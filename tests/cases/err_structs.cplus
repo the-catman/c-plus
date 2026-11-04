@@ -1,0 +1,37 @@
+struct Point { int x; int y; };
+struct Node { int value; Node next; };
+struct Twice { int a; int a; };
+
+int main() {
+    Point p = {1, 2};
+    println("{}", p.z);
+    println("{}", p.xx);
+    Point many = {1, 2, 3};
+    Point mixed = {1, .y = 2};
+    Point wrong = {.q = 1};
+    Point repeat = {.x = 1, .x = 2};
+    auto bare = {1, 2};
+    int number = {5};
+    int n = 3;
+    println("{}", n.x);
+    bool same = p == p;
+    Point bad = {"one", 2};
+    Point big = Point(1, 2, 3);
+    println("{}", Point);
+    return 0;
+}
+// error: 'Point' has no field named 'z'
+// error: did you mean 'x'?
+// error: 'Point' has 2 fields but the list has 3 values
+// error: a { } list cannot mix named fields (.x = ...) and values given by position
+// error: 'Point' has no field named 'q'
+// error: field 'x' is given more than once
+// error: this { } list needs a type here
+// error: a { } list builds a struct or class object, but 'int' is expected here
+// error: 'int' has no fields, so '.x' cannot be used
+// error: comparing structs is not supported yet
+// error: expected 'int' for field 'x' of 'Point', but this is 'string'
+// error: 'Point' has 2 fields but 3 values were given
+// error: 'Point' is a struct type. To build one, write `Point{...}` or `Point(...)`
+// error: struct 'Node' contains itself through field 'next', so it would be infinitely large
+// error: struct 'Twice' already has a field named 'a'

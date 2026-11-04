@@ -1,0 +1,12 @@
+int main() {
+    int a = 1, b;
+    println("{}", b);
+    auto x = 1, y;
+    const int p = 1, q;
+    int a = 2, z = 3;
+    return 0;
+}
+// error: 'b' is used before it is given a value
+// error: auto variable 'y' needs an initial value
+// error: const variable 'q' needs an initial value
+// error: 'a' is already declared in this scope

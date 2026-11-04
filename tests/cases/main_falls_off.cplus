@@ -1,0 +1,4 @@
+int main() {
+    println("done");
+}
+// expect: done

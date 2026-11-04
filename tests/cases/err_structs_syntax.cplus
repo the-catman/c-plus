@@ -1,0 +1,11 @@
+struct Point { int x; int y; }
+int main() { return 0; }
+struct Shape {
+    int area();
+};
+struct Later;
+// error: expected ';' after the definition of struct 'Point', found keyword 'int'
+// error: a struct definition ends with `};`, as in C++
+// error: write the method body here
+// error: C+ has no separate definitions; replace ';' with `{ ... }`
+// error: C+ has no forward declarations

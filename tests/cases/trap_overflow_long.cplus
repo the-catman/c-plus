@@ -1,0 +1,6 @@
+int main() {
+    long x = 9223372036854775807;
+    x++;
+    return 0;
+}
+// trap: integer overflow: the result of '++' does not fit in 'long'

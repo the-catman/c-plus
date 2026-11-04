@@ -1,0 +1,20 @@
+// As in C++, a number used as a condition is true when it is not zero.
+int main() {
+    int n = 3;
+    if (n) println("n is nonzero");          // expect: n is nonzero
+    int steps = 0;
+    while (n) {
+        n--;
+        steps++;
+    }
+    println("{} steps", steps);              // expect: 3 steps
+    if (!n) println("n is now zero");        // expect: n is now zero
+    long big = 5;
+    bool both = big && steps;
+    bool either = n || 0;
+    println("{} {}", both, either);          // expect: true false
+    println("{}", steps ? "some" : "none");  // expect: some
+    for (int i = 2; i; i--) println("i={}", i);  // expect: i=2
+                                                 // expect: i=1
+    return 0;
+}

@@ -1,0 +1,47 @@
+class Point {
+public:
+    int x;
+    int y;
+    Point(int a) : x(a), y(0) {}
+    Point(int a, int b) : x(a), y(b) {}
+    int sum();
+    int x() const { return 0; }
+    int area() const { return 0; }
+    int area() const { return 1; }
+    ~Pt() {}
+    int first() const { return this->x; }
+};
+
+struct Plain {
+    ~Plain() {}
+};
+
+int Point::length() { return 0; }
+
+class Init {
+public:
+    int a;
+    Init() : b(1), a(2), a(3) {}
+};
+
+int main() {
+    Point p = new Point(1);
+    Point q = Point(1);
+    println("{}", q->x);
+    return 0;
+}
+// error: 'Point' already has a constructor
+// error: several constructors need overloading, which is planned
+// error: write the method body here
+// error: 'Point' already has a field named 'x'
+// error: 'Point' already has a method named 'area'
+// error: overloading is planned but not supported yet
+// error: a destructor is named after its type: '~Point'
+// error: this compiler does not support struct destructors yet
+// error: methods are defined inside their class
+// error: 'Init' has no field named 'b'
+// error: field 'a' is initialized more than once
+// error: class objects are created without 'new'
+// error: write `this.x`
+// error: write `q.x`
+// error: 'this' is a reference in C+, not a pointer

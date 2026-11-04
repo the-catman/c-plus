@@ -1,0 +1,23 @@
+// A struct declared without a value can be filled in field by field, as in C.
+struct Point { int x; int y; };
+struct Labeled { string label; Point at; int weight = 1; };
+
+int main() {
+    Point p;
+    p.x = 1;
+    p.y = 2;
+    println("{}", p);           // expect: {x: 1, y: 2}
+
+    Point q;
+    if (p.x > 0) q = {3, 4};
+    else q = p;
+    println("{}", q);           // expect: {x: 3, y: 4}
+
+    Labeled l;                  // label is "" and weight is 1; only `at` still needs values
+    l.at = p;
+    println("{}", l);           // expect: {label: "", at: {x: 1, y: 2}, weight: 1}
+
+    string s;                   // strings start empty, as in C++
+    println("[{}]", s);         // expect: []
+    return 0;
+}

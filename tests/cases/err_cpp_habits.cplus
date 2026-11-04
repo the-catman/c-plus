@@ -1,0 +1,14 @@
+#include <iostream>
+using namespace std;
+int main() {
+    std::cout << "hi" << std::endl;
+    int octal = 010;
+    long long big = 5;
+    return 0;
+}
+// error: '#' directives are not part of C+
+// error: C+ has no 'using' declarations
+// error: C+ has no std:: namespace
+// error: numbers cannot start with 0 in C+
+// error: Write 0o10 for octal
+// error: 'long long' is not a C+ type

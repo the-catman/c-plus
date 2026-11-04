@@ -1,0 +1,7 @@
+int main() {
+    int m = -2147483648;
+    int d = -1;
+    println("{}", m / d);
+    return 0;
+}
+// trap: integer overflow: the result of '/' does not fit in 'int'

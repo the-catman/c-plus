@@ -1,0 +1,116 @@
+// Edge cases for reference counting. The test runner fails on any object that is
+// never freed or is used after it was freed.
+class Node {
+public:
+    string name;
+    Node(string n) : name(n) {}
+    ~Node() { println("-{}", name); }
+};
+
+class Box {
+public:
+    Node item;
+    Box(Node n) : item(n) {}
+    void swap(Box other) {
+        Node mine = item;
+        item = other.item;
+        other.item = mine;
+    }
+    Box self() { return this; }
+    Node replace(Node n) {
+        Node old = item;
+        item = n;
+        return old;
+    }
+};
+
+struct Slot {
+    Node node;
+    int weight;
+};
+
+class Holder {
+public:
+    Slot slot;
+    Holder(Slot s) : slot(s) {}
+    void bump() { slot.weight += 1; }
+};
+
+Slot makeSlot(string name) { return {Node(name), 1}; }
+
+Node pick(bool first, Node a, Node b) { return first ? a : b; }
+
+void keep(Box b) {}
+
+int main() {
+    Node a = Node("a");
+    a = a;                       // assigning a reference to itself keeps the object
+    Node b = Node("b");
+    Node c = Node("c");
+    a = b = c;                   // b is assigned first, so the old b goes away first
+    // expect: -b
+    // expect: -a
+    println("{} {} {}", a.name, b.name, c.name);
+    // expect: c c c
+
+    Box x = Box(Node("x"));
+    Box y = Box(Node("y"));
+    x.swap(y);
+    println("{} {}", x.item.name, y.item.name);
+    // expect: y x
+    println("{}", x.self().self().item.name);
+    // expect: y
+    keep(x.self());
+
+    Node old = x.replace(Node("z"));
+    println("{} {}", old.name, x.item.name);
+    // expect: y z
+    old = Node("o");
+    // expect: -y
+
+    Slot s = makeSlot("s1");
+    Slot t = s;
+    s.node = Node("s2");
+    println("{} {}", t.node.name, s.node.name);
+    // expect: s1 s2
+    t = s;
+    // expect: -s1
+
+    Holder h = Holder(makeSlot("h"));
+    h.bump();
+    h.slot.weight += 10;
+    println("{}", h.slot);
+    // expect: {node: Node {name: "h"}, weight: 12}
+    println("{}", makeSlot("tmp").node.name);
+    // expect: tmp
+    // expect: -tmp
+
+    println("{}", pick(false, Node("p1"), Node("p2")).name);  // pick releases p1 when it returns
+    // expect: -p1
+    // expect: p2
+    // expect: -p2
+
+    bool yes = true;
+    Slot chosen = yes ? makeSlot("yes") : makeSlot("no");
+    println("{}", chosen.node.name);
+    // expect: yes
+
+    int i = 0;
+    while (i < 2) {
+        Node n = Node("w");
+        i += 1;
+    }
+    // expect: -w
+    // expect: -w
+
+    println("end");
+    // expect: end
+    // expect: -yes
+    // expect: -h
+    // expect: -s2
+    // expect: -o
+    // expect: -x
+    // expect: -z
+    // expect: -c
+    return 0;
+}

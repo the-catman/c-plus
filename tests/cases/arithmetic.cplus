@@ -1,0 +1,38 @@
+int main() {
+    println("{}", 2 + 3 * 4);          // expect: 14
+    println("{}", (2 + 3) * 4);        // expect: 20
+    println("{}", 17 / 5);             // expect: 3
+    println("{}", 17 % 5);             // expect: 2
+    println("{}", -17 / 5);            // expect: -3
+    println("{}", -17 % 5);            // expect: -2
+    println("{}", 7 - 10);             // expect: -3
+    println("{}", -2147483648);        // expect: -2147483648
+    int minInt = -2147483648;
+    println("{}", minInt % -1);        // expect: 0
+    long big = 3000000000;
+    println("{}", big * 3);            // expect: 9000000000
+    int small = 2;
+    println("{}", big + small);        // expect: 3000000002
+    println("{}", 0xFF + 0b101);       // expect: 260
+    println("{}", 1'000'000);          // expect: 1000000
+    println("{}", 6 & 3);              // expect: 2
+    println("{}", 6 | 3);              // expect: 7
+    println("{}", 6 ^ 3);              // expect: 5
+    println("{}", ~0);                 // expect: -1
+    println("{}", 1 << 10);            // expect: 1024
+    println("{}", -16 >> 2);           // expect: -4
+    int x = 10;
+    x += 5;
+    x -= 3;
+    x *= 2;
+    x /= 4;
+    x %= 4;
+    println("{}", x);                  // expect: 2
+    x <<= 3;
+    println("{}", x);                  // expect: 16
+    int i = 5;
+    println("{} {}", i++, i);          // expect: 5 6
+    println("{} {}", ++i, i);          // expect: 7 7
+    println("{}", --i);                // expect: 6
+    return 0;
+}

@@ -1,0 +1,95 @@
+// Classes are reference types: copies share one object.
+class User {
+public:
+    string name;
+    int age = 0;
+
+    User(string n, int a) : name(n), age(a) {}
+
+    void birthday() { age += 1; }
+    int getAge() const { return age; }
+    string describe() const { return name; }
+    bool olderThan(User other) const { return age > other.age; }
+};
+
+// Without a constructor, a class is built from its fields, like a struct.
+class Counter {
+public:
+    int count;
+    string label = "clicks";
+    void add(int n) { this.count += n; }
+    int twice() const { return getCount() * 2; }
+    int getCount() const { return count; }
+};
+
+class Team {
+public:
+    string title;
+    User lead;
+    Team(string t, User u) : title(t), lead(u) {}
+};
+
+struct Badge {
+    User owner;
+    int level;
+};
+
+User makeUser(string name) { return User(name, 1); }
+
+void rename(User u) { u.name = "Renamed"; }
+
+int main() {
+    User a = User("Alice", 30);
+    User b = a;
+    b.age = 31;
+    println("{} {}", a.age, b.age);
+    // expect: 31 31
+
+    a.birthday();
+    println("{}", b.getAge());
+    // expect: 32
+
+    rename(b);
+    println("{}", a.name);
+    // expect: Renamed
+
+    Counter c = {.count = 2};
+    c.add(3);
+    println("{} {} {}", c.count, c.label, c.twice());
+    // expect: 5 clicks 10
+
+    Counter d = Counter{};
+    println("{}", d);
+    // expect: Counter {count: 0, label: "clicks"}
+
+    Team t = Team("core", a);
+    t.lead.age = 40;
+    println("{} {}", a.age, t.lead.describe());
+    // expect: 40 Renamed
+
+    Badge badge = {a, 3};
+    Badge copy = badge;
+    copy.owner.name = "Shared";
+    println("{}", badge);
+    // expect: {owner: User {name: "Shared", age: 40}, level: 3}
+
+    println("{}", makeUser("Bob").describe());
+    // expect: Bob
+    println("{}", makeUser("Cy").age);
+    // expect: 1
+    println("{}", a.olderThan(makeUser("Dee")));
+    // expect: true
+
+    User e;
+    e = makeUser("Eve");
+    e = User("Eva", 2);
+    const User f = e;
+    f.age = 3;  // `const` keeps `f` pointing at the same object; the object can change
+    println("{}", e);
+    // expect: User {name: "Eva", age: 3}
+
+    auto g = t;
+    println("{}", g.title);
+    // expect: core
+    return 0;
+}

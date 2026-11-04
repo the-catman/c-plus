@@ -1,0 +1,16 @@
+// As in C++, a number converts to bool: zero is false, anything else is true.
+bool takesBool(bool flag) { return flag; }
+bool fromNumber(int n) { return n; }
+
+int main() {
+    bool a = 1;
+    bool b = 0;
+    bool c = 42L;
+    println("{} {} {}", a, b, c);                      // expect: true false true
+    a = 0;
+    println("{}", a);                                  // expect: false
+    println("{} {}", takesBool(-7), fromNumber(0));    // expect: true false
+    auto copied = a;
+    println("{}", copied);                             // expect: false
+    return 0;
+}

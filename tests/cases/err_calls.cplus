@@ -1,0 +1,12 @@
+int add(int a, int b) { return a + b; }
+void nothing() {}
+int main() {
+    add(1);
+    int x = nothing();
+    println("{}", nothing());
+    return 0;
+}
+// error: 'add' takes 2 arguments but 1 was given
+// error: its signature is `add(int a, int b)`
+// error: expected 'int' to initialize 'x', but this is 'void'
+// error: this expression produces no value, so it cannot be printed

@@ -1,0 +1,16 @@
+int main() {
+    int x = 1;
+    int x = 2;
+    const int limit = 10;
+    limit = 11;
+    break;
+    {
+        int inner = 1;
+    }
+    println("{}", inner);
+    return 0;
+}
+// error: 'x' is already declared in this scope
+// error: 'limit' is const and cannot be assigned to
+// error: 'break' can only be used inside a loop
+// error: 'inner' is not declared

@@ -1,0 +1,8 @@
+int main() {
+    int a = 1
+    int b = 2;
+    println("{}", b)
+    return 0;
+}
+// error: expected ';' after the variable declaration, found keyword 'int'
+// error: expected ';' after the expression, found keyword 'return'

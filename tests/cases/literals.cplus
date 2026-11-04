@@ -1,0 +1,19 @@
+int main() {
+    println("{}", 0o17);                 // expect: 15
+    println("{}", 0o755);                // expect: 493
+    println("{}", 0xFF);                 // expect: 255
+    println("{}", 0b1010);               // expect: 10
+    println("{}", 1'000'000);            // expect: 1000000
+    println("{}", 1L << 40);             // expect: 1099511627776
+    println("{}", 1LL << 62);            // expect: 4611686018427387904
+    auto big = 5L;                       // L makes the literal a long
+    big *= 3000000000;
+    println("{}", big);                  // expect: 15000000000
+    long shifted = 1;
+    shifted <<= 40;
+    println("{}", shifted);              // expect: 1099511627776
+    println("{}", 0);                    // expect: 0
+    println("{}", -2147483648);          // expect: -2147483648
+    println("{}", -9223372036854775808); // expect: -9223372036854775808
+    return 0;
+}

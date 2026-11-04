@@ -1,0 +1,22 @@
+int main() {
+    int octal = 010;
+    int a = 0o19;
+    int b = 0b102;
+    int c = 5u;
+    int d = 5x;
+    long e = 1 << 40;
+    int f = 5L;
+    int g = 0;
+    g <<= 32;
+    return 0;
+}
+// error: numbers cannot start with 0 in C+
+// error: Write 0o10 for octal, or 10 for decimal
+// error: '9' is not a valid digit in an octal number
+// error: '2' is not a valid digit in a binary number
+// error: this compiler does not support unsigned integer types yet
+// error: 'x' is not a number suffix
+// error: shifting 'int' by 40 is out of range
+// error: Write the left side as a long with an L suffix, e.g. `1L << 40`
+// error: expected 'int' to initialize 'f', but this is 'long'
+// error: shifting 'int' by 32 is out of range

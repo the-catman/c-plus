@@ -1,0 +1,13 @@
+int compute(int value) { return value; }
+int main() {
+    int count = 1;
+    println("{}", coutn);
+    println("{}", compte(1));
+    printf("%d\n", count);
+    return 0;
+}
+// error: 'coutn' is not declared
+// error: did you mean 'count'?
+// error: there is no function named 'compte'
+// error: did you mean 'compute'?
+// error: `printf("%d\n", x)` becomes `println("{}", x)`

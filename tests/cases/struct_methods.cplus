@@ -1,0 +1,70 @@
+// Struct methods work on the struct in place; const methods only read it.
+struct Point {
+    int x;
+    int y;
+    int sum() const { return x + y; }
+    void move(int dx, int dy) {
+        x += dx;
+        this.y += dy;
+    }
+    void moveTwice(int d) {
+        move(d, d);
+        move(d, d);
+    }
+    Point flipped() const { return {y, x}; }
+};
+
+struct Range {
+    int low;
+    int high;
+    Range(int a, int b) {
+        if (a < b) {
+            low = a;
+            high = b;
+        } else {
+            low = b;
+            high = a;
+        }
+    }
+    int size() const { return high - low; }
+};
+
+struct Line {
+    Point from;
+    Point to = {10, 10};
+    int length() const { return to.sum() - from.sum(); }
+};
+
+Point origin() { return {}; }
+
+int main() {
+    Point p = {1, 2};
+    p.move(10, 20);
+    println("{} {}", p, p.sum());
+    // expect: {x: 11, y: 22} 33
+    p.moveTwice(1);
+    println("{}", p);
+    // expect: {x: 13, y: 24}
+
+    Point q = p;
+    q.move(1, 1);
+    println("{} {}", p.x, q.x);
+    // expect: 13 14
+
+    println("{}", p.flipped().flipped().sum());
+    // expect: 37
+    origin().move(5, 5);  // changes a temporary copy, which is then dropped
+    println("{}", origin().sum());
+    // expect: 0
+
+    Range r = Range(9, 4);
+    Range s = {3, 7};
+    println("{} {} {}", r, r.size(), s.size());
+    // expect: {low: 4, high: 9} 5 4
+
+    Line line = {.from = {1, 1}};
+    line.from.move(1, 0);
+    println("{} {}", line, line.length());
+    // expect: {from: {x: 2, y: 1}, to: {x: 10, y: 10}} 17
+    return 0;
+}

@@ -1,0 +1,46 @@
+// Structs are values: assigning or passing one makes a copy.
+int main() {
+    Point a = {1, 2};
+    Point b = Point(3, 4);
+    auto c = Point{5, 6};
+    Point d = {.y = 8, .x = 7};
+    println("{} {} {} {}", a, b, c, d);   // expect: {x: 1, y: 2} {x: 3, y: 4} {x: 5, y: 6} {x: 7, y: 8}
+
+    Point copy = a;
+    copy.x = 100;
+    println("{} {}", a.x, copy.x);        // expect: 1 100
+
+    moveRight(a);
+    println("{}", a.x);                   // expect: 1
+    a = shifted(a, 10);
+    println("{}", a);                     // expect: {x: 11, y: 12}
+
+    a.x += 5;
+    a.y++;
+    --a.y;
+    println("{}", a);                     // expect: {x: 16, y: 12}
+
+    a = {0, 0};
+    println("{}", a);                     // expect: {x: 0, y: 0}
+    println("{}", origin().y);            // expect: 0
+    println("{}", add({1, 1}, Point{2, 2}));  // expect: {x: 3, y: 3}
+    return 0;
+}
+
+// Used above, defined below: no forward declarations needed.
+struct Point {
+    int x;
+    int y;
+};
+
+void moveRight(Point p) { p.x += 1; }   // changes only its own copy
+
+Point shifted(Point p, int by) {
+    p.x += by;
+    p.y += by;
+    return p;
+}
+
+Point origin() { return {}; }
+
+Point add(Point l, Point r) { return {l.x + r.x, l.y + r.y}; }

@@ -1,0 +1,74 @@
+class User {
+    string password;
+public:
+    string name;
+    int age;
+    User(string n) : name(n) {}
+    int getAge() const { age = 3; return age; }
+    void change() { age = 1; }
+    int peek() const { change(); return 0; }
+private:
+    void secret() {}
+};
+
+class Node {
+public:
+    int value;
+    Node next;
+    Node(int v) : value(v) {}
+};
+
+class Holder {
+public:
+    User user;
+};
+
+struct Counter {
+    int n;
+    int doubled = n * 2;
+    void bump() { n += 1; }
+};
+
+int main() {
+    User a = User("a", 2);
+    User b = User("b");
+    println("{}", b.password);
+    b.secret();
+    User none;
+    println("{}", none.name);
+    Holder h = {};
+    const Counter c = {1};
+    c.bump();
+    println("{}", b == b);
+    println("{}", b.nam);
+    println("{}", b.getAge);
+    b.age();
+    b.fly();
+    User d = User{.name = "d"};
+    println("{}", this);
+    return 0;
+}
+// error: the constructor of 'User' takes 1 argument but 2 were given
+// error: its signature is `User(string n)`
+// error: 'password' is private in 'User'
+// error: Put the field under `public:` to use it here
+// error: 'secret' is private in 'User'
+// error: 'none' is used before it is given a value
+// error: e.g. `User none = User(...);`
+// error: field 'user' of 'Holder' needs a value, because a 'User' reference cannot be empty
+// error: cannot call 'bump' on const 'c', because it may change fields
+// error: comparing class objects is not supported yet
+// error: did you mean 'name'?
+// error: 'getAge' is a method; call it with `getAge()`
+// error: 'User' has no method named 'age'
+// error: 'age' is a field; read it without parentheses
+// error: 'User' has no method named 'fly'
+// error: 'User' has a constructor, so its values are passed in order
+// error: 'this' can only be used inside a method or constructor
+// error: 'age' cannot be assigned to inside const method 'getAge'
+// error: const method 'peek' cannot call 'change', which may change fields
+// error: the constructor of 'Node' must give every class-typed field a value, but 'next' has none
+// error: references that can be empty (`Node?`) are planned
+// error: spec: docs/SPEC.md#methods
+// error: spec: docs/SPEC.md#classes
+// error: a field's default cannot read other fields; set this field in a constructor instead

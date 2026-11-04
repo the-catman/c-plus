@@ -1,0 +1,6 @@
+int main() {
+    int m = -2147483648;
+    int n = -m;
+    return 0;
+}
+// trap: integer overflow: the result of '-' does not fit in 'int'

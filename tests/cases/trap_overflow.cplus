@@ -1,0 +1,10 @@
+int main() {
+    int big = 2147483647;
+    println("before");
+    big = big + 1;
+    println("after {}", big);
+    return 0;
+}
+// expect: before
+// trap: integer overflow: the result of '+' does not fit in 'int'
+// trap: trap_overflow.cplus:4:15

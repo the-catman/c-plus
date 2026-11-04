@@ -1,0 +1,5 @@
+void f() { return 1; }
+int g() { return; }
+int main() { return 0; }
+// error: function 'f' returns void, so it cannot return a value
+// error: function 'g' must return 'int' here

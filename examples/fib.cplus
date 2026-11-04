@@ -1,0 +1,14 @@
+// Functions can be called before they are defined: there are no headers.
+int main() {
+    for (int i = 0; i <= 10; i++) {
+        println("fib({}) = {}", i, fib(i));
+    }
+    long big = fib(46);
+    println("fib(46) = {}, as a long it doubles to {}", big, big * 2);
+    return 0;
+}
+
+int fib(int n) {
+    if (n < 2) return n;
+    return fib(n - 1) + fib(n - 2);
+}

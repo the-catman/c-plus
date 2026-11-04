@@ -1,0 +1,6 @@
+int main() {
+    int amount = 32;
+    println("{}", 1 << amount);
+    return 0;
+}
+// trap: shift amount out of range

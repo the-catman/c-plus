@@ -1,0 +1,11 @@
+bool noisy(string label, bool value) {
+    println("evaluated {}", label);
+    return value;
+}
+
+int main() {
+    bool a = noisy("left", false) && noisy("right", true);  // expect: evaluated left
+    bool b = noisy("left", true) || noisy("right", true);   // expect: evaluated left
+    println("{} {}", a, b);                                 // expect: false true
+    return 0;
+}

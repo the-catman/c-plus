@@ -1,0 +1,6 @@
+int main() {
+    int zero = 0;
+    println("{}", 10 / zero);
+    return 0;
+}
+// trap: division by zero in '/'

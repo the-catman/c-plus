@@ -1,0 +1,2 @@
+int helper() { return 1; }
+// error: this program has no main function

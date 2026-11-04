@@ -1,0 +1,96 @@
+// Semantic analysis: resolves names, assigns types, and enforces the rules that make
+// C+ safer than C++: definite assignment (down to struct fields), no implicit narrowing,
+// every path of a non-void function returns, and checked print format strings.
+#pragma once
+
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "AST.h"
+
+namespace cplus {
+
+class Sema {
+public:
+    explicit Sema(Diagnostics& diags) : diags_(diags) {}
+    void check(Program& program);
+
+private:
+    // A place that holds a value: a variable (empty path) or a field inside one ("pos.x").
+    using Place = std::pair<const VarDecl*, std::string>;
+    // What is known at a point in the program: which places definitely hold a value,
+    // and whether the point can be reached at all.
+    struct Flow {
+        std::set<Place> assigned;
+        bool reachable = true;
+    };
+    struct LoopContext {
+        std::vector<Flow> breaks;     // state at each `break`
+        std::vector<Flow> continues;  // state at each `continue`
+    };
+
+    // Definite assignment
+    Flow merge(const Flow& a, const Flow& b) const;
+    bool isAssigned(const Flow& flow, const VarDecl* var, const Type* type, const std::string& path) const;
+    bool anyPartAssigned(const Flow& flow, const VarDecl* var, const std::string& path) const;
+    std::string firstUnassigned(const Flow& flow, const VarDecl* var, const Type* type, const std::string& path) const;
+    void markAssigned(Flow& flow, const VarDecl* var, const std::string& path);
+    void markDefaults(Flow& flow, const VarDecl* var, const Type* type, const std::string& path);
+    void markConstructed(Flow& flow, const VarDecl* var, const Type* type, const std::string& path);
+    void requireFullyBuilt(Flow& flow, Loc loc);  // at the end of a constructor
+    void requireAssigned(Flow& flow, const VarDecl* var, const std::string& path, const Type* type, Loc loc);
+
+    void checkStructs(Program& program);
+    void checkMembers(StructDecl& sd);
+    void checkFunction(FuncDecl& fn);
+    void checkStmt(Stmt& s, Flow& flow);
+    void checkVarDecl(VarDecl& v, Flow& flow);
+    void checkLoopBody(Stmt& body, Flow& flow);
+    const Type* checkExpr(Expr& e, Flow& flow);
+    // Checks `e` where a value of type `expected` is needed. A `{ }` list takes that type.
+    void checkValue(Expr& e, Flow& flow, const Type* expected, const std::string& context);
+    void checkInitList(InitListExpr& list, Flow& flow, const Type* type);
+    void checkLooseValue(Expr& e, Flow& flow);  // checks an expression whose target type is unknown
+    const Type* checkCall(CallExpr& call, Flow& flow);
+    const Type* checkMethodCall(MethodCallExpr& call, Flow& flow);
+    // Checks arguments against parameters; `what` names the callee in messages.
+    void checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow, Loc loc, const std::string& what);
+    // One value given when building a struct or class: `Type(args)` or a `{ }` list.
+    struct ConstructArg {
+        std::string designator;  // field name for `.x = value`, empty for positional
+        Loc loc;
+        Expr* value;
+        int* fieldIndex;  // where to record the field it fills, or null
+    };
+    void checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc);
+    bool canAccess(const StructDecl& sd, Access access) const;
+    void reportAccess(const StructDecl& sd, const std::string& member, bool isMethod, Loc loc);
+    const Type* checkPrint(CallExpr& call, Flow& flow);
+    void checkCondition(Expr& e, Flow& flow, const char* what);
+    void checkShiftAmount(const Type* lhsType, const Expr* lhs, const Expr& amount);
+    void requireConvertible(const Expr& e, const Type* to, const std::string& context);
+    // Resolves a variable or field access. When the expression is rooted at a variable,
+    // `var` and `path` name the place; otherwise var is null (e.g. `makePoint().x`).
+    const Type* resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::string& path);
+    bool checkAssignable(Expr& target, Flow& flow, const char* action, const VarDecl*& var, std::string& path);
+    void reportUnknownName(const NameExpr& n);
+
+    VarDecl* lookup(const std::string& name);
+    void declare(VarDecl& v);
+    std::string suggestName(const std::string& name);
+
+    Diagnostics& diags_;
+    std::unordered_map<std::string, FuncDecl*> funcs_;
+    std::unordered_map<std::string, StructDecl*> structs_;
+    std::vector<std::unordered_map<std::string, VarDecl*>> scopes_;
+    std::vector<LoopContext> loops_;
+    FuncDecl* fn_ = nullptr;
+    const StructDecl* defaultsOf_ = nullptr;  // the type whose field defaults are being checked
+    StructDecl* owner() const { return fn_ ? fn_->owner : nullptr; }
+    VarDecl* thisVar() const { return fn_ ? fn_->thisDecl.get() : nullptr; }
+};
+
+}  // namespace cplus

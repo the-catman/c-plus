@@ -1,0 +1,114 @@
+// An object is destroyed as soon as its last reference goes away.
+class Tracker {
+public:
+    string name;
+    Tracker(string n) : name(n) { println("+{}", name); }
+    ~Tracker() { println("-{}", name); }
+    string id() const { return name; }
+    bool ok() const { return true; }
+};
+
+class Pair {
+public:
+    Tracker first;
+    Tracker second;
+    ~Pair() { println("-pair"); }
+};
+
+Tracker make(string name) { return Tracker(name); }
+
+Tracker pass(Tracker t) { return t; }
+
+void take(Tracker t) { println("take {}", t.name); }
+
+int findAt(int stop) {
+    for (int i = 0; i < 5; ++i) {
+        Tracker t = Tracker("loop");
+        if (i == stop) return i;
+    }
+    return -1;
+}
+
+int main() {
+    {
+        Tracker a = Tracker("a");
+        println("in scope");
+    }
+    // expect: +a
+    // expect: in scope
+    // expect: -a
+
+    Tracker b = Tracker("b");
+    b = Tracker("b2");
+    // expect: +b
+    // expect: +b2
+    // expect: -b
+
+    make("temp");
+    // expect: +temp
+    // expect: -temp
+
+    println("id {}", make("t2").id());
+    // expect: +t2
+    // expect: id t2
+    // expect: -t2
+
+    take(Tracker("arg"));
+    // expect: +arg
+    // expect: take arg
+    // expect: -arg
+
+    Tracker c = pass(Tracker("kept"));
+    println("still {}", c.name);
+    // expect: +kept
+    // expect: still kept
+
+    for (int i = 0; i < 3; ++i) {
+        Tracker t = Tracker("iter");
+        if (i == 0) continue;
+        if (i == 1) break;
+    }
+    // expect: +iter
+    // expect: -iter
+    // expect: +iter
+    // expect: -iter
+
+    println("found {}", findAt(1));
+    // expect: +loop
+    // expect: -loop
+    // expect: +loop
+    // expect: -loop
+    // expect: found 1
+
+    bool yes = true;
+    Tracker d = yes ? Tracker("then") : Tracker("else");
+    // expect: +then
+    if (yes || make("skipped").ok()) println("short");
+    // expect: short
+    if (yes && make("rhs").ok()) println("ran");
+    // expect: +rhs
+    // expect: -rhs
+    // expect: ran
+
+    Pair p = {Tracker("one"), Tracker("two")};
+    // expect: +one
+    // expect: +two
+    p.first = Tracker("three");
+    // expect: +three
+    // expect: -one
+
+    if (yes) Tracker unbraced = Tracker("unbraced");
+    // expect: +unbraced
+    // expect: -unbraced
+
+    println("end");
+    return 0;
+    // expect: end
+    // Locals go away last declared first; fields of a destroyed object last declared first.
+    // expect: -pair
+    // expect: -two
+    // expect: -three
+    // expect: -then
+    // expect: -kept
+    // expect: -b2
+}

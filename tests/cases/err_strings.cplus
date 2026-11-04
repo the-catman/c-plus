@@ -1,0 +1,8 @@
+int main() {
+    string a = "x";
+    string b = a + "y";
+    println("bad escape \q");
+    return 0;
+}
+// error: '+' cannot be used with 'string'
+// error: unknown escape sequence '\q'

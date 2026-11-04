@@ -1,0 +1,5 @@
+class User { int age; };
+class Admin : User { int level; };
+int main() { return 0; }
+// error: this compiler does not support inheritance yet
+// error: spec: docs/SPEC.md#implementation-status

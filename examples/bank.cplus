@@ -1,0 +1,45 @@
+// Classes are shared references; structs are copied values.
+
+struct Money {
+    long cents;
+    long dollars() const { return cents / 100; }
+};
+
+class Account {
+public:
+    string owner;
+
+    Account(string name, long cents) : owner(name), balance({cents}) {
+        println("opened {} with ${}", owner, balance.dollars());
+    }
+    ~Account() { println("closed {}", owner); }
+
+    void deposit(long cents) { balance.cents += cents; }
+    bool withdraw(long cents) {
+        if (cents > balance.cents) return false;
+        balance.cents -= cents;
+        return true;
+    }
+    long dollars() const { return balance.dollars(); }
+
+private:
+    Money balance;
+};
+
+void payRent(Account from) {
+    if (!from.withdraw(1200'00)) println("{} cannot pay rent", from.owner);
+}
+
+int main() {
+    Account alice = Account("Alice", 2000'00);
+    Account shared = alice;          // the same account, not a copy
+    shared.deposit(500'00);
+    payRent(alice);
+    println("{} has ${}", alice.owner, alice.dollars());
+
+    Account bob = Account("Bob", 300'00);
+    payRent(bob);
+    bob = Account("Bob's new account", 5000'00);   // the old account closes here
+    println("end of main");
+    return 0;
+}

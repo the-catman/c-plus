@@ -1,0 +1,37 @@
+int main() {
+    int total = 0;
+    for (int i = 0; i < 10; i++) {
+        if (i == 3) continue;
+        if (i == 8) break;
+        total += i;
+    }
+    println("for: {}", total);              // expect: for: 25
+
+    int n = 0;
+    while (n < 5) n++;
+    println("while: {}", n);                // expect: while: 5
+
+    int d = 10;
+    do {
+        d++;
+    } while (d < 5);
+    println("do-while runs once: {}", d);   // expect: do-while runs once: 11
+
+    int steps = 0;
+    while (true) {
+        steps++;
+        if (steps == 4) break;
+    }
+    println("while true: {}", steps);       // expect: while true: 4
+
+    int grade = 85;
+    if (grade >= 90) println("A");
+    else if (grade >= 80) println("B");     // expect: B
+    else println("C");
+
+    println("{}", grade > 50 ? 1 : 0);      // expect: 1
+    bool both = grade > 50 && grade < 90;
+    bool either = grade < 10 || grade == 85;
+    println("{} {} {}", both, either, !both); // expect: true true false
+    return 0;
+}

@@ -1,0 +1,28 @@
+// Anchors into docs/SPEC.md that diagnostics cite. Each value must match a heading
+// in the spec (GitHub-style slug). tests/run_tests.py verifies that they all exist.
+#pragma once
+
+namespace cplus::spec {
+
+inline constexpr const char* Preprocessor = "no-preprocessor";
+inline constexpr const char* Comments = "comments";
+inline constexpr const char* IntegerLiterals = "integer-literals";
+inline constexpr const char* StringLiterals = "string-literals";
+inline constexpr const char* IntegerTypes = "integer-types";
+inline constexpr const char* ImplicitConversions = "implicit-conversions";
+inline constexpr const char* Variables = "variables";
+inline constexpr const char* DefiniteAssignment = "definite-assignment";
+inline constexpr const char* Functions = "functions";
+inline constexpr const char* MainFunction = "the-main-function";
+inline constexpr const char* Conditions = "conditions";
+inline constexpr const char* ControlFlow = "control-flow";
+inline constexpr const char* Operators = "operators";
+inline constexpr const char* IntegerOverflow = "integer-overflow";
+inline constexpr const char* Structs = "structs";
+inline constexpr const char* Classes = "classes";
+inline constexpr const char* Methods = "methods";
+inline constexpr const char* Printing = "printing";
+inline constexpr const char* Modules = "modules";
+inline constexpr const char* Status = "implementation-status";
+
+}  // namespace cplus::spec

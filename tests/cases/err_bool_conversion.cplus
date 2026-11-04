@@ -1,0 +1,9 @@
+// Only numbers convert to bool. bool does not convert back to a number,
+// and strings never convert.
+int main() {
+    int n = true;
+    bool s = "yes";
+    return 0;
+}
+// error: expected 'int' to initialize 'n', but this is 'bool'
+// error: expected 'bool' to initialize 's', but this is 'string'

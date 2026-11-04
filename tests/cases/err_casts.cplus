@@ -1,0 +1,11 @@
+int main() {
+    int n = 5;
+    long a = (long)n;
+    long b = long(n);
+    long c = static_cast<long>(n);
+    return 0;
+}
+// error: this compiler does not support casts like '(long)x' yet
+// error: this compiler does not support casts like 'long(x)' yet
+// error: this compiler does not support casts like 'static_cast<T>(x)' yet
+// error: an int already converts to a long

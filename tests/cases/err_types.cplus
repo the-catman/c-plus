@@ -1,0 +1,13 @@
+int takesInt(int x) { return x; }
+int main() {
+    long big = 5;
+    int narrow = big;
+    int tooBig = 3000000000;
+    takesInt(big);
+    string s = 5;
+    return 0;
+}
+// error: expected 'int' to initialize 'narrow', but this is 'long'
+// error: this number is larger than an int can hold; use long instead
+// error: expected 'int' for parameter 'x' of 'takesInt', but this is 'long'
+// error: expected 'string' to initialize 's', but this is 'int'

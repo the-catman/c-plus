@@ -1,0 +1,11 @@
+void nothing() {}
+int main() {
+    string s = "x";
+    if (s) println("yes");
+    while (nothing()) {}
+    bool b = !s;
+    return 0;
+}
+// error: the if condition must be a bool or a number, but this is 'string'
+// error: the while condition must be a bool or a number, but this is 'void'
+// error: '!' needs a bool or a number, but this is 'string'

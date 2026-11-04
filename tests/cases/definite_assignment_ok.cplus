@@ -1,0 +1,17 @@
+int main() {
+    int x;
+    if (true) x = 1; else x = 2;
+    println("{}", x);                // expect: 1
+
+    int y;
+    while (true) {
+        y = 5;
+        break;
+    }
+    println("{}", y);                // expect: 5
+
+    int z;
+    do { z = 3; } while (false);
+    println("{}", z);                // expect: 3
+    return 0;
+}

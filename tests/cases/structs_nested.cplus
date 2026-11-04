@@ -1,0 +1,26 @@
+struct Size { int width = 10; int height = 20; };
+struct Window {
+    string title = "untitled";
+    Size size;
+    bool visible = true;
+    long id;
+};
+
+int main() {
+    Window w = {};
+    println("{}", w);           // expect: {title: "untitled", size: {width: 10, height: 20}, visible: true, id: 0}
+    Window named = {.title = "Editor", .id = 7};
+    println("{}", named);       // expect: {title: "Editor", size: {width: 10, height: 20}, visible: true, id: 7}
+    named.size.width = 640;
+    named.size = {named.size.width, 480};
+    println("{} {}", named.size.width, named.size.height);  // expect: 640 480
+    Window partial = Window("Quoted \"title\"\n");
+    println("{}", partial.title);  // expect: Quoted "title"
+                                   // expect: 
+    println("{}", partial);        // expect: {title: "Quoted \"title\"\n", size: {width: 10, height: 20}, visible: true, id: 0}
+    Empty e = {};
+    println("{}", e);              // expect: {}
+    return 0;
+}
+
+struct Empty {};

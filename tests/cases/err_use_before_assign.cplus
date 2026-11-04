@@ -1,0 +1,10 @@
+int main() {
+    int x;
+    int y;
+    if (y > 0) x = 1;
+    println("{}", x);
+    return 0;
+}
+// error: 'y' is used before it is given a value
+// error: 'x' is used before it is given a value
+// error: spec: docs/SPEC.md#definite-assignment

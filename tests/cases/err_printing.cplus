@@ -1,0 +1,12 @@
+int main() {
+    int x = 1;
+    println("{} {}", x);
+    println(x);
+    println("{:x}", x);
+    println("oops }", x);
+    return 0;
+}
+// error: the format string has 2 {} placeholders but 1 value was given
+// error: the first argument of println must be a format string written in quotes
+// error: only {} placeholders are supported in format strings so far
+// error: this format string has a '}' with no matching '{'

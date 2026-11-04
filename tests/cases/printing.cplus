@@ -1,0 +1,15 @@
+int main() {
+    string name = "Ada";
+    long year = 1815;
+    println("{} was born in {}", name, year);   // expect: Ada was born in 1815
+    println("braces: {{}} and {{{}}}", 42);     // expect: braces: {} and {42}
+    print("no newline, ");
+    print("then ");
+    println("one");                             // expect: no newline, then one
+    println();                                  // expect:
+    println("{}{}{}", true, false, "!");        // expect: truefalse!
+    println("tab\tend");                        // expect: tab	end
+    println("joined " "literals");              // expect: joined literals
+    println("unicode: héllo ✓");                // expect: unicode: héllo ✓
+    return 0;
+}
