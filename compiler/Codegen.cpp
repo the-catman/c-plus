@@ -36,7 +36,7 @@ struct Codegen::Impl {
 
     llvm::StructType* stringTy = nullptr;  // { ptr data, i64 length }
     llvm::FunctionCallee rtPrintStr, rtPrintQuoted, rtPrintI32, rtPrintI64, rtPrintBool, rtPrintNewline, rtTrap;
-    llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave;
+    llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq;
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
 
@@ -44,6 +44,7 @@ struct Codegen::Impl {
     struct TypeInfo {
         llvm::StructType* layout = nullptr;  // a struct's value, or a class object: { i64 refcount, fields... }
         llvm::Function* print = nullptr;
+        llvm::Function* equals = nullptr;   // structs: compares two values field by field
         llvm::Function* retain = nullptr;   // structs that hold class references
         llvm::Function* release = nullptr;  // classes, and structs that hold class references
         llvm::Function* destroy = nullptr;  // classes
@@ -124,6 +125,7 @@ struct Codegen::Impl {
         rtRelease = decl("cplus_release", i32, {ptrTy});
         rtPrintEnter = decl("cplus_print_enter", i32, {ptrTy});
         rtPrintLeave = decl("cplus_print_leave", voidTy, {});
+        rtStrEq = decl("cplus_str_eq", i32, {ptrTy, i64, ptrTy, i64});
     }
 
     llvm::Type* llvmType(const Type* t) {
@@ -474,6 +476,11 @@ struct Codegen::Impl {
             case Expr::Kind::Binary: {
                 auto& bin = static_cast<const BinaryExpr&>(e);
                 if (bin.op == BinOp::LogAnd || bin.op == BinOp::LogOr) return genLogical(bin);
+                if (!bin.operandType->isInteger()) {  // == or != on bools, strings, structs, objects
+                    llvm::Value* l = gen(*bin.lhs);
+                    llvm::Value* same = genEquals(l, gen(*bin.rhs), bin.operandType);
+                    return bin.op == BinOp::Eq ? same : b.CreateNot(same);
+                }
                 llvm::Value* l = genConverted(*bin.lhs, bin.operandType);
                 bool shift = bin.op == BinOp::Shl || bin.op == BinOp::Shr;
                 llvm::Value* r = shift ? gen(*bin.rhs) : genConverted(*bin.rhs, bin.operandType);
@@ -541,6 +548,21 @@ struct Codegen::Impl {
             case Expr::Kind::MethodCall: owned = true; return genMethodCall(static_cast<const MethodCallExpr&>(e));
         }
         llvm_unreachable("unknown expression kind");
+    }
+
+    // Whether two values are equal: strings by contents, structs field by field, and
+    // class references by identity.
+    llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
+        switch (t->kind) {
+            case K::Bool: case K::Int: case K::Long: case K::Class: return b.CreateICmpEQ(l, r);
+            case K::String: {
+                llvm::Value* eq = b.CreateCall(rtStrEq, {b.CreateExtractValue(l, 0), b.CreateExtractValue(l, 1),
+                                                         b.CreateExtractValue(r, 0), b.CreateExtractValue(r, 1)});
+                return b.CreateICmpNE(eq, b.getInt32(0));
+            }
+            case K::Struct: return b.CreateCall(types.at(t->decl).equals, {l, r});
+            default: llvm_unreachable("Sema allowed == on a type Codegen cannot compare");
+        }
     }
 
     llvm::Value* genLogical(const BinaryExpr& bin) {
@@ -874,6 +896,7 @@ struct Codegen::Impl {
         TypeInfo& info = types.at(&sd);
         llvm::Type* self = llvmType(&sd.type);
         info.print = helper(sd, "print", b.getVoidTy(), {self});
+        if (!sd.isClass) info.equals = helper(sd, "equals", b.getInt1Ty(), {self, self});
         if (sd.isClass) {
             info.release = helper(sd, "release", b.getVoidTy(), {self});
             info.destroy = helper(sd, "destroy", b.getVoidTy(), {self});
@@ -921,6 +944,20 @@ struct Codegen::Impl {
         b.CreateRetVoid();
 
         if (!sd.isClass) {
+            // Equality: the first field that differs decides.
+            startHelper(info.equals);
+            auto* differBB = llvm::BasicBlock::Create(ctx, "differ", fn);
+            for (size_t i = 0; i < sd.fields.size(); ++i) {
+                llvm::Value* same = genEquals(loadField(sd, info.equals->getArg(0), i),
+                                              loadField(sd, info.equals->getArg(1), i), sd.fields[i].type);
+                auto* nextBB = llvm::BasicBlock::Create(ctx, "same", fn);
+                b.CreateCondBr(same, nextBB, differBB);
+                b.SetInsertPoint(nextBB);
+            }
+            b.CreateRet(b.getInt1(true));
+            b.SetInsertPoint(differBB);
+            b.CreateRet(b.getInt1(false));
+
             if (!info.retain) return;
             for (auto [f, which] : {std::pair{info.retain, true}, std::pair{info.release, false}}) {
                 startHelper(f);

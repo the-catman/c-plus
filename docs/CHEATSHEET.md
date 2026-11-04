@@ -30,6 +30,7 @@ long square(long n) { return n * n; }
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}` |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue`, `?:` |
 | Operators | all C++ integer operators, `&&` `\|\|` `!`, compound assignment, `++`/`--` |
+| Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), objects by identity |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
 | Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long) |
 | Conditions | `bool` or a number, as in C++: `if (n)`, `while (n--)`, `!n` |
@@ -57,6 +58,8 @@ long square(long n) { return n * n; }
 | `int Rect::area() { ... }` outside the type | write the method body inside the type |
 | `User u;` then use `u` | error until assigned: a class reference is never empty |
 | `const User u` freezes the object | `const` only stops `u` from referring to another object |
+| `u1 == u2` compares two objects' fields | it is true only for the same object, like `===` in JS. Compare fields instead |
+| `bool operator==(...) = default` | not needed: every struct already has `==` |
 | several constructors | one per type for now; leave it out and use field defaults instead |
 | `auto p = {1, 2};` | `auto p = Point{1, 2};`, since a bare `{ }` needs a known type |
 | overloaded functions | planned; one function per name for now |
@@ -66,7 +69,7 @@ long square(long n) { return n * n; }
 | Feature | C+ form |
 |---------|---------|
 | Inheritance | `class Admin : User {...}`, multiple inheritance, `virtual`, `override` |
-| Operators | `==` on structs and objects; operator overloading |
+| Operators | operator overloading with C++ syntax, after function overloading |
 | Optionals | `User?`, `null`, `if (auto u = opt)`, `opt?.name`, `opt ?? fallback` |
 | Errors | `int f() throws`, `throw Error("..")`, `try f()`, `try { } catch (Error e) { }` |
 | Generics | `template<typename T>`, `template<Comparable T>`; no specialization or SFINAE |

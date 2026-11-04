@@ -33,6 +33,12 @@ void cplus_print_i64(int64_t value) { printf("%" PRId64, value); }
 void cplus_print_bool(int32_t value) { fputs(value ? "true" : "false", stdout); }
 void cplus_print_newline(void) { fputc('\n', stdout); }
 
+// Returns 1 when two strings have the same bytes. An empty string may have no data.
+int32_t cplus_str_eq(const char* a, int64_t a_length, const char* b, int64_t b_length) {
+    if (a_length != b_length) return 0;
+    return a_length == 0 || memcmp(a, b, (size_t)a_length) == 0;
+}
+
 // Called when a runtime check fails (integer overflow, division by zero, ...).
 // Output printed so far is flushed first so the error appears after it.
 _Noreturn void cplus_trap(const char* message, const char* file, int32_t line, int32_t column) {

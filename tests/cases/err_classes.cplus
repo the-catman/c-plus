@@ -39,7 +39,7 @@ int main() {
     Holder h = {};
     const Counter c = {1};
     c.bump();
-    println("{}", b == b);
+    println("{}", b == 5);
     println("{}", b.nam);
     println("{}", b.getAge);
     b.age();
@@ -57,7 +57,7 @@ int main() {
 // error: e.g. `User none = User(...);`
 // error: field 'user' of 'Holder' needs a value, because a 'User' reference cannot be empty
 // error: cannot call 'bump' on const 'c', because it may change fields
-// error: comparing class objects is not supported yet
+// error: both sides of '==' must have the same type, but they are 'User' and 'int'
 // error: did you mean 'name'?
 // error: 'getAge' is a method; call it with `getAge()`
 // error: 'User' has no method named 'age'

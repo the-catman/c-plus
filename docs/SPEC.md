@@ -80,8 +80,10 @@ is an error.
 ### string
 
 An immutable UTF-8 string value. A `string` declared without a value is empty, as in
-C++. Today strings can be created from literals, stored, passed, returned and printed. Joining, comparing, indexing and slicing are planned
-(slicing will be bounds-checked; the representation will be copy-on-write).
+C++. Today strings can be created from literals, stored, passed, returned, printed, and
+compared with `==` and `!=`, which compare contents as in C++. Joining, ordering with `<`,
+indexing and slicing are planned (slicing will be bounds-checked; the representation will
+be copy-on-write).
 
 ### Implicit conversions
 
@@ -144,7 +146,11 @@ Point f = a;                    // a copy: changing f leaves a alone
   public unless marked `private:`, as in C++.
 - A struct that holds a class reference copies the reference, not the object, so both
   copies share that object.
-- Not yet: comparing structs with `==`, and destructors for structs.
+- `==` and `!=` work on every struct with no code to write: two structs are equal when
+  each pair of fields is equal, compared in order. C++20 needs
+  `bool operator==(const Point&) const = default;` for this; C+ does it for you. Strings
+  inside compare by contents and class references by identity (see [Classes](#classes)).
+- Not yet: destructors for structs.
 
 ### Classes
 
@@ -190,7 +196,11 @@ println("{}", a);              // User {name: "Alice", age: 31}
   and `private:` work as in C++. `protected:` acts as `private:` until inheritance arrives.
 - A class has at most one constructor until overloading arrives. To make values optional,
   leave out the constructor and give the fields defaults.
-- Not yet: comparing objects with `==`, and inheritance. Multiple inheritance will follow
+- `a == b` is true when `a` and `b` refer to the same object, like `===` on objects in
+  JavaScript or `==` on `shared_ptr` in C++. Two objects with equal fields are still two
+  objects, so `User("Ann") == User("Ann")` is false. To compare contents, compare the
+  fields. Classes will be able to define their own `==` with operator overloading.
+- Not yet: inheritance. Multiple inheritance will follow
   C++ default semantics: a diamond holds two copies of the shared base, and ambiguous
   members are qualified as `d.B::speak()`. There will be no virtual inheritance.
 
@@ -398,8 +408,12 @@ Precedence and associativity match C++. From tightest to loosest:
 | `?:` | condition is a bool or a number; branches must have compatible types |
 | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | right-associative |
 
-Arithmetic, bitwise and ordering operators take `int` and `long`. `==` and `!=` also take
-two `bool`s. Operands are evaluated left to right.
+Arithmetic, bitwise and ordering operators take `int` and `long`. `==` and `!=` take any
+two values of the same type: numbers, `bool`s, strings by contents, structs field by field,
+and class references by identity. Operands are evaluated left to right.
+
+Operator overloading is planned with C++ syntax, `Point operator+(Point other) const`,
+after function overloading. `&&`, `||` and the comma operator will not be overloadable.
 
 ### Integer overflow
 
@@ -529,14 +543,14 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Definite assignment of individual struct fields | implemented |
 | Classes: reference counting, constructors, destructors, printing | implemented |
 | Methods, `const` methods, `this`, `public:` / `private:` | implemented |
+| `==` and `!=` on strings, structs and class references | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
 | Casts, unsigned types, floating point, `char` | planned |
 | Function overloading | planned |
-| Strings: joining, comparing, slicing | planned |
+| Strings: joining, ordering, slicing | planned |
 | Arrays, `vector`, `hashmap` | planned |
 | Inheritance, `virtual`, `protected:` | planned |
-| Comparing structs and class objects with `==` | planned |
 | Operator overloading | planned |
 | Destructors for structs, static members | planned |
 | Optionals | planned |

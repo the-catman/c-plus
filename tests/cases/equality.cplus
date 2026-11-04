@@ -1,0 +1,76 @@
+// == and != compare strings by contents, structs field by field, and class
+// references by identity.
+struct Point {
+    int x;
+    int y;
+};
+
+struct Label {
+    string text;
+    Point at;
+    bool shown = true;
+};
+
+class User {
+public:
+    string name;
+    User(string n) : name(n) {}
+};
+
+struct Seat {
+    User user;
+    int row;
+};
+
+struct Empty {};
+
+string greeting() { return "hi"; }
+
+int main() {
+    string a = "hello";
+    string b = "hel";
+    string empty;
+    println("{} {} {}", a == "hello", a == b, a != b);
+    // expect: true false true
+    println("{} {} {}", empty == "", "" == empty, greeting() == "hi");
+    // expect: true true true
+
+    Point p = {1, 2};
+    Point q = {1, 2};
+    println("{} {} {}", p == q, p != q, p == Point{2, 1});
+    // expect: true false false
+    q.y = 3;
+    println("{}", p == q);
+    // expect: false
+
+    Label one = {"tag", {1, 2}};
+    Label two = {.text = "tag", .at = p};
+    println("{}", one == two);
+    // expect: true
+    two.shown = false;
+    println("{}", one == two);
+    // expect: false
+
+    User ann = User("Ann");
+    User same = ann;
+    User twin = User("Ann");
+    println("{} {} {}", ann == same, ann == twin, ann != twin);
+    // expect: true false true
+    println("{}", User("Ann") == User("Ann"));  // two different objects
+    // expect: false
+    println("{}", ann.name == twin.name);       // compare the fields to compare contents
+    // expect: true
+
+    Seat s1 = {ann, 1};
+    Seat s2 = {same, 1};
+    Seat s3 = {twin, 1};
+    println("{} {}", s1 == s2, s1 == s3);
+    // expect: true false
+
+    println("{} {}", Empty{} == Empty{}, true != false);
+    // expect: true true
+
+    if (a == "hello" && p == Point{1, 2}) println("both");
+    // expect: both
+    return 0;
+}

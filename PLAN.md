@@ -141,9 +141,16 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
   shared base, and ambiguous members must be qualified, `d.B::speak()`.
 - No virtual inheritance until a real case demands it.
 - Printing any object works out of the box via reflection; an optional `toString` overrides it.
+  Printing shows every field, private ones included.
+- A class reference is never empty. `User u;` declares a variable that must be assigned
+  before it is read, not a default-constructed object. Empty references are `User?`.
+- `const` on a class variable is shallow: the variable cannot refer to another object, but
+  the object can change, as with `const` in JavaScript.
+- One constructor per type until function overloading arrives.
+- `protected:` acts as `private:` until inheritance arrives.
 
 ### 2.12 Strings — DECIDED
-UTF-8 value type with copy-on-write. Slicing is bounds-checked.
+UTF-8 value type with copy-on-write. Slicing is bounds-checked. `==` compares contents.
 
 ### 2.13 Modules — DECIDED
 - No header files. One file is one module. Imports are dotted names mapped to paths:
@@ -191,6 +198,11 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
   pointers exist, a declaration that mixes pointers and non-pointers (`int* a, b;`) is an
   error.
 - `int` is 32-bit and `long` is 64-bit on every platform. There is no `long long` type.
+- `==` and `!=` work on every struct without writing anything: fields are compared in
+  order. On class references they compare identity, true only for the same object, like
+  `===` on objects in JavaScript and `==` on `shared_ptr` in C++.
+- Operator overloading uses C++ syntax, `Point operator+(Point other) const`, and arrives
+  after function overloading. `&&`, `||` and the comma operator cannot be overloaded.
 - Printing follows C++23: `println("x = {}", x)`. The format string must be a literal and
   the compiler checks that placeholders match arguments.
 - Source files use `.cplus`.
@@ -284,13 +296,6 @@ will confidently write C++ wherever the two differ.
 - Remaining syntax: interfaces, casts, `unique<T>` and `local<T>` construction, `async`
   functions, lambdas, enums, `switch`. Settled in Phase 0 as each feature is reached.
 - Function overloading is planned, as in C++, after the v1 core.
-- Operator overloading: not decided. The parser rejects `operator` with "not supported
-  yet". It would need function overloading first.
-- Class choices made while implementing classes, to confirm (**OPEN**): `User u;` is an
-  unassigned reference, not a default-constructed object; `const` on a class variable is
-  shallow; one constructor per type until overloading; `protected:` acts as `private:`
-  until inheritance; printing an object shows its private fields; `==` on objects is an
-  error until it is decided whether it compares identity or fields.
 - Event loop and threads: one loop per thread versus a work-stealing scheduler. Decided
   in Phase 5 with real workloads.
 - Package manager, after v1.

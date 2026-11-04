@@ -982,8 +982,10 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 break;
             }
             bool equality = b.op == BinOp::Eq || b.op == BinOp::Ne;
-            if (equality && l->is(K::Bool) && r->is(K::Bool)) {
-                b.operandType = Type::boolTy();
+            // Values of the same type can always be compared for equality: strings by
+            // contents, structs field by field, and class references by identity.
+            if (equality && l == r && !l->isInteger()) {
+                b.operandType = l;
                 result = Type::boolTy();
                 break;
             }
@@ -992,11 +994,10 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 const Expr* side = !l->isInteger() ? b.lhs.get() : b.rhs.get();
                 std::string help;
                 if (bad->is(K::String) && b.op == BinOp::Add) help = "joining strings is not supported yet; print the parts with println(\"{}{}\", a, b)";
-                else if (bad->is(K::String) && equality) help = "comparing strings is not supported yet";
-                else if (bad->isStruct() && equality) help = "comparing structs is not supported yet; compare their fields one by one";
-                else if (bad->isClass() && equality) help = "comparing class objects is not supported yet";
+                else if (equality) help = "both sides of '" + std::string(sym) + "' must have the same type, but they are " + q(l) + " and " + q(r);
+                else if (comparison && bad->is(K::String)) help = "strings can be compared with == and != for now; ordering them is planned";
+                else if (comparison && bad->hasFields()) help = q(bad) + " values can only be compared with == and !=";
                 else if (bad->is(K::Bool) && (b.op == BinOp::BitAnd || b.op == BinOp::BitOr)) help = std::string("use '") + (b.op == BinOp::BitAnd ? "&&" : "||") + "' for logic";
-                else if (equality) help = "both sides of " + std::string(sym) + " must have the same type";
                 diags_.error(side->loc, std::string("'") + sym + "' cannot be used with " + q(bad), help, spec::Operators);
                 if (comparison) result = Type::boolTy();
                 break;
