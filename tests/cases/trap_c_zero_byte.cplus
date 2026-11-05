@@ -1,0 +1,12 @@
+extern "C" long strlen(string s);
+
+int main() {
+    string text = "abc";
+    println("{}", strlen(text));
+    text += "\0def";
+    println("{}", strlen(text));
+    return 0;
+}
+// expect: 3
+// trap: the string passed to the C function 'strlen' has a zero byte at position 3, where C would think it ends
+// trap: trap_c_zero_byte.cplus:7:26

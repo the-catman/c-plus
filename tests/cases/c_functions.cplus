@@ -1,0 +1,66 @@
+// Calling C library functions: declare them with extern "C", using C+ types. A string
+// is passed to C as a copy that ends in a zero byte, and text C returns is copied into
+// a string.
+extern "C" int abs(int n);
+extern "C" long labs(long n);
+extern "C" long strlen(string s);
+
+extern "C" {
+    int atoi(string text);
+    int strcmp(string a, string b);
+    int toupper(int c);
+    string? getenv(string name);
+    int setenv(string name, string value, int overwrite);
+    int unsetenv(string);
+    int puts(string text);
+    string? setlocale(int category, string? locale);
+    int getpid(void);
+    int rand();
+    void srand(int seed);
+}
+
+int twice(int n) { return n * 2; }
+
+int main() {
+    println("{} {} {}", abs(-5), labs(-9000000000L), abs(twice(-4)));
+    // expect: 5 9000000000 8
+
+    // Strings are passed as zero-terminated copies, including substrings and strings built
+    // at run time.
+    string word = "hello world";
+    println("{} {} {}", strlen(word), strlen(word.substr(6, 3)), strlen(""));
+    // expect: 11 3 0
+    println("{} {} {}", atoi("42"), atoi(to_string(-17) + "x"), strcmp("apple", "apple"));
+    // expect: 42 -17 0
+    println("{} {}", strcmp("a", "b") < 0, toupper(97));
+    // expect: true 65
+
+    // Text a C function returns is copied into a string; NULL becomes null for `string?`.
+    setenv("CPLUS_TEST_VALUE", "from C", 1);
+    string? value = getenv("CPLUS_TEST_VALUE");
+    println("{} {}", value, value?.size());
+    // expect: from C 6
+    unsetenv("CPLUS_TEST_VALUE");
+    println("{} {}", getenv("CPLUS_TEST_VALUE"), getenv("CPLUS_TEST_VALUE") ?? "unset");
+    // expect: null unset
+    if (auto v = getenv("CPLUS_CHECK_LEAKS")) println("leak checks: {}", v);
+    // expect: leak checks: 1
+
+    // A null `string?` is passed as NULL. LC_ALL is 6 on Linux.
+    println("{}", setlocale(6, null));
+    // expect: C
+
+    // C's own output and println share one buffer, so they come out in order.
+    print("before ");
+    puts("from puts");
+    println("after");
+    // expect: before from puts
+    // expect: after
+
+    srand(7);
+    int r = rand();
+    srand(7);
+    println("{} {}", getpid() > 0, r == rand());
+    // expect: true true
+    return 0;
+}

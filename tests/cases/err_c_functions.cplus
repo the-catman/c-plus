@@ -1,0 +1,52 @@
+struct Point {
+    int x;
+    int y;
+};
+
+class User {
+public:
+    string name;
+    User(string n) : name(n) {}
+};
+
+extern "C" {
+    int area(Point p);
+    void keep(User u);
+    long total(vector<int> values);
+    int maybe(int? n);
+    Point origin();
+    int? find(string key);
+    int empty(void x);
+    int main();
+    void cplus_trap();
+    int println(int x);
+    int abs(int);
+    void srand(int seed);
+}
+
+int abs(int n) { return n < 0 ? -n : n; }
+
+int main() {
+    srand("seed");
+    srand(1, 2);
+    int n = srand(3);
+    return 0;
+}
+// error: this compiler does not support passing structs to or from C functions yet
+// error: pass the fields as separate arguments, if the C library allows it
+// error: a C function can take int, long, bool, string or string?, but this parameter is 'User'
+// error: C cannot hold a C+ object; pass the fields it needs as separate arguments
+// error: this compiler does not support passing vectors to or from C functions yet
+// error: a C function can take int, long, bool, string or string?, but this parameter is 'int?'
+// error: only text can be null in C (a NULL `const char*`). Pass a plain 'int' instead
+// error: a C function can return void, int, long, bool, string or string?, but this is 'int?'
+// error: Declare the result as a plain 'int' instead
+// error: parameters cannot have type void
+// error: 'main' is where a C+ program starts, so it cannot be a C function
+// error: names starting with 'cplus_' are reserved for the C+ runtime
+// error: 'println' is a built-in function and cannot be redefined
+// error: a function named 'abs' is already defined
+// error: expected 'int' for parameter 'seed' of 'srand', but this is 'string'
+// error: 'srand' takes 1 argument but 2 were given
+// error: its signature is `srand(int seed)`
+// error: spec: docs/SPEC.md#c-functions

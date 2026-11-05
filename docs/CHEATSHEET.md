@@ -33,6 +33,7 @@ long square(long n) { return n * n; }
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]` |
 | Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(n)` for an `int` or `long` |
 | Optionals | `User? u = find(name);` holds a `User` or `null`; `int? n;` starts out null. `u?.name` is null when `u` is, `u?.name ?? "nobody"` gives a fallback, `if (auto x = u)` runs with the `User` inside. `has_value()`, `value()`, `value_or(x)`, `u == null` |
+| C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`. Strings are converted at each call. Link other libraries with `-lname` |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)`, `break`, `continue`, `?:` |
 | Operators | all C++ integer operators, `&&` `\|\|` `!`, compound assignment, `++`/`--` |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors element by element, objects by identity. `opt == 3`, `opt == null` |
@@ -44,7 +45,9 @@ long square(long n) { return n * n; }
 
 | C++ habit | C+ |
 |-----------|----|
-| `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;` |
+| `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;`; C functions are declared with `extern "C"` |
+| `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `size_t` is `long`, `unsigned` is `int` |
+| `extern "C" int printf(const char*, ...);` | variable arguments are not supported; use `println` |
 | `std::cout << x`, `printf` | `println("{}", x)` |
 | `std::vector<int>`, `std::string`, `std::to_string` | `vector<int>`, `string`, `to_string`, with no `std::` |
 | `std::`, `using namespace std` | no `std::`; built-ins have no prefix |
@@ -112,6 +115,7 @@ long square(long n) { return n * n; }
 cplus check file.cplus      # errors only
 cplus run file.cplus        # build and run
 cplus build file.cplus -o app [-O] [--emit-llvm]
+cplus build app.cplus -lsqlite3 -L dir   # link C libraries, as with a C compiler
 ```
 
 Compiler errors say what is wrong, how to fix it, and which spec section explains the rule.

@@ -380,6 +380,7 @@ struct FuncDecl {
     Role role = Role::Free;
     StructDecl* owner = nullptr;  // the struct or class a method belongs to
     bool isConst = false;         // `int area() const`
+    bool isExtern = false;        // `extern "C" int abs(int n);`, defined in C, with no body
     Access access = Access::Public;
     std::vector<MemberInit> memberInits;
     std::unique_ptr<VarDecl> thisDecl;  // stands for `this` in definite assignment; set by Sema

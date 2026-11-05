@@ -46,6 +46,7 @@ private:
     void checkStructs(Program& program);
     void checkMembers(StructDecl& sd);
     void checkFunction(FuncDecl& fn);
+    void checkExternFunction(FuncDecl& fn);
     void checkStmt(Stmt& s, Flow& flow);
     void checkVarDecl(VarDecl& v, Flow& flow);
     void checkLoopBody(Stmt& body, Flow& flow);

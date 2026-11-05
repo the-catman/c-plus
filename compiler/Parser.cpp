@@ -110,7 +110,7 @@ void Parser::parseTopLevel(Program& prog) {
         case Tok::KwTemplate: notYet(t.loc, "templates (generics)");
         case Tok::KwEnum: notYet(t.loc, "enums");
         case Tok::KwInterface: notYet(t.loc, "interfaces");
-        case Tok::KwExtern: notYet(t.loc, "extern declarations for C libraries");
+        case Tok::KwExtern: parseExtern(prog); return;
         case Tok::KwNamespace:
             fail(t.loc, "C+ has no namespaces; each file is a module", "remove the namespace block", spec::Modules);
         case Tok::Ident:
@@ -145,6 +145,136 @@ void Parser::parseTopLevel(Program& prog) {
              spec::Classes);
     if (check(Tok::Ident) && peek(1).kind != Tok::LParen) notYet(peek().loc, "global variables");
     prog.funcs.push_back(parseFunction(ret, retLoc));
+}
+
+// `extern "C" int abs(int n);` or a block of such declarations: `extern "C" { ... }`.
+void Parser::parseExtern(Program& prog) {
+    Loc loc = advance().loc;
+    if (!check(Tok::StringLit))
+        fail(loc, "a C function is declared with `extern \"C\"`",
+             "write e.g. `extern \"C\" int abs(int n);`; C+ code needs no extern to call C+ functions in the same "
+             "file",
+             spec::CFunctions);
+    const Token& lang = advance();
+    if (lang.text != "C")
+        fail(lang.loc, "only C functions can be declared with extern, not \"" + lang.text + "\"",
+             lang.text == "C++" ? "C++ functions cannot be called directly. Wrap them in functions declared "
+                                  "`extern \"C\"` in C++, and declare those here with `extern \"C\"`"
+                                : "write `extern \"C\"`",
+             spec::CFunctions);
+    if (!match(Tok::LBrace)) {
+        prog.funcs.push_back(parseExternFunction());
+        return;
+    }
+    while (!check(Tok::RBrace) && !check(Tok::Eof)) {
+        try {
+            prog.funcs.push_back(parseExternFunction());
+        } catch (ParseError&) {
+            syncStatement();
+        }
+    }
+    expect(Tok::RBrace, "to close the extern \"C\" block");
+    match(Tok::Semi);
+}
+
+// `int abs(int n);` inside `extern "C"`. Parameter names are optional, as in C.
+std::unique_ptr<FuncDecl> Parser::parseExternFunction() {
+    if (check(Tok::KwExtern))
+        fail(peek().loc, "extern \"C\" blocks cannot be nested", "remove this `extern \"C\"`", spec::CFunctions);
+    if (check(Tok::KwStatic) || (check(Tok::Ident) && peek().text == "inline"))
+        fail(peek().loc, "'" + peek().text + "' does not belong in an extern \"C\" declaration",
+             "remove it; C+ calls the function that the C library exports", spec::CFunctions);
+    auto fn = std::make_unique<FuncDecl>();
+    fn->isExtern = true;
+    fn->retType = parseCType(fn->retTypeLoc, true);
+    const Token& name = expect(Tok::Ident, "for the name of the C function");
+    fn->name = name.text;
+    fn->nameLoc = name.loc;
+    if (!check(Tok::LParen))
+        fail(name.loc, "this compiler does not support C variables, such as errno, yet",
+             "only C functions can be declared with extern \"C\"", spec::CFunctions);
+    advance();
+    if (check(Tok::KwVoid) && peek(1).kind == Tok::RParen) advance();  // `int rand(void)`
+    if (!check(Tok::RParen)) {
+        do {
+            if (check(Tok::Dot) && peek(1).kind == Tok::Dot && peek(2).kind == Tok::Dot)
+                fail(peek().loc, "this compiler does not support C functions with variable arguments, such as "
+                                 "printf, yet",
+                     fn->name == "printf" || fn->name == "fprintf" || fn->name == "sprintf" || fn->name == "snprintf"
+                         ? "print with `println(\"{}\", x)` and build strings with `format(\"{}\", x)`"
+                         : "declare a C function with fixed parameters instead",
+                     spec::CFunctions);
+            Loc typeLoc;
+            const Type* ty = parseCType(typeLoc, false);
+            Loc nameLoc = typeLoc;
+            std::string pname;
+            if (check(Tok::Ident)) {
+                const Token& t = advance();
+                pname = t.text;
+                nameLoc = t.loc;
+            }
+            if (check(Tok::LBracket))
+                notYet(peek().loc, "C array parameters", "arrays reach C through raw pointers, which are planned");
+            if (check(Tok::Assign)) notYet(peek().loc, "default argument values");
+            auto param = std::make_unique<VarDecl>(nameLoc, pname, ty, typeLoc);
+            param->isParam = true;
+            fn->params.push_back(std::move(param));
+        } while (match(Tok::Comma));
+    }
+    expect(Tok::RParen, "to close the parameter list");
+    if (check(Tok::LBrace))
+        fail(peek().loc, "a function declared extern \"C\" is defined in C, so it has no body here",
+             "end the declaration with ';'. A function written in C+ needs no extern \"C\"",
+             spec::CFunctions);
+    expect(Tok::Semi, "after the declaration of a C function");
+    return fn;
+}
+
+// A type in a C declaration. C+ types are written there, and the common C spellings get
+// an error that names the C+ type to write instead.
+const Type* Parser::parseCType(Loc& loc, bool isReturn) {
+    const Token& t = peek();
+    bool isConst = check(Tok::KwConst);
+    const Token& base = isConst ? peek(1) : t;
+    std::string spelled = (isConst ? "const " : "") + base.text;
+    if (base.kind == Tok::KwChar && peek(isConst ? 2 : 1).kind == Tok::Star)
+        fail(t.loc, "C+ passes text to C as `string`, not as `" + spelled + "*`",
+             isReturn ? "write `string?`, which is null when the C function returns NULL, or `string` if it never "
+                        "does. The text is copied into a C+ string"
+                      : "write `string`. C+ passes a copy of the text that ends in a zero byte, as C expects; write "
+                        "`string?` if the function also accepts NULL",
+             spec::CFunctions);
+    if (base.kind == Tok::Ident) {
+        const std::string& n = base.text;
+        std::string use, why;
+        if (n == "size_t" || n == "ssize_t" || n == "ptrdiff_t" || n == "intptr_t" || n == "int64_t" ||
+            n == "off_t" || n == "time_t")
+            use = "long", why = "it is 64 bits, like '" + n + "'";
+        else if (n == "uint64_t" || n == "uintptr_t")
+            use = "long", why = "it passes the same 64 bits; C+ has no unsigned types yet";
+        else if (n == "int32_t" || n == "pid_t" || n == "uid_t" || n == "gid_t")
+            use = "int", why = "it is 32 bits, like '" + n + "'";
+        else if (n == "uint32_t" || n == "unsigned")
+            use = "int", why = "it passes the same 32 bits; C+ has no unsigned types yet";
+        if (n == "short" || n == "int8_t" || n == "int16_t" || n == "uint8_t" || n == "uint16_t")
+            notYet(base.loc, "8-bit and 16-bit integer types such as '" + n + "'",
+                   "a C function that takes one can be declared only once they exist");
+        if (!use.empty()) {
+            if (n == "unsigned" && peek(isConst ? 2 : 1).kind == Tok::KwLong)
+                use = "long", why = "it passes the same 64 bits; C+ has no unsigned types yet";
+            fail(t.loc, "'" + n + "' is a C type; write `" + use + "` here", why, spec::CFunctions);
+        }
+    }
+    if (base.kind == Tok::KwStruct)
+        notYet(t.loc, "passing C structs", "pass their fields as separate arguments, if the C library allows it");
+    if (isConst) advance();
+    const Type* ty = parseType(loc);
+    if (ty->is(Type::Kind::Auto)) fail(loc, "a C function needs written types, not 'auto'", "", spec::CFunctions);
+    if (check(Tok::Star))
+        notYet(peek().loc, "pointer types in C declarations",
+               "pointers, including handles such as `sqlite3*`, arrive with raw pointers, which are planned");
+    if (check(Tok::Amp)) fail(peek().loc, "C has no references", "pass the value itself", spec::CFunctions);
+    return ty;
 }
 
 // `std::name`. C+ has no namespaces, and its built-ins need no prefix.
@@ -629,6 +759,11 @@ StmtPtr Parser::parseStmt() {
             return std::make_unique<ContinueStmt>(t.loc);
         case Tok::KwSwitch: notYet(t.loc, "switch statements", "use if / else if for now");
         case Tok::KwTry: case Tok::KwThrow: notYet(t.loc, "errors (try, throw, catch)");
+        case Tok::KwExtern:
+            fail(t.loc, "C functions are declared outside of functions",
+                 "move the `extern \"C\"` declaration to the top level of the file; it can then be called anywhere "
+                 "in the file",
+                 spec::CFunctions);
         case Tok::KwDelete: notYet(t.loc, "manual memory (new and delete)");
         default: break;
     }

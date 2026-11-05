@@ -1,0 +1,10 @@
+extern "C" string getenv(string name);
+
+int main() {
+    println("{}", getenv("CPLUS_CHECK_LEAKS"));
+    println("{}", getenv("CPLUS_VARIABLE_THAT_IS_NOT_SET"));
+    return 0;
+}
+// expect: 1
+// trap: the C function 'getenv' returned NULL, but its declaration says it always returns a string; declare it as returning `string?`
+// trap: trap_c_null_string.cplus:5:19

@@ -249,6 +249,46 @@ int32_t cplus_str_ends_with(const char* s, int64_t length, const char* suffix, i
            (suffix_length == 0 || memcmp(s + (length - suffix_length), suffix, (size_t)suffix_length) == 0);
 }
 
+// ---- C functions -------------------------------------------------------------
+
+// The text of a string as C expects it: a copy that ends in a zero byte, which the
+// caller frees with cplus_c_free once the C function returns. NULL when `present` is
+// 0, for a null `string?`. A zero byte inside the text would cut it short in C, so it
+// stops the program instead.
+char* cplus_c_string(const char* data, int64_t length, int32_t present, const char* function, const char* file,
+                     int32_t line, int32_t column) {
+    if (!present) return NULL;
+    const char* zero = length > 0 ? memchr(data, 0, (size_t)length) : NULL;
+    if (zero) {
+        char message[256];
+        snprintf(message, sizeof message,
+                 "the string passed to the C function '%s' has a zero byte at position %" PRId64
+                 ", where C would think it ends",
+                 function, (int64_t)(zero - data));
+        cplus_trap(message, file, line, column);
+    }
+    char* copy = malloc((size_t)length + 1);
+    if (!copy) out_of_memory();
+    if (length > 0) memcpy(copy, data, (size_t)length);
+    copy[length] = 0;
+    return copy;
+}
+
+void cplus_c_free(char* text) { free(text); }
+
+// A string holding a copy of the text a C function returned. NULL gives the empty
+// string; for a `string?` result, the generated code makes that null.
+void cplus_str_from_c(cplus_string* out, const char* text) {
+    size_t length = text ? strlen(text) : 0;
+    if (length == 0) {
+        *out = (cplus_string){NULL, 0, NULL};
+        return;
+    }
+    cplus_str_buf* b = str_buf_new((int64_t)length);
+    memcpy(buf_bytes(b), text, length);
+    *out = (cplus_string){buf_bytes(b), (int64_t)length, b};
+}
+
 // ---- Output ----------------------------------------------------------------
 //
 // Printing goes to standard output when `out` is null, and otherwise to the end of

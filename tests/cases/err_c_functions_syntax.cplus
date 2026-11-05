@@ -1,0 +1,45 @@
+extern int f(int x);
+extern "C++" int g();
+extern "C" size_t length(string s);
+extern "C" long strlen(const char* s);
+extern "C" char* strdup(string s);
+extern "C" int printf(string format, ...);
+extern "C" void* malloc(long size);
+extern "C" int errno;
+extern "C" int square(int n) { return n * n; }
+extern "C" unsigned sleep(unsigned seconds);
+extern "C" {
+    extern "C" int abs(int);
+    double sqrt(double x);
+    static int helper();
+    int sum(int values[], int count);
+    uint64_t hash(string s);
+}
+
+int main() {
+    extern "C" int rand();
+    return 0;
+}
+// error: a C function is declared with `extern "C"`
+// error: only C functions can be declared with extern, not "C++"
+// error: C++ functions cannot be called directly
+// error: 'size_t' is a C type; write `long` here
+// error: it is 64 bits, like 'size_t'
+// error: C+ passes text to C as `string`, not as `const char*`
+// error: write `string`. C+ passes a copy of the text that ends in a zero byte, as C expects
+// error: C+ passes text to C as `string`, not as `char*`
+// error: write `string?`, which is null when the C function returns NULL
+// error: this compiler does not support C functions with variable arguments, such as printf, yet
+// error: print with `println("{}", x)`
+// error: this compiler does not support pointer types in C declarations yet
+// error: this compiler does not support C variables, such as errno, yet
+// error: a function declared extern "C" is defined in C, so it has no body here
+// error: 'unsigned' is a C type; write `int` here
+// error: extern "C" blocks cannot be nested
+// error: this compiler does not support floating-point types yet
+// error: 'static' does not belong in an extern "C" declaration
+// error: arrive with raw pointers, which are planned
+// error: this compiler does not support C array parameters yet
+// error: 'uint64_t' is a C type; write `long` here
+// error: C functions are declared outside of functions
+// error: spec: docs/SPEC.md#c-functions

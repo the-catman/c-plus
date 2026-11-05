@@ -152,7 +152,8 @@ static std::string cycleHelp(const Type* fieldType, const std::string& field, co
 static std::string signature(const FuncDecl& fn) {
     std::string sig = (fn.owner ? fn.owner->name + "." : "") + fn.name + "(";
     for (size_t i = 0; i < fn.params.size(); ++i)
-        sig += (i ? ", " : "") + std::string(fn.params[i]->declType->name) + " " + fn.params[i]->name;
+        sig += (i ? ", " : "") + std::string(fn.params[i]->declType->name) +
+               (fn.params[i]->name.empty() ? "" : " " + fn.params[i]->name);
     return sig + ")";
 }
 static std::string listFields(const StructDecl& sd) {
@@ -395,6 +396,13 @@ void Sema::check(Program& program) {
                          "give your function a different name", spec::Printing);
             continue;
         }
+        if (fn->isExtern && (fn->name == "main" || fn->name.rfind("cplus_", 0) == 0)) {
+            diags_.error(fn->nameLoc,
+                         fn->name == "main" ? "'main' is where a C+ program starts, so it cannot be a C function"
+                                            : "names starting with 'cplus_' are reserved for the C+ runtime",
+                         "give the function a different name", spec::CFunctions);
+            continue;
+        }
         if (auto s = structs_.find(fn->name); s != structs_.end()) {
             diags_.error(fn->nameLoc, q(fn->name) + " is already the name of a struct",
                          "give the function a different name", spec::Functions);
@@ -506,7 +514,46 @@ void Sema::checkStructs(Program& program) {
     }
 }
 
+// A C function takes and returns the types that have a C equivalent. A string becomes a
+// copy that ends in a zero byte, and a returned `const char*` becomes a string.
+void Sema::checkExternFunction(FuncDecl& fn) {
+    auto check = [&](const Type* t, Loc loc, bool isReturn) {
+        if (t->is(K::Int) || t->is(K::Long) || t->is(K::Bool) || t->is(K::String) || t->isError()) return;
+        if (t->isOptional() && t->elem->is(K::String)) return;
+        if (isReturn && t->is(K::Void)) return;
+        if (t->is(K::Void)) {
+            diags_.error(loc, "parameters cannot have type void",
+                         "a C function with no parameters is written `int rand();` or `int rand(void);`",
+                         spec::CFunctions);
+            return;
+        }
+        std::string message = isReturn ? "a C function can return void, int, long, bool, string or string?, but "
+                                         "this is " + q(t)
+                                       : "a C function can take int, long, bool, string or string?, but this "
+                                         "parameter is " + q(t);
+        std::string help;
+        if (t->isStruct())
+            message = "this compiler does not support passing structs to or from C functions yet",
+            help = "pass the fields as separate arguments, if the C library allows it";
+        else if (t->isClass())
+            help = "C cannot hold a C+ object; pass the fields it needs as separate arguments";
+        else if (t->isVector())
+            message = "this compiler does not support passing vectors to or from C functions yet",
+            help = "C arrays arrive with raw pointers; until then, pass the elements one at a time";
+        else if (t->isOptional())
+            help = "only text can be null in C (a NULL `const char*`). " +
+                   std::string(isReturn ? "Declare the result as" : "Pass") + " a plain " + q(t->elem) + " instead";
+        diags_.error(loc, message, help, spec::CFunctions);
+    };
+    check(fn.retType, fn.retTypeLoc, true);
+    for (auto& p : fn.params) {
+        p->type = p->declType;
+        check(p->declType, p->typeLoc, false);
+    }
+}
+
 void Sema::checkFunction(FuncDecl& fn) {
+    if (fn.isExtern) return checkExternFunction(fn);
     fn_ = &fn;
     Flow flow;
     bool isCtor = fn.role == FuncDecl::Role::Constructor;
@@ -1453,8 +1500,11 @@ void Sema::checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow,
         diags_.note(fn.nameLoc, q(fn.name) + " is defined here");
         return;
     }
-    for (size_t i = 0; i < args.size(); ++i)
-        checkValue(*args[i], flow, fn.params[i]->declType, "for parameter " + q(fn.params[i]->name) + " of " + q(fn.name));
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& n = fn.params[i]->name;  // a C function's parameters may have no names
+        checkValue(*args[i], flow, fn.params[i]->declType,
+                   (n.empty() ? "for argument " + std::to_string(i + 1) : "for parameter " + q(n)) + " of " + q(fn.name));
+    }
 }
 
 const Type* Sema::checkCall(CallExpr& call, Flow& flow) {

@@ -44,7 +44,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq;
     llvm::FunctionCallee rtTrapIndex, rtVecNew, rtVecRelease, rtVecReserve;
     llvm::FunctionCallee rtStrRelease, rtStrCompare, rtStrConcat, rtStrAppend, rtStrSubstr, rtStrFind;
-    llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith;
+    llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC;
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
 
@@ -162,6 +162,9 @@ struct Codegen::Impl {
         rtStrFind = decl("cplus_str_find", i64, {ptrTy, i64, ptrTy, i64, i64});
         rtStrStartsWith = decl("cplus_str_starts_with", i32, {ptrTy, i64, ptrTy, i64});
         rtStrEndsWith = decl("cplus_str_ends_with", i32, {ptrTy, i64, ptrTy, i64});
+        rtCString = decl("cplus_c_string", ptrTy, {ptrTy, i64, i32, ptrTy, ptrTy, i32, i32});
+        rtCFree = decl("cplus_c_free", voidTy, {ptrTy});
+        rtStrFromC = decl("cplus_str_from_c", voidTy, {ptrTy, ptrTy});
         rtTrapIndex = decl("cplus_trap_index", voidTy, {i64, i64, ptrTy, i32, i32});
         if (auto* f = llvm::dyn_cast<llvm::Function>(rtTrapIndex.getCallee())) {
             f->addFnAttr(llvm::Attribute::NoReturn);
@@ -1233,6 +1236,7 @@ struct Codegen::Impl {
         }
         // A function, or a method called by name inside another method of the same type.
         const FuncDecl* target = call.target ? call.target : call.method;
+        if (target->isExtern) return genCCall(call, *target);
         std::vector<llvm::Value*> args;
         if (call.method) args.push_back(thisPtr);
         for (size_t i = 0; i < call.args.size(); ++i) args.push_back(genOwned(*call.args[i], target->params[i]->type));
@@ -1585,6 +1589,7 @@ struct Codegen::Impl {
     // ---- Functions ---------------------------------------------------------
 
     void declareFunction(const FuncDecl& f) {
+        if (f.isExtern) return declareCFunction(f);
         std::vector<llvm::Type*> params;
         if (f.owner) params.push_back(b.getPtrTy());  // `this`
         for (auto& p : f.params) params.push_back(llvmType(p->type));
@@ -1606,6 +1611,65 @@ struct Codegen::Impl {
         funcs[&f] = func;
     }
 
+    // A C function, under its own name. Text crosses as a `const char*`, and a bool as
+    // a C `bool`, which is zero-extended to a byte.
+    void declareCFunction(const FuncDecl& f) {
+        auto cType = [&](const Type* t) -> llvm::Type* {
+            return t->is(K::String) || t->isOptional() ? b.getPtrTy() : llvmType(t);
+        };
+        std::vector<llvm::Type*> params;
+        for (auto& p : f.params) params.push_back(cType(p->type));
+        auto* type = llvm::FunctionType::get(cType(f.retType), params, false);
+        auto* func = llvm::Function::Create(type, llvm::Function::ExternalLinkage, f.name, mod.get());
+        for (size_t i = 0; i < f.params.size(); ++i)
+            if (f.params[i]->type->is(K::Bool)) func->addParamAttr((unsigned)i, llvm::Attribute::ZExt);
+        if (f.retType->is(K::Bool)) func->addRetAttr(llvm::Attribute::ZExt);
+        funcs[&f] = func;
+    }
+
+    // A call to a C function. Each string is copied, with a zero byte at the end, right
+    // after it is evaluated, and the copies are freed when the call returns. Text the
+    // function returns is copied into a string.
+    llvm::Value* genCCall(const CallExpr& call, const FuncDecl& f) {
+        std::vector<llvm::Value*> args, copies;
+        for (size_t i = 0; i < call.args.size(); ++i) {
+            const Type* t = f.params[i]->type;
+            llvm::Value* v = genConverted(*call.args[i], t);
+            if (!t->is(K::String) && !t->isOptional()) {
+                args.push_back(v);
+                continue;
+            }
+            llvm::Value* present = b.getInt32(1);
+            if (t->isOptional()) {
+                present = b.CreateZExt(hasValue(v, t), b.getInt32Ty());
+                v = valueOf(v, t);  // zero bytes when null
+            }
+            llvm::Value* copy = b.CreateCall(rtCString, {strData(v), strLength(v), present, cstring(f.name), fileName,
+                                                         b.getInt32(call.args[i]->loc.line),
+                                                         b.getInt32(call.args[i]->loc.col)});
+            args.push_back(copy);
+            copies.push_back(copy);
+        }
+        llvm::Function* callee = funcs.at(&f);
+        llvm::CallInst* result = b.CreateCall(callee, args);
+        result->setAttributes(callee->getAttributes());  // a bool is extended at the call, too
+        for (llvm::Value* copy : copies) b.CreateCall(rtCFree, {copy});
+        const Type* rt = f.retType;
+        if (rt->is(K::Void)) return nullptr;
+        if (!rt->is(K::String) && !rt->isOptional()) return result;
+        if (rt->is(K::String))
+            trapIf(b.CreateIsNull(result),
+                   "the C function '" + f.name + "' returned NULL, but its declaration says it always returns a "
+                   "string; declare it as returning `string?`",
+                   call.loc);
+        llvm::AllocaInst* slot = entryAlloca(stringTy, "text");
+        b.CreateCall(rtStrFromC, {slot, result});
+        llvm::Value* text = b.CreateLoad(stringTy, slot, "text");
+        if (rt->is(K::String)) return text;
+        llvm::Value* opt = b.CreateInsertValue(llvm::PoisonValue::get(llvmType(rt)), b.CreateIsNotNull(result), {0});
+        return b.CreateInsertValue(opt, text, {1});
+    }
+
     // Before a constructor's body runs, each field gets its value from the initializer
     // list, its default, or zero, in the order the fields are declared.
     void genFieldInits(const FuncDecl& ctor) {
@@ -1624,6 +1688,7 @@ struct Codegen::Impl {
     }
 
     void defineFunction(const FuncDecl& f) {
+        if (f.isExtern) return;  // defined in C
         fn = funcs.at(&f);
         fnDecl = &f;
         locals.clear();

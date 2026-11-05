@@ -492,7 +492,8 @@ long square(long n) {
 
 - **No headers and no forward declarations.** A function can be called anywhere in its
   file, before or after its definition. Writing a prototype like `int f(int x);` is an
-  error.
+  error. The exception is a function written in C, which is declared with
+  [`extern "C"`](#c-functions).
 - Every path through a non-`void` function must `return` a value. Falling off the end is
   a compile error, not undefined behavior.
 - A `void` function cannot return a value.
@@ -506,6 +507,63 @@ long square(long n) {
 
 Every program has exactly one `int main()`. Its return value is the process exit code.
 Falling off the end of `main` returns 0, as in C++. Command-line arguments are planned.
+
+### C functions
+
+A function from a C library is declared with `extern "C"`, as in C++, and called like any
+other function. The declaration is written with C+ types, and the compiler converts the
+values to and from C at each call.
+
+```cpp
+extern "C" int abs(int n);
+
+extern "C" {
+    long strlen(string s);                                  // size_t strlen(const char* s)
+    string? getenv(string name);                            // char* getenv(const char* name)
+    int setenv(string name, string value, int overwrite);
+}
+
+int main() {
+    println("{} {}", abs(-5), strlen("four"));
+    println("{}", getenv("HOME") ?? "no home directory");
+    return 0;
+}
+```
+
+| In the C header | In the `extern "C"` declaration |
+|-----------------|---------------------------------|
+| `int`, `int32_t`, `pid_t`, `unsigned`, `uint32_t` | `int` |
+| `long`, `long long`, `int64_t`, `size_t`, `ssize_t`, `time_t`, `uint64_t` | `long` |
+| `bool` | `bool` |
+| `void` result | `void` |
+| `const char*` parameter | `string`, or `string?` when NULL may be passed |
+| `char*` or `const char*` result | `string?`, which is null when the result is NULL, or `string` when it never is |
+
+- Parameter names are optional, as in C: `int abs(int);`. `int rand();` and
+  `int rand(void);` both take no arguments.
+- **Strings going to C.** A `string` argument is copied into a buffer that ends in a zero
+  byte, as C expects, and the copy is freed when the call returns, so a C function must
+  not keep the pointer. A string with a zero byte inside stops the program, since C
+  would only see the text before it. A null `string?` is passed as NULL.
+- **Strings coming back.** Text a C function returns is copied into a new string. C+
+  never frees memory that a C function returns. That is right for functions such as
+  `getenv`, which return text they keep, but memory from functions such as `strdup`, which
+  the caller must free, leaks. Those need raw pointers, which are planned. A result
+  declared `string` that turns out to be NULL stops the program with file:line; declare
+  `string?` for a function that can return NULL.
+- **Unsigned types** are declared with the C+ type of the same size. The same bits are
+  passed, so a value above the largest `int` or `long` comes out negative. C's `long` is
+  64 bits on Linux and macOS, like C+'s.
+- **Libraries.** C's standard library is always linked. Other libraries are named on the
+  command line, as with a C compiler: `cplus build app.cplus -lsqlite3`, adding
+  `-L <directory>` for a library outside the usual places. `cplus run` takes the same
+  options.
+- C's output functions, such as `puts`, share their buffer with `print` and `println`, so
+  output comes out in the order it was written.
+- A C function cannot be named `main`, or start with `cplus_`, which the C+ runtime uses.
+- Not supported yet: pointers, including handles such as `sqlite3*`; structs; `double`,
+  `float` and `char`; functions with a variable number of arguments, such as `printf`;
+  callbacks; C variables such as `errno`; and reading declarations from C headers.
 
 ### Modules
 
@@ -769,6 +827,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Vectors: `vector<T>`, checked `v[i]`, `push_back` and the other basic methods, copy-on-write | implemented |
 | Range-based `for` over vectors | implemented |
 | Optionals: `T?`, `null`, `?.`, `??`, `if (auto u = opt)`, `value()`, `value_or()` | implemented |
+| `extern "C"` functions taking and returning `int`, `long`, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
 | Casts, unsigned types, floating point, `char` | planned |
@@ -782,7 +841,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `weak` references | planned |
 | Errors (`throws`, `try`, `catch`) | planned |
 | Generics | planned |
-| `extern` C functions | planned |
+| C pointers, structs, callbacks and variables in `extern "C"`; reading C headers | planned |
 | Reflection, JSON, HTTP | planned |
 | Threads, async | planned |
 

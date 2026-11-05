@@ -25,7 +25,10 @@ static const char* kUsage =
     "  cplus build <file.cplus> [-o <output>] [-O]   compile to a native executable\n"
     "  cplus build <file.cplus> --emit-llvm [-O]     print the LLVM IR instead\n"
     "  cplus run <file.cplus> [-O] [-- <args>...]    build to a temporary file and run it\n"
-    "  cplus --version\n";
+    "  cplus --version\n"
+    "\n"
+    "build and run also take -l<library> and -L<directory>, as a C compiler does, for\n"
+    "the libraries of C functions declared with extern \"C\", e.g. -lsqlite3.\n";
 
 struct Options {
     std::string command;
@@ -33,6 +36,7 @@ struct Options {
     std::string output;
     bool optimize = false;
     bool emitLLVM = false;
+    std::vector<std::string> linkArgs;  // -l and -L, passed on to the linker
     std::vector<std::string> programArgs;
 };
 
@@ -117,11 +121,21 @@ static int build(const Options& opts, const std::string& exePath) {
         std::fprintf(stderr, "error: %s\n", error.c_str());
         return 1;
     }
-    int rc = runProcess({CPLUS_LINKER, objPath, CPLUS_RUNTIME_LIB, "-o", exePath});
+    std::vector<std::string> link{CPLUS_LINKER, objPath, CPLUS_RUNTIME_LIB};
+    link.insert(link.end(), opts.linkArgs.begin(), opts.linkArgs.end());
+    link.insert(link.end(), {"-o", exePath});
+    int rc = runProcess(link);
     std::error_code ec;
     fs::remove(objPath, ec);
     if (rc != 0) {
         std::fprintf(stderr, "error: linking failed (the linker exited with code %d)\n", rc);
+        bool callsC = false;
+        for (auto& f : program.funcs) callsC = callsC || f->isExtern;
+        if (callsC)
+            std::fprintf(stderr, "  = help: if a C function is undefined, name its library with -l, e.g. `cplus "
+                                 "%s %s -lsqlite3`, and its directory with -L if it is not installed in the usual "
+                                 "place\n",
+                         opts.command.c_str(), opts.input.c_str());
         return 1;
     }
     return 0;
@@ -154,6 +168,14 @@ int main(int argc, char** argv) {
             opts.output = argv[i];
         } else if (a == "-O") {
             opts.optimize = true;
+        } else if (a.rfind("-l", 0) == 0 || a.rfind("-L", 0) == 0) {
+            // -lm or -l m; -Ldir or -L dir. `check` accepts them too, so one command line works for all.
+            std::string value = a.substr(2);
+            if (value.empty()) {
+                if (++i == argc) return usageError(a + " needs a " + (a == "-l" ? "library name" : "directory"));
+                value = argv[i];
+            }
+            opts.linkArgs.push_back(a.substr(0, 2) + value);
         } else if (a == "--emit-llvm") {
             if (opts.command != "build") return usageError("--emit-llvm is only used with `cplus build`");
             opts.emitLLVM = true;

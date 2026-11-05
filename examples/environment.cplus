@@ -1,0 +1,21 @@
+// Calling the C library: `extern "C"` declares C functions with C+ types. Strings are
+// converted at each call, and a function that may return NULL returns `string?`.
+extern "C" {
+    string? getenv(string name);
+    int setenv(string name, string value, int overwrite);
+    int atoi(string text);
+    int getpid();
+}
+
+int main() {
+    for (string name : vector<string>{"SHELL", "LANG", "NO_SUCH_VARIABLE"})
+        println("{} = {}", name, getenv(name) ?? "(not set)");
+
+    // Settings often arrive as environment variables holding numbers.
+    setenv("REPEAT", "3", 0);  // 0: keep the value if REPEAT is already set
+    int times = atoi(getenv("REPEAT") ?? "1");
+    for (int i = 1; i <= times; i++) println("round {} of {}", i, times);
+
+    println("running as process {}", getpid());
+    return 0;
+}

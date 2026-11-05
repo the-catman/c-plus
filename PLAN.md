@@ -54,6 +54,18 @@ C++20, built with clang. Self-hosting in C+ is a later milestone, not a requirem
 - First (project Phase 1): manual `extern` declarations for C functions and structs.
 - Later (project Phase 6): import C headers directly via libclang, Zig translate-c style.
 - C+ is not a superset of C. No compatibility mode.
+- Declarations are written as in C++, `extern "C" int abs(int n);` or `extern "C" { ... }`,
+  but with C+ types: `long strlen(string s);`, `string? getenv(string name);`. C spellings
+  such as `const char*`, `size_t` and `unsigned` are errors that name the C+ type to write.
+  Decided 2026-11-05.
+- A `string` argument is passed as a copy that ends in a zero byte, freed when the call
+  returns. A zero byte inside the string stops the program. A null `string?` is NULL.
+- A returned `const char*` is copied into a string; C+ never frees it. A `string` result
+  that is NULL stops the program, and a `string?` result makes it null.
+- Libraries are named on the command line, `-lname` and `-Ldir`, as with a C compiler.
+  libc is always linked.
+- Pointers (and opaque handles), C structs, `double`, `char`, variadic functions and
+  callbacks follow with the features they need.
 
 ### 2.5 C++ interop — DECIDED
 None. C++ libraries are consumed through hand-written `extern "C"` shims. No tooling
@@ -297,8 +309,10 @@ progress. The compiler builds programs with integers, bools, strings (joining, o
 constructors and destructors, vectors, and optionals (`T?`, `null`, `?.`, `??`), using
 functions, control flow including range-based `for`, definite assignment (down to struct
 fields), overflow and bounds traps, and `println`, all through LLVM. Destructors and a
-leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. Next in
-Phase 1: `extern` C calls and `char`.
+leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. C functions
+can be called through `extern "C"` declarations with `int`, `long`, `bool` and `string`
+values. Next in Phase 1: `char`, floating point and raw pointers, which the rest of C
+interop needs.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

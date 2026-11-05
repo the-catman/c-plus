@@ -38,6 +38,9 @@ private:
     // Grammar
     void parseTopLevel(Program& prog);
     void parseRecord();  // struct or class
+    void parseExtern(Program& prog);
+    std::unique_ptr<FuncDecl> parseExternFunction();
+    const Type* parseCType(Loc& loc, bool isReturn);
     void parseMember(StructDecl& sd, Access& access);
     void parseParams(FuncDecl& fn);
     void parseMemberInits(FuncDecl& ctor);
