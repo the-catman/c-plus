@@ -1,0 +1,10 @@
+// Memory from `new T` is freed with plain delete, not delete[].
+[[allow(new_delete)]];
+
+int main() {
+    int* value = new int(4);
+    delete[] value;
+    return 0;
+}
+// trap: 'delete[]' was used on memory from `new T`, which is freed with `delete`
+// trap: trap_delete_one.cplus:6:5

@@ -8,8 +8,13 @@ in its comments. A test can use these, one per line, anywhere in the file:
 
   // expect: <text>    the next line the program must print (in order)
   // error: <text>     compiling must fail, and the errors must contain <text>
+  // warning: <text>   compiling must print a warning containing <text>; a test with no
+                       warning directives fails if the compiler prints any warning
   // trap: <text>      the program must stop with a runtime error containing <text>
+  // stderr: <text>    what the program prints to stderr must contain <text>, e.g. a
+                       leak report, which otherwise fails the test
   // exit: <number>    the exit code the program must return (default 0)
+  // flags: <flags>    options for the compiler, e.g. -Wno-new-delete
 
 A program that runs is built twice, without and with -O, and must behave the same
 both times. It runs with CPLUS_CHECK_LEAKS=1, so a class object that is never freed,
@@ -49,12 +54,16 @@ def run_case(cplus, path, workdir):
     expect = re.findall(r"//[ \t]*expect:[ \t]?(.*)$", text, re.M)
     errors = re.findall(r"//[ \t]*error:[ \t]*(.*?)[ \t]*$", text, re.M)
     traps = re.findall(r"//[ \t]*trap:[ \t]*(.*?)[ \t]*$", text, re.M)
+    warnings = re.findall(r"//[ \t]*warning:[ \t]*(.*?)[ \t]*$", text, re.M)
+    stderr = re.findall(r"//[ \t]*stderr:[ \t]*(.*?)[ \t]*$", text, re.M)
+    flags_m = re.search(r"//[ \t]*flags:[ \t]*(.*?)[ \t]*$", text, re.M)
+    extra = flags_m.group(1).split() if flags_m else []
     exit_m = re.search(r"//[ \t]*exit:[ \t]*(-?\d+)", text)
     want_exit = int(exit_m.group(1)) if exit_m else 0
     rel = path.relative_to(ROOT)
 
     if errors:
-        build = subprocess.run([cplus, "build", str(rel), "-o", str(workdir / path.stem)], cwd=ROOT,
+        build = subprocess.run([cplus, "build", str(rel), "-o", str(workdir / path.stem), *extra], cwd=ROOT,
                                capture_output=True, text=True)
         if build.returncode == 0:
             return "expected a compile error, but it compiled"
@@ -63,17 +72,23 @@ def run_case(cplus, path, workdir):
             return "compile errors did not contain: " + "; ".join(missing) + "\n--- stderr ---\n" + build.stderr
         return None
     for flags in ([], ["-O"]):
-        problem = run_program(cplus, rel, workdir / path.stem, flags, expect, traps, want_exit)
+        problem = run_program(cplus, rel, workdir / path.stem, [*extra, *flags], expect, traps, want_exit, warnings,
+                              stderr)
         if problem:
             return (f"with {' '.join(flags)}: " if flags else "") + problem
     return None
 
 
-def run_program(cplus, rel, exe, flags, expect, traps, want_exit):
+def run_program(cplus, rel, exe, flags, expect, traps, want_exit, warnings, stderr):
     build = subprocess.run([cplus, "build", str(rel), "-o", str(exe), *flags], cwd=ROOT, capture_output=True,
                            text=True)
     if build.returncode != 0:
         return "failed to compile:\n" + build.stderr
+    if not warnings and "warning:" in build.stderr:
+        return "unexpected warning:\n" + build.stderr
+    missing = [w for w in warnings if w not in build.stderr]
+    if missing:
+        return "warnings did not contain: " + "; ".join(missing) + "\n--- stderr ---\n" + build.stderr
     env = dict(os.environ, CPLUS_CHECK_LEAKS="1")
     try:
         run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10, env=env)
@@ -87,7 +102,11 @@ def run_program(cplus, rel, exe, flags, expect, traps, want_exit):
             return "runtime error did not contain: " + "; ".join(missing) + "\n--- stderr ---\n" + run.stderr
     elif run.returncode != want_exit:
         return f"exit code {run.returncode}, expected {want_exit}\n--- stderr ---\n{run.stderr}"
-    if "never freed" in run.stderr or "internal error" in run.stderr:
+    missing = [e for e in stderr if e not in run.stderr]
+    if missing:
+        return "stderr did not contain: " + "; ".join(missing) + "\n--- stderr ---\n" + run.stderr
+    reported = any("never freed" in e for e in stderr)
+    if ("never freed" in run.stderr and not reported) or "internal error" in run.stderr:
         return "memory problem:\n" + run.stderr
     got = run.stdout.splitlines()
     if got != expect:

@@ -1,0 +1,13 @@
+// -Wno-new-delete turns off the warning for new and delete in the whole program, with
+// no attribute in the file.
+// flags: -Wno-new-delete
+int main() {
+    int* n = new int(3);
+    int* many = new int[2];
+    many[1] = *n;
+    println("{}", many[1]);
+    // expect: 3
+    delete n;
+    delete[] many;
+    return 0;
+}

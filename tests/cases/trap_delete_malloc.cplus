@@ -1,0 +1,11 @@
+// delete only frees memory from new. Memory from C's malloc is freed with free.
+[[allow(new_delete)]];
+extern "C" void* malloc(long size);
+
+int main() {
+    int* values = (int*)malloc(64);
+    delete values;
+    return 0;
+}
+// trap: 'delete' was used on memory that did not come from new, or was already deleted
+// trap: trap_delete_malloc.cplus:7:5

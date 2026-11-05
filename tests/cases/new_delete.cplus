@@ -1,0 +1,178 @@
+// new and delete, as in C++: `new T` makes one value that stays until `delete` frees
+// it, and `new T[n]` makes n of them, freed with `delete[]`. The line below turns off
+// the warning that every new and delete otherwise gets, for the whole file.
+[[allow(new_delete)]];
+
+struct Point {
+    int x = 1;
+    int y = 2;
+};
+
+struct Counter {
+    int count;
+    Counter() : count(100) {}
+};
+
+struct Node {
+    int value;
+    Node* next = null;
+};
+
+class Tracker {
+public:
+    string label;
+    Tracker(string l) : label(l) {}
+    ~Tracker() { println("freed {}", label); }
+};
+
+struct Slot {
+    Tracker? tracker;
+    string note = "empty";
+};
+
+// The file's attribute also covers a field whose default value uses new.
+struct Owned {
+    int* p = new int(11);
+};
+
+// A list linked by nodes from new.
+Node* push(Node* head, int value) { return new Node{value, head}; }
+
+int total(const Node* head) {
+    int sum = 0;
+    for (const Node* cur = head; cur != null; cur = cur->next) sum += cur->value;
+    return sum;
+}
+
+void freeAll(Node* head) {
+    while (head != null) {
+        Node* next = head->next;
+        delete head;
+        head = next;
+    }
+}
+
+int main() {
+    // One value: the one given, or the default of its type.
+    int* n = new int(5);
+    int* zero = new int;
+    int* alsoZero = new int();
+    long* wide = new long(7);  // an int converts to long, as in `long x = 7;`
+    println("{} {} {} {}", *n, *zero, *alsoZero, *wide);
+    // expect: 5 0 0 7
+    *n += 1;
+    println("{}", *n);
+    // expect: 6
+    delete n;
+    delete zero;
+    delete alsoZero;
+    delete wide;
+
+    // Structs: field defaults, a { } list, `Point(...)`, and a constructor.
+    Point* a = new Point;
+    Point* b = new Point{3, 4};
+    Point* c = new Point(5, 6);
+    Point* d = new Point{.y = 9};
+    Counter* counter = new Counter;
+    println("{} {} {} {} {}", *a, *b, c->x, d->y, counter->count);
+    // expect: {x: 1, y: 2} {x: 3, y: 4} 5 9 100
+    delete a;
+    delete b;
+    delete c;
+    delete d;
+    delete counter;
+
+    // Arrays: every element starts with its default, and p[i] reaches each one.
+    int* squares = new int[5];
+    for (int i = 0; i < 5; i++) squares[i] = i * i;
+    println("{} {} {}", squares[0], squares[4], squares[2] + squares[3]);
+    // expect: 0 16 13
+    delete[] squares;
+    Point* points = new Point[3]();
+    points[2].x = 30;
+    println("{} {}", points[0], points[2]);
+    // expect: {x: 1, y: 2} {x: 30, y: 2}
+    delete[] points;
+    Counter* counters = new Counter[2];
+    println("{}", counters[1].count);
+    // expect: 100
+    delete[] counters;
+    long size = 0;
+    char* empty = new char[size];  // no elements, as C++ allows
+    delete[] empty;
+
+    // delete releases the strings, vectors and objects inside.
+    string* s = new string("hello");
+    *s += " world";
+    vector<int>* v = new vector<int>(3, 7);
+    v->push_back(8);
+    println("{} {}", *s, *v);
+    // expect: hello world [7, 7, 7, 8]
+    delete s;
+    delete v;
+    Slot* slots = new Slot[3];
+    slots[0].tracker = Tracker("first");
+    slots[2].tracker = Tracker("last");
+    slots[2].note = "full";
+    println("{} {}", slots[1].note, slots[2].note);
+    // expect: empty full
+    delete[] slots;  // the last element is released first, as in C++
+    // expect: freed last
+    // expect: freed first
+
+    // Any other type: optionals, vectors from a list, the forms of string, and conversions.
+    Tracker? boxed = Tracker("boxed");
+    Tracker?* slot = new Tracker?(boxed);
+    println("{}", (*slot)?.label ?? "none");
+    // expect: boxed
+    delete slot;
+    Tracker?* nothing = new Tracker?;
+    println("{}", *nothing == null);
+    // expect: true
+    delete nothing;
+    vector<int>* listed = new vector<int>{1, 2};
+    string* dashes = new string(3, '-');
+    string* blank = new string();
+    char* letter = new char('a');
+    float* half = new float(0.5);
+    double* whole = new double(1);
+    println("{} {} [{}] {} {} {}", *listed, *dashes, *blank, *letter, *half, *whole);
+    // expect: [1, 2] --- [] a 0.5 1
+    delete listed;
+    delete dashes;
+    delete blank;
+    delete letter;
+    delete half;
+    delete whole;
+    Owned* owned = new Owned;
+    println("{}", *owned->p);
+    // expect: 11
+    delete owned->p;
+    delete owned;
+
+    // A linked list.
+    Node* list = null;
+    for (int i = 1; i <= 4; i++) list = push(list, i * 10);
+    println("{} {}", list->value, total(list));
+    // expect: 40 100
+    freeAll(list);
+
+    // An array of pointers, and deleting null, which does nothing.
+    int** table = new int*[2];
+    table[0] = new int(1);
+    table[1] = new int(2);
+    println("{} {}", *table[0], *table[1]);
+    // expect: 1 2
+    delete table[0];
+    delete table[1];
+    delete[] table;
+    int* none = null;
+    delete none;
+    delete[] none;
+    const Point* fixed = new Point{8, 8};
+    println("{}", fixed->x + fixed->y);
+    // expect: 16
+    delete fixed;  // a pointer to const can be deleted, as in C++
+    return 0;
+}
+// expect: freed boxed

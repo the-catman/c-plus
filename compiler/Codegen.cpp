@@ -48,6 +48,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
+    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree;
     llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
@@ -185,6 +186,9 @@ struct Codegen::Impl {
             }
         rtPrintCharQuoted = decl("cplus_print_char_quoted", voidTy, {ptrTy, i32});
         rtPrintPtr = decl("cplus_print_ptr", voidTy, {ptrTy, ptrTy});
+        rtNew = decl("cplus_new", ptrTy, {i64, i64, i32, ptrTy, i32, i32});
+        rtDeleteCheck = decl("cplus_delete_check", i64, {ptrTy, i32, ptrTy, i32, i32});
+        rtDeleteFree = decl("cplus_delete_free", voidTy, {ptrTy});
         rtStrMutable = decl("cplus_str_mutable", ptrTy, {ptrTy});
         rtStrRepeat = decl("cplus_str_repeat", voidTy, {ptrTy, i64, i32, ptrTy, i32, i32});
         rtVecNew = decl("cplus_vec_new", ptrTy, {i64, i64});
@@ -1179,6 +1183,8 @@ struct Codegen::Impl {
             case Expr::Kind::InitList:
                 owned = true;
                 return genInitList(static_cast<const InitListExpr&>(e), e.type);
+            case Expr::Kind::New: return genNew(static_cast<const NewExpr&>(e));
+            case Expr::Kind::Delete: genDelete(static_cast<const DeleteExpr&>(e)); return nullptr;
             case Expr::Kind::Sizeof: {
                 const Type* t = static_cast<const SizeofExpr&>(e).target;
                 return b.getInt64(mod->getDataLayout().getTypeAllocSize(llvmType(t)));
@@ -1333,6 +1339,53 @@ struct Codegen::Impl {
             case Expr::Kind::MethodCall: owned = true; return genMethodCall(static_cast<const MethodCallExpr&>(e));
         }
         llvm_unreachable("unknown expression kind");
+    }
+
+    // `new T...`: memory from the runtime, which records before it how many elements
+    // there are, filled with the value given or the default of T.
+    llvm::Value* genNew(const NewExpr& n) {
+        const Type* t = n.target;
+        llvm::Type* lt = llvmType(t);
+        uint64_t size = mod->getDataLayout().getTypeAllocSize(lt);
+        llvm::Value* count = n.count ? genConverted(*n.count, Type::longTy()) : b.getInt64(1);
+        llvm::Value* p = b.CreateCall(rtNew, {b.getInt64(size), count, b.getInt32(n.count ? 1 : 0), fileName,
+                                              b.getInt32(n.loc.line), b.getInt32(n.loc.col)},
+                                      "new");
+        if (n.init) {
+            b.CreateStore(genOwned(*n.init, t), p);
+        } else if (t->isStruct()) {  // the memory starts as zero bytes, the default of every other type
+            countedLoop(count, [&](llvm::Value* i) {
+                size_t mark = temps.size();
+                llvm::Value* x = t->decl->constructor ? construct(*t->decl, {}) : genDefault(t);
+                flushTemps(mark);
+                b.CreateStore(x, b.CreateInBoundsGEP(lt, p, i));
+            });
+        }
+        return p;
+    }
+
+    // `delete p` and `delete[] p`: the values are released, the last one first, and the
+    // memory is freed. Deleting null does nothing, as in C++.
+    void genDelete(const DeleteExpr& d) {
+        llvm::Value* p = gen(*d.operand);
+        const Type* t = d.operand->type->elem;
+        auto* freeBB = llvm::BasicBlock::Create(ctx, "delete", fn);
+        auto* doneBB = llvm::BasicBlock::Create(ctx, "delete.done", fn);
+        b.CreateCondBr(b.CreateIsNull(p), doneBB, freeBB);
+        b.SetInsertPoint(freeBB);
+        llvm::Value* count = b.CreateCall(rtDeleteCheck, {p, b.getInt32(d.array ? 1 : 0), fileName,
+                                                          b.getInt32(d.loc.line), b.getInt32(d.loc.col)},
+                                          "count");
+        if (isManaged(t)) {
+            llvm::Type* lt = llvmType(t);
+            countedLoop(count, [&](llvm::Value* i) {
+                llvm::Value* index = b.CreateSub(b.CreateSub(count, b.getInt64(1)), i);
+                releaseValue(b.CreateLoad(lt, b.CreateInBoundsGEP(lt, p, index)), t);
+            });
+        }
+        b.CreateCall(rtDeleteFree, {p});
+        b.CreateBr(doneBB);
+        b.SetInsertPoint(doneBB);
     }
 
     // `p == q`, `p < q`, `p + n`, `n + p`, `p - n` and `p - q`. Pointers compare as

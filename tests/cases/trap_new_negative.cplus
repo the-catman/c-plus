@@ -1,0 +1,12 @@
+// The number of elements given to new[] cannot be negative.
+[[allow(new_delete)]];
+
+int count() { return -2; }
+
+int main() {
+    int* values = new int[count()];
+    delete[] values;
+    return 0;
+}
+// trap: new[] was given -2 as the number of elements, which is negative
+// trap: trap_new_negative.cplus:7:19

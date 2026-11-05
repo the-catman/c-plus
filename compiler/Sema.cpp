@@ -446,6 +446,7 @@ void Sema::reportUnknownName(const NameExpr& n) {
 // ---- Program, structs and functions ----------------------------------------
 
 void Sema::check(Program& program) {
+    program_ = &program;
     for (auto& imp : program.imports)
         diags_.error(imp.loc, "this compiler does not support modules yet, so '" + imp.path + "' cannot be imported",
                      "remove the import for now; built-ins like println need no import", spec::Status);
@@ -1958,6 +1959,8 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             break;
         }
         case Expr::Kind::Call: result = checkCall(static_cast<CallExpr&>(e), flow); break;
+        case Expr::Kind::New: result = checkNew(static_cast<NewExpr&>(e), flow); break;
+        case Expr::Kind::Delete: result = checkDelete(static_cast<DeleteExpr&>(e), flow); break;
         case Expr::Kind::Sizeof: {
             auto& z = static_cast<SizeofExpr&>(e);
             if (z.operand) {
@@ -2408,6 +2411,89 @@ const Type* Sema::checkVectorConstruction(CallExpr& call, Flow& flow) {
                      spec::Vectors);
     }
     return vt;
+}
+
+static const char* kAllowNewDelete =
+    " To use new and delete on purpose, write `[[allow(new_delete)]]` before the function, or `[[allow(new_delete)]];` "
+    "at the top of the file";
+
+void Sema::warnManualMemory(Loc loc, const std::string& message, const std::string& alternative) {
+    if (!warnNewDelete_ || program_->allowNewDelete || (fn_ && fn_->allowNewDelete)) return;
+    diags_.warning(loc, message, alternative + "." + kAllowNewDelete, spec::NewDelete);
+}
+
+// `new T`, `new T(...)`, `new T{...}` or `new T[n]`: a `T*` to memory that stays until it
+// is deleted.
+const Type* Sema::checkNew(NewExpr& n, Flow& flow) {
+    const Type* t = n.target;
+    std::string name = t->name;
+    if (n.count)
+        warnManualMemory(n.loc, "memory from 'new[]' must be freed by hand, with 'delete[]'",
+                         "a vector frees its elements by itself and checks every index: `auto v = vector<" + name +
+                             ">(n);`");
+    else
+        warnManualMemory(n.loc, "memory from 'new' must be freed by hand, with 'delete'",
+                         "C+ frees memory by itself when it can: a local variable lasts until its block ends, and a "
+                         "class object, made with `Name(...)`, is freed when nothing refers to it");
+    if (!checkStorable(t, n.typeLoc)) return Type::error();
+    if (t->is(K::Void)) {
+        diags_.error(n.typeLoc, "new needs the type of the value it makes, not void",
+                     "for memory of no particular type, use C's malloc, declared as `extern \"C\" void* malloc(long "
+                     "size);`",
+                     spec::NewDelete);
+        return Type::error();
+    }
+    if (n.count) {
+        checkValue(*n.count, flow, Type::longTy(), "as the number of elements in `new " + name + "[...]`");
+        if (n.count->kind == Expr::Kind::IntLit && static_cast<IntLitExpr&>(*n.count).value < 0)
+            diags_.error(n.count->loc, "an array cannot have a negative number of elements", "", spec::NewDelete);
+    }
+    if (n.init) {
+        checkValue(*n.init, flow, t, "for the value of `new " + name + "`");
+    } else if (!hasDefault(t)) {
+        std::string why = needsValue(t) ? q(t) + " holds a class reference that cannot be empty"
+                                        : "the constructor of " + q(t) + " needs arguments";
+        diags_.error(n.loc,
+                     (n.count ? "`new " + name + "[n]` cannot make its elements" : "`new " + name + "` cannot make its value") +
+                         " on its own, because " + why,
+                     n.count ? "use a vector, which can start empty and grow with push_back: `vector<" + name + "> v;`"
+                             : "give the value: `new " + name + "{...}` or `new " + name + "(...)`",
+                     spec::NewDelete);
+    }
+    return Type::pointerTo(t);
+}
+
+// `delete p` or `delete[] p`, on a pointer that new returned.
+const Type* Sema::checkDelete(DeleteExpr& d, Flow& flow) {
+    const Type* t = checkExpr(*d.operand, flow);
+    std::string op = d.array ? "delete[]" : "delete";
+    warnManualMemory(d.loc, "'" + op + "' frees memory by hand, so nothing stops it from being used afterward",
+                     "memory that a variable, a vector, a string or a class object holds is freed automatically");
+    Loc loc = d.operand->loc;
+    if (t->isError() || (t->isPointer() && !t->elem->is(K::Void) && !t->elem->isOpaque())) return Type::voidTy();
+    if (t->isClass())
+        diags_.error(loc, "a class object is freed automatically, when nothing refers to it any more",
+                     "to free it sooner, let go of its references: assign another object to the variable, or make "
+                     "the variable optional, `" + std::string(t->name) + "?`, and set it to null",
+                     spec::Classes);
+    else if (t->isNull())
+        diags_.error(loc, "'" + op + "' needs a pointer, but this is null", "deleting null does nothing; remove it",
+                     spec::NewDelete);
+    else if (t->isPointer() && t->elem->is(K::Void))
+        diags_.error(loc, "'" + op + "' cannot free a " + q(t) + ", since C+ does not know what it points to",
+                     "cast it back to the pointer new returned, e.g. `" + op + " static_cast<int*>(p);`. Memory "
+                     "from C's malloc is freed with C's free",
+                     spec::NewDelete);
+    else if (t->isPointer())
+        diags_.error(loc, q(t->elem) + " is a C type known only by name, so its memory belongs to its C library",
+                     "free it with the C function made for it, such as fclose for a FILE*", spec::CTypes);
+    else
+        diags_.error(loc, "'" + op + "' frees memory from new through a pointer, but this is " + q(t),
+                     t->isVector() || t->is(K::String) ? "a " + std::string(t->isVector() ? "vector" : "string") +
+                                                             " frees its memory by itself"
+                                                       : "",
+                     spec::NewDelete);
+    return Type::voidTy();
 }
 
 // print, println and format: a format string, then one value for each {} in it.

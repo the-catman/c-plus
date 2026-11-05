@@ -1,0 +1,14 @@
+// Deleting the same memory twice stops the program. With CPLUS_CHECK_LEAKS=1, which the
+// tests use, deleted memory is kept and marked, so this is always caught; without it,
+// it is caught unless the memory was already reused.
+[[allow(new_delete)]];
+
+int main() {
+    int* value = new int(4);
+    int* alias = value;
+    delete value;
+    delete alias;
+    return 0;
+}
+// trap: 'delete' was used on memory that was already deleted
+// trap: trap_delete_twice.cplus:10:5

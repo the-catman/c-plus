@@ -1,0 +1,13 @@
+// Memory from new[] is freed with delete[]. Plain delete on it stops the program, where
+// C++ leaves it undefined.
+[[allow(new_delete)]];
+
+int main() {
+    int* values = new int[3];
+    println("made");
+    delete values;
+    return 0;
+}
+// expect: made
+// trap: 'delete' was used on memory from `new T[n]`, which is freed with `delete[]`
+// trap: trap_delete_array.cplus:8:5

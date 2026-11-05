@@ -1,0 +1,58 @@
+// Mistakes with new and delete.
+[[allow(new_delete)]];
+extern "C" struct FILE;
+
+class User {
+public:
+    string name = "a";
+};
+struct Wrapper {
+    User user;
+};
+struct Pair {
+    int a;
+    int b;
+    Pair(int x, int y) : a(x), b(y) {}
+};
+
+int main() {
+    User u = User();
+    vector<int> v;
+    void* raw = null;
+    FILE* f = null;
+    int* fromString = new int("five");
+    Wrapper* w = new Wrapper;
+    Wrapper* ws = new Wrapper[3];
+    Pair* p = new Pair;
+    int* negative = new int[-1];
+    int* bySize = new int[2.5];
+    auto handle = new FILE;
+    auto nothing = new void;
+    delete u;
+    delete v;
+    delete raw;
+    delete f;
+    delete null;
+    delete 5;
+    return 0;
+}
+// error: expected 'int' for the value of `new int`, but this is 'string'
+// error: `new Wrapper` cannot make its value on its own, because 'Wrapper' holds a class reference that cannot be empty
+// error: give the value: `new Wrapper{...}` or `new Wrapper(...)`
+// error: `new Wrapper[n]` cannot make its elements on its own
+// error: use a vector, which can start empty and grow with push_back: `vector<Wrapper> v;`
+// error: `new Pair` cannot make its value on its own, because the constructor of 'Pair' needs arguments
+// error: an array cannot have a negative number of elements
+// error: expected 'long' as the number of elements in `new int[...]`, but this is 'double'
+// error: 'FILE' is a C type known only by name, so C+ can only hold a pointer to it
+// error: new needs the type of the value it makes, not void
+// error: for memory of no particular type, use C's malloc
+// error: a class object is freed automatically, when nothing refers to it any more
+// error: to free it sooner, let go of its references
+// error: 'delete' frees memory from new through a pointer, but this is 'vector<int>'
+// error: a vector frees its memory by itself
+// error: 'delete' cannot free a 'void*', since C+ does not know what it points to
+// error: 'FILE' is a C type known only by name, so its memory belongs to its C library
+// error: 'delete' needs a pointer, but this is null
+// error: 'delete' frees memory from new through a pointer, but this is 'int'
+// error: spec: docs/SPEC.md#new-and-delete

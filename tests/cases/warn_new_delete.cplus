@@ -1,0 +1,32 @@
+// Without [[allow(new_delete)]], each new and delete gets a warning that names the safer
+// choice. The program still compiles and runs.
+int main() {
+    int* n = new int(3);
+    int* many = new int[4];
+    println("{} {}", *n, many[0]);
+    // expect: 3 0
+    delete n;
+    delete[] many;
+    Owned o;
+    println("{}", *o.p);
+    // expect: 11
+    release(o);
+    return 0;
+}
+
+// Marking one function does not cover the others, or a field's default value.
+struct Owned {
+    int* p = new int(11);
+};
+
+[[allow(new_delete)]] void release(Owned o) { delete o.p; }
+// warning: memory from 'new' must be freed by hand, with 'delete'
+// warning: warn_new_delete.cplus:4:14
+// warning: C+ frees memory by itself when it can: a local variable lasts until its block ends
+// warning: memory from 'new[]' must be freed by hand, with 'delete[]'
+// warning: a vector frees its elements by itself and checks every index: `auto v = vector<int>(n);`
+// warning: 'delete' frees memory by hand, so nothing stops it from being used afterward
+// warning: 'delete[]' frees memory by hand
+// warning: To use new and delete on purpose, write `[[allow(new_delete)]]` before the function, or `[[allow(new_delete)]];` at the top of the file
+// warning: warn_new_delete.cplus:19:14
+// warning: spec: docs/SPEC.md#new-and-delete

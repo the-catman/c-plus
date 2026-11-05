@@ -105,6 +105,65 @@ _Noreturn static void out_of_memory(void) {
     abort();
 }
 
+// ---- new and delete --------------------------------------------------------
+//
+// Memory from `new` starts with a header recording how many elements follow and
+// whether it came from `new T` or `new T[n]`, so that delete can release every element
+// and stop the program when the other form of delete is used. With leak checking,
+// deleted memory is kept and marked, so deleting it again is caught.
+
+typedef struct {
+    int64_t count;
+    int64_t kind;  // one of the marks below
+} cplus_new_header;
+
+static const int64_t new_one = 0x2165756c61762b43;      // "C+value!"
+static const int64_t new_array = 0x2179617272612b43;    // "C+array!"
+static const int64_t new_deleted = 0x2165746c65642b43;  // "C+delte!"
+static int64_t live_new_blocks;
+
+void* cplus_new(int64_t elem_size, int64_t count, int32_t is_array, const char* file, int32_t line, int32_t column) {
+    if (count < 0) {
+        char message[128];
+        snprintf(message, sizeof message, "new[] was given %" PRId64 " as the number of elements, which is negative",
+                 count);
+        cplus_trap(message, file, line, column);
+    }
+    if (elem_size > 0 && count > (INT64_MAX - (int64_t)sizeof(cplus_new_header)) / elem_size) out_of_memory();
+    cplus_new_header* h = calloc(1, sizeof *h + (size_t)(count * elem_size));
+    if (!h) out_of_memory();
+    h->count = count;
+    h->kind = is_array ? new_array : new_one;
+    __atomic_add_fetch(&live_new_blocks, 1, __ATOMIC_RELAXED);
+    return h + 1;
+}
+
+// Checks that `p`, which is not null, came from the same form of new, and returns the
+// number of elements it holds.
+int64_t cplus_delete_check(void* p, int32_t is_array, const char* file, int32_t line, int32_t column) {
+    cplus_new_header* h = (cplus_new_header*)p - 1;
+    if (h->kind == (is_array ? new_array : new_one)) return h->count;
+    const char* op = is_array ? "delete[]" : "delete";
+    char message[160];
+    if (h->kind == new_deleted)
+        snprintf(message, sizeof message, "'%s' was used on memory that was already deleted", op);
+    else if (h->kind == new_one)
+        snprintf(message, sizeof message, "'delete[]' was used on memory from `new T`, which is freed with `delete`");
+    else if (h->kind == new_array)
+        snprintf(message, sizeof message, "'delete' was used on memory from `new T[n]`, which is freed with `delete[]`");
+    else
+        snprintf(message, sizeof message, "'%s' was used on memory that did not come from new, or was already deleted",
+                 op);
+    cplus_trap(message, file, line, column);
+}
+
+void cplus_delete_free(void* p) {
+    cplus_new_header* h = (cplus_new_header*)p - 1;
+    h->kind = new_deleted;
+    __atomic_sub_fetch(&live_new_blocks, 1, __ATOMIC_RELAXED);
+    if (!leak_checking()) free(h);
+}
+
 // ---- Strings ---------------------------------------------------------------
 //
 // A string is { data, length, owner }, laid out as generated code lays it out. `owner`
@@ -658,6 +717,12 @@ __attribute__((destructor)) static void report_leaks(void) {
     if (count != 0) {
         fflush(stdout);
         fprintf(stderr, "cplus: %" PRId64 " object%s never freed\n", count, count == 1 ? " was" : "s were");
+    }
+    int64_t blocks = __atomic_load_n(&live_new_blocks, __ATOMIC_RELAXED);
+    if (blocks != 0) {
+        fflush(stdout);
+        fprintf(stderr, "cplus: %" PRId64 " allocation%s from new %s never freed by delete\n", blocks,
+                blocks == 1 ? "" : "s", blocks == 1 ? "was" : "were");
     }
 }
 

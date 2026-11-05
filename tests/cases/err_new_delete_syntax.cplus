@@ -1,0 +1,33 @@
+// new and delete written in ways C+ does not accept.
+class User {
+public:
+    string name = "a";
+};
+
+int main() {
+    User* u = new User("a");
+    int* a = new (u) int;
+    int* b = new Foo;
+    int* c = new int(1, 2);
+    int* d = new int{5};
+    int* e = new int[3]{1, 2, 3};
+    int* f = new int[2][3];
+    int* g = new int[];
+    auto h = new auto(5);
+    delete[2] g;
+    [[allow(new_delete)]] delete g;
+    return 0;
+}
+// error: class objects are created without 'new'
+// error: write `User(...)`; the object is reference-counted and freed automatically
+// error: C+ has no placement new
+// error: unknown type 'Foo'
+// error: `new int(...)` takes one value
+// error: this compiler does not support brace initializers for 'int' yet
+// error: write `new int(value)`
+// error: this compiler does not support initial values for an array from new yet
+// error: this compiler does not support arrays of arrays from new yet
+// error: new[] needs the number of elements
+// error: new needs the type of the value it makes
+// error: 'delete[]' has nothing inside the brackets
+// error: [[allow(new_delete)]] is written before a function, not before a statement

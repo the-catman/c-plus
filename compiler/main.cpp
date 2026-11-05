@@ -28,7 +28,8 @@ static const char* kUsage =
     "  cplus --version\n"
     "\n"
     "build and run also take -l<library> and -L<directory>, as a C compiler does, for\n"
-    "the libraries of C functions declared with extern \"C\", e.g. -lsqlite3.\n";
+    "the libraries of C functions declared with extern \"C\", e.g. -lsqlite3.\n"
+    "-Wno-new-delete turns off the warning for new and delete in every file.\n";
 
 struct Options {
     std::string command;
@@ -36,6 +37,7 @@ struct Options {
     std::string output;
     bool optimize = false;
     bool emitLLVM = false;
+    bool warnNewDelete = true;  // -Wno-new-delete turns the warning off
     std::vector<std::string> linkArgs;  // -l and -L, passed on to the linker
     std::vector<std::string> programArgs;
 };
@@ -69,11 +71,11 @@ static int runProcess(const std::vector<std::string>& argv) {
 }
 
 // Parses and checks a file. Returns false if it has errors.
-static bool frontEnd(const SourceFile& file, Diagnostics& diags, Program& program) {
+static bool frontEnd(const SourceFile& file, Diagnostics& diags, Program& program, bool warnNewDelete) {
     Lexer lexer(file, diags);
     Parser parser(lexer.lexAll(), diags);
     program = parser.parseProgram();
-    Sema sema(diags);
+    Sema sema(diags, warnNewDelete);
     sema.check(program);
     if (diags.hasErrors()) {
         int n = diags.errorCount();
@@ -103,7 +105,7 @@ static int build(const Options& opts, const std::string& exePath) {
     SourceFile file(opts.input, std::move(text));
     Diagnostics diags(file);
     Program program;
-    if (!frontEnd(file, diags, program)) return 1;
+    if (!frontEnd(file, diags, program, opts.warnNewDelete)) return 1;
     if (opts.command == "check") return 0;
 
     Codegen codegen(file, CodegenOptions{opts.optimize});
@@ -169,6 +171,8 @@ int main(int argc, char** argv) {
             opts.output = argv[i];
         } else if (a == "-O") {
             opts.optimize = true;
+        } else if (a == "-Wno-new-delete") {
+            opts.warnNewDelete = false;
         } else if (a.rfind("-l", 0) == 0 || a.rfind("-L", 0) == 0) {
             // -lm or -l m; -Ldir or -L dir. `check` accepts them too, so one command line works for all.
             std::string value = a.substr(2);

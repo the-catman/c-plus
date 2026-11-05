@@ -102,8 +102,11 @@ The default path:
 
 Always available, no `unsafe` block:
 - Raw pointers `T*`, address-of, pointer arithmetic, casts, `new`/`delete`, `malloc`/`free`.
-- Manual `new`/`delete` emit an on-by-default warning naming the alternative. Silenceable
-  per file.
+- Manual `new`/`delete` emit an on-by-default warning naming the alternative. It is turned
+  off with `[[allow(new_delete)]]` before a function or method, `[[allow(new_delete)]];` at
+  the top of a file, or `-Wno-new-delete` for the whole build. Decided 2026-11-05: an
+  `unsafe` block was rejected, because it would suggest that the code outside it is safe,
+  and a `new_delete { }` block because its braces would end the scope of what it allocates.
 - Debug builds run under ASan and UBSan, so use-after-free, double free, buffer overrun,
   and null dereference stop the program with a readable message and a stack trace.
 
@@ -352,8 +355,19 @@ Decided 2026-11-05.
 - Pointers are not counted. A pointer to a class variable points to the variable, not
   the object.
 - `int* a, b;` is an error (the C++ trap); `sizeof` is C++'s and gives a `long`.
-- Next: `new` and `delete` with the warning from §2.7; how it is silenced per file is
-  still open (§6).
+
+### 2.22 new and delete — DECIDED
+Decided 2026-11-05.
+- C++'s forms: `new T`, `new T(...)`, `new T{...}`, `new T[n]`, `delete`, `delete[]`, with
+  the warning and its off switches from §2.7. No placement new and no `new auto`.
+- `new T` and `new T[n]` always hold default values, since definite assignment cannot
+  follow memory on the heap. This differs from C++ only where C++ leaves the value unset.
+- `new` on a class is an error: an object is already on the heap and freed by counting.
+- `delete` releases what the memory holds, the last element first, as in C++.
+- Memory from `new` starts with a header holding the element count and a mark. The wrong
+  form of delete stops the program, and deleting twice or deleting other memory almost
+  always does. Use after delete is left to ASan in debug builds.
+- `CPLUS_CHECK_LEAKS=1` also reports memory from `new` that was never deleted.
 
 ---
 
@@ -392,7 +406,8 @@ fields), overflow and bounds traps, and `println`, all through LLVM. Destructors
 leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. C functions
 can be called through `extern "C"` declarations with number, `char`, `bool`, `string`
 and pointer values. Raw pointers work, with pointer arithmetic, `sizeof`, null traps and
-C types known by name such as `FILE*`. Next in Phase 1: `new` and `delete`.
+C types known by name such as `FILE*`, and `new` and `delete` with their warning. Next in
+Phase 1: C structs in `extern "C"`, `array<T, N>`, and debug builds with ASan and UBSan.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -451,8 +466,6 @@ will confidently write C++ wherever the two differ.
 - References (`T&`): whether C+ gets them, and in what form. They decide how
   `for (auto& x : v)` and `const T&` parameters work; today both are errors that point to a
   copy, which is cheap for vectors.
-- How the warning for `new` and `delete` is silenced for one file (§2.7): a comment, an
-  attribute, or a compiler option.
 - Event loop and threads: one loop per thread versus a work-stealing scheduler. Decided
   in Phase 5 with real workloads.
 - Package manager, after v1.

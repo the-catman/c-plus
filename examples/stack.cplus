@@ -1,0 +1,45 @@
+// A stack built by hand with new and delete: each node comes from new, and the class
+// frees what is left in its destructor. C+ warns about every new and delete, because a
+// vector does this job more safely; [[allow(new_delete)]] says it is on purpose.
+struct Node {
+    string text;
+    Node* below = null;
+};
+
+class Stack {
+    Node* top = null;
+    long count = 0;
+
+public:
+    long size() const { return count; }
+
+    [[allow(new_delete)]]
+    void push(string text) {
+        top = new Node{text, top};
+        count++;
+    }
+
+    // Popping an empty stack stops the program: `top->text` follows a null pointer.
+    [[allow(new_delete)]]
+    string pop() {
+        string text = top->text;
+        Node* below = top->below;
+        delete top;
+        top = below;
+        count--;
+        return text;
+    }
+
+    ~Stack() {
+        while (top != null) pop();
+    }
+};
+
+int main() {
+    Stack stack = Stack();
+    for (string word : vector<string>{"first", "second", "third"}) stack.push(word);
+    println("{} on the stack", stack.size());
+    println("popped {}", stack.pop());
+    println("{} left, freed when the stack goes away", stack.size());
+    return 0;
+}

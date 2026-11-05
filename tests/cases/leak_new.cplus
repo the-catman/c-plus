@@ -1,0 +1,14 @@
+// With CPLUS_CHECK_LEAKS=1, which the tests use, memory from new that is never deleted
+// is reported when the program ends.
+[[allow(new_delete)]];
+
+int main() {
+    int* kept = new int(1);
+    int* many = new int[3];
+    int* freed = new int(2);
+    delete freed;
+    println("{} {}", *kept, many[0]);
+    // expect: 1 0
+    return 0;
+}
+// stderr: cplus: 2 allocations from new were never freed by delete

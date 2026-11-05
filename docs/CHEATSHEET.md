@@ -39,6 +39,7 @@ long square(long n) { return n * n; }
 | Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(x)` for any number |
 | Optionals | `User? u = find(name);` holds a `User` or `null`; `int? n;` starts out null. `u?.name` is null when `u` is, `u?.name ?? "nobody"` gives a fallback, `if (auto x = u)` runs with the `User` inside. `has_value()`, `value()`, `value_or(x)`, `u == null` |
 | Pointers | `int* p = &x;`, `*p = 5`, `p->x`, `p[i]` (unchecked), `p + n`, `p - q`, `p++`, `const int*`, `int* const`, `void*`, `int**`, `null`, `if (p)`. Following a null pointer **stops the program**. `sizeof(T)`, `sizeof x` (a `long`). `string(p)` copies a `char*`'s text. A pointer prints as `0x...` |
+| Manual memory | `int* p = new int(5); delete p;`, `new Point{1, 2}`, `int* a = new int[n]; delete[] a;`. Values start as their default, and each `new`/`delete` **warns**. Turn it off with `[[allow(new_delete)]]` before a function, `[[allow(new_delete)]];` at the top of the file, or `-Wno-new-delete`. The wrong form of delete **stops the program** |
 | C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`, `void* malloc(long n);`, `double frexp(double x, int* e);`. Strings are converted at each call. Link other libraries with `-lname` |
 | C types by name | `extern "C" struct FILE;`, then `FILE* f = fopen(...)`. Only pointers to it can be used |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)`, `break`, `continue`, `?:` |
@@ -83,7 +84,10 @@ long square(long n) { return n * n; }
 | `int f() { if (c) return 1; }` | error: every path must return |
 | signed overflow is UB | overflow, `/0`, bad shifts **stop the program** with file:line |
 | `int x{5}`, `int x(5)` | `int x = 5;` for now |
-| `new User("a")`, `delete u` | `User("a")`; the object is freed automatically. `new`/`delete` are planned; use C's `malloc`/`free` for raw memory |
+| `new User("a")`, `delete u` on a class | `User("a")`; the object is freed automatically. `new` is for other values: `new Point{1, 2}` |
+| `int* p = new int;` then read `*p` | it is 0: `new` always gives a default value |
+| `#pragma`, `[[nodiscard]]`, `[[maybe_unused]]` | the one attribute is `[[allow(new_delete)]]` |
+| `new (buffer) T`, `new int[3]{1, 2, 3}` | no placement new; set array elements afterward, in a loop |
 | `this->x`, `u->name` | `this.x`, `u.name`; `->` is only for pointers, `T*` |
 | `int Rect::area() { ... }` outside the type | write the method body inside the type |
 | `User u;` then use `u` | error until assigned: a class reference is never empty. `User? u;` starts out null |
@@ -128,7 +132,7 @@ long square(long n) { return n * n; }
 | Errors | `int f() throws`, `throw Error("..")`, `try f()`, `try { } catch (Error e) { }` |
 | Generics | `template<typename T>`, `template<Comparable T>`; no specialization or SFINAE |
 | Modules | `import net.server;`, `http::get(url)` |
-| Memory | `weak` to break reference cycles, `unique<T>`, `local<T>`; `new`/`delete`, which warn; pointers into vectors and strings |
+| Memory | `weak` to break reference cycles, `unique<T>`, `local<T>`; pointers into vectors and strings |
 | Containers | `array<T, N>`, `hashmap<K, V>`; `insert`, `erase` and iterators on vectors |
 | References | `T&` parameters, `for (auto& x : v)` |
 | Format options | width and alignment, `{:x}`, `{:>8}` |
@@ -142,6 +146,7 @@ cplus check file.cplus      # errors only
 cplus run file.cplus        # build and run
 cplus build file.cplus -o app [-O] [--emit-llvm]
 cplus build app.cplus -lsqlite3 -L dir   # link C libraries, as with a C compiler
+cplus build app.cplus -Wno-new-delete    # no warning for new and delete
 ```
 
 Compiler errors say what is wrong, how to fix it, and which spec section explains the rule.

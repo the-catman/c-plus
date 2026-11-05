@@ -15,7 +15,8 @@ namespace cplus {
 
 class Sema {
 public:
-    explicit Sema(Diagnostics& diags) : diags_(diags) {}
+    // `warnNewDelete` is false with -Wno-new-delete.
+    explicit Sema(Diagnostics& diags, bool warnNewDelete = true) : diags_(diags), warnNewDelete_(warnNewDelete) {}
     void check(Program& program);
 
 private:
@@ -60,6 +61,11 @@ private:
     const Type* checkMethodCall(MethodCallExpr& call, Flow& flow);
     const Type* checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type* vecType);
     const Type* checkVectorConstruction(CallExpr& call, Flow& flow);
+    const Type* checkNew(NewExpr& n, Flow& flow);
+    const Type* checkDelete(DeleteExpr& d, Flow& flow);
+    // The warning for `new` and `delete`, unless [[allow(new_delete)]] or -Wno-new-delete
+    // turns it off.
+    void warnManualMemory(Loc loc, const std::string& message, const std::string& alternative);
     const Type* checkStringMethod(MethodCallExpr& call, Flow& flow);
     const Type* checkToString(CallExpr& call, Flow& flow);
     const Type* checkCast(CastExpr& c, Flow& flow);
@@ -112,6 +118,8 @@ private:
     std::string suggestName(const std::string& name);
 
     Diagnostics& diags_;
+    bool warnNewDelete_;
+    const Program* program_ = nullptr;
     std::unordered_map<std::string, FuncDecl*> funcs_;
     std::unordered_map<std::string, StructDecl*> structs_;
     std::vector<std::unordered_map<std::string, VarDecl*>> scopes_;

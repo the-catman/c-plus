@@ -432,7 +432,8 @@ println("{}", a);              // User {name: "Alice", age: 31}
 ```
 
 - An object is created by calling the class like a function, `User("Alice", 30)`, or
-  with a `{ }` list, `User{"Alice", 30}`. There is no `new`.
+  with a `{ }` list, `User{"Alice", 30}`. `new User(...)` is an error, since the object is
+  already on the heap and freed automatically.
 - A class without a constructor is built from its fields, like a struct:
   `Counter{.count = 1}`. With a constructor, the values are its arguments, in order.
 - Fields and methods are reached with `.`, also through `this`: `this.age`. A class
@@ -655,11 +656,12 @@ if (p) println("{}", *p);       // a pointer is true when it is not null
 - **Memory from `malloc` holds no values yet.** Numbers, chars, bools and pointers can
   be stored into it. A string, vector, class reference or optional, or a struct holding
   one, cannot: assigning releases the old value first, and there is none, so this is
-  undefined, as it is in C++ without placement `new`.
-- Planned: `new` and `delete`, which will warn and name the safer alternative, and
-  pointers into vectors and strings. Memory can come from C's `malloc` and `free` until
-  then (see [C functions](#c-functions)). References (`T&`) are planned too; meanwhile a
-  pointer parameter lets a function change the caller's variable.
+  undefined, as it is in C++. Memory from [`new`](#new-and-delete) starts with real values,
+  so it can hold anything.
+- Memory that a pointer owns comes from [`new`](#new-and-delete) or from C's `malloc`
+  (see [C functions](#c-functions)). Planned: pointers into vectors and strings, and
+  references (`T&`); meanwhile a pointer parameter lets a function change the caller's
+  variable.
 
 ### Pointer declarations
 
@@ -671,6 +673,62 @@ int* a, b;          // error
 int* a, * b;        // ok: both are pointers
 int* a; int b;      // ok
 ```
+
+### new and delete
+
+`new` and `delete` work as in C++: `new T` makes one value on the heap and returns a `T*`,
+`new T[n]` makes `n` of them, and `delete` and `delete[]` free them. C+ frees memory by
+itself nearly everywhere else, so every `new` and `delete` gets a warning that names the
+safer choice, which can be turned off.
+
+```cpp
+[[allow(new_delete)]];              // no warning anywhere in this file
+
+int* n = new int(5);                // *n is 5
+int* zero = new int;                // 0, unlike C++, which leaves it unset
+Point* p = new Point{1, 2};         // or new Point(1, 2), or new Point for its defaults
+int* many = new int[count];         // count ints, all 0
+many[0] = *n;
+delete n;
+delete zero;
+delete p;
+delete[] many;
+```
+
+- **Values.** `new T(x)` starts with `x`, which converts to `T` as in `T v = x;`. A struct or
+  vector is built as `T(...)` and `T{...}` build it. `new T` and `new T()` hold the default
+  value of `T`: 0, an empty string, or a struct's field defaults or its constructor with no
+  arguments. A type with no default, such as a struct holding a class reference, must be
+  given a value.
+- **Arrays.** `new T[n]` holds `n` default values, and `n` is an `int` or a `long`. A
+  negative `n` stops the program, and `n` can be 0. `new int[n]()` means the same as
+  `new int[n]`. `new int[3]{1, 2, 3}` and arrays of arrays are not supported yet.
+- **Classes.** `new User(...)` is an error: an object is made with `User(...)` and freed
+  automatically. `new` can make anything else, including a `User?` or a `User*`.
+- **`delete`** releases what the memory holds, such as strings, vectors and class
+  references, the last element first, as in C++, and then frees it. Deleting null does
+  nothing. A `const T*` can be deleted.
+- **What is checked.** `delete` on memory from `new T[n]`, and `delete[]` on memory from
+  `new T`, stop the program with file:line; C++ leaves them undefined. Deleting memory
+  twice, or memory that did not come from `new`, is undefined, as in C++, but `delete`
+  looks for a mark that `new` leaves, so it nearly always stops the program too. Using
+  memory after it is deleted is not checked.
+- `delete` cannot free a `void*`, since C+ would not know what it holds, or a C type known
+  [only by name](#c-types-known-by-name). Memory from C's `malloc` is freed with `free`.
+- `CPLUS_CHECK_LEAKS=1` reports how many allocations from `new` were never deleted (see
+  [Memory model](#memory-model)).
+- Placement new, `new (buffer) T`, and `new auto(x)` do not exist.
+
+**The warning.** It is on by default and does not stop the build. Three things turn it off:
+
+- `[[allow(new_delete)]]` before a function, method, constructor or destructor, for the
+  code inside it.
+- `[[allow(new_delete)]];` at the top of the file, before the first declaration, for the
+  whole file. This also covers a field whose default value uses `new`.
+- `-Wno-new-delete` on the command line of `cplus check`, `build` or `run`, for the whole
+  program.
+
+This is the one attribute C+ has. C++'s others, such as `[[nodiscard]]`, are errors.
 
 ---
 
@@ -1111,16 +1169,14 @@ objects in it released, when the last vector using it goes away. An element is r
 when it is removed: by `pop_back`, by `clear`, or by being overwritten.
 
 Set the environment variable `CPLUS_CHECK_LEAKS=1` when running a program to have it
-report, at exit, any class objects, vector buffers or string buffers that were never freed. The test suite
-runs every program this way.
+report, at exit, any class objects, vector buffers or string buffers that were never freed,
+and any memory from `new` that was never deleted. The test suite runs every program this way.
 
 Raw [pointers](#pointers) are not counted: a pointer does not keep alive what it points
-to.
+to. Memory from [`new`](#new-and-delete) stays until `delete` frees it.
 
 Planned: `unique<T>` for a single owner with no count, and `local<T>` for non-atomic
-sharing that cannot cross threads. `new` and `delete` will be available everywhere, and
-will produce a warning that names the safer alternative. Debug builds will run with AddressSanitizer and
-UBSan.
+sharing that cannot cross threads. Debug builds will run with AddressSanitizer and UBSan.
 
 ## Generics
 
@@ -1164,6 +1220,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `extern "C"` functions taking and returning numbers, `char`, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
 | Pointers: `T*`, `&x`, `*p`, `p->x`, `p[i]`, arithmetic, `const T*`, `void*`, null checks, `sizeof` | implemented |
 | Pointers in `extern "C"`, and C types known by name, such as `FILE*` | implemented |
+| `new`, `new[]`, `delete`, `delete[]`, with a warning; `[[allow(new_delete)]]`, `-Wno-new-delete` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
 | Unsigned types | planned |
@@ -1178,7 +1235,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `weak` references | planned |
 | Errors (`throws`, `try`, `catch`) | planned |
 | Generics | planned |
-| `new` and `delete`; pointers into vectors and strings | planned |
+| Pointers into vectors and strings | planned |
 | C structs, callbacks and variables in `extern "C"`; reading C headers | planned |
 | Reflection, JSON, HTTP | planned |
 | Threads, async | planned |

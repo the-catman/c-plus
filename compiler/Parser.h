@@ -37,6 +37,10 @@ private:
 
     // Grammar
     void parseTopLevel(Program& prog);
+    // `[[allow(new_delete)]]`, the one attribute C+ has. Returns where it is written.
+    Loc parseAttribute();
+    bool atAttribute() const { return check(Tok::LBracket) && peek(1).kind == Tok::LBracket; }
+    ExprPtr parseNew();
     void parseRecord();  // struct or class
     void parseExtern(Program& prog);
     void parseExternItem(Program& prog);  // a C function, or `struct sqlite3;`
@@ -82,6 +86,8 @@ private:
     // Struct names found by a scan before parsing, so types can be used before
     // their definition (there are no headers or forward declarations).
     std::unordered_set<std::string> typeNames_;
+    bool declSeen_ = false;  // a declaration came before; `[[allow(new_delete)]];` must be first
+    bool fileAttr_ = false;  // the item just parsed was `[[allow(new_delete)]];`
 };
 
 }  // namespace cplus

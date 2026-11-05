@@ -1,0 +1,58 @@
+// [[allow(new_delete)]] before a function or a method turns off the warning for new and
+// delete in it. A test with no warning directives fails on any warning, so this one
+// checks that each of these is quiet.
+struct Buffer {
+    int* data = null;
+    long size = 0;
+
+    [[allow(new_delete)]]
+    void resize(long n) {
+        int* bigger = new int[n];
+        for (long i = 0; i < size && i < n; i++) bigger[i] = data[i];
+        delete[] data;
+        data = bigger;
+        size = n;
+    }
+
+    [[allow(new_delete)]] void release() {
+        delete[] data;
+        data = null;
+        size = 0;
+    }
+};
+
+class Owner {
+public:
+    int* value;
+    [[allow(new_delete)]] Owner(int v) : value(new int(v)) {}
+    [[allow(new_delete)]] ~Owner() {
+        println("deleting {}", *value);
+        delete value;
+    }
+};
+
+[[allow(new_delete)]]
+int* makeCounter(int start) { return new int(start); }
+
+[[allow(new_delete)]] void drop(int* p) { delete p; }
+
+int main() {
+    Buffer buf;
+    buf.resize(2);
+    buf.data[0] = 10;
+    buf.data[1] = 20;
+    buf.resize(3);
+    println("{} {} {} {}", buf.size, buf.data[0], buf.data[1], buf.data[2]);
+    // expect: 3 10 20 0
+    buf.release();
+    int* c = makeCounter(5);
+    *c += 1;
+    println("{}", *c);
+    // expect: 6
+    drop(c);
+    {
+        Owner o = Owner(7);
+    }
+    // expect: deleting 7
+    return 0;
+}

@@ -81,13 +81,43 @@ Program Parser::parseProgram() {
             prog.structs.push_back(std::make_unique<StructDecl>(toks_[i + 1].text, toks_[i].kind == Tok::KwClass));
     }
     while (!check(Tok::Eof)) {
+        fileAttr_ = false;
         try {
             parseTopLevel(prog);
         } catch (ParseError&) {
             syncTopLevel();
         }
+        if (!fileAttr_) declSeen_ = true;
     }
     return prog;
+}
+
+// `[[allow(new_delete)]]`. C++'s own attributes, such as [[nodiscard]], are not part of C+.
+Loc Parser::parseAttribute() {
+    Loc loc = advance().loc;
+    advance();
+    const Token& name = peek();
+    if (name.kind != Tok::Ident || name.text != "allow")
+        fail(name.loc,
+             name.kind == Tok::Ident ? "C+ has no attribute '" + name.text + "'"
+                                     : "expected an attribute name after '[[', found " + describeToken(name),
+             "the one attribute C+ has is `[[allow(new_delete)]]`, which turns off the warning for new and delete",
+             spec::NewDelete);
+    advance();
+    expect(Tok::LParen, "after 'allow'");
+    const Token& what = peek();
+    if (what.kind != Tok::Ident || what.text != "new_delete")
+        fail(what.loc,
+             what.kind == Tok::Ident ? "'" + what.text + "' is not a warning that can be allowed"
+                                     : "expected the name of a warning inside allow(...)",
+             "the warning that can be turned off is the one for new and delete: `[[allow(new_delete)]]`",
+             spec::NewDelete);
+    advance();
+    expect(Tok::RParen, "after 'new_delete'");
+    expect(Tok::RBracket, "to close the attribute `[[allow(new_delete)]]`");
+    expect(Tok::RBracket, "to close the attribute `[[allow(new_delete)]]`");
+    if (prev().loc.line == loc.line) loc.len = prev().loc.col + 1 - loc.col;
+    return loc;
 }
 
 void Parser::parseTopLevel(Program& prog) {
@@ -107,6 +137,39 @@ void Parser::parseTopLevel(Program& prog) {
         }
         case Tok::KwStruct:
         case Tok::KwClass: parseRecord(); return;
+        case Tok::LBracket: {
+            if (!atAttribute()) break;
+            Loc attr = parseAttribute();
+            if (match(Tok::Semi)) {  // `[[allow(new_delete)]];` for the whole file
+                if (declSeen_)
+                    diags_.error(attr, "`[[allow(new_delete)]];` applies to the whole file, so it is written at the "
+                                       "top, before the first declaration",
+                                 "move it to the top of the file, or write `[[allow(new_delete)]]`, without the ';', "
+                                 "just before a function that uses new and delete",
+                                 spec::NewDelete);
+                prog.allowNewDelete = true;
+                fileAttr_ = true;
+                return;
+            }
+            if (check(Tok::KwStruct) || check(Tok::KwClass)) {
+                diags_.error(attr, "[[allow(new_delete)]] is written before a function or a method, not a " +
+                                       std::string(tokSpelling(peek().kind)),
+                             "write it before each method that uses new and delete, or write `[[allow(new_delete)]];` "
+                             "at the top of the file to allow them everywhere",
+                             spec::NewDelete);
+                parseRecord();
+                return;
+            }
+            if (check(Tok::KwExtern) || check(Tok::KwImport) || atAttribute() || check(Tok::Eof))
+                fail(attr, "[[allow(new_delete)]] is written before a function",
+                     "write it just before a function that uses new and delete, or end it with ';' at the top of "
+                     "the file to allow them in the whole file",
+                     spec::NewDelete);
+            size_t before = prog.funcs.size();
+            parseTopLevel(prog);
+            if (prog.funcs.size() > before) prog.funcs.back()->allowNewDelete = true;
+            return;
+        }
         case Tok::KwTemplate: notYet(t.loc, "templates (generics)");
         case Tok::KwEnum: notYet(t.loc, "enums");
         case Tok::KwInterface: notYet(t.loc, "interfaces");
@@ -661,6 +724,26 @@ void Parser::parseMemberInits(FuncDecl& ctor) {
 }
 
 void Parser::parseMember(StructDecl& sd, Access& access) {
+    if (atAttribute()) {  // `[[allow(new_delete)]]` before a method, constructor or destructor
+        Loc attr = parseAttribute();
+        if (check(Tok::KwPublic) || check(Tok::KwPrivate) || check(Tok::KwProtected) || check(Tok::RBrace) ||
+            atAttribute()) {
+            diags_.error(attr, "[[allow(new_delete)]] is written before a method",
+                         "write it just before a method, constructor or destructor that uses new and delete",
+                         spec::NewDelete);
+            if (!check(Tok::RBrace)) parseMember(sd, access);
+            return;
+        }
+        size_t methods = sd.methods.size(), fields = sd.fields.size();
+        parseMember(sd, access);
+        if (sd.methods.size() > methods) sd.methods.back()->allowNewDelete = true;
+        else if (sd.fields.size() > fields)
+            diags_.error(attr, "[[allow(new_delete)]] is written before a method, not a field",
+                         "for a field whose default value uses new, write `[[allow(new_delete)]];` at the top of the "
+                         "file",
+                         spec::NewDelete);
+        return;
+    }
     const Token& t = peek();
     switch (t.kind) {
         case Tok::KwPublic: case Tok::KwPrivate: case Tok::KwProtected:
@@ -893,6 +976,14 @@ StmtPtr Parser::parseStmt() {
     switch (t.kind) {
         case Tok::LBrace: return parseBlock();
         case Tok::Semi: advance(); return std::make_unique<BlockStmt>(t.loc);
+        case Tok::LBracket:
+            if (atAttribute()) {
+                Loc attr = parseAttribute();
+                fail(attr, "[[allow(new_delete)]] is written before a function, not before a statement",
+                     "move it to just before the function, as in `[[allow(new_delete)]] void f() { ... }`",
+                     spec::NewDelete);
+            }
+            break;
         case Tok::KwIf: {
             advance();
             expect(Tok::LParen, "after 'if'");
@@ -944,7 +1035,6 @@ StmtPtr Parser::parseStmt() {
                  "move the `extern \"C\"` declaration to the top level of the file; it can then be called anywhere "
                  "in the file",
                  spec::CFunctions);
-        case Tok::KwDelete: notYet(t.loc, "manual memory (new and delete)");
         default: break;
     }
     if (isTypeStart()) {
@@ -1150,17 +1240,22 @@ ExprPtr Parser::parseUnary() {
         }
         case Tok::Star: advance(); return std::make_unique<UnaryExpr>(t.loc, UnOp::Deref, parseUnary());
         case Tok::Amp: advance(); return std::make_unique<UnaryExpr>(t.loc, UnOp::AddrOf, parseUnary());
-        case Tok::KwNew:
-            if (isTypeName(peek(1))) {
-                if (prog_->findStruct(peek(1).text)->isClass)
-                    fail(t.loc, "class objects are created without 'new'",
-                         "write `" + peek(1).text + "(...)`; the object is reference-counted and freed automatically",
-                         spec::Classes);
-                fail(t.loc, "struct values are created without 'new'",
-                     "write `" + peek(1).text + "(...)` or `" + peek(1).text + "{...}`; a struct is a plain value",
-                     spec::Structs);
+        case Tok::KwNew: return parseNew();
+        case Tok::KwDelete: {
+            advance();
+            bool array = false;
+            if (match(Tok::LBracket)) {
+                if (!check(Tok::RBracket))
+                    fail(peek().loc, "'delete[]' has nothing inside the brackets",
+                         "write `delete[] p;`; the number of elements is kept with the memory", spec::NewDelete);
+                advance();
+                array = true;
             }
-            notYet(t.loc, "manual memory with 'new'");
+            ExprPtr operand = parseUnary();
+            Loc loc = t.loc;
+            if (prev().loc.line == loc.line) loc.len = prev().loc.col + prev().loc.len - loc.col;
+            return std::make_unique<DeleteExpr>(loc, array, std::move(operand));
+        }
         case Tok::KwSizeof: {
             advance();
             if (check(Tok::LParen) && isTypeAt(1)) {  // `sizeof(int)`
@@ -1178,6 +1273,76 @@ ExprPtr Parser::parseUnary() {
         case Tok::KwSpawn: notYet(t.loc, "threads (spawn)");
         default: return parsePostfix(parsePrimary());
     }
+}
+
+// `new T`, `new T(args)`, `new T{...}` or `new T[n]`, as in C++.
+ExprPtr Parser::parseNew() {
+    Loc loc = advance().loc;
+    if (check(Tok::LParen))
+        fail(peek().loc, "C+ has no placement new",
+             "new allocates the memory itself: write the type right after it, as in `new int(5)` or "
+             "`new Point{1, 2}`",
+             spec::NewDelete);
+    if (!isTypeAt(0) && !check(Tok::KwAuto)) {
+        const Token& t = peek();
+        fail(t.loc, t.kind == Tok::Ident ? "unknown type '" + t.text + "'" : "expected a type after 'new', found " + describeToken(t),
+             "new is followed by the type of the value it makes, e.g. `new int(5)` or `new Point{1, 2}`",
+             spec::NewDelete);
+    }
+    Loc typeLoc;
+    const Type* ty = parseType(typeLoc);
+    std::string name = ty->name;
+    if (ty->isClass())
+        fail(loc, "class objects are created without 'new'",
+             "write `" + name + "(...)`; the object is reference-counted and freed automatically", spec::Classes);
+    if (ty->is(Type::Kind::Auto))
+        fail(typeLoc, "new needs the type of the value it makes", "write the type, e.g. `new int(5)`", spec::NewDelete);
+    auto n = std::make_unique<NewExpr>(loc, ty, typeLoc);
+    if (match(Tok::LBracket)) {
+        if (check(Tok::RBracket))
+            fail(peek().loc, "new[] needs the number of elements", "write e.g. `new " + name + "[10]`", spec::NewDelete);
+        n->count = parseExpr();
+        expect(Tok::RBracket, "to close the size in `new " + name + "[...]`");
+        if (check(Tok::LBracket))
+            notYet(peek().loc, "arrays of arrays from new",
+                   "allocate one array of rows * columns elements and reach an element with `p[row * columns + "
+                   "column]`");
+        if (check(Tok::LParen) && peek(1).kind == Tok::RParen) {  // `new int[n]()`, the same as without ()
+            advance();
+            advance();
+        } else if (check(Tok::LParen) || check(Tok::LBrace)) {
+            notYet(peek().loc, "initial values for an array from new",
+                   "the elements start with their default value, such as 0; set them afterward, e.g. in a loop: "
+                   "`p[i] = ...;`");
+        }
+    } else if (check(Tok::LBrace)) {
+        if (!ty->isStruct() && !ty->isVector())  // reported at the '{', so recovery skips the list
+            notYet(peek().loc, "brace initializers for '" + name + "'", "write `new " + name + "(value)`");
+        advance();
+        n->init = parseInitList(typeLoc, ty);
+    } else if (match(Tok::LParen)) {
+        std::vector<ExprPtr> args;
+        if (!check(Tok::RParen)) {
+            do args.push_back(parseExpr());
+            while (match(Tok::Comma));
+        }
+        expect(Tok::RParen, "to close `new " + name + "(...)`");
+        if (ty->isStruct() || ty->isVector() || (ty->is(Type::Kind::String) && args.size() != 1)) {
+            // `new Point(1, 2)` builds the value as `Point(1, 2)` does.
+            if (!args.empty() || !ty->is(Type::Kind::String)) {
+                auto call = std::make_unique<CallExpr>(typeLoc, name, std::move(args));
+                if (ty->isVector()) call->vectorType = ty;
+                n->init = std::move(call);
+            }
+        } else if (args.size() > 1) {
+            fail(args[1]->loc, "`new " + name + "(...)` takes one value",
+                 "write e.g. `new " + name + "(x)`, which starts with the value of x", spec::NewDelete);
+        } else if (args.size() == 1) {
+            n->init = std::move(args[0]);  // `new int(5)`; `new int()` is the default value, as in C++
+        }
+    }
+    if (prev().loc.line == loc.line) n->loc.len = prev().loc.col + prev().loc.len - loc.col;
+    return n;
 }
 
 // `.name` or `.name(args)` after `e`.

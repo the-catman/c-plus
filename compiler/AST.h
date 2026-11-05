@@ -109,7 +109,8 @@ struct FuncDecl;
 
 struct Expr {
     enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
-                      Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof };
+                      Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof, New,
+                      Delete };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -191,6 +192,23 @@ struct SizeofExpr : Expr {
     const Type* target;  // `sizeof(T)`, or null
     ExprPtr operand;     // `sizeof x`, or null
     SizeofExpr(Loc l, const Type* t, ExprPtr e) : Expr(Kind::Sizeof, l), target(t), operand(std::move(e)) {}
+};
+
+// `new T`, `new T(args)`, `new T{...}` or `new T[n]`: memory for one T, or for n of them,
+// that stays until `delete` frees it. The result is a `T*`.
+struct NewExpr : Expr {
+    const Type* target;
+    Loc typeLoc;
+    ExprPtr count;  // `new T[n]`, or null for one value
+    ExprPtr init;   // the value; null for the default value of T
+    NewExpr(Loc l, const Type* t, Loc tl) : Expr(Kind::New, l), target(t), typeLoc(tl) {}
+};
+
+// `delete p` or `delete[] p`. Its type is void.
+struct DeleteExpr : Expr {
+    bool array;
+    ExprPtr operand;
+    DeleteExpr(Loc l, bool a, ExprPtr e) : Expr(Kind::Delete, l), array(a), operand(std::move(e)) {}
 };
 
 enum class BinOp { Add, Sub, Mul, Div, Rem, Shl, Shr, BitAnd, BitOr, BitXor, Eq, Ne, Lt, Le, Gt, Ge, LogAnd, LogOr };
@@ -475,6 +493,7 @@ struct FuncDecl {
     StructDecl* owner = nullptr;  // the struct or class a method belongs to
     bool isConst = false;         // `int area() const`
     bool isExtern = false;        // `extern "C" int abs(int n);`, defined in C, with no body
+    bool allowNewDelete = false;  // marked `[[allow(new_delete)]]`: no warning for new and delete
     Access access = Access::Public;
     std::vector<MemberInit> memberInits;
     std::unique_ptr<VarDecl> thisDecl;  // stands for `this` in definite assignment; set by Sema
@@ -533,6 +552,7 @@ struct Program {
     std::vector<ImportDecl> imports;
     std::vector<std::unique_ptr<StructDecl>> structs;
     std::vector<std::unique_ptr<FuncDecl>> funcs;
+    bool allowNewDelete = false;  // `[[allow(new_delete)]];` at the top of the file
 
     StructDecl* findStruct(const std::string& name) const {
         for (auto& s : structs)
