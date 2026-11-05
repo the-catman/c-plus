@@ -35,10 +35,14 @@ struct Codegen::Impl {
     llvm::IRBuilder<> b;
     std::unique_ptr<llvm::TargetMachine> tm;
 
-    llvm::StructType* stringTy = nullptr;  // { ptr data, i64 length }
+    // A string is { ptr data, i64 length, ptr owner }, as the runtime's cplus_string.
+    // `owner` is the reference-counted buffer holding the bytes, or null for a literal.
+    llvm::StructType* stringTy = nullptr;
     llvm::FunctionCallee rtPrintStr, rtPrintQuoted, rtPrintI32, rtPrintI64, rtPrintBool, rtPrintNewline, rtTrap;
     llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq;
     llvm::FunctionCallee rtTrapIndex, rtVecNew, rtVecRelease, rtVecReserve;
+    llvm::FunctionCallee rtStrRelease, rtStrCompare, rtStrConcat, rtStrAppend, rtStrSubstr, rtStrFind;
+    llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith;
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
 
@@ -124,11 +128,13 @@ struct Codegen::Impl {
         auto decl = [&](const char* name, llvm::Type* ret, std::vector<llvm::Type*> params) {
             return mod->getOrInsertFunction(name, llvm::FunctionType::get(ret, params, false));
         };
-        rtPrintStr = decl("cplus_print_str", voidTy, {ptrTy, i64});
-        rtPrintQuoted = decl("cplus_print_quoted", voidTy, {ptrTy, i64});
-        rtPrintI32 = decl("cplus_print_i32", voidTy, {i32});
-        rtPrintI64 = decl("cplus_print_i64", voidTy, {i64});
-        rtPrintBool = decl("cplus_print_bool", voidTy, {i32});
+        // The print functions write to the string their first argument points to, or
+        // to standard output when it is null.
+        rtPrintStr = decl("cplus_print_str", voidTy, {ptrTy, ptrTy, i64});
+        rtPrintQuoted = decl("cplus_print_quoted", voidTy, {ptrTy, ptrTy, i64});
+        rtPrintI32 = decl("cplus_print_i32", voidTy, {ptrTy, i32});
+        rtPrintI64 = decl("cplus_print_i64", voidTy, {ptrTy, i64});
+        rtPrintBool = decl("cplus_print_bool", voidTy, {ptrTy, i32});
         rtPrintNewline = decl("cplus_print_newline", voidTy, {});
         rtTrap = decl("cplus_trap", voidTy, {ptrTy, ptrTy, i32, i32});
         if (auto* f = llvm::dyn_cast<llvm::Function>(rtTrap.getCallee())) {
@@ -143,6 +149,14 @@ struct Codegen::Impl {
         rtPrintEnter = decl("cplus_print_enter", i32, {ptrTy});
         rtPrintLeave = decl("cplus_print_leave", voidTy, {});
         rtStrEq = decl("cplus_str_eq", i32, {ptrTy, i64, ptrTy, i64});
+        rtStrRelease = decl("cplus_str_release", voidTy, {ptrTy});
+        rtStrCompare = decl("cplus_str_compare", i32, {ptrTy, i64, ptrTy, i64});
+        rtStrConcat = decl("cplus_str_concat", voidTy, {ptrTy, ptrTy, i64});
+        rtStrAppend = decl("cplus_str_append", voidTy, {ptrTy, ptrTy, i64});
+        rtStrSubstr = decl("cplus_str_substr", voidTy, {ptrTy, ptrTy, i64, i64, ptrTy, i32, i32});
+        rtStrFind = decl("cplus_str_find", i64, {ptrTy, i64, ptrTy, i64, i64});
+        rtStrStartsWith = decl("cplus_str_starts_with", i32, {ptrTy, i64, ptrTy, i64});
+        rtStrEndsWith = decl("cplus_str_ends_with", i32, {ptrTy, i64, ptrTy, i64});
         rtTrapIndex = decl("cplus_trap_index", voidTy, {i64, i64, ptrTy, i32, i32});
         if (auto* f = llvm::dyn_cast<llvm::Function>(rtTrapIndex.getCallee())) {
             f->addFnAttr(llvm::Attribute::NoReturn);
@@ -167,10 +181,11 @@ struct Codegen::Impl {
         }
     }
 
-    // Whether values of this type hold class references, which are retained when the
-    // value is copied and released when it goes away.
+    // Whether values of this type hold references to heap objects (class objects,
+    // vector buffers, string buffers), which are retained when the value is copied and
+    // released when it goes away.
     bool isManaged(const Type* t) {
-        if (t->isClass() || t->isVector()) return true;
+        if (t->isClass() || t->isVector() || t->is(K::String)) return true;
         if (!t->isStruct()) return false;
         TypeInfo& info = types.at(t->decl);
         if (info.managed < 0) {
@@ -189,8 +204,11 @@ struct Codegen::Impl {
 
     llvm::Value* stringValue(const std::string& s) {
         llvm::Constant* data = cstring(s);
-        return llvm::ConstantStruct::get(stringTy, {data, b.getInt64(s.size())});
+        return llvm::ConstantStruct::get(stringTy, {data, b.getInt64(s.size()), llvm::ConstantPointerNull::get(b.getPtrTy())});
     }
+
+    llvm::Value* strData(llvm::Value* s) { return b.CreateExtractValue(s, 0, "data"); }
+    llvm::Value* strLength(llvm::Value* s) { return b.CreateExtractValue(s, 1, "length"); }
 
     llvm::AllocaInst* entryAlloca(llvm::Type* t, const std::string& name) {
         llvm::IRBuilder<> entry(&fn->getEntryBlock(), fn->getEntryBlock().begin());
@@ -284,16 +302,113 @@ struct Codegen::Impl {
 
     void retainValue(llvm::Value* v, const Type* t) {
         if (t->isClass() || t->isVector()) b.CreateCall(rtRetain, {v});
+        else if (t->is(K::String)) b.CreateCall(rtRetain, {b.CreateExtractValue(v, 2, "owner")});
         else if (isManaged(t)) b.CreateCall(types.at(t->decl).retain, {v});
     }
 
     void releaseValue(llvm::Value* v, const Type* t) {
-        if (t->isVector()) {
+        if (t->is(K::String)) {
+            b.CreateCall(rtStrRelease, {b.CreateExtractValue(v, 2, "owner")});
+        } else if (t->isVector()) {
             VecInfo& info = vecInfo(t);
             b.CreateCall(rtVecRelease, {v, b.getInt64(info.elemSize), info.releaseElem});
         } else if (isManaged(t)) {
             b.CreateCall(types.at(t->decl).release, {v});
         }
+    }
+
+    // ---- Strings -----------------------------------------------------------
+
+    // The value of a string that is only read before any other code runs, so one
+    // stored in a variable or field is used in place, without a reference of its own.
+    llvm::Value* stringForRead(const Expr& e) {
+        return isPlace(e) ? b.CreateLoad(stringTy, addressOf(e), "str") : gen(e);
+    }
+
+    // The operands of `a + b + c`, which are joined all at once.
+    static void concatParts(const Expr& e, std::vector<const Expr*>& parts) {
+        if (e.kind == Expr::Kind::Binary) {
+            auto& bin = static_cast<const BinaryExpr&>(e);
+            if (bin.op == BinOp::Add && bin.operandType && bin.operandType->is(K::String)) {
+                concatParts(*bin.lhs, parts);
+                concatParts(*bin.rhs, parts);
+                return;
+            }
+        }
+        parts.push_back(&e);
+    }
+
+    // `a + b + c`: a new string, made with one allocation.
+    llvm::Value* genConcat(const BinaryExpr& bin) {
+        std::vector<const Expr*> parts;
+        concatParts(bin, parts);
+        // A part is read in place unless a later part runs code that could change it.
+        std::vector<bool> codeRunsLater(parts.size());
+        bool later = false;
+        for (size_t i = parts.size(); i-- > 0;) {
+            codeRunsLater[i] = later;
+            later = later || mayRunCode(*parts[i]);
+        }
+        auto* arrayTy = llvm::ArrayType::get(stringTy, parts.size());
+        llvm::AllocaInst* array = entryAlloca(arrayTy, "parts");
+        for (size_t i = 0; i < parts.size(); ++i) {
+            llvm::Value* v = codeRunsLater[i] ? gen(*parts[i]) : stringForRead(*parts[i]);
+            b.CreateStore(v, b.CreateConstInBoundsGEP2_32(arrayTy, array, 0, (unsigned)i));
+        }
+        llvm::AllocaInst* out = entryAlloca(stringTy, "joined");
+        b.CreateCall(rtStrConcat, {out, array, b.getInt64(parts.size())});
+        return b.CreateLoad(stringTy, out, "joined");
+    }
+
+    llvm::Value* genStringMethod(const MethodCallExpr& call) {
+        const Expr& recv = *call.receiver;
+        if (call.strMethod == StrMethod::Clear) {
+            llvm::Value* slot = addressOf(recv, false, true);
+            llvm::Value* old = b.CreateLoad(stringTy, slot, "old");
+            b.CreateStore(llvm::Constant::getNullValue(stringTy), slot);
+            releaseValue(old, Type::stringTy());
+            return nullptr;
+        }
+        // The receiver is evaluated before the arguments, as in C++17, and read in
+        // place unless an argument runs code that could change it.
+        bool argsRunCode = false;
+        for (auto& a : call.args) argsRunCode = argsRunCode || mayRunCode(*a);
+        llvm::Value* s = argsRunCode ? gen(recv) : stringForRead(recv);
+        std::vector<llvm::Value*> args;
+        for (auto& a : call.args) {
+            if (!a->type->is(K::String)) args.push_back(genConverted(*a, Type::longTy()));
+            else args.push_back(argsRunCode ? gen(*a) : stringForRead(*a));
+        }
+        auto test = [&](llvm::FunctionCallee f, const char* name) {
+            llvm::Value* r = b.CreateCall(f, {strData(s), strLength(s), strData(args[0]), strLength(args[0])});
+            return b.CreateICmpNE(r, b.getInt32(0), name);
+        };
+        switch (call.strMethod) {
+            case StrMethod::Size: return strLength(s);
+            case StrMethod::Empty: return b.CreateICmpEQ(strLength(s), b.getInt64(0), "empty");
+            case StrMethod::Substr: {
+                llvm::Value* pos = args.size() > 0 ? args[0] : b.getInt64(0);
+                llvm::Value* count = args.size() > 1 ? args[1] : b.getInt64(-1);  // string::npos: the rest
+                llvm::AllocaInst* in = entryAlloca(stringTy, "str");
+                b.CreateStore(s, in);
+                llvm::AllocaInst* out = entryAlloca(stringTy, "sub");
+                b.CreateCall(rtStrSubstr, {out, in, pos, count, fileName, b.getInt32(call.loc.line), b.getInt32(call.loc.col)});
+                return b.CreateLoad(stringTy, out, "sub");  // shares the bytes of `s`, with its own reference
+            }
+            case StrMethod::Find:
+            case StrMethod::Contains: {
+                llvm::Value* from = args.size() > 1 ? args[1] : b.getInt64(0);
+                if (args.size() > 1) trapIf(b.CreateICmpSLT(from, b.getInt64(0)), "find() was given a negative position", call.loc);
+                llvm::Value* pos = b.CreateCall(rtStrFind, {strData(s), strLength(s), strData(args[0]), strLength(args[0]), from}, "pos");
+                if (call.strMethod == StrMethod::Find) return pos;
+                return b.CreateICmpSGE(pos, b.getInt64(0), "contains");
+            }
+            case StrMethod::StartsWith: return test(rtStrStartsWith, "starts");
+            case StrMethod::EndsWith: return test(rtStrEndsWith, "ends");
+            case StrMethod::Clear:
+            case StrMethod::None: break;
+        }
+        llvm_unreachable("unknown string method");
     }
 
     // ---- Vectors -----------------------------------------------------------
@@ -410,7 +525,7 @@ struct Codegen::Impl {
         std::string prefix = std::string("cplus.") + vt->name + "#";
         // Everything is declared before any body is generated, so element types that
         // lead back to this vector find its helpers.
-        info.print = internalFunction(prefix + "print", b.getVoidTy(), {ptrTy});
+        info.print = internalFunction(prefix + "print", b.getVoidTy(), {ptrTy, ptrTy});  // the vector, the output
         info.equals = internalFunction(prefix + "equals", b.getInt1Ty(), {ptrTy, ptrTy});
         llvm::Function* retainElem = nullptr;
         llvm::Function* releaseElem = nullptr;
@@ -425,18 +540,19 @@ struct Codegen::Impl {
         // Printing: `[1, 2, 3]`, with strings in quotes.
         startHelper(info.print);
         llvm::Value* v = info.print->getArg(0);
-        printText("[");
+        llvm::Value* out = info.print->getArg(1);
+        printText(out, "[");
         countedLoop(vecSize(v), [&](llvm::Value* i) {
             auto* sepBB = llvm::BasicBlock::Create(ctx, "sep", fn);
             auto* elemBB = llvm::BasicBlock::Create(ctx, "elem", fn);
             b.CreateCondBr(b.CreateICmpNE(i, b.getInt64(0)), sepBB, elemBB);
             b.SetInsertPoint(sepBB);
-            printText(", ");
+            printText(out, ", ");
             b.CreateBr(elemBB);
             b.SetInsertPoint(elemBB);
-            printValue(b.CreateLoad(info.elemTy, elementAt(v, i, vt)), elem, true);
+            printValue(out, b.CreateLoad(info.elemTy, elementAt(v, i, vt)), elem, true);
         });
-        printText("]");
+        printText(out, "]");
         b.CreateRetVoid();
 
         // Equality: the same size, and each pair of elements equal.
@@ -650,8 +766,7 @@ struct Codegen::Impl {
         switch (t->kind) {
             case K::Bool: return b.getInt1(false);
             case K::Int: case K::Long: return llvm::ConstantInt::get(llvmType(t), 0);
-            case K::String:
-                return llvm::ConstantStruct::get(stringTy, {llvm::ConstantPointerNull::get(b.getPtrTy()), b.getInt64(0)});
+            case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct: return buildAggregate(*t->decl, {});
             case K::Class: case K::Vector: return llvm::ConstantPointerNull::get(b.getPtrTy());
             default: llvm_unreachable("no default value for this type");
@@ -861,6 +976,17 @@ struct Codegen::Impl {
             case Expr::Kind::Binary: {
                 auto& bin = static_cast<const BinaryExpr&>(e);
                 if (bin.op == BinOp::LogAnd || bin.op == BinOp::LogOr) return genLogical(bin);
+                bool equality = bin.op == BinOp::Eq || bin.op == BinOp::Ne;
+                if (bin.operandType->is(K::String) && bin.op == BinOp::Add) {
+                    owned = true;
+                    return genConcat(bin);
+                }
+                if (bin.operandType->is(K::String) && !equality) {  // ordered by their bytes
+                    llvm::Value* l = gen(*bin.lhs);
+                    llvm::Value* r = gen(*bin.rhs);
+                    llvm::Value* order = b.CreateCall(rtStrCompare, {strData(l), strLength(l), strData(r), strLength(r)}, "order");
+                    return arith(bin.op, order, b.getInt32(0), Type::intTy(), bin.loc);
+                }
                 if (!bin.operandType->isInteger()) {  // == or != on bools, strings, structs, objects
                     llvm::Value* l = gen(*bin.lhs);
                     llvm::Value* same = genEquals(l, gen(*bin.rhs), bin.operandType);
@@ -875,6 +1001,13 @@ struct Codegen::Impl {
                 auto& a = static_cast<const AssignExpr&>(e);
                 const Type* ty = a.target->type;
                 // As in C++17, the right side is evaluated before the left.
+                if (a.op && ty->is(K::String)) {
+                    // `s += x` appends in place when nothing else holds the string's buffer.
+                    llvm::Value* rhs = gen(*a.value);
+                    llvm::Value* slot = addressOf(*a.target, false, true);
+                    b.CreateCall(rtStrAppend, {slot, strData(rhs), strLength(rhs)});
+                    return b.CreateLoad(stringTy, slot, "str");
+                }
                 if (a.op) {
                     bool shift = *a.op == BinOp::Shl || *a.op == BinOp::Shr;
                     llvm::Value* rhs = shift ? gen(*a.value) : genConverted(*a.value, ty);
@@ -972,40 +1105,50 @@ struct Codegen::Impl {
         return phi;
     }
 
-    void printText(const std::string& text) {
-        if (!text.empty()) b.CreateCall(rtPrintStr, {cstring(text), b.getInt64(text.size())});
+    // Printing writes to `out`: the address of a string being built by format() or
+    // to_string(), or null for standard output.
+    void printText(llvm::Value* out, const std::string& text) {
+        if (!text.empty()) b.CreateCall(rtPrintStr, {out, cstring(text), b.getInt64(text.size())});
     }
 
     // Strings print as-is at the top level and in quotes inside a struct or class, so
     // `{name: "Ada", age: 36}` stays readable.
-    void printValue(llvm::Value* v, const Type* t, bool nested = false) {
+    void printValue(llvm::Value* out, llvm::Value* v, const Type* t, bool nested = false) {
         switch (t->kind) {
-            case K::Int: b.CreateCall(rtPrintI32, {v}); break;
-            case K::Long: b.CreateCall(rtPrintI64, {v}); break;
-            case K::Bool: b.CreateCall(rtPrintBool, {b.CreateZExt(v, b.getInt32Ty())}); break;
-            case K::String:
-                b.CreateCall(nested ? rtPrintQuoted : rtPrintStr, {b.CreateExtractValue(v, 0), b.CreateExtractValue(v, 1)});
-                break;
+            case K::Int: b.CreateCall(rtPrintI32, {out, v}); break;
+            case K::Long: b.CreateCall(rtPrintI64, {out, v}); break;
+            case K::Bool: b.CreateCall(rtPrintBool, {out, b.CreateZExt(v, b.getInt32Ty())}); break;
+            case K::String: b.CreateCall(nested ? rtPrintQuoted : rtPrintStr, {out, strData(v), strLength(v)}); break;
             case K::Struct:
-            case K::Class: b.CreateCall(types.at(t->decl).print, {v}); break;
-            case K::Vector: b.CreateCall(vecInfo(t).print, {v}); break;
+            case K::Class: b.CreateCall(types.at(t->decl).print, {v, out}); break;
+            case K::Vector: b.CreateCall(vecInfo(t).print, {v, out}); break;
             default: llvm_unreachable("unprintable type reached codegen");
         }
     }
 
+    // print, println, format and to_string. The values are evaluated left to right
+    // before anything is written.
+    llvm::Value* genFormatted(const CallExpr& call) {
+        size_t first = call.builtin == Builtin::ToString ? 0 : 1;  // the others start with the format string
+        std::vector<llvm::Value*> values;
+        for (size_t i = first; i < call.args.size(); ++i) values.push_back(gen(*call.args[i]));
+        bool toString = call.builtin == Builtin::Format || call.builtin == Builtin::ToString;
+        llvm::Value* out = llvm::ConstantPointerNull::get(b.getPtrTy());
+        if (toString) {
+            out = entryAlloca(stringTy, "text");
+            b.CreateStore(llvm::Constant::getNullValue(stringTy), out);
+        }
+        for (size_t i = 0; i < call.formatPieces.size(); ++i) {
+            printText(out, call.formatPieces[i]);
+            if (i < values.size()) printValue(out, values[i], call.args[i + first]->type);
+        }
+        if (call.builtin == Builtin::Println) b.CreateCall(rtPrintNewline, {});
+        return toString ? b.CreateLoad(stringTy, out, "text") : nullptr;  // a new string, owned
+    }
+
     llvm::Value* genCall(const CallExpr& call) {
         if (call.vectorType) return genVectorConstruction(call);
-        if (call.builtin != Builtin::None) {
-            // Arguments are evaluated left to right before anything is printed.
-            std::vector<llvm::Value*> values;
-            for (size_t i = 1; i < call.args.size(); ++i) values.push_back(gen(*call.args[i]));
-            for (size_t i = 0; i < call.formatPieces.size(); ++i) {
-                printText(call.formatPieces[i]);
-                if (i < values.size()) printValue(values[i], call.args[i + 1]->type);
-            }
-            if (call.builtin == Builtin::Println) b.CreateCall(rtPrintNewline, {});
-            return nullptr;
-        }
+        if (call.builtin != Builtin::None) return genFormatted(call);
         if (call.constructs) {  // `Point(1, 2)`
             const StructDecl& sd = *call.constructs;
             if (sd.constructor) {
@@ -1029,6 +1172,7 @@ struct Codegen::Impl {
     llvm::Value* genMethodCall(const MethodCallExpr& call) {
         const Expr& recv = *call.receiver;
         if (recv.type->isVector()) return genVectorMethod(call);
+        if (recv.type->is(K::String)) return genStringMethod(call);
         llvm::Value* self;
         if (recv.type->isClass()) {
             self = gen(recv);
@@ -1330,7 +1474,7 @@ struct Codegen::Impl {
     void declareHelpers(const StructDecl& sd) {
         TypeInfo& info = types.at(&sd);
         llvm::Type* self = llvmType(&sd.type);
-        info.print = helper(sd, "print", b.getVoidTy(), {self});
+        info.print = helper(sd, "print", b.getVoidTy(), {self, b.getPtrTy()});  // the value, the output
         if (!sd.isClass) info.equals = helper(sd, "equals", b.getInt1Ty(), {self, self});
         if (sd.isClass) {
             info.release = helper(sd, "release", b.getVoidTy(), {self});
@@ -1359,22 +1503,23 @@ struct Codegen::Impl {
         // Printing: `{x: 1, y: 2}` for a struct, `User {name: "Ada", age: 36}` for a class.
         startHelper(info.print);
         llvm::Value* self = info.print->getArg(0);
+        llvm::Value* out = info.print->getArg(1);
         if (sd.isClass) {
             auto* bodyBB = llvm::BasicBlock::Create(ctx, "print", fn);
             auto* againBB = llvm::BasicBlock::Create(ctx, "seen", fn);
             b.CreateCondBr(b.CreateICmpNE(b.CreateCall(rtPrintEnter, {self}), b.getInt32(0)), bodyBB, againBB);
             b.SetInsertPoint(againBB);
-            printText(sd.name + " {...}");  // already being printed: it refers back to itself
+            printText(out, sd.name + " {...}");  // already being printed: it refers back to itself
             b.CreateRetVoid();
             b.SetInsertPoint(bodyBB);
-            printText(sd.name + " ");
+            printText(out, sd.name + " ");
         }
-        printText("{");
+        printText(out, "{");
         for (size_t i = 0; i < sd.fields.size(); ++i) {
-            printText((i ? ", " : "") + sd.fields[i].name + ": ");
-            printValue(loadField(sd, self, i), sd.fields[i].type, true);
+            printText(out, (i ? ", " : "") + sd.fields[i].name + ": ");
+            printValue(out, loadField(sd, self, i), sd.fields[i].type, true);
         }
-        printText("}");
+        printText(out, "}");
         if (sd.isClass) b.CreateCall(rtPrintLeave, {});
         b.CreateRetVoid();
 
@@ -1441,7 +1586,7 @@ struct Codegen::Impl {
     bool generate(const Program& program, std::string& error) {
         mod = std::make_unique<llvm::Module>(file.path, ctx);
         if (!setupTarget(error)) return false;
-        stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty()}, "cplus.string");
+        stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy()}, "cplus.string");
         // Named types are created first and given bodies after, so they can refer to
         // each other in any order.
         for (auto& sd : program.structs)

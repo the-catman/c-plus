@@ -93,7 +93,7 @@ int main() {
 // error: this compiler does not support insert() on vectors yet
 // error: 'bag' is const, so its fields cannot be changed
 // error: cannot call 'move' on const 'ps', because it may change fields
-// error: '[ ]' picks an element of a vector, but this is 'string'
+// error: this compiler does not support indexing strings yet
 // error: 'items' cannot be changed inside const method 'peek'
 // error: the elements of 'items' cannot be assigned to inside const method 'peek'
 // error: spec: docs/SPEC.md#vectors

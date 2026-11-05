@@ -1,0 +1,117 @@
+// A string is a value: changing one never changes another, even though copies and
+// substrings share their bytes. The test runner checks that every buffer is freed.
+class Log {
+public:
+    string text;
+    vector<string> lines;
+    void add(string line) {
+        text += line + ";";
+        lines.push_back(line);
+    }
+    string reset() {
+        text = "reset";
+        return "";
+    }
+};
+
+struct Named {
+    string name;
+    int n = 0;
+};
+
+string bump(string s) {
+    s += "!";
+    return s;
+}
+
+int main() {
+    // Appending to a copy leaves the original alone, in either order.
+    string a = "base";
+    a += "-grown";
+    string b = a;
+    b += "-b";
+    a += "-a";
+    println("{} {}", a, b);
+    // expect: base-grown-a base-grown-b
+    string c = bump(bump(a));
+    println("{} {}", a, c);
+    // expect: base-grown-a base-grown-a!!
+
+    // A substring stays the same when the string it came from changes or goes away.
+    string word;
+    {
+        string sentence = "the quick brown fox";
+        sentence += " jumps";
+        word = sentence.substr(4, 5);
+        sentence += " high";
+        sentence.clear();
+    }
+    string rest = word.substr(1);
+    word += "er";
+    println("{} {}", word, rest);
+    // expect: quicker uick
+
+    // A small part of a big string is copied and a large part shares its bytes; either
+    // way the part stays the same while the big string changes.
+    string big;
+    for (int i = 0; i < 100; i++) big += "0123456789";
+    string small = big.substr(10, 3);
+    string large = big.substr(1, 900);
+    large += "!";
+    big += "tail";
+    string kept = big;
+    big.clear();
+    println("{} {} {} {} {}", small, large.size(), large.substr(895), kept.substr(899, 4), kept.substr(998));
+    // expect: 012 901 67890! 9012 89tail
+
+    // Appending a string to itself, or a part of itself.
+    string twice = "ab";
+    twice += "cd";
+    twice += twice;
+    twice += twice.substr(0, 2);
+    println("{}", twice);
+    // expect: abcdabcdab
+
+    // Building a long string piece by piece.
+    string digits;
+    for (int i = 0; i < 1000; i++) digits += to_string(i % 10);
+    println("{} {} {}", digits.size(), digits.substr(0, 12), digits.substr(995));
+    // expect: 1000 012345678901 56789
+
+    // Strings in structs, classes and vectors are copied with them.
+    Named x = {"x"};
+    Named y = x;
+    y.name += "y";
+    println("{} {}", x, y);
+    // expect: {name: "x", n: 0} {name: "xy", n: 0}
+    Log log = Log();
+    Log same = log;
+    log.add("one");
+    same.add(format("{}", 2));
+    println("{} {}", same.text, log.lines);
+    // expect: one;2; ["one", "2"]
+    vector<string> v = {"p", "q"};
+    vector<string> w = v;
+    w[0] += "!";
+    v[1] = v[0] + v[1];
+    println("{} {}", v, w);
+    // expect: ["p", "pq"] ["p!", "q"]
+
+    // The operands of + are read before the code in later operands runs.
+    log.text = "before";
+    string joined = log.text + log.reset() + log.text;
+    println("{}", joined);
+    // expect: beforereset
+    log.text = "before";
+    string found = log.text.substr(0, log.reset().size() + 3);
+    println("{} {}", found, log.text);
+    // expect: bef reset
+
+    // Temporaries made while a statement runs are freed when it ends.
+    println("{}", (a + b).substr(5, 5) + format("{}", 1).substr(0));
+    // expect: grown1
+    format("{}", a);
+    to_string(5);
+    a.substr(1);
+    return 0;
+}

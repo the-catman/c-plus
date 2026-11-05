@@ -8,6 +8,7 @@ inline constexpr const char* Preprocessor = "no-preprocessor";
 inline constexpr const char* Comments = "comments";
 inline constexpr const char* IntegerLiterals = "integer-literals";
 inline constexpr const char* StringLiterals = "string-literals";
+inline constexpr const char* Strings = "string";
 inline constexpr const char* IntegerTypes = "integer-types";
 inline constexpr const char* ImplicitConversions = "implicit-conversions";
 inline constexpr const char* Variables = "variables";

@@ -22,6 +22,22 @@ static const Type* commonInteger(const Type* a, const Type* b) {
 }
 
 static std::string q(const std::string& s) { return "'" + s + "'"; }
+
+// How to turn a value of type `t` into text, for errors about joining it to a string
+// with `op` (+ or +=).
+static std::string textHelp(const Type* t, const char* op = "+") {
+    if (t->isInteger())
+        return std::string("turn the number into a string first: `s ") + op +
+               " to_string(n)`, or build the whole text with `format(\"{}{}\", s, n)`. Unlike C++, a number is "
+               "never added as a character code";
+    if (t->is(K::Bool)) return "`format(\"{}\", b)` turns a bool into \"true\" or \"false\"";
+    if (t->is(K::Void) || t->isError()) return "";
+    return "`format(\"{}\", value)` turns any value that can be printed into a string";
+}
+
+static bool isBuiltinFunction(const std::string& name) {
+    return name == "println" || name == "print" || name == "format" || name == "to_string";
+}
 static std::string q(const Type* t) { return q(t->name); }
 static std::string join(const std::string& path, const std::string& field) {
     return path.empty() ? field : path + "." + field;
@@ -272,7 +288,7 @@ static std::string closest(const std::string& name, const std::vector<std::strin
 }
 
 std::string Sema::suggestName(const std::string& name) {
-    std::vector<std::string> candidates{"println", "print"};
+    std::vector<std::string> candidates{"println", "print", "format", "to_string"};
     for (auto& scope : scopes_)
         for (auto& [n, _] : scope) candidates.push_back(n);
     for (auto& [n, _] : funcs_) candidates.push_back(n);
@@ -310,7 +326,7 @@ void Sema::check(Program& program) {
         if (sd->defined) structs_[sd->name] = sd.get();
 
     for (auto& fn : program.funcs) {
-        if (fn->name == "println" || fn->name == "print") {
+        if (isBuiltinFunction(fn->name)) {
             diags_.error(fn->nameLoc, q(fn->name) + " is a built-in function and cannot be redefined",
                          "give your function a different name", spec::Printing);
             continue;
@@ -515,9 +531,11 @@ void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
     if (usableAsCondition(t)) return;
     std::string help;
     if (t->is(K::Void)) help = "this expression produces no value";
-    else if (t->isVector())
-        help = "to check whether it has elements, write `!" +
-               (e.kind == Expr::Kind::Name ? static_cast<NameExpr&>(e).name : std::string("items")) + ".empty()`";
+    else if (t->isVector() || t->is(K::String))
+        help = std::string("to check whether it has ") + (t->isVector() ? "elements" : "any text") + ", write `!" +
+               (e.kind == Expr::Kind::Name ? static_cast<NameExpr&>(e).name
+                                           : std::string(t->isVector() ? "items" : "text")) +
+               ".empty()`";
     diags_.error(e.loc, std::string("the ") + what + " must be a bool or a number, but this is " + q(t), help,
                  spec::Conditions);
 }
@@ -666,8 +684,10 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
         elem = rangeType->elem;
     } else if (!rangeType->isError()) {
         diags_.error(st.range->loc, "a range-based for loop goes over a vector, but this is " + q(rangeType),
-                     rangeType->is(K::String) ? "looping over the characters of a string is planned"
-                                              : "write the vector to loop over after the ':'",
+                     rangeType->is(K::String)
+                         ? "looping over the characters of a string needs the `char` type, which is planned; until "
+                           "then loop over the positions and use `s.substr(i, 1)`"
+                         : "write the vector to loop over after the ':'",
                      spec::RangeFor);
         rangeType = Type::error();
     }
@@ -889,9 +909,15 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         const Type* indexType = checkExpr(*ix.index, flow);
         e.type = Type::error();
         if (baseType->isError()) return e.type;
+        if (baseType->is(K::String)) {
+            diags_.error(e.loc, "this compiler does not support indexing strings yet",
+                         "`s[i]` needs the `char` type, which is planned; until then `s.substr(i, 1)` is the "
+                         "character at position i, as a string",
+                         spec::Strings);
+            return e.type;
+        }
         if (!baseType->isVector()) {
-            diags_.error(e.loc, "'[ ]' picks an element of a vector, but this is " + q(baseType),
-                         baseType->is(K::String) ? "string operations are planned" : "", spec::Vectors);
+            diags_.error(e.loc, "'[ ]' picks an element of a vector, but this is " + q(baseType), "", spec::Vectors);
             return e.type;
         }
         if (!indexType->isError() && !indexType->isInteger())
@@ -921,13 +947,16 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         path.clear();
     }
     if (!baseType->hasFields()) {
-        std::string help = baseType->is(K::String) ? "string operations are planned" : "";
-        if (baseType->isVector())
-            help = m.field == "size" || m.field == "empty" || m.field == "front" || m.field == "back"
+        std::string help;
+        bool str = baseType->is(K::String);
+        if (str || baseType->isVector())
+            help = m.field == "size" || m.field == "length" || m.field == "empty" || m.field == "front" ||
+                           m.field == "back"
                        ? q(m.field) + " is a method; call it with `" + m.field + "()`"
-                       : "vectors have methods like size(), push_back(x) and back(), and elements are read with `v[i]`";
+                   : str ? "strings have methods like size(), substr(pos, n) and find(text)"
+                         : "vectors have methods like size(), push_back(x) and back(), and elements are read with `v[i]`";
         diags_.error(e.loc, q(baseType) + " has no fields, so '." + m.field + "' cannot be used", help,
-                     baseType->isVector() ? spec::Vectors : spec::Structs);
+                     str ? spec::Strings : baseType->isVector() ? spec::Vectors : spec::Structs);
         var = nullptr;
         return e.type;
     }
@@ -1141,13 +1170,31 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 result = Type::boolTy();
                 break;
             }
+            // Strings are joined with + and ordered by their bytes, as in C++.
+            bool lStr = l->is(K::String), rStr = r->is(K::String);
+            if ((lStr || rStr) && (b.op == BinOp::Add || comparison)) {
+                if (lStr && rStr) {
+                    b.operandType = l;
+                    result = comparison ? Type::boolTy() : l;
+                    break;
+                }
+                const Expr* other = lStr ? b.rhs.get() : b.lhs.get();
+                const Type* ot = lStr ? r : l;
+                if (b.op == BinOp::Add)
+                    diags_.error(other->loc, "'+' joins two strings, but this is " + q(ot), textHelp(ot), spec::Strings);
+                else
+                    diags_.error(other->loc, std::string("'") + sym + "' compares two strings, but this is " + q(ot),
+                                 ot->isInteger() ? "turn the number into a string first with `to_string(n)`" : "",
+                                 spec::Strings);
+                if (comparison) result = Type::boolTy();
+                break;
+            }
             if (!l->isInteger() || !r->isInteger()) {
                 const Type* bad = !l->isInteger() ? l : r;
                 const Expr* side = !l->isInteger() ? b.lhs.get() : b.rhs.get();
                 std::string help;
-                if (bad->is(K::String) && b.op == BinOp::Add) help = "joining strings is not supported yet; print the parts with println(\"{}{}\", a, b)";
+                if (bad->is(K::String)) help = "strings work with + to join them, and with == != < <= > >= to compare them";
                 else if (equality) help = "both sides of '" + std::string(sym) + "' must have the same type, but they are " + q(l) + " and " + q(r);
-                else if (comparison && bad->is(K::String)) help = "strings can be compared with == and != for now; ordering them is planned";
                 else if (comparison && (bad->hasFields() || bad->isVector())) help = q(bad) + " values can only be compared with == and !=";
                 else if (bad->is(K::Bool) && (b.op == BinOp::BitAnd || b.op == BinOp::BitOr)) help = std::string("use '") + (b.op == BinOp::BitAnd ? "&&" : "||") + "' for logic";
                 diags_.error(side->loc, std::string("'") + sym + "' cannot be used with " + q(bad), help, spec::Operators);
@@ -1177,7 +1224,15 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 if (ok && var) requireAssigned(flow, var, path, t, a.target->loc);  // `x += v` reads x first
                 checkLooseValue(*a.value, flow);
                 std::string opName = std::string("'") + binOpSpelling(*a.op) + "='";
-                if (!t->isError() && !t->isInteger())
+                const Type* vt = a.value->type;
+                if (t->is(K::String) && *a.op == BinOp::Add) {
+                    if (!vt->isError() && !vt->is(K::String))
+                        diags_.error(a.value->loc, "'+=' on a string adds another string, but this is " + q(vt),
+                                     textHelp(vt, "+="), spec::Strings);
+                } else if (t->is(K::String))
+                    diags_.error(a.target->loc, opName + " cannot be used with 'string'",
+                                 "the only compound assignment on strings is +=, which appends", spec::Strings);
+                else if (!t->isError() && !t->isInteger())
                     diags_.error(a.target->loc, opName + " needs an int or long, but this is " + q(t), "", spec::Operators);
                 else if (!a.value->type->isError() && !a.value->type->isInteger())
                     diags_.error(a.value->loc, opName + " needs an int or long, but this is " + q(a.value->type), "",
@@ -1246,7 +1301,8 @@ void Sema::checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow,
 
 const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (call.vectorType) return checkVectorConstruction(call, flow);
-    if (call.callee == "println" || call.callee == "print") return checkPrint(call, flow);
+    if (call.callee == "println" || call.callee == "print" || call.callee == "format") return checkPrint(call, flow);
+    if (call.callee == "to_string") return checkToString(call, flow);
     Loc nameLoc = call.loc;
     nameLoc.len = (uint32_t)call.callee.size();
 
@@ -1302,10 +1358,10 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         return Type::error();
     }
     if (t->isVector()) return checkVectorMethod(call, flow, t);
+    if (t->is(K::String)) return checkStringMethod(call, flow);
     if (!t->hasFields()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
-        diags_.error(call.loc, q(t) + " has no methods, so '." + call.name + "()' cannot be used",
-                     t->is(K::String) ? "string operations are planned" : "", spec::Methods);
+        diags_.error(call.loc, q(t) + " has no methods, so '." + call.name + "()' cannot be used", "", spec::Methods);
         return Type::error();
     }
     const StructDecl& sd = *t->decl;
@@ -1358,6 +1414,26 @@ const VectorMethodInfo kVectorMethods[] = {
 };
 }  // namespace
 
+// A method that changes a vector or string, like push_back() or clear(), needs a
+// receiver that can be changed: a variable or a field, and not a const one.
+void Sema::checkChangingReceiver(const Expr& recv, const char* method, const char* what, const char* anchor) {
+    if (!isPlaceKind(recv)) {
+        diags_.error(recv.loc, std::string(method) + "() changes the " + what + ", so it must be called on a variable or a field",
+                     std::string("this ") + what + " is a temporary copy, so changing it would have no effect", anchor);
+        return;
+    }
+    const VarDecl* var = nullptr;
+    std::string path;
+    const Expr* root = nullptr;
+    if (storageOf(recv, root) == Storage::Variable && root && !containsIndex(recv)) {
+        var = rootVariable(*root);
+        if (recv.kind == Expr::Kind::Member ||
+            (recv.kind == Expr::Kind::Name && static_cast<const NameExpr&>(recv).implicitField >= 0))
+            path = outerVectorName(recv);
+    }
+    checkChangeable(recv, "changed", var, path);
+}
+
 const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type* vecType) {
     const VectorMethodInfo* info = nullptr;
     for (auto& m : kVectorMethods)
@@ -1385,25 +1461,7 @@ const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type
         return Type::error();
     }
     call.vecMethod = info->method;
-    if (info->changes) {
-        const Expr& recv = *call.receiver;
-        if (!isPlaceKind(recv)) {
-            diags_.error(recv.loc, std::string(info->name) + "() changes the vector, so it must be called on a variable "
-                                                             "or a field",
-                         "this vector is a temporary copy, so changing it would have no effect", spec::Vectors);
-        } else {
-            const VarDecl* var = nullptr;
-            std::string path;
-            const Expr* root = nullptr;
-            if (storageOf(recv, root) == Storage::Variable && root && !containsIndex(recv)) {
-                var = rootVariable(*root);
-                if (recv.kind == Expr::Kind::Member || (recv.kind == Expr::Kind::Name &&
-                                                        static_cast<const NameExpr&>(recv).implicitField >= 0))
-                    path = outerVectorName(recv);
-            }
-            checkChangeable(recv, "changed", var, path);
-        }
-    }
+    if (info->changes) checkChangingReceiver(*call.receiver, info->name, "vector", spec::Vectors);
     size_t want = info->takesElement ? 1 : 0;
     if (call.args.size() != want) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
@@ -1457,20 +1515,28 @@ const Type* Sema::checkVectorConstruction(CallExpr& call, Flow& flow) {
     return vt;
 }
 
+// print, println and format: a format string, then one value for each {} in it.
 const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
-    call.builtin = call.callee == "println" ? Builtin::Println : Builtin::Print;
+    call.builtin = call.callee == "println" ? Builtin::Println
+                   : call.callee == "print" ? Builtin::Print
+                                            : Builtin::Format;
+    bool format = call.builtin == Builtin::Format;
+    const Type* result = format ? Type::stringTy() : Type::voidTy();
     for (auto& a : call.args) checkExpr(*a, flow);
     if (call.args.empty()) {
-        if (call.builtin == Builtin::Print)
-            diags_.error(call.loc, "print needs a format string", "write e.g. `print(\"{}\", value);`", spec::Printing);
+        if (call.builtin != Builtin::Println)
+            diags_.error(call.loc, call.callee + " needs a format string",
+                         "write e.g. `" + call.callee + "(\"{}\", value)`", spec::Printing);
         call.formatPieces = {""};
-        return Type::voidTy();
+        return result;
     }
     Expr& fmtExpr = *call.args[0];
     if (fmtExpr.kind != Expr::Kind::StringLit) {
         diags_.error(fmtExpr.loc, "the first argument of " + call.callee + " must be a format string written in quotes",
-                     "to print a value, write `" + call.callee + "(\"{}\", value);`", spec::Printing);
-        return Type::voidTy();
+                     format ? "to turn a value into a string, write `format(\"{}\", value)`"
+                            : "to print a value, write `" + call.callee + "(\"{}\", value);`",
+                     spec::Printing);
+        return result;
     }
     const std::string& fmt = static_cast<StringLitExpr&>(fmtExpr).value;
     std::vector<std::string> pieces{""};
@@ -1483,11 +1549,11 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
         else if (c == '{') {
             diags_.error(fmtExpr.loc, "only {} placeholders are supported in format strings so far",
                          "write {{ for a literal '{'; format options like {:x} are not supported yet", spec::Printing);
-            return Type::voidTy();
+            return result;
         } else if (c == '}') {
             diags_.error(fmtExpr.loc, "this format string has a '}' with no matching '{'",
                          "write }} for a literal '}'", spec::Printing);
-            return Type::voidTy();
+            return result;
         } else pieces.back() += c;
     }
     size_t placeholders = pieces.size() - 1, values = call.args.size() - 1;
@@ -1496,7 +1562,7 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
                                    (placeholders == 1 ? "" : "s") + " but " + std::to_string(values) + " value" +
                                    (values == 1 ? " was" : "s were") + " given",
                      "use one {} for each value after the format string", spec::Printing);
-        return Type::voidTy();
+        return result;
     }
     for (size_t i = 1; i < call.args.size(); ++i) {
         const Type* t = call.args[i]->type;
@@ -1505,7 +1571,114 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
                          spec::Printing);
     }
     call.formatPieces = std::move(pieces);
-    return Type::voidTy();
+    return result;
+}
+
+// `to_string(n)`, as in C++: the decimal digits of an int or a long.
+const Type* Sema::checkToString(CallExpr& call, Flow& flow) {
+    call.builtin = Builtin::ToString;
+    call.formatPieces = {"", ""};
+    if (call.args.size() != 1) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, "to_string() takes one argument but " + std::to_string(call.args.size()) +
+                                   (call.args.size() == 1 ? " was" : " were") + " given",
+                     "write `to_string(n)`; to build text from several values, write `format(\"{} {}\", a, b)`",
+                     spec::Strings);
+        return Type::stringTy();
+    }
+    const Type* t = checkExpr(*call.args[0], flow);
+    if (!t->isError() && !t->isInteger())
+        diags_.error(call.args[0]->loc, "to_string() takes an int or a long, but this is " + q(t),
+                     t->is(K::String) ? "it is already a string" : textHelp(t), spec::Strings);
+    return Type::stringTy();
+}
+
+namespace {
+struct StringMethodInfo {
+    const char* name;
+    StrMethod method;
+    const char* usage;  // how it is called, for messages
+    size_t minArgs, maxArgs;
+    bool takesText;  // the first argument is a string; any others are positions
+    bool changes;    // changes the string
+};
+const StringMethodInfo kStringMethods[] = {
+    {"size", StrMethod::Size, "size()", 0, 0, false, false},
+    {"length", StrMethod::Size, "length()", 0, 0, false, false},
+    {"empty", StrMethod::Empty, "empty()", 0, 0, false, false},
+    {"substr", StrMethod::Substr, "substr(pos, count)", 0, 2, false, false},
+    {"find", StrMethod::Find, "find(text)` or `s.find(text, pos)", 1, 2, true, false},
+    {"contains", StrMethod::Contains, "contains(text)", 1, 1, true, false},
+    {"starts_with", StrMethod::StartsWith, "starts_with(text)", 1, 1, true, false},
+    {"ends_with", StrMethod::EndsWith, "ends_with(text)", 1, 1, true, false},
+    {"clear", StrMethod::Clear, "clear()", 0, 0, false, true},
+};
+const char* kStringMethodList =
+    "the string methods today are size, length, empty, substr, find, contains, starts_with, ends_with and clear";
+
+std::string argumentCount(size_t min, size_t max) {
+    if (max == 0) return "no arguments";
+    if (min == max) return min == 1 ? "one argument" : std::to_string(min) + " arguments";
+    if (min == 0) return "at most " + std::string(max == 1 ? "one argument" : std::to_string(max) + " arguments");
+    return std::to_string(min) + " or " + std::to_string(max) + " arguments";
+}
+}  // namespace
+
+const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
+    const StringMethodInfo* info = nullptr;
+    for (auto& m : kStringMethods)
+        if (call.name == m.name) info = &m;
+    if (!info) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        const std::string& n = call.name;
+        std::string notYet = "this compiler does not support " + n + "() on strings yet";
+        if (n == "push_back" || n == "pop_back" || n == "front" || n == "back" || n == "at")
+            diags_.error(call.loc, notYet,
+                         "it works with single characters, which need the `char` type; until then `s += \"x\"` "
+                         "appends and `s.substr(i, 1)` reads one character",
+                         spec::Status);
+        else if (n == "append")
+            diags_.error(call.loc, notYet, "write `s += text`", spec::Status);
+        else if (n == "insert" || n == "erase" || n == "replace" || n == "rfind" || n == "compare" ||
+                 n == "find_first_of" || n == "find_last_of" || n == "find_first_not_of" ||
+                 n == "find_last_not_of" || n == "resize" || n == "reserve" || n == "c_str" || n == "data" ||
+                 n == "begin" || n == "end")
+            diags_.error(call.loc, notYet, kStringMethodList, spec::Status);
+        else {
+            std::vector<std::string> names;
+            for (auto& m : kStringMethods) names.push_back(m.name);
+            std::string guess = closest(n, names);
+            diags_.error(call.loc, "'string' has no method named " + q(n),
+                         guess.empty() ? kStringMethodList : "did you mean " + q(guess) + "?", spec::Strings);
+        }
+        return Type::error();
+    }
+    call.strMethod = info->method;
+    if (info->changes) checkChangingReceiver(*call.receiver, info->name, "string", spec::Strings);
+    if (call.args.size() < info->minArgs || call.args.size() > info->maxArgs) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, std::string(info->name) + "() takes " + argumentCount(info->minArgs, info->maxArgs) +
+                                   " but " + std::to_string(call.args.size()) + (call.args.size() == 1 ? " was" : " were") +
+                                   " given",
+                     "write `s." + std::string(info->usage) + "`", spec::Strings);
+    } else {
+        for (size_t i = 0; i < call.args.size(); ++i) {
+            bool text = info->takesText && i == 0;
+            std::string what = text ? "for " : info->method == StrMethod::Substr && i == 1 ? "as the length for "
+                                                                                             : "as the position for ";
+            checkValue(*call.args[i], flow, text ? Type::stringTy() : Type::longTy(), what + info->name + "()");
+        }
+    }
+    switch (info->method) {
+        case StrMethod::Size:
+        case StrMethod::Find: return Type::longTy();
+        case StrMethod::Empty:
+        case StrMethod::Contains:
+        case StrMethod::StartsWith:
+        case StrMethod::EndsWith: return Type::boolTy();
+        case StrMethod::Substr: return Type::stringTy();
+        default: return Type::voidTy();
+    }
 }
 
 }  // namespace cplus

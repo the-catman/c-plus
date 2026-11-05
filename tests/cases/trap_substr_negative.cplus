@@ -1,0 +1,8 @@
+int main() {
+    string s = "hello";
+    long start = s.find("z");
+    println("{}", s.substr(start, 2));
+    return 0;
+}
+// trap: substr() position -1 is out of range for a string of size 5
+// trap: trap_substr_negative.cplus:4:21

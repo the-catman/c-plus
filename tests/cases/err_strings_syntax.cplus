@@ -1,0 +1,19 @@
+std::string greet() { return "hi"; }
+
+int main() {
+    string s = "abc";
+    long a = string::size;
+    long b = string::;
+    string t = std::to_string(5);
+    long c = std::string::npos;
+    string ch = 'a';
+    return 0;
+}
+// error: C+ has no std:: namespace
+// error: built-ins need no prefix: write `string` instead of `std::string`
+// error: 'string' has no member named 'size'
+// error: the only one is `string::npos`, the value find() returns when nothing is found
+// error: expected a name after 'string::', found ';'
+// error: built-ins need no prefix: write `to_string` instead of `std::to_string`
+// error: character literals like 'a' are not supported yet
+// error: spec: docs/SPEC.md#string

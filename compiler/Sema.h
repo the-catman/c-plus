@@ -59,6 +59,9 @@ private:
     const Type* checkMethodCall(MethodCallExpr& call, Flow& flow);
     const Type* checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type* vecType);
     const Type* checkVectorConstruction(CallExpr& call, Flow& flow);
+    const Type* checkStringMethod(MethodCallExpr& call, Flow& flow);
+    const Type* checkToString(CallExpr& call, Flow& flow);
+    void checkChangingReceiver(const Expr& recv, const char* method, const char* what, const char* anchor);
     // Checks arguments against parameters; `what` names the callee in messages.
     void checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow, Loc loc, const std::string& what);
     // One value given when building a struct or class: `Type(args)` or a `{ }` list.

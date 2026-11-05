@@ -79,11 +79,48 @@ is an error.
 
 ### string
 
-An immutable UTF-8 string value. A `string` declared without a value is empty, as in
-C++. Today strings can be created from literals, stored, passed, returned, printed, and
-compared with `==` and `!=`, which compare contents as in C++. Joining, ordering with `<`,
-indexing and slicing are planned (slicing will be bounds-checked; the representation will
-be copy-on-write).
+A string is a value, as in C++: assigning or passing one gives an independent copy, and
+`string s;` is empty. It holds bytes, which are UTF-8 text by convention. As in C++,
+`size()` counts bytes and positions are byte positions, so `"é".size()` is 2.
+
+```cpp
+string name = "Ada";
+string greeting = "Hello, " + name + "!";   // + joins two strings
+greeting += " Welcome.";                    // += appends
+long n = greeting.size();                   // a long, like a vector's size
+string word = greeting.substr(7, 3);        // "Ada": 3 bytes from position 7
+if (greeting.find("Ada") != string::npos) println("found");
+string line = format("{} is {}", name, 36); // built the way println prints
+string digits = to_string(42);
+```
+
+- `a + b` joins two strings, and `s += t` appends. Both sides must be strings: `s + 5`,
+  which C++ compiles as adding the character with code 5, is an error. Write
+  `s + to_string(5)` or `format("{}{}", s, 5)`. Two literals can be joined: `"a" + "b"`.
+- `==` and `!=` compare contents, and `<`, `<=`, `>`, `>=` compare bytes in order, as
+  C++ does. For UTF-8 text this is the order of the code points, so `"Z" < "a"`.
+- `size()` and `length()` give the number of bytes, and `empty()` is `size() == 0`.
+- `substr(pos, count)` is the part of the string from `pos`, at most `count` bytes long.
+  `substr(pos)` and a `count` that runs past the end both take the rest. A `pos` past the
+  end, which throws in C++, stops the program; so does a negative `pos`, or a negative
+  `count` other than `string::npos`.
+- `find(text)` and `find(text, pos)` return the position of the first match at or after
+  `pos`, or `string::npos` when there is none. With no unsigned types, `string::npos` is
+  `-1`, a `long`, so both `pos != string::npos` and `pos >= 0` work. A `pos` past the end
+  finds nothing, as in C++; a negative `pos` stops the program.
+- `contains(text)`, `starts_with(text)` and `ends_with(text)` return a `bool`.
+- `clear()` empties the string.
+- `to_string(n)` turns an `int` or a `long` into its digits. `format("...", values...)`,
+  C++20's `std::format`, builds a string with the rules of [Printing](#printing):
+  `format("{}", true)` is `"true"`, and `format("{}", user)` describes an object.
+
+Copies of a string, and large substrings, share their bytes instead of copying them, and
+`+=` adds to a string in place when no other string shares it, so building a string in a
+loop takes linear time. See [Memory model](#memory-model).
+
+Planned: `s[i]`, `for (char c : s)` and the methods that take or return one character
+(`push_back`, `front`, `back`, `at`), which need the `char` type; `append`, `insert`,
+`erase`, `replace`, `rfind` and `compare`; and parsing numbers out of strings.
 
 ### Implicit conversions
 
@@ -497,9 +534,11 @@ Precedence and associativity match C++. From tightest to loosest:
 | `?:` | condition is a bool or a number; branches must have compatible types |
 | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | right-associative |
 
-Arithmetic, bitwise and ordering operators take `int` and `long`. `==` and `!=` take any
-two values of the same type: numbers, `bool`s, strings by contents, structs field by field,
-vectors element by element, and class references by identity. Operands are evaluated left
+Arithmetic, bitwise and ordering operators take `int` and `long`. `+` also joins two
+strings, and the ordering operators also compare two strings (see [string](#string)).
+`==` and `!=` take any two values of the same type: numbers, `bool`s, strings by
+contents, structs field by field, vectors element by element, and class references by
+identity. Operands are evaluated left
 to right; in `v[i]`, `v` is evaluated before `i`, as in C++17.
 
 Operator overloading is planned with C++ syntax, `Point operator+(Point other) const`,
@@ -550,6 +589,15 @@ println("{{literal braces}}");
   `User {...}`, so an object that refers back to itself does not print forever.
 - There is no `printf`, `cout` or `std::`.
 
+`format` takes the same arguments as `print` and returns the text as a string instead of
+printing it, like C++20's `std::format`. `to_string(n)` is the text of an `int` or
+`long`, as in C++. `string` covers the other ways to build strings.
+
+```cpp
+string label = format("{}/{}", done, total);   // "3/10"
+string key = "user" + to_string(id);
+```
+
 ---
 
 ## Errors
@@ -584,6 +632,13 @@ shared between threads. Counting is automatic:
   Today a cycle cannot be built, because a class reference cannot be empty. `weak`
   references, which break cycles, are planned together with [Optionals](#optionals).
 
+A string's bytes live in a reference-counted buffer, which copies of the string share. A
+string never changes bytes another string can see: `s += t` writes after the end of `s`
+only when no other string holds its buffer, and otherwise moves `s` to a new buffer. A
+literal needs no buffer at all. `substr` shares the buffer when the part is at least a
+quarter of it and copies a smaller part, so a substring never keeps alive more than four
+times the memory it uses.
+
 A vector is a value, but its elements live in a reference-counted buffer that copies of
 the vector share. Changing a vector whose buffer is shared first copies the buffer, so the
 change is seen only through that vector (copy-on-write). The buffer is freed, and the
@@ -591,7 +646,7 @@ objects in it released, when the last vector using it goes away. An element is r
 when it is removed: by `pop_back`, by `clear`, or by being overwritten.
 
 Set the environment variable `CPLUS_CHECK_LEAKS=1` when running a program to have it
-report, at exit, any class objects or vector buffers that were never freed. The test suite
+report, at exit, any class objects, vector buffers or string buffers that were never freed. The test suite
 runs every program this way.
 
 Planned: `unique<T>` for a single owner with no count, and `local<T>` for non-atomic
@@ -641,13 +696,15 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Classes: reference counting, constructors, destructors, printing | implemented |
 | Methods, `const` methods, `this`, `public:` / `private:` | implemented |
 | `==` and `!=` on strings, structs, vectors and class references | implemented |
+| Strings: `+`, `+=`, `<`, `size`, `substr`, `find`, `contains`, `starts_with`, `ends_with`, `clear` | implemented |
+| `format(...)` and `to_string(n)` | implemented |
 | Vectors: `vector<T>`, checked `v[i]`, `push_back` and the other basic methods, copy-on-write | implemented |
 | Range-based `for` over vectors | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
 | Casts, unsigned types, floating point, `char` | planned |
 | Function overloading | planned |
-| Strings: joining, ordering, slicing | planned |
+| Strings: `s[i]` and looping over characters (with `char`), `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
 | `array<T, N>`, `hashmap<K, V>`; vector `insert`, `erase`, iterators | planned |
 | References (`T&`), including `for (auto& x : v)` | planned |
 | Inheritance, `virtual`, `protected:` | planned |

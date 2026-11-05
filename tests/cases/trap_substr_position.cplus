@@ -1,0 +1,9 @@
+int main() {
+    string s = "hello";
+    println("[{}]", s.substr(5));
+    println("{}", s.substr(6));
+    return 0;
+}
+// expect: []
+// trap: substr() position 6 is out of range for a string of size 5
+// trap: trap_substr_position.cplus:4:21

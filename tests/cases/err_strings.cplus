@@ -1,8 +1,99 @@
+struct Point {
+    int x;
+    int y;
+};
+
+string make() { return "m"; }
+
+string format(int x) { return ""; }
+
 int main() {
-    string a = "x";
-    string b = a + "y";
+    string s = "abc";
+    int n = 5;
+    bool flag = true;
+    Point p = {1, 2};
+    string a = s + 1;
+    string b = 1 + s;
+    string c = s + flag;
+    string d = s + p;
+    s += n;
+    s -= "a";
+    println("{}", s - "a");
+    println("{}", s < n);
+    println("{}", s[0]);
+    for (string ch : s) println("{}", ch);
+    s.append("x");
+    s.push_back("x");
+    s.insert(0, "x");
+    s.lenght();
+    long z = s.size;
+    s.substr(1, 2, 3);
+    s.find();
+    s.substr("a");
+    s.find(1);
+    int pos = s.find("b");
+    make().clear();
+    const string k = "k";
+    k += "x";
+    k.clear();
+    string t = to_string(flag);
+    string u = to_string(s);
+    string w = to_string(1, 2);
+    string f = format(s);
+    string g = format("{} {}", 1);
+    format();
+    int len = format("{}", 1);
+    if (s) println("yes");
     println("bad escape \q");
     return 0;
 }
-// error: '+' cannot be used with 'string'
+// error: 'format' is a built-in function and cannot be redefined
+// error: '+' joins two strings, but this is 'int'
+// error: turn the number into a string first: `s + to_string(n)`
+// error: Unlike C++, a number is never added as a character code
+// error: '+' joins two strings, but this is 'bool'
+// error: `format("{}", b)` turns a bool into "true" or "false"
+// error: '+' joins two strings, but this is 'Point'
+// error: `format("{}", value)` turns any value that can be printed into a string
+// error: '+=' on a string adds another string, but this is 'int'
+// error: turn the number into a string first: `s += to_string(n)`
+// error: '-=' cannot be used with 'string'
+// error: the only compound assignment on strings is +=, which appends
+// error: '-' cannot be used with 'string'
+// error: strings work with + to join them, and with == != < <= > >= to compare them
+// error: '<' compares two strings, but this is 'int'
+// error: this compiler does not support indexing strings yet
+// error: `s[i]` needs the `char` type, which is planned; until then `s.substr(i, 1)` is the character at position i
+// error: a range-based for loop goes over a vector, but this is 'string'
+// error: looping over the characters of a string needs the `char` type
+// error: this compiler does not support append() on strings yet
+// error: write `s += text`
+// error: this compiler does not support push_back() on strings yet
+// error: it works with single characters, which need the `char` type
+// error: this compiler does not support insert() on strings yet
+// error: 'string' has no method named 'lenght'
+// error: did you mean 'length'?
+// error: 'string' has no fields, so '.size' cannot be used
+// error: 'size' is a method; call it with `size()`
+// error: substr() takes at most 2 arguments but 3 were given
+// error: write `s.substr(pos, count)`
+// error: find() takes 1 or 2 arguments but 0 were given
+// error: write `s.find(text)` or `s.find(text, pos)`
+// error: expected 'long' as the position for substr(), but this is 'string'
+// error: expected 'string' for find(), but this is 'int'
+// error: expected 'int' to initialize 'pos', but this is 'long'
+// error: clear() changes the string, so it must be called on a variable or a field
+// error: 'k' is const and cannot be changed
+// error: to_string() takes an int or a long, but this is 'bool'
+// error: to_string() takes an int or a long, but this is 'string'
+// error: it is already a string
+// error: to_string() takes one argument but 2 were given
+// error: the first argument of format must be a format string written in quotes
+// error: to turn a value into a string, write `format("{}", value)`
+// error: the format string has 2 {} placeholders but 1 value was given
+// error: format needs a format string
+// error: expected 'int' to initialize 'len', but this is 'string'
+// error: the if condition must be a bool or a number, but this is 'string'
+// error: to check whether it has any text, write `!s.empty()`
 // error: unknown escape sequence '\q'
+// error: spec: docs/SPEC.md#string

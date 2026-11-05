@@ -27,6 +27,7 @@ private:
     [[noreturn]] void fail(Loc loc, const std::string& message, const std::string& help = "",
                            const std::string& spec = "");
     [[noreturn]] void notYet(Loc loc, const std::string& feature, const std::string& help = "");
+    [[noreturn]] void failStd(Loc loc, const Token& name);
     void syncTopLevel();
     void syncStatement();
 

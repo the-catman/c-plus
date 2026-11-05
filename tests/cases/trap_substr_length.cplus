@@ -1,0 +1,11 @@
+int main() {
+    string s = "hello";
+    long from = 3;
+    long to = 1;
+    println("{}", s.substr(0, -1));
+    println("{}", s.substr(from, to - from));
+    return 0;
+}
+// expect: hello
+// trap: substr() was given the negative length -2
+// trap: trap_substr_length.cplus:6:21

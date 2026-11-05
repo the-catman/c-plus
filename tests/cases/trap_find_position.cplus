@@ -1,0 +1,9 @@
+int main() {
+    string s = "hello";
+    println("{}", s.find("l", 10));
+    println("{}", s.find("l", -1));
+    return 0;
+}
+// expect: -1
+// trap: find() was given a negative position
+// trap: trap_find_position.cplus:4:21

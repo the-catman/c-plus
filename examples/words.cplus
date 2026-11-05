@@ -1,0 +1,41 @@
+// Strings are values, like std::string: + joins them, and substr, find and format work
+// as in C++. Copies share their bytes, so passing a string to a function is cheap.
+
+vector<string> split(string text, string sep) {
+    vector<string> parts;
+    long start = 0;
+    while (true) {
+        long end = text.find(sep, start);
+        if (end == string::npos) {
+            parts.push_back(text.substr(start));
+            return parts;
+        }
+        parts.push_back(text.substr(start, end - start));
+        start = end + sep.size();
+    }
+}
+
+string join(vector<string> parts, string sep) {
+    string out;
+    for (long i = 0; i < parts.size(); i++) {
+        if (i > 0) out += sep;
+        out += parts[i];
+    }
+    return out;
+}
+
+int main() {
+    string record = "name=Ada Lovelace;born=1815;field=mathematics";
+    vector<string> keys;
+    string longest;
+    for (string pair : split(record, ";")) {
+        long eq = pair.find("=");
+        string key = pair.substr(0, eq);
+        println("{} -> {}", key, pair.substr(eq + 1));
+        keys.push_back(key);
+        if (key.size() > longest.size()) longest = key;
+    }
+    println("keys: {}", join(keys, ", "));
+    println("{}", format("{} keys, the longest is '{}'", keys.size(), longest));
+    return 0;
+}

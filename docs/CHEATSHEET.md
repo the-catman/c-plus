@@ -29,7 +29,9 @@ long square(long n) { return n * n; }
 | Access | `public:` / `private:`; class members are private by default, struct members public |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
+| Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>` |
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]` |
+| Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(n)` for an `int` or `long` |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)`, `break`, `continue`, `?:` |
 | Operators | all C++ integer operators, `&&` `\|\|` `!`, compound assignment, `++`/`--` |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors element by element, objects by identity |
@@ -43,7 +45,7 @@ long square(long n) { return n * n; }
 |-----------|----|
 | `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;` |
 | `std::cout << x`, `printf` | `println("{}", x)` |
-| `std::vector<int>` | `vector<int>`, with no `std::` |
+| `std::vector<int>`, `std::string`, `std::to_string` | `vector<int>`, `string`, `to_string`, with no `std::` |
 | `std::`, `using namespace std` | no `std::`; built-ins have no prefix |
 | prototypes / headers | none. Define each function once, in any order |
 | `int x;` then read `x` | compile error until `x` is assigned on every path |
@@ -73,6 +75,12 @@ long square(long n) { return n * n; }
 | `v.emplace_back(x)`, `v.at(i)` | `v.push_back(x)`, `v[i]` (always checked) |
 | `int a[5];` | `vector<int> a = vector<int>(5);`; `array<T, N>` is planned |
 | `if (v)`, `if (!v)` | `if (!v.empty())`, `if (v.empty())`; a vector itself is not a condition |
+| `s + 5`, `s + 'c'`, `"abc" + 1` | error: `+` only joins two strings. Write `s + to_string(5)`; a number is never a character code |
+| `std::stringstream`, `sprintf`, `snprintf` | `format("{}: {}", name, n)` returns the string |
+| `size_t pos = s.find(t)` | `long pos = s.find(t)` or `auto pos`. `string::npos` is `-1`, so `pos != string::npos` and `pos >= 0` both work |
+| `s.substr(pos)` past the end throws | it **stops the program** with file:line, as do a negative position and `s.find(t, -1)` |
+| `s[i]`, `for (char c : s)`, `'a'`, `s.push_back(c)` | planned with `char`. Use `s.substr(i, 1)` for one character and `s += "x"` to append |
+| `s.append(t)` | `s += t` |
 | overloaded functions | planned; one function per name for now |
 
 ## Planned. The compiler rejects these today with "does not support ... yet"
@@ -88,6 +96,8 @@ long square(long n) { return n * n; }
 | Memory | `weak`, `unique<T>`, `local<T>`; raw `T*`, `new`/`delete` warn |
 | Containers | `array<T, N>`, `hashmap<K, V>`; `insert`, `erase` and iterators on vectors |
 | References | `T&` parameters, `for (auto& x : v)` |
+| Characters | `char`, `'a'`, `s[i]`, `for (char c : s)`, `s.push_back(c)` |
+| More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare`; parsing numbers from strings |
 | Concurrency | `spawn f()` → `Task<T>`; later `async`/`await` |
 
 ## Tools

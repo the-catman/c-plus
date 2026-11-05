@@ -150,7 +150,28 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
 - `protected:` acts as `private:` until inheritance arrives.
 
 ### 2.12 Strings — DECIDED
-UTF-8 value type with copy-on-write. Slicing is bounds-checked. `==` compares contents.
+- A value type, like `std::string`, holding UTF-8 text by convention and bytes in fact:
+  `size()` counts bytes and positions are byte positions, as in C++. Walking code points
+  is planned.
+- Representation: `{data, length, owner}`. A literal has no owner and costs nothing.
+  Otherwise `owner` is a reference-counted buffer that copies share. Bytes another string
+  can see never change: `+=` appends in place only when nothing else holds the buffer, and
+  grows it by doubling, so building a string in a loop is linear. `substr` shares the
+  buffer when the part is at least a quarter of it and copies smaller parts, so a
+  substring never keeps alive more than four times its own size.
+- `+` joins two strings only. `s + 5`, which C++ compiles as appending character 5, is
+  an error that points to `to_string(n)` and `format`. `a + b + c` is joined with one
+  allocation.
+- `<` and the other orderings compare bytes, as C++ does (code point order for UTF-8).
+- C++ names and meanings: `size`, `length`, `empty`, `substr`, `find`, `contains`,
+  `starts_with`, `ends_with`, `clear`. Where C++ throws `out_of_range`, the program stops.
+  With no unsigned types, `string::npos` is `-1`, a `long`; a `substr` count of
+  `string::npos` takes the rest as in C++, and other negative counts stop the program.
+- `format(...)`, C++20's `std::format`, returns what `print` would print. `to_string(n)`
+  takes an `int` or `long`; `to_string(true)`, which is `"1"` in C++, is an error that
+  points to `format`.
+- `s[i]`, `for (char c : s)` and the methods that take or return one character wait for
+  `char`.
 
 ### 2.13 Modules — DECIDED
 - No header files. One file is one module. Imports are dotted names mapped to paths:
@@ -247,12 +268,13 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phase 0 has a first draft (`docs/SPEC.md`, `docs/CHEATSHEET.md`). Phase 1 is in
-progress. The compiler builds programs with integers, bools, string literals, structs,
-reference-counted classes with methods, constructors and destructors, and vectors, using
-functions, control flow including range-based `for`, definite assignment (down to struct
-fields), overflow and bounds traps, and `println`, all through LLVM. Destructors and a leak
-check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. Next in Phase 1:
-string operations, optionals, and `extern` C calls.
+progress. The compiler builds programs with integers, bools, strings (joining, ordering,
+`substr`, `find`, `format`, `to_string`), structs, reference-counted classes with methods,
+constructors and destructors, and vectors, using functions, control flow including
+range-based `for`, definite assignment (down to struct fields), overflow and bounds traps,
+and `println`, all through LLVM. Destructors and a leak check (`CPLUS_CHECK_LEAKS=1`)
+arrived with classes, ahead of Phase 2. Next in Phase 1: optionals, `extern` C calls, and
+`char`.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

@@ -142,7 +142,7 @@ struct IncDecExpr : Expr {
         : Expr(Kind::IncDec, l), increment(inc), prefix(pre), target(std::move(t)) {}
 };
 
-enum class Builtin { None, Print, Println };
+enum class Builtin { None, Print, Println, Format, ToString };
 
 // `f(args)`, a built-in like println, or `Point(1, 2)`, which builds a struct.
 struct CallExpr : Expr {
@@ -153,13 +153,15 @@ struct CallExpr : Expr {
     const StructDecl* constructs = nullptr;  // set by Sema for `TypeName(...)`
     Builtin builtin = Builtin::None;       // set by Sema for built-ins
     const Type* vectorType = nullptr;      // `vector<int>(n)` or `vector<int>(n, value)`
-    std::vector<std::string> formatPieces;  // print/println: literal text around each {} (args.size() pieces)
+    std::vector<std::string> formatPieces;  // print, println, format, to_string: literal text around each {}
     CallExpr(Loc l, std::string c, std::vector<ExprPtr> a)
         : Expr(Kind::Call, l), callee(std::move(c)), args(std::move(a)) {}
 };
 
 // The methods every vector has.
 enum class VecMethod { None, Size, Empty, PushBack, PopBack, Front, Back, Clear };
+// The methods every string has. `length()` is `size()`.
+enum class StrMethod { None, Size, Empty, Substr, Find, Contains, StartsWith, EndsWith, Clear };
 
 // `receiver.name(args)`
 struct MethodCallExpr : Expr {
@@ -168,6 +170,7 @@ struct MethodCallExpr : Expr {
     std::vector<ExprPtr> args;
     FuncDecl* method = nullptr;               // set by Sema for a struct or class method
     VecMethod vecMethod = VecMethod::None;    // set by Sema for a vector method
+    StrMethod strMethod = StrMethod::None;    // set by Sema for a string method
     MethodCallExpr(Loc nameLoc, ExprPtr r, std::string n, std::vector<ExprPtr> a)
         : Expr(Kind::MethodCall, nameLoc), receiver(std::move(r)), name(std::move(n)), args(std::move(a)) {}
 };

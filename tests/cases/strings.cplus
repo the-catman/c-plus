@@ -1,0 +1,121 @@
+// Strings: joining, comparing, searching, slicing, and building them from values.
+struct Point {
+    int x;
+    int y;
+};
+
+class User {
+public:
+    string name;
+    User(string n) : name(n) {}
+};
+
+string greet(string name) { return "Hello, " + name + "!"; }
+
+string repeat(string s, int n) {
+    string out;
+    for (int i = 0; i < n; i++) out += s;
+    return out;
+}
+
+int main() {
+    // + joins strings, literals included; += appends.
+    string first = "Ada";
+    string last = "Lovelace";
+    string full = first + " " + last;
+    println("{} | {} | {}", full, greet(first), "con" + "cat");
+    // expect: Ada Lovelace | Hello, Ada! | concat
+    string s = "a";
+    s += "b";
+    s += s;
+    s += "";
+    println("{} {}", s, repeat("ab", 3));
+    // expect: abab ababab
+
+    // size() and length() count bytes, as in C++; a character outside ASCII takes more than one.
+    string empty;
+    println("{} {} {} {} {}", full.size(), full.length(), empty.size(), empty.empty(), "é".size());
+    // expect: 12 12 0 true 2
+
+    // Comparing: == by contents, and < <= > >= by bytes, as in C++.
+    println("{} {} {} {}", "apple" < "banana", "b" > "abc", "ab" < "abc", "" < "a");
+    // expect: true true true true
+    println("{} {} {} {}", "abc" <= "abc", "abc" >= "abd", first == "Ada", first != "Ada");
+    // expect: true false true false
+    println("{} {}", "Z" < "a", "é" > "z");
+    // expect: true true
+
+    // substr(pos, count) takes at most `count` bytes from `pos`; substr(pos) takes the rest.
+    string text = "Hello, world";
+    println("[{}] [{}] [{}] [{}]", text.substr(7), text.substr(0, 5), text.substr(7, 100), text.substr(12));
+    // expect: [world] [Hello] [world] []
+    println("[{}] [{}] [{}]", text.substr(), text.substr(3, 0), text.substr(0, string::npos));
+    // expect: [Hello, world] [] [Hello, world]
+
+    // find returns the position, or string::npos (-1) when the text is not there.
+    println("{} {} {} {}", text.find("o"), text.find("o", 5), text.find("o", 9), text.find("xyz"));
+    // expect: 4 8 -1 -1
+    println("{} {} {}", text.find(""), text.find("", 12), text.find("", 13));
+    // expect: 0 12 -1
+    long comma = text.find(",");
+    if (comma != string::npos) println("before the comma: {}", text.substr(0, comma));
+    // expect: before the comma: Hello
+    println("{}", text.substr(0, text.find("!")));
+    // expect: Hello, world
+    println("{} {} {}", text.contains("lo, w"), text.starts_with("Hell"), text.ends_with("world"));
+    // expect: true true true
+    println("{} {} {}", text.contains("World"), text.starts_with(""), "ab".ends_with("abc"));
+    // expect: false true false
+
+    // Splitting on a separator, the C++ way.
+    string csv = "red,green,,blue";
+    vector<string> parts;
+    long start = 0;
+    while (true) {
+        long end = csv.find(",", start);
+        if (end == string::npos) {
+            parts.push_back(csv.substr(start));
+            break;
+        }
+        parts.push_back(csv.substr(start, end - start));
+        start = end + 1;
+    }
+    println("{} {}", parts, parts.size());
+    // expect: ["red", "green", "", "blue"] 4
+
+    // clear() empties the string.
+    string scratch = "temporary";
+    scratch.clear();
+    println("[{}] {}", scratch, scratch.empty());
+    // expect: [] true
+
+    // to_string turns a number into its digits; format builds a string the way println prints.
+    int n = 42;
+    long big = -9000000000L;
+    println("{} {} {}", to_string(n) + "!", to_string(big), to_string(n * 2).size());
+    // expect: 42! -9000000000 2
+    string report = format("{} has {} points at {}", first, n, Point{1, 2});
+    println("{}", report);
+    // expect: Ada has 42 points at {x: 1, y: 2}
+    println("{}", format("{} {} {} {{}}", vector<string>{"a", "b"}, true, User("Bo")));
+    // expect: ["a", "b"] true User {name: "Bo"} {}
+    println("[{}] [{}]", format("plain"), format(""));
+    // expect: [plain] []
+
+    // Strings in vectors print in quotes and compare by contents.
+    vector<string> names = {"Grace", "Ada"};
+    names[1] += " Lovelace";
+    println("{} {}", names, names[1] == "Ada Lovelace");
+    // expect: ["Grace", "Ada Lovelace"] true
+    string longest = "";
+    for (string name : names)
+        if (name.size() > longest.size()) longest = name;
+    println("{}", longest);
+    // expect: Ada Lovelace
+
+    // Strings print as-is at the top level and with escapes inside a struct or vector.
+    vector<string> odd = {"tab\there", "quote\"", "new\nline"};
+    println("{}", odd);
+    // expect: ["tab\there", "quote\"", "new\nline"]
+    return 0;
+}

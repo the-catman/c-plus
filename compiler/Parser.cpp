@@ -120,6 +120,7 @@ void Parser::parseTopLevel(Program& prog) {
                      "move this definition into the body of '" + t.text + "'; C+ has no headers, so there is no "
                      "separate declaration to match",
                      spec::Classes);
+            if (t.text == "std" && peek(1).kind == Tok::ColonColon) failStd(t.loc, peek(2));
             if (t.text == "using")
                 fail(t.loc, "C+ has no 'using' declarations",
                      "built-ins like println, string and vector need no std:: prefix, so `using namespace std;` "
@@ -144,6 +145,16 @@ void Parser::parseTopLevel(Program& prog) {
              spec::Classes);
     if (check(Tok::Ident) && peek(1).kind != Tok::LParen) notYet(peek().loc, "global variables");
     prog.funcs.push_back(parseFunction(ret, retLoc));
+}
+
+// `std::name`. C+ has no namespaces, and its built-ins need no prefix.
+void Parser::failStd(Loc loc, const Token& name) {
+    std::string n = name.kind == Tok::Ident ? name.text : name.kind == Tok::KwString ? "string" : "";
+    if (n == "string" || n == "vector" || n == "to_string" || n == "format" || n == "println" || n == "print")
+        fail(loc, "C+ has no std:: namespace", "built-ins need no prefix: write `" + n + "` instead of `std::" + n + "`",
+             spec::Modules);
+    fail(loc, "C+ has no std:: namespace",
+         "built-ins need no prefix: `std::cout << x << std::endl;` becomes `println(\"{}\", x);`", spec::Printing);
 }
 
 bool Parser::isTypeStart(size_t ahead) const {
@@ -833,6 +844,21 @@ ExprPtr Parser::parsePrimary() {
         case Tok::KwTrue: return std::make_unique<BoolLitExpr>(t.loc, true);
         case Tok::KwFalse: return std::make_unique<BoolLitExpr>(t.loc, false);
         case Tok::KwInt: case Tok::KwLong: case Tok::KwBool: case Tok::KwString:
+            if (t.kind == Tok::KwString && match(Tok::ColonColon)) {
+                // `string::npos`, what find() returns when nothing is found. With no
+                // unsigned types it is -1, a long.
+                const Token& member = peek();
+                if (member.kind != Tok::Ident || member.text != "npos")
+                    fail(member.loc,
+                         member.kind == Tok::Ident ? "'string' has no member named '" + member.text + "'"
+                                                   : "expected a name after 'string::', found " + describeToken(member),
+                         "the only one is `string::npos`, the value find() returns when nothing is found",
+                         spec::Strings);
+                advance();
+                Loc loc = t.loc;
+                if (member.loc.line == loc.line) loc.len = member.loc.col + member.loc.len - loc.col;
+                return std::make_unique<IntLitExpr>(loc, -1, true);
+            }
             if (check(Tok::LParen)) notYet(t.loc, "casts like '" + std::string(tokSpelling(t.kind)) + "(x)'", kCastHelp);
             fail(t.loc, "expected an expression, found " + describeToken(t),
                  "a type name can only start a declaration, e.g. `" + std::string(tokSpelling(t.kind)) + " x = ...;`");
@@ -852,10 +878,7 @@ ExprPtr Parser::parsePrimary() {
                 t.text == "dynamic_cast")
                 notYet(t.loc, "casts like '" + t.text + "<T>(x)'", kCastHelp);
             if (check(Tok::ColonColon)) {
-                if (t.text == "std")
-                    fail(t.loc, "C+ has no std:: namespace",
-                         "built-ins need no prefix: `std::cout << x << std::endl;` becomes `println(\"{}\", x);`",
-                         spec::Printing);
+                if (t.text == "std") failStd(t.loc, peek(1));
                 notYet(t.loc, "module members like '" + t.text + "::" + peek(1).text + "'");
             }
             if (isTypeName(t) && match(Tok::LBrace)) return parseInitList(t.loc, &prog_->findStruct(t.text)->type);
