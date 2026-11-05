@@ -1,0 +1,27 @@
+void? nothing() {}
+
+int main() {
+    int?? a;
+    string? ? b;
+    auto? c = 1;
+    vector<int>? list;
+    int? d = list?.[0];
+    int? e = list?.(1);
+    if (auto f) println("f");
+    while (int? g) {}
+    return 0;
+}
+// error: 'void' cannot be optional
+// error: a function that may return nothing returns an optional of a real type, e.g. `User?`
+// error: an optional cannot hold another optional
+// error: write one '?': `int?` already means int or null
+// error: write one '?': `string?` already means string or null
+// error: 'auto' cannot be optional
+// error: write the type, e.g. `User? u = find(name);`, or `auto u = find(name);` when find returns an optional
+// error: '?.' is followed by a field or method name
+// error: to read an element of an optional vector, unwrap it first: `if (auto v = opt) ... v[i]`
+// error: write e.g. `user?.name`
+// error: a variable declared in the if condition needs a value
+// error: write e.g. `if (auto f = find(key))`
+// error: a variable declared in the while condition needs a value
+// error: spec: docs/SPEC.md#optionals

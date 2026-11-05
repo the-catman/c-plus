@@ -13,6 +13,12 @@ using K = Type::Kind;
 static bool canConvert(const Type* from, const Type* to) {
     if (from->isError() || to->isError()) return true;
     if (from == to) return true;
+    if (to->isOptional()) {
+        // `null`, or a value that the optional then holds. Two optional types do not
+        // convert into each other.
+        if (from->isNull()) return true;
+        return !from->isOptional() && canConvert(from, to->elem);
+    }
     if (from->is(K::Int) && to->is(K::Long)) return true;  // widening never loses information
     return from->isInteger() && to->is(K::Bool);           // as in C++: zero is false, anything else true
 }
@@ -21,7 +27,63 @@ static const Type* commonInteger(const Type* a, const Type* b) {
     return (a->is(K::Long) || b->is(K::Long)) ? Type::longTy() : Type::intTy();
 }
 
+// The type of `c ? x : y` when one branch is null or an optional and the other fits in
+// it: `c ? user : null` is a `User?`. Null otherwise.
+static const Type* optionalOfBranches(const Type* x, const Type* y) {
+    for (int i = 0; i < 2; ++i, std::swap(x, y)) {
+        if (x->isOptional() && canConvert(y, x)) return x;
+        if (x->isNull() && !y->isNull() && !y->is(K::Void) && !y->is(K::Auto)) return Type::optionalOf(y);
+    }
+    return nullptr;
+}
+
 static std::string q(const std::string& s) { return "'" + s + "'"; }
+
+// An expression as it might be written in source, for help texts: `node.next`, or
+// `fallback` when it is something more complicated.
+static std::string spelled(const Expr& e, const std::string& fallback = "opt") {
+    if (e.kind == Expr::Kind::Name) return static_cast<const NameExpr&>(e).name;
+    if (e.kind == Expr::Kind::This) return "this";
+    if (e.kind == Expr::Kind::Member) {
+        auto& m = static_cast<const MemberExpr&>(e);
+        std::string base = spelled(*m.base, "");
+        if (!base.empty()) return base + "." + m.field;
+    }
+    return fallback;
+}
+
+// How to get at the value of an optional named `name`.
+static std::string unwrapHelp(const std::string& name) {
+    return "'" + name + "' may be null. Unwrap it with `if (auto v = " + name + ") ...`, give a fallback with `" + name +
+           " ?? value`, or call `" + name + ".value()`, which stops the program when it is null";
+}
+
+// Whether `e` reaches into the value of an optional through `?.`: `opt?.x` or `opt?.a.b`.
+static bool throughOptionalChain(const Expr& e) {
+    switch (e.kind) {
+        case Expr::Kind::OptValue: return true;
+        case Expr::Kind::Member: return throughOptionalChain(*static_cast<const MemberExpr&>(e).base);
+        case Expr::Kind::Index: return throughOptionalChain(*static_cast<const IndexExpr&>(e).base);
+        default: return false;
+    }
+}
+
+// Whether `e` lies in the copy of an optional's value that `?.` works on, rather than
+// in a class object that the optional refers to.
+static bool inOptionalCopy(const Expr& e) {
+    switch (e.kind) {
+        case Expr::Kind::OptValue: return e.type && !e.type->isClass();
+        case Expr::Kind::Member: {
+            const Expr& base = *static_cast<const MemberExpr&>(e).base;
+            return !(base.type && base.type->isClass()) && inOptionalCopy(base);
+        }
+        case Expr::Kind::Index: return inOptionalCopy(*static_cast<const IndexExpr&>(e).base);
+        default: return false;
+    }
+}
+
+static const char* kChainOnlyReads =
+    "'?.' only reads. To change the value, unwrap the optional first: `if (auto u = opt) u.field = ...;`";
 
 // How to turn a value of type `t` into text, for errors about joining it to a string
 // with `op` (+ or +=).
@@ -32,6 +94,7 @@ static std::string textHelp(const Type* t, const char* op = "+") {
                "never added as a character code";
     if (t->is(K::Bool)) return "`format(\"{}\", b)` turns a bool into \"true\" or \"false\"";
     if (t->is(K::Void) || t->isError()) return "";
+    if (t->isOptional()) return "it may be null: `opt ?? \"none\"` is its value, or \"none\" when it is null";
     return "`format(\"{}\", value)` turns any value that can be printed into a string";
 }
 
@@ -79,11 +142,11 @@ static bool needsExisting(const Type* from, const StructDecl* target, std::set<c
     return false;
 }
 
-static std::string cycleHelp(const Type* fieldType, const StructDecl& sd) {
+static std::string cycleHelp(const Type* fieldType, const std::string& field, const StructDecl& sd) {
     std::set<const StructDecl*> seen;
     if (!needsExisting(fieldType, &sd, seen)) return "";
-    return ". A " + q(sd.name) + " can only be built from an existing one, so none can be built yet; references "
-           "that can be empty (`" + std::string(fieldType->name) + "?`) are planned for this";
+    return ". A " + q(sd.name) + " can only be built from an existing one, so none can ever be built; make the field "
+           "optional, `" + std::string(fieldType->name) + "? " + field + ";`, so it can start out null";
 }
 
 static std::string signature(const FuncDecl& fn) {
@@ -165,10 +228,11 @@ void Sema::markAssigned(Flow& flow, const VarDecl* var, const std::string& path)
 }
 
 // A declaration without an initializer still gives strings and vectors their empty
-// value and fields their defaults, as in C++. Numbers and bools stay unassigned.
+// value, optionals null and fields their defaults, as in C++. Numbers and bools stay
+// unassigned.
 void Sema::markDefaults(Flow& flow, const VarDecl* var, const Type* type, const std::string& path) {
     if (tooDeep(path)) return;
-    if (type->is(K::String) || type->isVector()) {
+    if (type->is(K::String) || type->isVector() || type->isOptional()) {
         markAssigned(flow, var, path);
     } else if (type->isStruct()) {
         for (auto& f : type->decl->fields) {
@@ -199,7 +263,7 @@ void Sema::requireFullyBuilt(Flow& flow, Loc loc) {
                           q(missing) + " has none",
                  "a " + q(missingType) + " reference cannot be empty. Set it in the initializer list, e.g. `: " +
                      missing.substr(0, missing.find('.')) + "(value)`, or give the field a default" +
-                     cycleHelp(missingType, *owner()),
+                     cycleHelp(missingType, missing.substr(0, missing.find('.')), *owner()),
                  spec::Classes);
     markAssigned(flow, self, "");
 }
@@ -308,7 +372,7 @@ void Sema::reportUnknownName(const NameExpr& n) {
                n.name + "(...)`";
     else if (funcs_.count(n.name)) help = "functions can only be called for now, e.g. `" + n.name + "()`";
     else if (n.name == "cout" || n.name == "endl" || n.name == "cerr") help = "C+ prints with `println(\"{}\", value);`";
-    else if (n.name == "nullptr" || n.name == "NULL") help = "C+ uses optionals (`T?` and null) instead";
+    else if (n.name == "nullptr" || n.name == "NULL") help = "write `null`; only an optional, such as `User?`, can be null";
     else if (defaultsOf_ && defaultsOf_->fieldIndex(n.name) >= 0)
         help = "a field's default cannot read other fields; set this field in a constructor instead";
     else if (std::string guess = suggestName(n.name); !guess.empty()) help = "did you mean " + q(guess) + "?";
@@ -405,14 +469,17 @@ void Sema::checkStructs(Program& program) {
     std::function<void(const StructDecl*)> visit = [&](const StructDecl* sd) {
         state[sd] = 1;
         for (auto& f : sd->fields) {
-            if (!f.type->isStruct()) continue;
-            const StructDecl* inner = f.type->decl;
+            // An optional struct holds the struct itself, so it counts too.
+            const Type* ft = f.type->isOptional() ? f.type->elem : f.type;
+            if (!ft->isStruct()) continue;
+            const StructDecl* inner = ft->decl;
             if (state[inner] == 1)
                 diags_.error(f.loc,
                              "struct " + q(sd->name) + " contains itself through field " + q(f.name) +
                                  ", so it would be infinitely large",
-                             "a struct can hold other structs, but not itself. Classes and pointers, which are "
-                             "planned, will allow linked structures",
+                             "a struct can hold other structs, but not itself, not even as an optional. For a "
+                             "linked structure, make it a class: a `" + std::string(sd->name) + "? next;` field in a "
+                             "class refers to another object instead of holding it",
                              spec::Structs);
             else if (state[inner] == 0)
                 visit(inner);
@@ -503,7 +570,10 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
             if (t->is(K::Void))
                 diags_.error(v.init->loc, "cannot store the result of a void function in " + q(v.name), "",
                              spec::Variables);
-            v.type = t->is(K::Void) ? Type::error() : t;
+            if (t->isNull())
+                diags_.error(v.init->loc, "auto cannot tell what kind of optional " + q(v.name) + " is from null",
+                             "write the type, e.g. `User? " + v.name + " = null;`", spec::Optionals);
+            v.type = t->is(K::Void) || t->isNull() ? Type::error() : t;
         } else {
             v.type = v.declType;
             checkValue(*v.init, flow, v.type, "to initialize " + q(v.name));
@@ -523,21 +593,31 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
     else markDefaults(flow, &v, v.type, "");
 }
 
-// As in C++, a number used as a condition is true when it is not zero.
-static bool usableAsCondition(const Type* t) { return t->isError() || t->is(K::Bool) || t->isInteger(); }
+// As in C++, a number used as a condition is true when it is not zero, and an optional
+// when it holds a value. A `bool?` would be ambiguous, so it is not a condition.
+static bool usableAsCondition(const Type* t) {
+    return t->isError() || t->is(K::Bool) || t->isInteger() || (t->isOptional() && !t->elem->is(K::Bool));
+}
+
+// Help for a bool? used as a condition.
+static std::string boolOptionalHelp(const std::string& name) {
+    return "it could mean true, or that it has a value: write `" + name + " == true`, or `" + name +
+           " != null` to check that it holds a bool";
+}
 
 void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
     const Type* t = checkExpr(e, flow);
     if (usableAsCondition(t)) return;
     std::string help;
     if (t->is(K::Void)) help = "this expression produces no value";
+    else if (t->isOptional()) help = boolOptionalHelp(spelled(e, "b"));
     else if (t->isVector() || t->is(K::String))
         help = std::string("to check whether it has ") + (t->isVector() ? "elements" : "any text") + ", write `!" +
                (e.kind == Expr::Kind::Name ? static_cast<NameExpr&>(e).name
                                            : std::string(t->isVector() ? "items" : "text")) +
                ".empty()`";
-    diags_.error(e.loc, std::string("the ") + what + " must be a bool or a number, but this is " + q(t), help,
-                 spec::Conditions);
+    diags_.error(e.loc, std::string("the ") + what + " must be a bool, a number or an optional, but this is " + q(t),
+                 help, spec::Conditions);
 }
 
 void Sema::checkShiftAmount(const Type* lhsType, const Expr* lhs, const Expr& amount) {
@@ -585,9 +665,16 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
         }
         case Stmt::Kind::If: {
             auto& st = static_cast<IfStmt&>(s);
-            checkCondition(*st.cond, flow, "if condition");
+            if (st.decl) checkCondDecl(*st.decl, flow, "if");
+            else checkCondition(*st.cond, flow, "if condition");
             Flow thenFlow = flow;
+            scopes_.emplace_back();  // a variable declared in the condition exists in the first branch
+            if (st.decl) {
+                declare(*st.decl->var);
+                markAssigned(thenFlow, st.decl->var.get(), "");
+            }
             checkLoopBody(*st.thenStmt, thenFlow);  // a branch gets its own scope
+            scopes_.pop_back();
             Flow elseFlow = flow;
             if (st.elseStmt) checkLoopBody(*st.elseStmt, elseFlow);
             flow = merge(thenFlow, elseFlow);
@@ -595,12 +682,20 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
         }
         case Stmt::Kind::While: {
             auto& st = static_cast<WhileStmt&>(s);
-            checkCondition(*st.cond, flow, "while condition");
+            if (st.decl) checkCondDecl(*st.decl, flow, "while");
+            else checkCondition(*st.cond, flow, "while condition");
             loops_.emplace_back();
             Flow body = flow;
+            scopes_.emplace_back();  // a variable declared in the condition exists in the body
+            if (st.decl) {
+                declare(*st.decl->var);
+                markAssigned(body, st.decl->var.get(), "");
+            }
             checkLoopBody(*st.body, body);
+            scopes_.pop_back();
             Flow after = flow;
-            if (isConstantTrue(st.cond.get())) after.reachable = false;  // only a break leaves `while (true)`
+            // Only a break leaves `while (true)`.
+            if (!st.decl && isConstantTrue(st.cond.get())) after.reachable = false;
             for (auto& b : loops_.back().breaks) after = merge(after, b);
             loops_.pop_back();
             flow = after;
@@ -683,8 +778,11 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
     if (rangeType->isVector()) {
         elem = rangeType->elem;
     } else if (!rangeType->isError()) {
+        std::string n = spelled(*st.range, "items");
         diags_.error(st.range->loc, "a range-based for loop goes over a vector, but this is " + q(rangeType),
-                     rangeType->is(K::String)
+                     rangeType->isOptional() ? "it may be null; unwrap it first: `if (auto v = " + n +
+                                                   ") for (auto x : v) ...`"
+                     : rangeType->is(K::String)
                          ? "looping over the characters of a string needs the `char` type, which is planned; until "
                            "then loop over the positions and use `s.substr(i, 1)`"
                          : "write the vector to loop over after the ':'",
@@ -733,6 +831,13 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         help = "this expression produces no value";
     } else if (from->is(K::Bool) && to->isInteger()) {
         help = "a bool does not convert to a number; write `flag ? 1 : 0`";
+    } else if (from->isOptional() && !to->isOptional() && canConvert(from->elem, to)) {
+        help = unwrapHelp(spelled(e));
+    } else if (from->isOptional() && to->isOptional()) {
+        help = "an optional only converts to an optional of the same type. Unwrap it first: `if (auto v = " +
+               spelled(e) + ") ...` gives the " + std::string(from->elem->name) + " inside";
+    } else if (from->isNull()) {
+        help = "only an optional can be null; make the type `" + std::string(to->name) + "?`";
     }
     diags_.error(e.loc, "expected " + q(to) + " " + context + ", but this is " + q(from), help,
                  spec::ImplicitConversions);
@@ -740,7 +845,8 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
 
 void Sema::checkValue(Expr& e, Flow& flow, const Type* expected, const std::string& context) {
     if (e.kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(e).explicitType) {
-        checkInitList(static_cast<InitListExpr&>(e), flow, expected);
+        // `Point? p = {1, 2}` builds the Point the optional holds.
+        checkInitList(static_cast<InitListExpr&>(e), flow, expected->isOptional() ? expected->elem : expected);
         return;
     }
     checkExpr(e, flow);
@@ -863,7 +969,7 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
         diags_.error(loc, "field " + q(f.name) + " of " + q(sd.name) + " needs a value, because " +
                               (f.type->isClass() ? "a " + q(f.type) + " reference cannot be empty"
                                                  : q(f.type) + " holds a class reference that cannot be empty"),
-                     "give it a value here, or give the field a default in " + q(sd.name) + cycleHelp(f.type, sd),
+                     "give it a value here, or give the field a default in " + q(sd.name) + cycleHelp(f.type, f.name, sd),
                      spec::Classes);
     }
 }
@@ -909,6 +1015,12 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         const Type* indexType = checkExpr(*ix.index, flow);
         e.type = Type::error();
         if (baseType->isError()) return e.type;
+        if (baseType->isOptional()) {
+            std::string n = spelled(*ix.base, "items");
+            diags_.error(e.loc, q(baseType) + " may be null, so it cannot be indexed directly",
+                         "unwrap it first: `if (auto v = " + n + ") ... v[i]`", spec::Optionals);
+            return e.type;
+        }
         if (baseType->is(K::String)) {
             diags_.error(e.loc, "this compiler does not support indexing strings yet",
                          "`s[i]` needs the `char` type, which is planned; until then `s.substr(i, 1)` is the "
@@ -945,6 +1057,15 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         requireAssigned(flow, var, path, baseType, m.base->loc);
         var = nullptr;
         path.clear();
+    }
+    if (baseType->isOptional()) {
+        std::string n = spelled(*m.base);
+        diags_.error(e.loc, q(baseType) + " may be null, so '." + m.field + "' cannot be used on it directly",
+                     "write `" + n + "?." + m.field + "`, which is null when " + n + " is, or unwrap it: `if (auto v = " +
+                         n + ") ... v." + m.field + "`",
+                     spec::Optionals);
+        var = nullptr;
+        return e.type;
     }
     if (!baseType->hasFields()) {
         std::string help;
@@ -1065,6 +1186,12 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
 // class object or a vector, which always holds a value.
 bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const VarDecl*& var, std::string& path) {
     var = nullptr;
+    if (target.kind == Expr::Kind::OptChain) {
+        checkExpr(target, flow);
+        diags_.error(target.loc, std::string("a value reached through '?.' cannot be ") + action, kChainOnlyReads,
+                     spec::Optionals);
+        return false;
+    }
     if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index) {
         checkExpr(target, flow);
         std::string help = target.kind == Expr::Kind::This ? "'this' always refers to the current object" : "";
@@ -1078,6 +1205,12 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
     }
     const Type* t = resolvePlace(target, flow, var, path);
     if (t->isError()) return false;
+    if (throughOptionalChain(target)) {
+        diags_.error(target.loc, std::string("a value reached through '?.' cannot be ") + action, kChainOnlyReads,
+                     spec::Optionals);
+        var = nullptr;
+        return false;
+    }
     if (!checkChangeable(target, action, var, path)) {
         var = nullptr;
         return false;
@@ -1097,6 +1230,10 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
         }
         case Expr::Kind::BoolLit: result = Type::boolTy(); break;
         case Expr::Kind::StringLit: result = Type::stringTy(); break;
+        case Expr::Kind::NullLit: result = Type::nullTy(); break;
+        case Expr::Kind::OptValue: result = e.type ? e.type : Type::error(); break;  // set by its chain
+        case Expr::Kind::OptChain: result = checkOptChain(static_cast<OptChainExpr&>(e), flow); break;
+        case Expr::Kind::Coalesce: result = checkCoalesce(static_cast<CoalesceExpr&>(e), flow); break;
         case Expr::Kind::Name:
         case Expr::Kind::This:
         case Expr::Kind::Member:
@@ -1126,8 +1263,8 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (t->isError()) break;
             if (u.op == UnOp::Not) {
                 if (!usableAsCondition(t))
-                    diags_.error(u.operand->loc, "'!' needs a bool or a number, but this is " + q(t), "",
-                                 spec::Conditions);
+                    diags_.error(u.operand->loc, "'!' needs a bool, a number or an optional, but this is " + q(t),
+                                 t->isOptional() ? boolOptionalHelp(spelled(*u.operand, "b")) : "", spec::Conditions);
                 result = Type::boolTy();
             } else {
                 const char* sym = u.op == UnOp::Neg ? "-" : u.op == UnOp::Plus ? "+" : "~";
@@ -1150,7 +1287,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 const Type* r = checkExpr(*b.rhs, rhsFlow);
                 for (auto [side, t] : {std::pair{b.lhs.get(), l}, std::pair{b.rhs.get(), r}})
                     if (!usableAsCondition(t))
-                        diags_.error(side->loc, std::string("both sides of '") + sym + "' must be a bool or a number, but this is " + q(t),
+                        diags_.error(side->loc, std::string("both sides of '") + sym + "' must be a bool, a number or an optional, but this is " + q(t),
                                      "", spec::Conditions);
                 b.operandType = Type::boolTy();
                 result = Type::boolTy();
@@ -1167,6 +1304,24 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             // contents, structs field by field, and class references by identity.
             if (equality && l == r && !l->isInteger()) {
                 b.operandType = l;
+                result = Type::boolTy();
+                break;
+            }
+            // `opt == null` checks for a value; `opt == x` is true when it holds x, as with
+            // std::optional.
+            if (equality && (l->isOptional() || r->isOptional())) {
+                const Type* opt = l->isOptional() ? l : r;
+                const Type* other = opt == l ? r : l;
+                if (other->isNull() || canConvert(other, opt->elem)) {
+                    b.operandType = opt;
+                    result = Type::boolTy();
+                    break;
+                }
+                const Expr* side = opt == l ? b.rhs.get() : b.lhs.get();
+                diags_.error(side->loc, std::string("'") + sym + "' compares " + q(opt) + " with " + q(opt->elem) +
+                                            " or null, but this is " + q(other),
+                             "both sides of '" + std::string(sym) + "' must hold the same type of value",
+                             spec::Optionals);
                 result = Type::boolTy();
                 break;
             }
@@ -1193,7 +1348,9 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 const Type* bad = !l->isInteger() ? l : r;
                 const Expr* side = !l->isInteger() ? b.lhs.get() : b.rhs.get();
                 std::string help;
-                if (bad->is(K::String)) help = "strings work with + to join them, and with == != < <= > >= to compare them";
+                if (bad->isOptional()) help = unwrapHelp(spelled(*side));
+                else if (bad->isNull()) help = "null can only be compared with == and !=";
+                else if (bad->is(K::String)) help = "strings work with + to join them, and with == != < <= > >= to compare them";
                 else if (equality) help = "both sides of '" + std::string(sym) + "' must have the same type, but they are " + q(l) + " and " + q(r);
                 else if (comparison && (bad->hasFields() || bad->isVector())) help = q(bad) + " values can only be compared with == and !=";
                 else if (bad->is(K::Bool) && (b.op == BinOp::BitAnd || b.op == BinOp::BitOr)) help = std::string("use '") + (b.op == BinOp::BitAnd ? "&&" : "||") + "' for logic";
@@ -1258,6 +1415,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (x->isError() || y->isError()) break;
             if (x == y) result = x;
             else if (x->isInteger() && y->isInteger()) result = commonInteger(x, y);
+            else if (const Type* opt = optionalOfBranches(x, y)) result = opt;
             else
                 diags_.error(t.loc, "the two branches of ?: have different types, " + q(x) + " and " + q(y),
                              "make both branches the same type", spec::Operators);
@@ -1357,6 +1515,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         return Type::error();
     }
+    if (t->isOptional()) return checkOptionalMethod(call, flow, t);
     if (t->isVector()) return checkVectorMethod(call, flow, t);
     if (t->is(K::String)) return checkStringMethod(call, flow);
     if (!t->hasFields()) {
@@ -1381,7 +1540,12 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     }
     call.method = m;
     if (!canAccess(sd, m->access)) reportAccess(sd, m->name, true, call.loc);
-    if (!m->isConst) {
+    if (!m->isConst && t->isStruct() && inOptionalCopy(recv)) {
+        diags_.error(call.loc, q(m->name) + " may change the struct, but '?.' works on a copy of it",
+                     "unwrap the optional, change the copy and store it back: `if (auto v = opt) { v." + m->name +
+                         "(...); opt = v; }`, or mark " + q(m->name) + " `const` if it does not change any field",
+                     spec::Optionals);
+    } else if (!m->isConst) {
         // A method that may change fields changes the struct value it is called on,
         // wherever that value is stored.
         const VarDecl* holder = nullptr;
@@ -1417,6 +1581,13 @@ const VectorMethodInfo kVectorMethods[] = {
 // A method that changes a vector or string, like push_back() or clear(), needs a
 // receiver that can be changed: a variable or a field, and not a const one.
 void Sema::checkChangingReceiver(const Expr& recv, const char* method, const char* what, const char* anchor) {
+    if (inOptionalCopy(recv)) {
+        diags_.error(recv.loc, std::string(method) + "() changes the " + what + ", but '?.' works on a copy of it",
+                     std::string("unwrap the optional, change the copy and store it back: `if (auto v = opt) { v.") +
+                         method + "(...); opt = v; }`",
+                     spec::Optionals);
+        return;
+    }
     if (!isPlaceKind(recv)) {
         diags_.error(recv.loc, std::string(method) + "() changes the " + what + ", so it must be called on a variable or a field",
                      std::string("this ") + what + " is a temporary copy, so changing it would have no effect", anchor);
@@ -1679,6 +1850,122 @@ const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
         case StrMethod::Substr: return Type::stringTy();
         default: return Type::voidTy();
     }
+}
+
+// `if (auto u = found)` and `while (auto u = next())`. When the value is an optional, the
+// variable holds what is inside it, and the branch or body runs only when there is
+// something. Otherwise, as in C++, the variable holds the value and the condition is
+// that value, which must be a bool or a number.
+void Sema::checkCondDecl(CondDecl& d, Flow& flow, const char* stmt) {
+    VarDecl& v = *d.var;
+    const Type* t = checkExpr(*v.init, flow);
+    const Type* declared = v.declType;
+    v.type = declared->is(K::Auto) ? Type::error() : declared;
+    if (t->isError()) return;
+    if (t->is(K::Void) || t->isNull()) {
+        diags_.error(v.init->loc,
+                     t->isNull() ? std::string("null never holds a value, so this ") + stmt + " would never run"
+                                 : "this expression produces no value",
+                     "declare the variable from a value that may be null, e.g. `" + std::string(stmt) +
+                         " (auto u = find(name))`",
+                     t->isNull() ? spec::Optionals : spec::Variables);
+        return;
+    }
+    if (t->isOptional() && !declared->isOptional()) {
+        d.unwraps = true;
+        if (declared->is(K::Auto)) v.type = t->elem;
+        else if (!canConvert(t->elem, declared))
+            diags_.error(v.init->loc, "expected " + q(declared) + " to initialize " + q(v.name) + ", but this " +
+                                          q(t) + " holds " + q(t->elem),
+                         "", spec::ImplicitConversions);
+        return;
+    }
+    if (declared->is(K::Auto)) v.type = t;
+    else requireConvertible(*v.init, declared, "to initialize " + q(v.name));
+    if (!usableAsCondition(v.type))
+        diags_.error(v.init->loc, std::string("the variable declared in the ") + stmt + " condition must be an "
+                                      "optional, a bool or a number, but " + q(v.name) + " is " + q(v.type),
+                     v.type->isOptional() ? boolOptionalHelp(v.name)
+                                          : "an optional runs the branch when it holds a value, and a bool or a "
+                                            "number when it is true or not zero",
+                     spec::Optionals);
+}
+
+// `base?.rest`: the rest runs only when `base` holds a value, and its result becomes an
+// optional, unless it already is one or is void.
+const Type* Sema::checkOptChain(OptChainExpr& c, Flow& flow) {
+    const Type* base = checkExpr(*c.base, flow);
+    const Type* inner = base;
+    if (base->isOptional()) {
+        inner = base->elem;
+    } else if (!base->isError()) {
+        diags_.error(c.loc, "'?.' reads from an optional, but this is " + q(base) + ", which is never null",
+                     "write '.' instead of '?.'", spec::Optionals);
+    }
+    c.value->type = inner;
+    Flow bodyFlow = flow;  // the rest of the chain may not run
+    const Type* body = checkExpr(*c.body, bodyFlow);
+    if (base->isError() || body->isError()) return Type::error();
+    if (!base->isOptional() || body->is(K::Void) || body->isOptional()) return body;
+    return Type::optionalOf(body);
+}
+
+// `opt ?? fallback`. With a fallback that cannot be null, the result cannot be either.
+const Type* Sema::checkCoalesce(CoalesceExpr& c, Flow& flow) {
+    const Type* l = checkExpr(*c.lhs, flow);
+    Flow rhsFlow = flow;  // the fallback may not run
+    if (l->isError() || !l->isOptional()) {
+        checkLooseValue(*c.rhs, rhsFlow);
+        if (l->isError()) return Type::error();
+        diags_.error(c.loc, "'\?\?' gives a fallback for an optional, but the left side is " + q(l) + ", which is never null",
+                     "remove `?? ...`: the left side always has a value", spec::Optionals);
+        return l;
+    }
+    const Type* inner = l->elem;
+    const Type* r;
+    if (c.rhs->kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(*c.rhs).explicitType) {
+        checkInitList(static_cast<InitListExpr&>(*c.rhs), rhsFlow, inner);  // `p ?? {0, 0}`
+        r = inner;
+    } else {
+        r = checkExpr(*c.rhs, rhsFlow);
+    }
+    if (r->isError()) return inner;
+    if (r == l || r->isNull()) return l;  // the fallback may itself be null
+    if (canConvert(r, inner)) return inner;
+    if (r->isInteger() && inner->isInteger()) return commonInteger(r, inner);
+    diags_.error(c.rhs->loc, "the fallback after '\?\?' must be " + q(inner) + ", but this is " + q(r),
+                 "both sides of '\?\?' hold the same type of value", spec::Optionals);
+    return inner;
+}
+
+// The methods of std::optional: has_value(), value() and value_or(fallback). Anything
+// else is a method of the value inside, which needs `?.` or unwrapping.
+const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Type* opt) {
+    const Type* inner = opt->elem;
+    std::string n = spelled(*call.receiver);
+    size_t want = 0;
+    if (call.name == "has_value") call.optMethod = OptMethod::HasValue;
+    else if (call.name == "value") call.optMethod = OptMethod::Value;
+    else if (call.name == "value_or") call.optMethod = OptMethod::ValueOr, want = 1;
+    else {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, q(opt) + " may be null, so " + q(call.name) + " cannot be called on it directly",
+                     "write `" + n + "?." + call.name + "(...)`, which does nothing when " + n +
+                         " is null, or unwrap it: `if (auto v = " + n + ") v." + call.name + "(...);`",
+                     spec::Optionals);
+        return Type::error();
+    }
+    if (call.args.size() != want) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, call.name + "() takes " + (want ? "one argument" : "no arguments") + " but " +
+                                   std::to_string(call.args.size()) + (call.args.size() == 1 ? " was" : " were") +
+                                   " given",
+                     want ? "write `" + n + ".value_or(fallback)`" : "write `" + n + "." + call.name + "()`",
+                     spec::Optionals);
+    } else if (want) {
+        checkValue(*call.args[0], flow, inner, "for value_or() on " + q(opt));
+    }
+    return call.optMethod == OptMethod::HasValue ? Type::boolTy() : inner;
 }
 
 }  // namespace cplus

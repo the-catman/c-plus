@@ -1,0 +1,116 @@
+// What an optional holds is freed when the optional is set to null or goes away. The
+// test runner checks that every object and buffer is freed.
+class Tag {
+public:
+    string name;
+    Tag(string n) : name(n) {}
+    ~Tag() { println("free {}", name); }
+};
+
+class Node {
+public:
+    int value;
+    string label;
+    Node? next;
+    Node(int v) : value(v) {}
+};
+
+class Pair {
+public:
+    Tag first;
+    Tag second;
+    Pair(Tag a, Tag b) : first(a), second(b) {}
+};
+
+Tag? maybe(string name, bool give) {
+    if (give) return Tag(name);
+    return null;
+}
+
+string? label(int n) {
+    if (n > 0) return format("label {}", n);
+    return null;
+}
+
+int main() {
+    // Setting an optional to null releases the object it referred to.
+    Tag? t = Tag("a");
+    t = null;
+    println("after a");
+    // expect: free a
+    // expect: after a
+    t = Tag("b");
+    t = Tag("c");
+    println("after b");
+    // expect: free b
+    // expect: after b
+
+    // Results of ?. and ?? and value_or() are freed when the statement ends, like other
+    // temporaries.
+    println("{} {}", maybe("d", true)?.name, maybe("e", false)?.name ?? "none");
+    // expect: d none
+    // expect: free d
+    println("{}", (maybe("f", false) ?? Tag("g")).name);
+    // expect: g
+    // expect: free g
+    println("{}", maybe("h", false).value_or(Tag("i")).name);
+    // expect: i
+    // expect: free i
+    string? s = label(3);
+    string? none = label(0);
+    println("{} {} {}", s ?? "x", none ?? label(4) ?? "y", none.value_or("z"));
+    // expect: label 3 label 4 z
+
+    // A variable declared in the condition lives until the branch or loop body ends,
+    // and leaving the loop early releases it.
+    if (auto u = maybe("j", true)) println("got {}", u.name);
+    // expect: got j
+    // expect: free j
+    vector<Tag?> tags = {Tag("k"), Tag("l"), null};
+    int i = 0;
+    while (auto tag = tags[i]) {
+        println("tag {}", tag.name);
+        i++;
+        if (i == 1) continue;
+        break;
+    }
+    // expect: tag k
+    // expect: tag l
+    tags.clear();
+    println("cleared");
+    // expect: free k
+    // expect: free l
+    // expect: cleared
+
+    // A long linked list is freed one node after another, without running out of stack.
+    Node? head;
+    for (int n = 0; n < 1000000; n++) {
+        Node node = Node(n);
+        node.label = "n";
+        node.next = head;
+        head = node;
+    }
+    long sum = 0;
+    Node? cur = head;
+    while (auto node = cur) {
+        sum += node.value;
+        cur = node.next;
+    }
+    println("{}", sum);
+    // expect: 499999500000
+    cur = null;
+    head = null;
+    println("list freed");
+    // expect: list freed
+
+    // Fields are still released last declared first, as in C++.
+    {
+        Pair p = Pair(Tag("first"), Tag("second"));
+    }
+    // expect: free second
+    // expect: free first
+    println("end");
+    // expect: end
+    return 0;
+}
+// expect: free c

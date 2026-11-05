@@ -16,14 +16,16 @@ namespace cplus {
 struct StructDecl;
 
 struct Type {
-    enum class Kind { Error, Void, Bool, Int, Long, String, Auto, Struct, Class, Vector };
+    enum class Kind { Error, Void, Bool, Int, Long, String, Auto, Struct, Class, Vector, Optional, Null };
     Kind kind;
     const char* name;
     const StructDecl* decl = nullptr;  // for Kind::Struct and Kind::Class
-    const Type* elem = nullptr;        // for Kind::Vector
+    const Type* elem = nullptr;        // for Kind::Vector, and the value type of Kind::Optional
 
     bool is(Kind k) const { return kind == k; }
     bool isVector() const { return kind == Kind::Vector; }
+    bool isOptional() const { return kind == Kind::Optional; }
+    bool isNull() const { return kind == Kind::Null; }  // the type of `null`, which converts to any optional
     bool isError() const { return kind == Kind::Error; }
     bool isInteger() const { return kind == Kind::Int || kind == Kind::Long; }
     bool isStruct() const { return kind == Kind::Struct; }  // a value type
@@ -44,6 +46,10 @@ struct Type {
     static const Type* longTy() { return get(Kind::Long); }
     static const Type* stringTy() { return get(Kind::String); }
     static const Type* autoTy() { return get(Kind::Auto); }
+    static const Type* nullTy() {
+        static const Type t{Kind::Null, "null"};
+        return &t;
+    }
 
     // `vector<elem>`. There is one Type per element type, so types compare by address.
     static const Type* vectorOf(const Type* elem) {
@@ -55,6 +61,17 @@ struct Type {
         }
         return &it->second.second;
     }
+
+    // `elem?`: an `elem` or null. One Type per value type, like vectorOf.
+    static const Type* optionalOf(const Type* elem) {
+        static std::map<const Type*, std::pair<std::string, Type>> made;
+        auto [it, inserted] = made.try_emplace(elem);
+        if (inserted) {
+            it->second.first = std::string(elem->name) + "?";
+            it->second.second = Type{Kind::Optional, it->second.first.c_str(), nullptr, elem};
+        }
+        return &it->second.second;
+    }
 };
 
 struct VarDecl;
@@ -63,8 +80,8 @@ struct FuncDecl;
 // ---- Expressions -----------------------------------------------------------
 
 struct Expr {
-    enum class Kind { IntLit, BoolLit, StringLit, Name, This, Unary, Binary, Assign, Ternary, IncDec, Call, MethodCall,
-                      Member, Index, InitList };
+    enum class Kind { IntLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec, Call,
+                      MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -78,6 +95,10 @@ struct IntLitExpr : Expr {
     int64_t value;
     bool isLong;  // written with an L suffix
     IntLitExpr(Loc l, int64_t v, bool longSuffix) : Expr(Kind::IntLit, l), value(v), isLong(longSuffix) {}
+};
+
+struct NullLitExpr : Expr {
+    explicit NullLitExpr(Loc l) : Expr(Kind::NullLit, l) {}
 };
 
 struct BoolLitExpr : Expr {
@@ -162,6 +183,8 @@ struct CallExpr : Expr {
 enum class VecMethod { None, Size, Empty, PushBack, PopBack, Front, Back, Clear };
 // The methods every string has. `length()` is `size()`.
 enum class StrMethod { None, Size, Empty, Substr, Find, Contains, StartsWith, EndsWith, Clear };
+// The methods every optional has, as in std::optional.
+enum class OptMethod { None, HasValue, Value, ValueOr };
 
 // `receiver.name(args)`
 struct MethodCallExpr : Expr {
@@ -171,6 +194,7 @@ struct MethodCallExpr : Expr {
     FuncDecl* method = nullptr;               // set by Sema for a struct or class method
     VecMethod vecMethod = VecMethod::None;    // set by Sema for a vector method
     StrMethod strMethod = StrMethod::None;    // set by Sema for a string method
+    OptMethod optMethod = OptMethod::None;    // set by Sema for an optional method
     MethodCallExpr(Loc nameLoc, ExprPtr r, std::string n, std::vector<ExprPtr> a)
         : Expr(Kind::MethodCall, nameLoc), receiver(std::move(r)), name(std::move(n)), args(std::move(a)) {}
 };
@@ -201,6 +225,31 @@ struct InitListExpr : Expr {
     const Type* explicitType = nullptr;  // `Point{...}` or `vector<int>{...}`
     std::vector<Element> elements;
     explicit InitListExpr(Loc l) : Expr(Kind::InitList, l) {}
+};
+
+struct OptValueExpr;
+
+// `base?.rest`, where `rest` is the chain of fields, calls and indexes after `?.`, as in
+// JavaScript: when `base` is null the whole chain is null and `rest` is not evaluated.
+// Inside `body`, an OptValueExpr stands for the value in `base`.
+struct OptChainExpr : Expr {
+    ExprPtr base;
+    ExprPtr body;
+    OptValueExpr* value = nullptr;  // the placeholder in `body`
+    OptChainExpr(Loc questionDotLoc, ExprPtr b) : Expr(Kind::OptChain, questionDotLoc), base(std::move(b)) {}
+};
+
+// The value inside the optional of an OptChainExpr, known to be there.
+struct OptValueExpr : Expr {
+    OptChainExpr* chain;
+    OptValueExpr(Loc l, OptChainExpr* c) : Expr(Kind::OptValue, l), chain(c) {}
+};
+
+// `opt ?? fallback`: the value in `opt`, or `fallback` when it is null. `fallback` is only
+// evaluated when needed.
+struct CoalesceExpr : Expr {
+    ExprPtr lhs, rhs;
+    CoalesceExpr(Loc l, ExprPtr a, ExprPtr b) : Expr(Kind::Coalesce, l), lhs(std::move(a)), rhs(std::move(b)) {}
 };
 
 // ---- Statements ------------------------------------------------------------
@@ -248,15 +297,25 @@ struct ErrorStmt : Stmt {
     explicit ErrorStmt(Loc l) : Stmt(Kind::Error, l) {}
 };
 
+// A variable declared in the condition of an if or while: `if (auto u = find(name))`.
+// When its value is an optional, the variable holds what is inside, and the branch or
+// loop body runs only when there is something.
+struct CondDecl {
+    std::unique_ptr<VarDecl> var;
+    bool unwraps = false;  // set by Sema
+};
+
 struct IfStmt : Stmt {
-    ExprPtr cond;
+    ExprPtr cond;              // null when `decl` is set
+    std::optional<CondDecl> decl;
     StmtPtr thenStmt, elseStmt;
     IfStmt(Loc l, ExprPtr c, StmtPtr t, StmtPtr e)
         : Stmt(Kind::If, l), cond(std::move(c)), thenStmt(std::move(t)), elseStmt(std::move(e)) {}
 };
 
 struct WhileStmt : Stmt {
-    ExprPtr cond;
+    ExprPtr cond;  // null when `decl` is set
+    std::optional<CondDecl> decl;
     StmtPtr body;
     WhileStmt(Loc l, ExprPtr c, StmtPtr b) : Stmt(Kind::While, l), cond(std::move(c)), body(std::move(b)) {}
 };

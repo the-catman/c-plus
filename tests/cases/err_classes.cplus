@@ -68,7 +68,7 @@ int main() {
 // error: 'age' cannot be assigned to inside const method 'getAge'
 // error: const method 'peek' cannot call 'change', which may change fields
 // error: the constructor of 'Node' must give every class-typed field a value, but 'next' has none
-// error: references that can be empty (`Node?`) are planned
+// error: make the field optional, `Node? next;`, so it can start out null
 // error: spec: docs/SPEC.md#methods
 // error: spec: docs/SPEC.md#classes
 // error: a field's default cannot read other fields; set this field in a constructor instead

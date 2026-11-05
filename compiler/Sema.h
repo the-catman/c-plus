@@ -61,6 +61,10 @@ private:
     const Type* checkVectorConstruction(CallExpr& call, Flow& flow);
     const Type* checkStringMethod(MethodCallExpr& call, Flow& flow);
     const Type* checkToString(CallExpr& call, Flow& flow);
+    const Type* checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Type* opt);
+    const Type* checkOptChain(OptChainExpr& c, Flow& flow);
+    const Type* checkCoalesce(CoalesceExpr& c, Flow& flow);
+    void checkCondDecl(CondDecl& d, Flow& flow, const char* stmt);
     void checkChangingReceiver(const Expr& recv, const char* method, const char* what, const char* anchor);
     // Checks arguments against parameters; `what` names the callee in messages.
     void checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow, Loc loc, const std::string& what);

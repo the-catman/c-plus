@@ -1,0 +1,18 @@
+class User {
+public:
+    string name;
+    User(string n) : name(n) {}
+};
+
+User? find(string name) { return null; }
+
+int main() {
+    int? n = 4;
+    println("{}", n.value());
+    User u = find("Ada").value();
+    println("{}", u.name);
+    return 0;
+}
+// expect: 4
+// trap: value() was called on an empty optional
+// trap: trap_optional_value.cplus:12:26

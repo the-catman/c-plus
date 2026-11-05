@@ -20,7 +20,9 @@
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/TargetParser/Host.h>
 
+#include <algorithm>
 #include <functional>
+#include <set>
 #include <unordered_map>
 
 namespace cplus {
@@ -72,6 +74,9 @@ struct Codegen::Impl {
     std::unordered_map<const Type*, VecInfo> vecs;
     llvm::Function* vecSizeFn = nullptr;
     llvm::Function* vecReserveFn = nullptr;
+
+    // Inside the rest of a `?.` chain, the value found in the optional.
+    std::unordered_map<const OptValueExpr*, llvm::Value*> optValues;
 
     std::unordered_map<const FuncDecl*, llvm::Function*> funcs;
     std::unordered_map<const VarDecl*, llvm::AllocaInst*> locals;
@@ -176,7 +181,13 @@ struct Codegen::Impl {
             case K::Long: return b.getInt64Ty();
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
-            case K::Class: case K::Vector: return b.getPtrTy();
+            case K::Class: case K::Vector: case K::Null: return b.getPtrTy();
+            // An optional class reference is a pointer that may be null. Any other
+            // optional is { i1 has, T value }, and its value is all zero bytes when it
+            // has none, so retaining or releasing it is harmless either way.
+            case K::Optional:
+                if (t->elem->isClass()) return b.getPtrTy();
+                return llvm::StructType::get(ctx, {b.getInt1Ty(), llvmType(t->elem)});
             default: llvm_unreachable("unresolved type reached codegen");
         }
     }
@@ -186,6 +197,7 @@ struct Codegen::Impl {
     // released when it goes away.
     bool isManaged(const Type* t) {
         if (t->isClass() || t->isVector() || t->is(K::String)) return true;
+        if (t->isOptional()) return isManaged(t->elem);
         if (!t->isStruct()) return false;
         TypeInfo& info = types.at(t->decl);
         if (info.managed < 0) {
@@ -300,13 +312,33 @@ struct Codegen::Impl {
 
     // ---- Reference counting ------------------------------------------------
 
+    // ---- Optionals ---------------------------------------------------------
+
+    llvm::Value* hasValue(llvm::Value* opt, const Type* t) {
+        if (t->elem->isClass()) return b.CreateIsNotNull(opt, "has");
+        return b.CreateExtractValue(opt, 0, "has");
+    }
+
+    llvm::Value* valueOf(llvm::Value* opt, const Type* t) {
+        if (t->elem->isClass()) return opt;
+        return b.CreateExtractValue(opt, 1, "value");
+    }
+
+    llvm::Value* wrapOptional(llvm::Value* v, const Type* t) {
+        if (t->elem->isClass()) return v;
+        llvm::Value* opt = b.CreateInsertValue(llvm::PoisonValue::get(llvmType(t)), b.getInt1(true), {0});
+        return b.CreateInsertValue(opt, v, {1});
+    }
+
     void retainValue(llvm::Value* v, const Type* t) {
+        if (t->isOptional()) return retainValue(valueOf(v, t), t->elem);
         if (t->isClass() || t->isVector()) b.CreateCall(rtRetain, {v});
         else if (t->is(K::String)) b.CreateCall(rtRetain, {b.CreateExtractValue(v, 2, "owner")});
         else if (isManaged(t)) b.CreateCall(types.at(t->decl).retain, {v});
     }
 
     void releaseValue(llvm::Value* v, const Type* t) {
+        if (t->isOptional()) return releaseValue(valueOf(v, t), t->elem);
         if (t->is(K::String)) {
             b.CreateCall(rtStrRelease, {b.CreateExtractValue(v, 2, "owner")});
         } else if (t->isVector()) {
@@ -719,6 +751,8 @@ struct Codegen::Impl {
 
     llvm::Value* convert(llvm::Value* v, const Type* from, const Type* to) {
         if (from == to) return v;
+        if (from->isNull()) return llvm::Constant::getNullValue(llvmType(to));
+        if (to->isOptional()) return wrapOptional(convert(v, from, to->elem), to);
         if (from->is(K::Int) && to->is(K::Long)) return b.CreateSExt(v, b.getInt64Ty());
         if (from->isInteger() && to->is(K::Bool)) return b.CreateICmpNE(v, llvm::ConstantInt::get(v->getType(), 0));
         llvm_unreachable("Sema allowed a conversion Codegen does not know");
@@ -742,9 +776,14 @@ struct Codegen::Impl {
     llvm::Value* genConverted(const Expr& e, const Type* to) { return convert(gen(e), e.type, to); }
 
     // Evaluates `e` as a value of type `to` that the caller takes over: it is stored,
-    // passed to a function, or returned. A `{ }` list takes that type.
+    // passed to a function, or returned. A `{ }` list takes that type, or the type of the
+    // value an optional holds.
     llvm::Value* genOwned(const Expr& e, const Type* to) {
-        if (e.kind == Expr::Kind::InitList) return genInitList(static_cast<const InitListExpr&>(e), to);
+        if (e.kind == Expr::Kind::InitList) {
+            auto& list = static_cast<const InitListExpr&>(e);
+            if (!to->isOptional()) return genInitList(list, to);
+            return convert(genInitList(list, list.type), list.type, to);
+        }
         bool owned = false;
         llvm::Value* v = convert(genRaw(e, owned), e.type, to);
         if (!owned) retainValue(v, to);
@@ -769,6 +808,7 @@ struct Codegen::Impl {
             case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct: return buildAggregate(*t->decl, {});
             case K::Class: case K::Vector: return llvm::ConstantPointerNull::get(b.getPtrTy());
+            case K::Optional: return llvm::Constant::getNullValue(llvmType(t));  // null
             default: llvm_unreachable("no default value for this type");
         }
     }
@@ -834,10 +874,13 @@ struct Codegen::Impl {
         return buildAggregate(sd, std::move(given));
     }
 
-    // A condition is a bool, or a number that counts as true when it is not zero.
-    llvm::Value* genCond(const Expr& e) {
-        llvm::Value* v = gen(e);
-        if (e.type->isInteger()) return b.CreateICmpNE(v, llvm::ConstantInt::get(v->getType(), 0));
+    // A condition is a bool, a number that counts as true when it is not zero, or an
+    // optional that counts as true when it holds a value.
+    llvm::Value* genCond(const Expr& e) { return condValue(gen(e), e.type); }
+
+    llvm::Value* condValue(llvm::Value* v, const Type* t) {
+        if (t->isInteger()) return b.CreateICmpNE(v, llvm::ConstantInt::get(v->getType(), 0));
+        if (t->isOptional()) return hasValue(v, t);
         return v;
     }
 
@@ -861,8 +904,8 @@ struct Codegen::Impl {
     // or an assignment, which releases the value it replaces.
     static bool mayRunCode(const Expr& e) {
         switch (e.kind) {
-            case Expr::Kind::IntLit: case Expr::Kind::BoolLit: case Expr::Kind::StringLit:
-            case Expr::Kind::Name: case Expr::Kind::This: return false;
+            case Expr::Kind::IntLit: case Expr::Kind::BoolLit: case Expr::Kind::StringLit: case Expr::Kind::NullLit:
+            case Expr::Kind::Name: case Expr::Kind::This: case Expr::Kind::OptValue: return false;
             case Expr::Kind::Member: return mayRunCode(*static_cast<const MemberExpr&>(e).base);
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
@@ -944,6 +987,10 @@ struct Codegen::Impl {
                 return llvm::ConstantInt::getSigned(llvmType(e.type), static_cast<const IntLitExpr&>(e).value);
             case Expr::Kind::BoolLit: return b.getInt1(static_cast<const BoolLitExpr&>(e).value);
             case Expr::Kind::StringLit: return stringValue(static_cast<const StringLitExpr&>(e).value);
+            case Expr::Kind::NullLit: return llvm::ConstantPointerNull::get(b.getPtrTy());
+            case Expr::Kind::OptValue: return optValues.at(static_cast<const OptValueExpr*>(&e));
+            case Expr::Kind::OptChain: return genOptChain(static_cast<const OptChainExpr&>(e), owned);
+            case Expr::Kind::Coalesce: return genCoalesce(static_cast<const CoalesceExpr&>(e), owned);
             case Expr::Kind::Name:
                 return b.CreateLoad(llvmType(e.type), addressOf(e), static_cast<const NameExpr&>(e).name);
             case Expr::Kind::This:
@@ -987,9 +1034,9 @@ struct Codegen::Impl {
                     llvm::Value* order = b.CreateCall(rtStrCompare, {strData(l), strLength(l), strData(r), strLength(r)}, "order");
                     return arith(bin.op, order, b.getInt32(0), Type::intTy(), bin.loc);
                 }
-                if (!bin.operandType->isInteger()) {  // == or != on bools, strings, structs, objects
-                    llvm::Value* l = gen(*bin.lhs);
-                    llvm::Value* same = genEquals(l, gen(*bin.rhs), bin.operandType);
+                if (!bin.operandType->isInteger()) {  // == or != on bools, strings, structs, objects, optionals
+                    llvm::Value* l = genConverted(*bin.lhs, bin.operandType);
+                    llvm::Value* same = genEquals(l, genConverted(*bin.rhs, bin.operandType), bin.operandType);
                     return bin.op == BinOp::Eq ? same : b.CreateNot(same);
                 }
                 llvm::Value* l = genConverted(*bin.lhs, bin.operandType);
@@ -1080,6 +1127,15 @@ struct Codegen::Impl {
             }
             case K::Struct: return b.CreateCall(types.at(t->decl).equals, {l, r});
             case K::Vector: return b.CreateCall(vecInfo(t).equals, {l, r});
+            case K::Null: return b.getInt1(true);
+            case K::Optional: {
+                // Both null, or both holding equal values. An empty optional holds zero
+                // bytes, which compare safely.
+                if (t->elem->isClass()) return b.CreateICmpEQ(l, r);
+                llvm::Value* hl = hasValue(l, t);
+                llvm::Value* same = genEquals(valueOf(l, t), valueOf(r, t), t->elem);
+                return b.CreateAnd(b.CreateICmpEQ(hl, hasValue(r, t)), b.CreateOr(b.CreateNot(hl), same));
+            }
             default: llvm_unreachable("Sema allowed == on a type Codegen cannot compare");
         }
     }
@@ -1122,6 +1178,21 @@ struct Codegen::Impl {
             case K::Struct:
             case K::Class: b.CreateCall(types.at(t->decl).print, {v, out}); break;
             case K::Vector: b.CreateCall(vecInfo(t).print, {v, out}); break;
+            case K::Null: printText(out, "null"); break;
+            case K::Optional: {
+                auto* someBB = llvm::BasicBlock::Create(ctx, "print.value", fn);
+                auto* noneBB = llvm::BasicBlock::Create(ctx, "print.null", fn);
+                auto* endBB = llvm::BasicBlock::Create(ctx, "print.end", fn);
+                b.CreateCondBr(hasValue(v, t), someBB, noneBB);
+                b.SetInsertPoint(someBB);
+                printValue(out, valueOf(v, t), t->elem, nested);
+                b.CreateBr(endBB);
+                b.SetInsertPoint(noneBB);
+                printText(out, "null");
+                b.CreateBr(endBB);
+                b.SetInsertPoint(endBB);
+                break;
+            }
             default: llvm_unreachable("unprintable type reached codegen");
         }
     }
@@ -1171,6 +1242,7 @@ struct Codegen::Impl {
 
     llvm::Value* genMethodCall(const MethodCallExpr& call) {
         const Expr& recv = *call.receiver;
+        if (recv.type->isOptional()) return genOptionalMethod(call);
         if (recv.type->isVector()) return genVectorMethod(call);
         if (recv.type->is(K::String)) return genStringMethod(call);
         llvm::Value* self;
@@ -1193,6 +1265,116 @@ struct Codegen::Impl {
             args.push_back(genOwned(*call.args[i], call.method->params[i]->type));
         llvm::CallInst* inst = b.CreateCall(funcs.at(call.method), args);
         return call.method->retType->is(K::Void) ? nullptr : inst;
+    }
+
+    // `base?.rest`: when `base` holds a value, the rest of the chain runs on it and its
+    // result becomes an optional; otherwise the result is null.
+    llvm::Value* genOptChain(const OptChainExpr& c, bool& owned) {
+        const Type* optTy = c.base->type;
+        const Type* resultTy = c.type;
+        llvm::Value* opt = gen(*c.base);  // kept until the statement ends
+        auto* someBB = llvm::BasicBlock::Create(ctx, "chain.value", fn);
+        auto* endBB = llvm::BasicBlock::Create(ctx, "chain.end", fn);
+        llvm::BasicBlock* noneFrom = b.GetInsertBlock();
+        b.CreateCondBr(hasValue(opt, optTy), someBB, endBB);
+        b.SetInsertPoint(someBB);
+        optValues[c.value] = valueOf(opt, optTy);
+        // Only this branch runs the rest of the chain, so it cleans up after itself, and
+        // a value holding references leaves it owned.
+        size_t mark = temps.size();
+        bool managed = isManaged(resultTy);
+        llvm::Value* v = nullptr;
+        if (resultTy->is(K::Void)) {
+            bool bodyOwned = false;
+            if (llvm::Value* x = genRaw(*c.body, bodyOwned); x && bodyOwned) releaseValue(x, c.body->type);
+        } else {
+            v = genOwned(*c.body, resultTy);
+        }
+        flushTemps(mark);
+        llvm::BasicBlock* someEnd = b.GetInsertBlock();
+        b.CreateBr(endBB);
+        b.SetInsertPoint(endBB);
+        if (!v) return nullptr;
+        llvm::PHINode* phi = b.CreatePHI(llvmType(resultTy), 2);
+        phi->addIncoming(v, someEnd);
+        phi->addIncoming(llvm::Constant::getNullValue(llvmType(resultTy)), noneFrom);
+        owned = managed;
+        return phi;
+    }
+
+    // `opt ?? fallback`: the fallback is only evaluated when `opt` is null.
+    llvm::Value* genCoalesce(const CoalesceExpr& c, bool& owned) {
+        const Type* optTy = c.lhs->type;
+        const Type* resultTy = c.type;
+        bool managed = isManaged(resultTy);
+        llvm::Value* opt = gen(*c.lhs);
+        auto* someBB = llvm::BasicBlock::Create(ctx, "coalesce.value", fn);
+        auto* noneBB = llvm::BasicBlock::Create(ctx, "coalesce.fallback", fn);
+        auto* endBB = llvm::BasicBlock::Create(ctx, "coalesce.end", fn);
+        b.CreateCondBr(hasValue(opt, optTy), someBB, noneBB);
+        b.SetInsertPoint(someBB);
+        llvm::Value* x = resultTy->isOptional() ? convert(opt, optTy, resultTy)
+                                                : convert(valueOf(opt, optTy), optTy->elem, resultTy);
+        if (managed) retainValue(x, resultTy);
+        llvm::BasicBlock* someEnd = b.GetInsertBlock();
+        b.CreateBr(endBB);
+        b.SetInsertPoint(noneBB);
+        size_t mark = temps.size();
+        llvm::Value* y = genOwned(*c.rhs, resultTy);
+        flushTemps(mark);
+        llvm::BasicBlock* noneEnd = b.GetInsertBlock();
+        b.CreateBr(endBB);
+        b.SetInsertPoint(endBB);
+        llvm::PHINode* phi = b.CreatePHI(llvmType(resultTy), 2);
+        phi->addIncoming(x, someEnd);
+        phi->addIncoming(y, noneEnd);
+        owned = managed;
+        return phi;
+    }
+
+    llvm::Value* genOptionalMethod(const MethodCallExpr& call) {
+        const Type* optTy = call.receiver->type;
+        const Type* inner = optTy->elem;
+        llvm::Value* opt = gen(*call.receiver);
+        llvm::Value* has = hasValue(opt, optTy);
+        switch (call.optMethod) {
+            case OptMethod::HasValue: return has;
+            case OptMethod::Value: {
+                trapIf(b.CreateNot(has), "value() was called on an empty optional", call.loc);
+                llvm::Value* v = valueOf(opt, optTy);
+                retainValue(v, inner);  // a method call's result is owned
+                return v;
+            }
+            case OptMethod::ValueOr: {
+                // As in C++, the fallback is evaluated either way.
+                llvm::Value* fallback = genOwned(*call.args[0], inner);
+                llvm::Value* v = b.CreateSelect(has, valueOf(opt, optTy), fallback, "value");
+                retainValue(v, inner);
+                releaseValue(fallback, inner);
+                return v;
+            }
+            case OptMethod::None: break;
+        }
+        llvm_unreachable("unknown optional method");
+    }
+
+    // Stores the variable of `if (auto u = found)` or `while (...)`, and returns the
+    // condition: whether the optional held a value, or the value itself as a condition.
+    llvm::Value* genCondDecl(const CondDecl& d) {
+        const VarDecl& var = *d.var;
+        const Type* t = var.init->type;
+        llvm::Value* init = genOwned(*var.init, t);
+        llvm::Value* cond;
+        llvm::Value* value;
+        if (d.unwraps) {
+            cond = hasValue(init, t);
+            value = convert(valueOf(init, t), t->elem, var.type);  // zero bytes when there is none
+        } else {
+            value = convert(init, t, var.type);
+            cond = condValue(value, var.type);
+        }
+        b.CreateStore(value, allocaFor(var));
+        return cond;
     }
 
     // ---- Statements --------------------------------------------------------
@@ -1227,7 +1409,8 @@ struct Codegen::Impl {
             case Stmt::Kind::VarDecl: {
                 auto& v = static_cast<const VarDecl&>(s);
                 llvm::Value* init = v.init ? genOwned(*v.init, v.type)
-                                    : v.type->is(K::String) || v.type->hasFields() || v.type->isVector()
+                                    : v.type->is(K::String) || v.type->hasFields() || v.type->isVector() ||
+                                              v.type->isOptional()
                                         ? genDefault(v.type)
                                         : nullptr;
                 flushTemps();
@@ -1250,11 +1433,14 @@ struct Codegen::Impl {
                 auto* thenBB = llvm::BasicBlock::Create(ctx, "if.then", fn);
                 auto* endBB = llvm::BasicBlock::Create(ctx, "if.end", fn);
                 auto* elseBB = st.elseStmt ? llvm::BasicBlock::Create(ctx, "if.else", fn) : endBB;
-                llvm::Value* cond = genCond(*st.cond);
+                llvm::Value* cond = st.decl ? genCondDecl(*st.decl) : genCond(*st.cond);
                 flushTemps();
                 b.CreateCondBr(cond, thenBB, elseBB);
                 b.SetInsertPoint(thenBB);
+                scopes.emplace_back();  // the variable declared in the condition, if any
+                if (st.decl && isManaged(st.decl->var->type)) scopes.back().push_back(st.decl->var.get());
                 genScoped(*st.thenStmt);
+                popScope();
                 b.CreateBr(endBB);
                 if (st.elseStmt) {
                     b.SetInsertPoint(elseBB);
@@ -1271,11 +1457,16 @@ struct Codegen::Impl {
                 auto* endBB = llvm::BasicBlock::Create(ctx, "while.end", fn);
                 b.CreateBr(condBB);
                 b.SetInsertPoint(condBB);
-                llvm::Value* cond = genCond(*st.cond);
+                llvm::Value* cond = st.decl ? genCondDecl(*st.decl) : genCond(*st.cond);
                 flushTemps();
                 b.CreateCondBr(cond, bodyBB, endBB);
                 b.SetInsertPoint(bodyBB);
-                genBody(*st.body, endBB, condBB);
+                loops.push_back({endBB, condBB, scopes.size()});
+                scopes.emplace_back();  // the variable declared in the condition, a new one each time
+                if (st.decl && isManaged(st.decl->var->type)) scopes.back().push_back(st.decl->var.get());
+                genScoped(*st.body);
+                popScope();
+                loops.pop_back();
                 b.CreateBr(condBB);
                 b.SetInsertPoint(endBB);
                 return;
@@ -1558,13 +1749,15 @@ struct Codegen::Impl {
         auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
         b.CreateCondBr(b.CreateICmpNE(b.CreateCall(rtRelease, {self}), b.getInt32(0)), destroyBB, doneBB);
         b.SetInsertPoint(destroyBB);
-        b.CreateCall(info.destroy, {self});
-        b.CreateBr(doneBB);
+        b.CreateCall(info.destroy, {self})->setTailCallKind(llvm::CallInst::TCK_MustTail);
+        b.CreateRetVoid();
         b.SetInsertPoint(doneBB);
         b.CreateRetVoid();
 
-        // Destroy: run the destructor, release the fields (last declared first, as in
-        // C++), and free the memory.
+        // Destroy: run the destructor, read the fields, free the memory, and release the
+        // fields, last declared first as in C++. The last release is a tail call, so
+        // freeing a long chain of objects, like a linked list, needs no more stack than
+        // freeing one.
         startHelper(info.destroy);
         self = info.destroy->getArg(0);
         if (sd.destructor) {
@@ -1577,10 +1770,50 @@ struct Codegen::Impl {
                    "the destructor of '" + sd.name + "' stored 'this' somewhere, so the object would be used after it is freed",
                    sd.destructor->nameLoc);
         }
+        std::vector<size_t> order;  // the managed fields, in the order they are released
         for (size_t i = sd.fields.size(); i-- > 0;)
-            if (isManaged(sd.fields[i].type)) releaseValue(loadField(sd, self, i), sd.fields[i].type);
+            if (isManaged(sd.fields[i].type)) order.push_back(i);
+        // The chain usually goes through the first class-typed field. It can be released
+        // last only if no field declared before it could run a destructor.
+        for (size_t k = order.size(); k-- > 0;) {
+            const Type* ft = sd.fields[order[k]].type;
+            if (classOf(ft)) {
+                std::rotate(order.begin() + k, order.begin() + k + 1, order.end());
+                break;
+            }
+            std::set<const StructDecl*> seen;
+            if (mayRunDestructor(ft, seen)) break;
+        }
+        std::vector<llvm::Value*> values;
+        for (size_t i : order) values.push_back(loadField(sd, self, i));
         b.CreateCall(rtFree, {self});
+        for (size_t k = 0; k < order.size(); ++k) {
+            const Type* ft = sd.fields[order[k]].type;
+            if (k + 1 == order.size() && classOf(ft)) {
+                b.CreateCall(types.at(classOf(ft)->decl).release, {values[k]})
+                    ->setTailCallKind(llvm::CallInst::TCK_MustTail);
+                break;
+            }
+            releaseValue(values[k], ft);
+        }
         b.CreateRetVoid();
+    }
+
+    // The class of a field that refers to an object, or may: `User` or `User?`.
+    static const Type* classOf(const Type* t) {
+        if (t->isOptional()) t = t->elem;
+        return t->isClass() ? t : nullptr;
+    }
+
+    // Whether releasing a value of this type could free an object, and so run a
+    // destructor.
+    static bool mayRunDestructor(const Type* t, std::set<const StructDecl*>& seen) {
+        if (t->isOptional() || t->isVector()) return mayRunDestructor(t->elem, seen);
+        if (t->isClass()) return true;
+        if (!t->isStruct() || !seen.insert(t->decl).second) return false;
+        for (auto& f : t->decl->fields)
+            if (mayRunDestructor(f.type, seen)) return true;
+        return false;
     }
 
     bool generate(const Program& program, std::string& error) {

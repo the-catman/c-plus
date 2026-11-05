@@ -11,6 +11,7 @@ inline constexpr const char* StringLiterals = "string-literals";
 inline constexpr const char* Strings = "string";
 inline constexpr const char* IntegerTypes = "integer-types";
 inline constexpr const char* ImplicitConversions = "implicit-conversions";
+inline constexpr const char* Optionals = "optionals";
 inline constexpr const char* Variables = "variables";
 inline constexpr const char* DefiniteAssignment = "definite-assignment";
 inline constexpr const char* Functions = "functions";

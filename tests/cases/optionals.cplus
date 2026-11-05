@@ -1,0 +1,181 @@
+// Optionals: `T?` holds a T or null. `?.` reads through one, `??` gives a fallback, and
+// `if (auto x = opt)` runs only when there is a value.
+struct Point {
+    int x;
+    int y;
+};
+
+class User {
+public:
+    string name;
+    int age = 0;
+    User? manager;
+    User(string n) : name(n) {}
+    string greet() const { return "hi " + name; }
+    void birthday() { age += 1; }
+};
+
+User? find(vector<User> users, string name) {
+    for (User u : users)
+        if (u.name == name) return u;
+    return null;
+}
+
+int? parseDigit(string s) {
+    if (s == "0") return 0;
+    if (s == "1") return 1;
+    if (s == "7") return 7;
+    return null;
+}
+
+class Counter {
+public:
+    int calls = 0;
+    int next() {
+        calls++;
+        return calls;
+    }
+};
+
+long? half(long n) {
+    if (n % 2 != 0) return null;
+    return n / 2;
+}
+
+User? nobodyYet() { return null; }
+
+string describe(int? n) {
+    if (auto v = n) return format("got {}", v);
+    return "nothing";
+}
+
+int main() {
+    // An optional starts out null, and takes a value or null.
+    int? a;
+    int? b = 5;
+    println("{} {} {} {}", a, b, a.has_value(), b.has_value());
+    // expect: null 5 false true
+    a = 3;
+    b = null;
+    println("{} {}", a, b);
+    // expect: 3 null
+
+    // An optional is a condition: true when it holds a value, even a zero.
+    int? zero = 0;
+    if (zero) println("zero is a value");
+    // expect: zero is a value
+    if (!b) println("b is null");
+    // expect: b is null
+    println("{} {}", zero ? "yes" : "no", b && true);
+    // expect: yes false
+
+    // `if (auto v = opt)` unwraps; the variable holds the value inside.
+    println("{} {} {}", describe(parseDigit("7")), describe(parseDigit("0")), describe(parseDigit("x")));
+    // expect: got 7 got 0 nothing
+    if (auto d = parseDigit("1")) println("{}", d + 10);
+    else println("none");
+    // expect: 11
+    if (long h = parseDigit("7")) println("{}", h);
+    // expect: 7
+    if (User? maybe = nobodyYet()) println("unreachable");
+    else println("no user");
+    // expect: no user
+
+    // value() and value_or() as in C++.
+    println("{} {} {}", parseDigit("7").value(), parseDigit("x").value_or(-1), b.value_or(9));
+    // expect: 7 -1 9
+
+    // `??` gives a fallback, evaluated only when needed; it chains to the right.
+    Counter c = Counter();
+    int? none;
+    println("{} {} {}", a ?? c.next(), none ?? 42, none ?? none ?? 8);
+    // expect: 3 42 8
+    println("{} {} {}", none ?? c.next(), a ?? c.next(), c.calls);
+    // expect: 1 3 1
+    int? stillNone = none ?? null;
+    println("{} {}", stillNone, none ?? parseDigit("1"));
+    // expect: null 1
+    long wide = a ?? 10L;
+    println("{}", wide + 9000000000L);
+    // expect: 9000000003
+
+    // `==` compares with values and null.
+    int? three = 3;
+    println("{} {} {} {} {}", a == three, a == 3, a != null, none == null, null == none);
+    // expect: true true true true true
+    println("{} {}", a == none, half(4) == half(5));
+    // expect: false false
+
+    // Classes: `User?` refers to a User or is null.
+    vector<User> users = {User("Ada"), User("Bo")};
+    users[1].manager = users[0];
+    User? ada = find(users, "Ada");
+    User? nobody = find(users, "Zed");
+    println("{} {}", ada?.name, nobody?.name);
+    // expect: Ada null
+    println("{} {}", ada?.greet() ?? "-", nobody?.greet() ?? "-");
+    // expect: hi Ada -
+    println("{} {}", find(users, "Bo")?.manager?.name, ada?.manager?.name);
+    // expect: Ada null
+    println("{}", find(users, "Bo")?.manager?.name.size());
+    // expect: 3
+    ada?.birthday();
+    nobody?.birthday();
+    println("{} {}", users[0].age, ada?.age);
+    // expect: 1 1
+    if (auto u = ada) u.age += 10;
+    println("{}", users[0].age);
+    // expect: 11
+    println("{} {}", ada == users[0], ada == find(users, "Bo"));
+    // expect: true false
+
+    // Optional structs and strings are values.
+    Point? p = {1, 2};
+    Point? q;
+    println("{} {} {} {}", p, q, p?.x, q?.y);
+    // expect: {x: 1, y: 2} null 1 null
+    Point fallback = q ?? {0, 0};
+    println("{} {}", fallback, p == Point{1, 2});
+    // expect: {x: 0, y: 0} true
+    string? title = "Dr";
+    string? missing;
+    println("{} {} {}", title, title?.size(), (missing ?? "anonymous").size());
+    // expect: Dr 2 9
+    string? copy = title;
+    title = null;
+    println("{} {}", copy, title);
+    // expect: Dr null
+
+    // Optionals inside vectors, and vectors inside optionals.
+    vector<int?> slots = {1, null, 3};
+    slots.push_back(null);
+    println("{} {}", slots, slots[1] ?? 0);
+    // expect: [1, null, 3, null] 0
+    vector<int>? list = vector<int>{1, 2, 3};
+    println("{} {}", list?.size(), list?.back());
+    // expect: 3 3
+
+    // `while (auto x = ...)` runs while there is a value.
+    long n = 40;
+    int steps = 0;
+    while (auto h = half(n)) {
+        n = h;
+        steps++;
+    }
+    println("{} {}", n, steps);
+    // expect: 5 3
+
+    // Walking a linked list.
+    User head = User("x");
+    head.manager = User("y");
+    if (auto m = head.manager) m.manager = User("z");
+    User? cur = head;
+    string path;
+    while (auto u = cur) {
+        path += u.name;
+        cur = u.manager;
+    }
+    println("{}", path);
+    // expect: xyz
+    return 0;
+}

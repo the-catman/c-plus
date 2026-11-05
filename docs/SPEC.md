@@ -124,12 +124,14 @@ Planned: `s[i]`, `for (char c : s)` and the methods that take or return one char
 
 ### Implicit conversions
 
-There are exactly two implicit conversions:
+There are exactly three implicit conversions:
 - **`int` to `long`**, which never loses information.
 - **a number to `bool`**: zero is `false`, anything else is `true`, as in C++.
+- **a value to an optional**: a `T`, or `null`, converts to `T?`. The value converts as it
+  would to `T`, so an `int` also converts to `long?` (see [Optionals](#optionals)).
 
-Everything else is an error, including `long` to `int` and `bool` to a number. Explicit
-casts are planned.
+Everything else is an error, including `long` to `int`, `bool` to a number, `T?` to `T`,
+and one optional type to another. Explicit casts are planned.
 
 ```cpp
 long big = 5;       // ok: int widens to long
@@ -142,13 +144,70 @@ In arithmetic with mixed types, the `int` side is widened: `int + long` is a `lo
 
 ### Optionals
 
-Planned. `T?` holds a `T` or `null`. Plain types are never null.
+`T?` holds a `T` or `null`. No other type can be null: a `User` always refers to an
+object, and an `int` always holds a number. Any type but `void` and `auto` can be made
+optional, but an optional cannot hold another optional: `int??` is an error.
 
 ```cpp
-User? found = findUser("bob");
-if (auto u = found) println("{}", u.name);  // u is a plain User inside the if
+User? find(vector<User> users, string name) {
+    for (User u : users)
+        if (u.name == name) return u;           // a User converts to User?
+    return null;
+}
+
+User? found = find(users, "bob");
+if (auto u = found) println("{}", u.name);      // u is a plain User inside the if
 string name = found?.name ?? "nobody";
 ```
+
+- **Values.** A `T` converts to `T?`, and `null` converts to any optional. An optional
+  declared without a value is null: `int? n;`. A `{ }` list builds the value inside, as in
+  `Point? p = {1, 2};`. A `T?` never converts to `T`, and an optional never converts to
+  an optional of another type, not even `int?` to `long?`. Unwrap it first.
+  `auto x = null;` is an error, because it does not say what `x` may hold.
+- **Representation.** A `User?` is a reference that may be null, the same size as a
+  `User`. Any other `T?` holds a `T` and a flag, like `std::optional<T>`. Optional
+  structs, strings and vectors are values, copied like the type they hold.
+- **Testing for a value.** An optional is a condition, true when it holds a value, as with
+  `std::optional`: `if (found)`, `while (cur)`, `!found`. A zero still counts as a value,
+  so `int? n = 0;` is true. A `bool?` is not a condition, since `if (flag)` could mean
+  either thing; write `flag == true` or `flag != null`. `opt == null` and `opt != null`
+  work for every optional.
+- **Unwrapping.** `if (auto u = found) ...` declares `u` as the value inside, and runs the
+  branch only when there is one. `u` exists only in that branch, not in the `else`.
+  `while (auto x = next()) ...` works the same way, with a new `x` each time around. A
+  type can replace `auto`, and the value converts to it as in an initialization:
+  `if (long n = maybeInt)`. When the value is not an optional, this is the C++ form: the
+  variable holds the value, and the condition is the value itself. To keep the optional,
+  declare an optional: `if (User? u = found)`.
+- **`?.`** reads a field or calls a method of the value inside, and is null when there is
+  none: `found?.name` is a `string?`. As in JavaScript, a null skips the rest of the
+  chain, so in `found?.manager.name`, neither `.manager` nor `.name` runs. A `?` is needed
+  again only where the chain reaches another optional, as in `found?.manager?.name`. The
+  result is optional unless it already is, or the method returns `void`. The left side is
+  evaluated once.
+- `?.` only reads. `found?.age = 3` is an error; unwrap it to make a change:
+  `if (auto u = found) u.age = 3;`. On a class, `found?.birthday()` changes the object it
+  refers to. On a struct, string or vector, `?.` works on a copy, so a method that changes
+  the copy is an error.
+- **`??`** gives a fallback: `found?.name ?? "nobody"` is a `string`. The fallback is
+  evaluated only when the left side is null. When the fallback may be null too, the
+  result is an optional, so `a ?? b ?? c` tries each in turn (`??` groups to the right).
+  `??` binds more loosely than `||` and more tightly than `?:`, so `n ?? 0 + 1` is
+  `n ?? (0 + 1)`.
+- **Methods**, as on `std::optional`: `has_value()`; `value()`, which stops the program
+  with file:line when there is no value; and `value_or(fallback)`, which evaluates the
+  fallback either way, as in C++.
+- **Equality.** `==` and `!=` compare two optionals of the same type, or an optional with
+  a value or `null`. Two nulls are equal, null never equals a value, and two values
+  compare as their type does. `opt == 3` is true when `opt` holds 3, as with
+  `std::optional`.
+- Everything else needs the value: `found.name`, `list[i]`, `n + 1` and
+  `for (auto x : list)` are errors that say how to unwrap it. Write `(n ?? 0) + 1`.
+- An optional prints its value, or `null`.
+- A struct cannot hold itself, not even as an optional, since it would be infinitely
+  large. A class can: a `Node? next;` field refers to another object, so linked lists and
+  trees work as they do in Java or JavaScript.
 
 ### Structs
 
@@ -227,14 +286,14 @@ println("{}", a);              // User {name: "Alice", age: 31}
   same reason, a class-typed field must get a value whenever an object is built: from the
   `{ }` list, from the constructor, or from a default written in the class. A class that
   needs an existing object of its own type to be built, such as a list node with a
-  `Node next` field, cannot be built until references that can be empty (`Node?`) arrive
-  with [Optionals](#optionals).
+  `Node next` field, can never be built. Make such a field optional: `Node? next;` starts
+  out null (see [Optionals](#optionals)).
 - `const User u = ...;` stops `u` from referring to another object. The object itself can
   still change, as with `const` in JavaScript.
 - Members are private by default in a class and public in a struct, as in C++. `public:`
   and `private:` work as in C++. `protected:` acts as `private:` until inheritance arrives.
-- A class has at most one constructor until overloading arrives. To make values optional,
-  leave out the constructor and give the fields defaults.
+- A class has at most one constructor until overloading arrives. To let a caller leave
+  out values, leave out the constructor and give the fields defaults.
 - `a == b` is true when `a` and `b` refer to the same object, like `===` on objects in
   JavaScript or `==` on `shared_ptr` in C++. Two objects with equal fields are still two
   objects, so `User("Ann") == User("Ann")` is false. To compare contents, compare the
@@ -479,12 +538,15 @@ in C++. The step of a `for` loop may list several expressions: `for (...; ...; i
 #### Conditions
 
 The condition of `if`, `while`, `do`-`while`, `for` and `?:`, and the operands of `!`, `&&`
-and `||`, may be a `bool` or a number. As in C++, a number is true when it is not zero.
+and `||`, may be a `bool`, a number or an optional. As in C++, a number is true when it
+is not zero, and an optional is true when it holds a value. A `bool?` is not a condition
+(see [Optionals](#optionals)).
 
 ```cpp
 if (count) ...          // same as if (count != 0)
 while (n) n--;
-if (!found) ...
+if (!found) ...         // found is null
+if (auto u = found) ... // runs with the User inside found
 ```
 
 Strings, vectors and `void` values are not conditions. For a vector, write `!v.empty()`.
@@ -519,7 +581,7 @@ Precedence and associativity match C++. From tightest to loosest:
 
 | Operators | Notes |
 |-----------|-------|
-| `x++` `x--` `f(...)` `v[i]` `a.b` | postfix |
+| `x++` `x--` `f(...)` `v[i]` `a.b` `a?.b` | postfix; `?.` skips the rest of the chain when `a` is null |
 | `++x` `--x` `-x` `+x` `!x` `~x` | prefix |
 | `*` `/` `%` | |
 | `+` `-` | |
@@ -529,16 +591,18 @@ Precedence and associativity match C++. From tightest to loosest:
 | `&` | |
 | `^` | |
 | `\|` | |
-| `&&` | short-circuit; operands are bools or numbers |
-| `\|\|` | short-circuit; operands are bools or numbers |
-| `?:` | condition is a bool or a number; branches must have compatible types |
+| `&&` | short-circuit; operands are conditions (see [Conditions](#conditions)) |
+| `\|\|` | short-circuit; operands are conditions |
+| `??` | right-associative; the right side is evaluated only when the left is null |
+| `?:` | branches must have compatible types; `c ? user : null` is a `User?` |
 | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | right-associative |
 
 Arithmetic, bitwise and ordering operators take `int` and `long`. `+` also joins two
 strings, and the ordering operators also compare two strings (see [string](#string)).
 `==` and `!=` take any two values of the same type: numbers, `bool`s, strings by
 contents, structs field by field, vectors element by element, and class references by
-identity. Operands are evaluated left
+identity. They also compare an optional with a value or `null` (see
+[Optionals](#optionals)). Operands are evaluated left
 to right; in `v[i]`, `v` is evaluated before `i`, as in C++17.
 
 Operator overloading is planned with C++ syntax, `Point operator+(Point other) const`,
@@ -628,9 +692,13 @@ shared between threads. Counting is automatic:
 - A temporary, such as the result of `makeUser()` when it is not stored, is released at
   the end of the statement that made it.
 - A parameter holds its argument until the function returns.
-- Two objects that refer to each other would never be freed; this is a reference cycle.
-  Today a cycle cannot be built, because a class reference cannot be empty. `weak`
-  references, which break cycles, are planned together with [Optionals](#optionals).
+- When an object is freed, its fields are released, the last declared first. A long
+  chain of objects, such as a linked list of a million nodes, is freed one node after
+  another, without running out of stack.
+- Two objects that refer to each other, such as `a.next = b; b.next = a;`, are never
+  freed; this is a reference cycle. `weak` references, which break cycles, are planned.
+  Until then, set one of the references to `null` when you are done with them.
+  `CPLUS_CHECK_LEAKS=1` reports the objects a cycle kept alive.
 
 A string's bytes live in a reference-counted buffer, which copies of the string share. A
 string never changes bytes another string can see: `s += t` writes after the end of `s`
@@ -695,11 +763,12 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Definite assignment of individual struct fields | implemented |
 | Classes: reference counting, constructors, destructors, printing | implemented |
 | Methods, `const` methods, `this`, `public:` / `private:` | implemented |
-| `==` and `!=` on strings, structs, vectors and class references | implemented |
+| `==` and `!=` on strings, structs, vectors, class references and optionals | implemented |
 | Strings: `+`, `+=`, `<`, `size`, `substr`, `find`, `contains`, `starts_with`, `ends_with`, `clear` | implemented |
 | `format(...)` and `to_string(n)` | implemented |
 | Vectors: `vector<T>`, checked `v[i]`, `push_back` and the other basic methods, copy-on-write | implemented |
 | Range-based `for` over vectors | implemented |
+| Optionals: `T?`, `null`, `?.`, `??`, `if (auto u = opt)`, `value()`, `value_or()` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
 | Casts, unsigned types, floating point, `char` | planned |
@@ -710,7 +779,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Inheritance, `virtual`, `protected:` | planned |
 | Operator overloading | planned |
 | Destructors for structs, static members | planned |
-| Optionals | planned |
+| `weak` references | planned |
 | Errors (`throws`, `try`, `catch`) | planned |
 | Generics | planned |
 | `extern` C functions | planned |

@@ -241,6 +241,30 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
 - A range-based `for` loops over the vector as it was when the loop started, so changing
   the vector in the body is safe. `for (auto& x : v)` waits for references.
 
+### 2.18 Optionals — DECIDED
+- `T?` holds a `T` or `null`, for any type but `void` and `auto`. An optional cannot hold
+  another optional.
+- A `User?` is a reference that may be null, the size of a pointer. Any other `T?` is the
+  value plus a flag, like `std::optional<T>`.
+- A `T`, or anything that converts to `T`, converts to `T?`, and so does `null`. A `T?`
+  never converts to `T`, and optionals of different types do not convert to each other.
+- An optional is a condition, true when it holds a value, as with `std::optional`.
+  `bool?` is not a condition, since `if (flag)` would be ambiguous.
+- `if (auto u = opt)` and `while (auto u = opt)` unwrap, and the variable exists only in
+  the branch or the body. With a value that is not optional they keep their C++ meaning.
+- `?.` skips the rest of the chain when the value is null, as in JavaScript and Swift. Its
+  result is optional, unless it already is or is `void`. It only reads: assigning through
+  it is an error, and so is calling a method that changes a struct, string or vector,
+  since `?.` works on a copy of those.
+- `??` sits between `||` and `?:`, groups to the right, and evaluates the fallback only
+  when it is needed.
+- `has_value()`, `value()`, which traps when empty, and `value_or(x)` as in
+  `std::optional`. `==` compares an optional with another of the same type, a value, or
+  `null`.
+- A struct cannot contain itself, even through an optional. A class can, so reference
+  cycles can now be built, and they leak until `weak` arrives (§2.7). Freeing a long chain
+  of objects uses constant stack.
+
 ---
 
 ## 3. Compiler architecture
@@ -270,11 +294,11 @@ Open implementation questions are listed in §6.
 Status: Phase 0 has a first draft (`docs/SPEC.md`, `docs/CHEATSHEET.md`). Phase 1 is in
 progress. The compiler builds programs with integers, bools, strings (joining, ordering,
 `substr`, `find`, `format`, `to_string`), structs, reference-counted classes with methods,
-constructors and destructors, and vectors, using functions, control flow including
-range-based `for`, definite assignment (down to struct fields), overflow and bounds traps,
-and `println`, all through LLVM. Destructors and a leak check (`CPLUS_CHECK_LEAKS=1`)
-arrived with classes, ahead of Phase 2. Next in Phase 1: optionals, `extern` C calls, and
-`char`.
+constructors and destructors, vectors, and optionals (`T?`, `null`, `?.`, `??`), using
+functions, control flow including range-based `for`, definite assignment (down to struct
+fields), overflow and bounds traps, and `println`, all through LLVM. Destructors and a
+leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. Next in
+Phase 1: `extern` C calls and `char`.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

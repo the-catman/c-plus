@@ -1,0 +1,109 @@
+struct Point {
+    int x;
+    int y;
+    void move() { x += 1; }
+};
+
+struct Loop {
+    int value;
+    Loop? next;
+};
+
+class User {
+public:
+    string name;
+    int age = 0;
+    User(string n) : name(n) {}
+    string greet() const { return "hi " + name; }
+};
+
+User? find(string name) { return null; }
+
+int main() {
+    int? n = 5;
+    long? wide = 5L;
+    bool? flag = true;
+    string? text = "t";
+    Point? p = {1, 2};
+    vector<int>? list = vector<int>{1};
+    User? u = find("a");
+    int plain = 1;
+    string word = "w";
+    auto x = null;
+    int a = n;
+    User v = u;
+    User w = null;
+    int b = n + 1;
+    bool c = n < 3;
+    int? d = wide;
+    int e = list[0];
+    string f = u.name;
+    string g = u.greet();
+    n.reset();
+    n.value(1);
+    n.value_or();
+    u?.name = "b";
+    u?.age++;
+    p?.x = 3;
+    p?.move();
+    list?.push_back(2);
+    text?.clear();
+    for (int i : list) println("{}", i);
+    if (flag) println("flag");
+    bool h = !flag;
+    if (auto k = null) println("never");
+    if (bool? k = flag) println("k");
+    if (auto k = "text") println("k");
+    long s = word?.size();
+    int t = plain ?? 0;
+    int y = n ?? "zero";
+    bool z = n == "five";
+    bool zz = null < 1;
+    string joined = "name: " + text;
+    User? q = nullptr;
+    return 0;
+}
+// error: 'Loop' contains itself
+// error: auto cannot tell what kind of optional 'x' is from null
+// error: write the type, e.g. `User? x = null;`
+// error: expected 'int' to initialize 'a', but this is 'int?'
+// error: 'n' may be null. Unwrap it with `if (auto v = n) ...`, give a fallback with `n ?? value`, or call `n.value()`, which stops the program when it is null
+// error: expected 'User' to initialize 'v', but this is 'User?'
+// error: expected 'User' to initialize 'w', but this is 'null'
+// error: only an optional can be null; make the type `User?`
+// error: '+' cannot be used with 'int?'
+// error: '<' cannot be used with 'int?'
+// error: expected 'int?' to initialize 'd', but this is 'long?'
+// error: an optional only converts to an optional of the same type. Unwrap it first: `if (auto v = wide) ...` gives the long inside
+// error: 'vector<int>?' may be null, so it cannot be indexed directly
+// error: unwrap it first: `if (auto v = list) ... v[i]`
+// error: 'User?' may be null, so '.name' cannot be used on it directly
+// error: write `u?.name`, which is null when u is, or unwrap it: `if (auto v = u) ... v.name`
+// error: 'User?' may be null, so 'greet' cannot be called on it directly
+// error: write `u?.greet(...)`, which does nothing when u is null, or unwrap it: `if (auto v = u) v.greet(...);`
+// error: 'int?' may be null, so 'reset' cannot be called on it directly
+// error: value() takes no arguments but 1 was given
+// error: value_or() takes one argument but 0 were given
+// error: write `n.value_or(fallback)`
+// error: a value reached through '?.' cannot be assigned to
+// error: a value reached through '?.' cannot be incremented
+// error: '?.' only reads. To change the value, unwrap the optional first: `if (auto u = opt) u.field = ...;`
+// error: 'move' may change the struct, but '?.' works on a copy of it
+// error: unwrap the optional, change the copy and store it back: `if (auto v = opt) { v.move(...); opt = v; }`
+// error: push_back() changes the vector, but '?.' works on a copy of it
+// error: clear() changes the string, but '?.' works on a copy of it
+// error: it may be null; unwrap it first: `if (auto v = list) for (auto x : v) ...`
+// error: the if condition must be a bool, a number or an optional, but this is 'bool?'
+// error: it could mean true, or that it has a value: write `flag == true`, or `flag != null` to check that it holds a bool
+// error: null never holds a value, so this if would never run
+// error: the variable declared in the if condition must be an optional, a bool or a number, but 'k' is 'bool?'
+// error: the variable declared in the if condition must be an optional, a bool or a number, but 'k' is 'string'
+// error: '?.' reads from an optional, but this is 'string', which is never null
+// error: write '.' instead of '?.'
+// error: '??' gives a fallback for an optional, but the left side is 'int', which is never null
+// error: the fallback after '??' must be 'int', but this is 'string'
+// error: '==' compares 'int?' with 'int' or null, but this is 'string'
+// error: null can only be compared with == and !=
+// error: it may be null: `opt ?? "none"` is its value, or "none" when it is null
+// error: write `null`; only an optional, such as `User?`, can be null
+// error: spec: docs/SPEC.md#optionals

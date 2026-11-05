@@ -28,6 +28,10 @@ private:
                            const std::string& spec = "");
     [[noreturn]] void notYet(Loc loc, const std::string& feature, const std::string& help = "");
     [[noreturn]] void failStd(Loc loc, const Token& name);
+    const Type* parseBaseType(Loc& loc);
+    ExprPtr parseCoalesce();
+    ExprPtr parseMemberAccess(ExprPtr e, const char* after);
+    CondDecl parseCondDecl(const char* stmt);
     void syncTopLevel();
     void syncStatement();
 
@@ -48,6 +52,7 @@ private:
     StmtPtr parseDeclarators(bool isConst, const Type* ty, Loc typeLoc);  // the part after the type
     StmtPtr parseFor();
     void checkUnknownType();
+    bool isOptionalDeclRest(size_t i) const;
 
     ExprPtr parseExpr();
     ExprPtr parseAssign();

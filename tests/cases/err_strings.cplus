@@ -93,7 +93,7 @@ int main() {
 // error: the format string has 2 {} placeholders but 1 value was given
 // error: format needs a format string
 // error: expected 'int' to initialize 'len', but this is 'string'
-// error: the if condition must be a bool or a number, but this is 'string'
+// error: the if condition must be a bool, a number or an optional, but this is 'string'
 // error: to check whether it has any text, write `!s.empty()`
 // error: unknown escape sequence '\q'
 // error: spec: docs/SPEC.md#string

@@ -1,0 +1,51 @@
+// Optionals: `T?` holds a T or null, and no other type can be null. `?.` reads through
+// an optional, `??` gives a fallback, and `if (auto x = opt)` runs with the value inside.
+
+class Employee {
+public:
+    string name;
+    Employee? manager;
+    Employee(string n) : name(n) {}
+};
+
+Employee? find(vector<Employee> staff, string name) {
+    for (Employee e : staff)
+        if (e.name == name) return e;
+    return null;
+}
+
+int? parseDigit(string s) {
+    vector<string> digits = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
+    for (int i = 0; i < 10; i++)
+        if (digits[i] == s) return i;
+    return null;
+}
+
+int main() {
+    vector<Employee> staff = {Employee("Grace"), Employee("Alan"), Employee("Ada")};
+    staff[1].manager = staff[0];
+    staff[2].manager = staff[1];
+
+    for (string name : vector<string>{"Ada", "Alan", "Grace", "Zed"}) {
+        Employee? e = find(staff, name);
+        println("{}: manager {}", name, e?.manager?.name ?? "none");
+    }
+
+    // Walk up the chain of managers until there is none.
+    Employee? cur = find(staff, "Ada");
+    string chain;
+    while (auto e = cur) {
+        if (!chain.empty()) chain += " -> ";
+        chain += e.name;
+        cur = e.manager;
+    }
+    println("{}", chain);
+
+    int total = 0;
+    for (string s : vector<string>{"4", "x", "2"}) {
+        if (auto d = parseDigit(s)) total += d;
+        else println("'{}' is not a digit", s);
+    }
+    println("total {}", total);
+    return 0;
+}

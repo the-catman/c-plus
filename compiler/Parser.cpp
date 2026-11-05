@@ -159,11 +159,14 @@ void Parser::failStd(Loc loc, const Token& name) {
 
 bool Parser::isTypeStart(size_t ahead) const {
     switch (peek(ahead).kind) {
-        case Tok::Ident:  // a struct name followed by a variable name: `Point p`, or `vector<...>`
+        case Tok::Ident:  // a struct name followed by a variable name: `Point p`, `User? u`, or `vector<...>`
             if (peek(ahead + 1).kind == Tok::Less)
                 return peek(ahead).text == "vector" || peek(ahead).text == "array" || peek(ahead).text == "hashmap";
-            return isTypeName(peek(ahead)) && peek(ahead + 1).kind == Tok::Ident;
-        case Tok::KwInt: case Tok::KwLong: case Tok::KwBool: case Tok::KwString:
+            if (!isTypeName(peek(ahead))) return false;
+            if (peek(ahead + 1).kind == Tok::Question || peek(ahead + 1).kind == Tok::QuestionQuestion) ++ahead;
+            return peek(ahead + 1).kind == Tok::Ident;
+        case Tok::KwString: return peek(ahead + 1).kind != Tok::ColonColon;  // not `string::npos`
+        case Tok::KwInt: case Tok::KwLong: case Tok::KwBool:
         case Tok::KwVoid: case Tok::KwAuto: case Tok::KwConst:
         case Tok::KwDouble: case Tok::KwFloat: case Tok::KwChar:
             return true;
@@ -172,8 +175,27 @@ bool Parser::isTypeStart(size_t ahead) const {
 }
 
 // Reports `Foo x` where Foo is not a known type (two identifiers in a row).
+// Whether the tokens from `i` on are the rest of `Name? name = ...;` rather than of
+// `c ? y = 1 : 2;`, which has a ':' before the statement ends.
+bool Parser::isOptionalDeclRest(size_t i) const {
+    Tok after = peek(i).kind;
+    if (after == Tok::Semi || after == Tok::Comma || after == Tok::RParen) return true;
+    if (after != Tok::Assign) return false;
+    int depth = 0;
+    for (size_t j = i + 1;; ++j) {
+        Tok k = peek(j).kind;
+        if (k == Tok::Eof || (depth == 0 && (k == Tok::Semi || k == Tok::RBrace))) return true;
+        if (k == Tok::LParen || k == Tok::LBracket || k == Tok::LBrace) ++depth;
+        else if (k == Tok::RParen || k == Tok::RBracket || k == Tok::RBrace) --depth;
+        else if (depth == 0 && k == Tok::Colon) return false;
+        if (depth < 0) return true;
+    }
+}
+
 void Parser::checkUnknownType() {
-    if (!(check(Tok::Ident) && peek(1).kind == Tok::Ident)) return;
+    bool optional = check(Tok::Ident) && peek(1).kind == Tok::Question && peek(2).kind == Tok::Ident &&
+                    isOptionalDeclRest(3);
+    if (!(check(Tok::Ident) && (peek(1).kind == Tok::Ident || optional))) return;
     const Token& t = peek();
     std::string help;
     if (t.text == "vector")
@@ -187,7 +209,29 @@ void Parser::checkUnknownType() {
     fail(t.loc, "unknown type '" + t.text + "'", help, spec::IntegerTypes);
 }
 
+// A type, with an optional `?` after it: `User?` is a User or null.
 const Type* Parser::parseType(Loc& loc) {
+    const Type* t = parseBaseType(loc);
+    if (check(Tok::QuestionQuestion))
+        fail(peek().loc, "an optional cannot hold another optional",
+             "write one '?': `" + std::string(t->name) + "?` already means " + t->name + " or null", spec::Optionals);
+    if (!check(Tok::Question)) return t;
+    Loc q = advance().loc;
+    if (t->is(Type::Kind::Void) || t->is(Type::Kind::Auto))
+        fail(loc, std::string("'") + t->name + "' cannot be optional",
+             t->is(Type::Kind::Auto) ? "write the type, e.g. `User? u = find(name);`, or `auto u = find(name);` when "
+                                       "find returns an optional"
+                                     : "a function that may return nothing returns an optional of a real type, "
+                                       "e.g. `User?`",
+             spec::Optionals);
+    if (check(Tok::Question))
+        fail(peek().loc, "an optional cannot hold another optional",
+             "write one '?': `" + std::string(t->name) + "?` already means " + t->name + " or null", spec::Optionals);
+    loc.len = q.col + 1 - loc.col;
+    return Type::optionalOf(t);
+}
+
+const Type* Parser::parseBaseType(Loc& loc) {
     const Token& t = advance();
     loc = t.loc;
     switch (t.kind) {
@@ -542,18 +586,24 @@ StmtPtr Parser::parseStmt() {
         case Tok::KwIf: {
             advance();
             expect(Tok::LParen, "after 'if'");
-            ExprPtr cond = parseExpr();
+            std::optional<CondDecl> decl;
+            ExprPtr cond = isTypeStart() ? (decl = parseCondDecl("if"), nullptr) : parseExpr();
             expect(Tok::RParen, "after the if condition");
             StmtPtr thenS = parseStmt();
             StmtPtr elseS = match(Tok::KwElse) ? parseStmt() : nullptr;
-            return std::make_unique<IfStmt>(t.loc, std::move(cond), std::move(thenS), std::move(elseS));
+            auto st = std::make_unique<IfStmt>(t.loc, std::move(cond), std::move(thenS), std::move(elseS));
+            st->decl = std::move(decl);
+            return st;
         }
         case Tok::KwWhile: {
             advance();
             expect(Tok::LParen, "after 'while'");
-            ExprPtr cond = parseExpr();
+            std::optional<CondDecl> decl;
+            ExprPtr cond = isTypeStart() ? (decl = parseCondDecl("while"), nullptr) : parseExpr();
             expect(Tok::RParen, "after the while condition");
-            return std::make_unique<WhileStmt>(t.loc, std::move(cond), parseStmt());
+            auto st = std::make_unique<WhileStmt>(t.loc, std::move(cond), parseStmt());
+            st->decl = std::move(decl);
+            return st;
         }
         case Tok::KwDo: {
             advance();
@@ -592,6 +642,23 @@ StmtPtr Parser::parseStmt() {
     Loc loc = e->loc;
     expect(Tok::Semi, "after the expression");
     return std::make_unique<ExprStmt>(loc, std::move(e));
+}
+
+// `auto u = find(name)` as the condition of an if or while, as in C++17.
+CondDecl Parser::parseCondDecl(const char* stmt) {
+    bool isConst = match(Tok::KwConst);
+    Loc typeLoc;
+    const Type* ty = parseType(typeLoc);
+    const Token& name = expect(Tok::Ident, std::string("for the name of the variable declared in the ") + stmt +
+                                               " condition");
+    if (!check(Tok::Assign))
+        fail(peek().loc, std::string("a variable declared in the ") + stmt + " condition needs a value",
+             std::string("write e.g. `") + stmt + " (auto " + name.text + " = find(key))`", spec::Optionals);
+    advance();
+    auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
+    var->isConst = isConst;
+    var->init = parseExpr();
+    return CondDecl{std::move(var)};
 }
 
 StmtPtr Parser::parseFor() {
@@ -678,8 +745,18 @@ ExprPtr Parser::parseAssign() {
     return lhs;
 }
 
+// `a ?? b` binds less tightly than `||` and more tightly than `?:`, as in JavaScript and
+// C#, and groups to the right: `a ?? b ?? c` is `a ?? (b ?? c)`.
+ExprPtr Parser::parseCoalesce() {
+    ExprPtr lhs = parseBinary(1);
+    if (!check(Tok::QuestionQuestion)) return lhs;
+    Loc loc = advance().loc;
+    ExprPtr rhs = parseCoalesce();
+    return std::make_unique<CoalesceExpr>(loc, std::move(lhs), std::move(rhs));
+}
+
 ExprPtr Parser::parseTernary() {
-    ExprPtr cond = parseBinary(1);
+    ExprPtr cond = parseCoalesce();
     if (!check(Tok::Question)) return cond;
     Loc loc = advance().loc;
     ExprPtr a = parseExpr();
@@ -718,7 +795,6 @@ ExprPtr Parser::parseBinary(int minPrec) {
         BinOp op;
         int prec = precedence(peek().kind, op);
         if (prec == 0 || prec < minPrec) return lhs;
-        if (check(Tok::QuestionQuestion)) notYet(peek().loc, "optionals");
         Loc opLoc = advance().loc;
         ExprPtr rhs = parseBinary(prec + 1);
         lhs = std::make_unique<BinaryExpr>(opLoc, op, std::move(lhs), std::move(rhs));
@@ -770,7 +846,31 @@ ExprPtr Parser::parseUnary() {
     }
 }
 
+// `.name` or `.name(args)` after `e`.
+ExprPtr Parser::parseMemberAccess(ExprPtr e, const char* after) {
+    const Token& name = expect(Tok::Ident, std::string("for the field or method name after '") + after + "'");
+    if (!match(Tok::LParen)) return std::make_unique<MemberExpr>(name.loc, std::move(e), name.text);
+    std::vector<ExprPtr> args;
+    if (!check(Tok::RParen)) {
+        do args.push_back(parseExpr());
+        while (match(Tok::Comma));
+    }
+    expect(Tok::RParen, "to close the argument list of '" + name.text + "'");
+    return std::make_unique<MethodCallExpr>(name.loc, std::move(e), name.text, std::move(args));
+}
+
 ExprPtr Parser::parsePostfix(ExprPtr e) {
+    // Each `?.` starts a chain that takes in the rest of the postfix expression, so in
+    // `a?.b.c` a null `a` skips `.b.c` as well, as in JavaScript.
+    std::vector<std::unique_ptr<OptChainExpr>> chains;
+    auto close = [&] {
+        while (!chains.empty()) {
+            chains.back()->body = std::move(e);
+            e = std::move(chains.back());
+            chains.pop_back();
+        }
+        return std::move(e);
+    };
     while (true) {
         const Token& t = peek();
         if (t.kind == Tok::PlusPlus || t.kind == Tok::MinusMinus) {
@@ -781,18 +881,20 @@ ExprPtr Parser::parsePostfix(ExprPtr e) {
                  spec::Functions);
         } else if (t.kind == Tok::Dot) {
             advance();
-            const Token& name = expect(Tok::Ident, "for the field or method name after '.'");
-            if (match(Tok::LParen)) {
-                std::vector<ExprPtr> args;
-                if (!check(Tok::RParen)) {
-                    do args.push_back(parseExpr());
-                    while (match(Tok::Comma));
-                }
-                expect(Tok::RParen, "to close the argument list of '" + name.text + "'");
-                e = std::make_unique<MethodCallExpr>(name.loc, std::move(e), name.text, std::move(args));
-            } else {
-                e = std::make_unique<MemberExpr>(name.loc, std::move(e), name.text);
-            }
+            e = parseMemberAccess(std::move(e), ".");
+        } else if (t.kind == Tok::QuestionDot) {
+            advance();
+            if (!check(Tok::Ident))
+                fail(peek().loc, "'?.' is followed by a field or method name",
+                     check(Tok::LBracket) ? "to read an element of an optional vector, unwrap it first: "
+                                            "`if (auto v = opt) ... v[i]`"
+                                          : "write e.g. `user?.name`",
+                     spec::Optionals);
+            auto chain = std::make_unique<OptChainExpr>(t.loc, std::move(e));
+            auto value = std::make_unique<OptValueExpr>(chain->base->loc, chain.get());
+            chain->value = value.get();
+            chains.push_back(std::move(chain));
+            e = parseMemberAccess(std::move(value), "?.");
         } else if (t.kind == Tok::Arrow) {
             if (e->kind == Expr::Kind::This)
                 fail(t.loc, "'this' is a reference in C+, not a pointer",
@@ -811,10 +913,8 @@ ExprPtr Parser::parsePostfix(ExprPtr e) {
                      "for a vector of vectors, write `grid[i][j]`", spec::Vectors);
             expect(Tok::RBracket, "to close the index");
             e = std::make_unique<IndexExpr>(t.loc, std::move(e), std::move(index));
-        } else if (t.kind == Tok::QuestionDot) {
-            notYet(t.loc, "optionals");
         } else {
-            return e;
+            return close();
         }
     }
 }
@@ -862,7 +962,7 @@ ExprPtr Parser::parsePrimary() {
             if (check(Tok::LParen)) notYet(t.loc, "casts like '" + std::string(tokSpelling(t.kind)) + "(x)'", kCastHelp);
             fail(t.loc, "expected an expression, found " + describeToken(t),
                  "a type name can only start a declaration, e.g. `" + std::string(tokSpelling(t.kind)) + " x = ...;`");
-        case Tok::KwNull: notYet(t.loc, "optionals and null");
+        case Tok::KwNull: return std::make_unique<NullLitExpr>(t.loc);
         case Tok::KwThis: return std::make_unique<ThisExpr>(t.loc);
         case Tok::LParen: {
             if ((check(Tok::KwInt) || check(Tok::KwLong) || check(Tok::KwBool) || check(Tok::KwString)) &&
@@ -885,7 +985,7 @@ ExprPtr Parser::parsePrimary() {
             if (t.text == "vector" && check(Tok::Less)) {
                 --pos_;  // back to `vector`, to read the whole type
                 Loc loc;
-                const Type* ty = parseType(loc);
+                const Type* ty = parseBaseType(loc);  // a '?' after it is an operator
                 if (match(Tok::LBrace)) return parseInitList(loc, ty);
                 if (!match(Tok::LParen))
                     fail(peek().loc, "expected '{' or '(' after '" + std::string(ty->name) + "'",
@@ -914,7 +1014,7 @@ ExprPtr Parser::parsePrimary() {
             if (check(Tok::Less) && (t.text == "array" || t.text == "hashmap")) {
                 --pos_;
                 Loc loc;
-                parseType(loc);  // reports that the container is not supported yet
+                parseBaseType(loc);  // reports that the container is not supported yet
             }
             return std::make_unique<NameExpr>(t.loc, t.text);
         }

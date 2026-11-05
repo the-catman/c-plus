@@ -20,7 +20,7 @@ long square(long n) { return n * n; }
 
 | Area | C+ |
 |------|----|
-| Types | `int` (32-bit), `long` (64-bit), `bool`, `string`, `void`, `auto`, structs, classes, `vector<T>` |
+| Types | `int` (32-bit), `long` (64-bit), `bool`, `string`, `void`, `auto`, structs, classes, `vector<T>`, `T?` |
 | Structs | `struct P { int x; int y = 0; };` is a **value** that is copied. Build with `{1, 2}`, `{.y = 2}`, `P{1, 2}`, `P(1, 2)`, `{}` |
 | Fields | `p.x`, `p.x += 1`. `Point p;` can be filled field by field before use |
 | Classes | `class U {...}; U u = U("a");` is a **reference-counted object**: `U v = u;` shares it. No `new`; freed when the last reference goes away |
@@ -32,12 +32,13 @@ long square(long n) { return n * n; }
 | Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>` |
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]` |
 | Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(n)` for an `int` or `long` |
+| Optionals | `User? u = find(name);` holds a `User` or `null`; `int? n;` starts out null. `u?.name` is null when `u` is, `u?.name ?? "nobody"` gives a fallback, `if (auto x = u)` runs with the `User` inside. `has_value()`, `value()`, `value_or(x)`, `u == null` |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)`, `break`, `continue`, `?:` |
 | Operators | all C++ integer operators, `&&` `\|\|` `!`, compound assignment, `++`/`--` |
-| Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors element by element, objects by identity |
+| Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
 | Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long) |
-| Conditions | `bool` or a number, as in C++: `if (n)`, `while (n--)`, `!n` |
+| Conditions | `bool`, a number or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (opt)` (holds a value) |
 
 ## Different from C++. Do not write the C++ version
 
@@ -61,7 +62,13 @@ long square(long n) { return n * n; }
 | `new User("a")`, `delete u` | `User("a")`; the object is freed automatically |
 | `this->x`, `u->name` | `this.x`, `u.name`; `->` is only for raw pointers |
 | `int Rect::area() { ... }` outside the type | write the method body inside the type |
-| `User u;` then use `u` | error until assigned: a class reference is never empty |
+| `User u;` then use `u` | error until assigned: a class reference is never empty. `User? u;` starts out null |
+| `nullptr`, `NULL`, `std::optional<T>`, `std::nullopt` | `null` and `T?`; only an optional can be null |
+| `*opt`, `opt->name` | `opt.value()`, `opt?.name`, or unwrap with `if (auto u = opt)` |
+| `int x = opt;`, `opt + 1` | error: unwrap first, e.g. `(opt ?? 0) + 1` |
+| `if (flag)` on a `bool?` | error: write `flag == true` or `flag != null` |
+| `opt?.age = 3` | error: `?.` only reads. Write `if (auto u = opt) u.age = 3;` |
+| `struct Node { Node* next; }` | `class Node { Node? next; };`. A struct cannot hold itself, not even as an optional |
 | `const User u` freezes the object | `const` only stops `u` from referring to another object |
 | `u1 == u2` compares two objects' fields | it is true only for the same object, like `===` in JS. Compare fields instead |
 | `bool operator==(...) = default` | not needed: every struct already has `==` |
@@ -89,11 +96,10 @@ long square(long n) { return n * n; }
 |---------|---------|
 | Inheritance | `class Admin : User {...}`, multiple inheritance, `virtual`, `override` |
 | Operators | operator overloading with C++ syntax, after function overloading |
-| Optionals | `User?`, `null`, `if (auto u = opt)`, `opt?.name`, `opt ?? fallback` |
 | Errors | `int f() throws`, `throw Error("..")`, `try f()`, `try { } catch (Error e) { }` |
 | Generics | `template<typename T>`, `template<Comparable T>`; no specialization or SFINAE |
 | Modules | `import net.server;`, `http::get(url)` |
-| Memory | `weak`, `unique<T>`, `local<T>`; raw `T*`, `new`/`delete` warn |
+| Memory | `weak` to break reference cycles, `unique<T>`, `local<T>`; raw `T*`, `new`/`delete` warn |
 | Containers | `array<T, N>`, `hashmap<K, V>`; `insert`, `erase` and iterators on vectors |
 | References | `T&` parameters, `for (auto& x : v)` |
 | Characters | `char`, `'a'`, `s[i]`, `for (char c : s)`, `s.push_back(c)` |
