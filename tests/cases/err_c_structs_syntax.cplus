@@ -1,0 +1,60 @@
+// What C structs often hold that C+ cannot write yet, and C's spellings of integers. A
+// wrong guess at the type of a field would put the fields after it in the wrong places.
+extern "C" {
+    struct Header {
+        short port;
+    };
+    struct Other {
+        uint16_t port;
+    };
+    struct Third {
+        unsigned short port;
+    };
+    struct Bytes {
+        uint8_t tag;
+    };
+    struct Sized {
+        unsigned int count;
+        signed char letter;
+    };
+    struct Names {
+        char name[64];
+    };
+    typedef struct { int quot; } div_t;
+    struct timeval {
+        time_t tv_sec;
+        struct timeval* next;
+        ssize_t size;
+    };
+    struct tm { int tm_sec; };
+    void take(struct tm t);
+}
+
+int main() {
+    struct tm t;
+    class tm other;
+    struct Local { int x; };
+    return 0;
+}
+// error: this compiler does not support 16-bit integer types such as 'short' yet
+// error: a C struct with such a field can still be used through pointers, by declaring it by name: `extern "C" struct name;`
+// error: this compiler does not support 16-bit integer types such as 'uint16_t' yet
+// error: this compiler does not support 16-bit integer types such as 'unsigned' yet
+// error: unknown type 'uint8_t'
+// error: write `char`, which is one byte
+// error: C+ has no 'unsigned int' type
+// error: write `int`, which has the same size; C+ has no unsigned types yet
+// error: C+ has no 'signed char' type
+// error: this compiler does not support arrays yet
+// error: C+ has no typedef
+// error: write a C struct as `struct div_t { int quot; int rem; };`
+// error: unknown type 'time_t'
+// error: write `long`, which has the same size as 'time_t'
+// error: C+ writes the type of a struct or class without the word 'struct'
+// error: write just `timeval`, as in C++
+// error: write `long`, which has the same size as 'ssize_t'
+// error: C+ writes a C type without the word 'struct'
+// error: declare the struct once inside extern "C", and then write just `tm`
+// error: write just `tm`, as in C++
+// error: C+ writes the type of a struct or class without the word 'class'
+// error: this compiler does not support types defined inside a function yet

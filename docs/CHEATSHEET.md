@@ -42,6 +42,7 @@ long square(long n) { return n * n; }
 | Manual memory | `int* p = new int(5); delete p;`, `new Point{1, 2}`, `int* a = new int[n]; delete[] a;`. Values start as their default, and each `new`/`delete` **warns**. Turn it off with `[[allow(new_delete)]]` before a function, `[[allow(new_delete)]];` at the top of the file, or `-Wno-new-delete`. The wrong form of delete **stops the program** |
 | C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`, `void* malloc(long n);`, `double frexp(double x, int* e);`. Strings are converted at each call. Link other libraries with `-lname` |
 | C types by name | `extern "C" struct FILE;`, then `FILE* f = fopen(...)`. Only pointers to it can be used |
+| C structs | `extern "C" { struct ldiv_t { long quot; long rem; }; ldiv_t ldiv(long a, long b); tm* gmtime_r(const long* t, tm* out); }`. Fields are numbers, `char`, `bool`, pointers and such structs, in C's order. By value or through a pointer. Before C fills one: `tm t = {};` |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)`, `break`, `continue`, `?:` |
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors element by element, objects by identity. `opt == 3`, `opt == null` |
@@ -55,7 +56,8 @@ long square(long n) { return n * n; }
 |-----------|----|
 | `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;`; C functions are declared with `extern "C"` |
 | `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `int`. `char*` is a raw pointer, for buffers and text to free |
-| `struct FILE* f`, `typedef struct x x;` | `extern "C" struct FILE;` once, then `FILE* f`; no `typedef` |
+| `struct FILE* f`, `struct tm t;`, `typedef struct x x;` | `extern "C" struct FILE;` once, then `FILE* f`; `tm t;`, no word `struct`; no `typedef` |
+| `char name[64]`, `short` in a C struct | not supported yet; use the struct through pointers, declared by name |
 | `void f(int v[])` in `extern "C"` | `void f(int* v)` |
 | `extern "C" int printf(const char*, ...);` | variable arguments are not supported; use `println` |
 | `std::cout << x`, `printf` | `println("{}", x)` |

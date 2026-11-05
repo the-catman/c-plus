@@ -1,0 +1,136 @@
+// Structs passed to and returned from C by value. Each platform has its own rules for
+// which registers a struct goes in, which depend on its size and the types of its fields.
+// tests/c/structs.c is compiled by a C compiler, so these calls fail if C+ gets one wrong.
+// link-c: tests/c/structs.c
+extern "C" {
+    struct OneChar { char c; };
+    struct OneInt { int a; };
+    struct TwoInts { int a; int b; };
+    struct ThreeInts { int a; int b; int c; };
+    struct TwoLongs { long a; long b; };
+    struct ThreeLongs { long a; long b; long c; };
+    struct OneFloat { float x; };
+    struct TwoFloats { float x; float y; };
+    struct ThreeFloats { float x; float y; float z; };
+    struct OneDouble { double x; };
+    struct TwoDoubles { double x; double y; };
+    struct ThreeDoubles { double x; double y; double z; };
+    struct FourDoubles { double x; double y; double z; double w; };
+    struct FiveDoubles { double a; double b; double c; double d; double e; };
+    struct DoubleLong { double x; long n; };
+    struct LongDouble { long n; double x; };
+    struct IntFloat { int n; float x; };
+    struct Mixed { float x; int n; double d; };
+    struct Nested { TwoInts inner; long n; };
+    struct NestedFloats { TwoFloats a; TwoFloats b; };
+    struct Small { bool flag; char c; int n; };
+    struct Text { const char* text; long size; };
+    struct Node { long value; const Node* next = null; };
+
+    OneChar one_char(OneChar s);
+    OneInt one_int(OneInt s);
+    TwoInts two_ints(TwoInts s);
+    ThreeInts three_ints(ThreeInts s);
+    TwoLongs two_longs(TwoLongs s);
+    ThreeLongs three_longs(ThreeLongs s);
+    OneFloat one_float(OneFloat s);
+    TwoFloats two_floats(TwoFloats s);
+    ThreeFloats three_floats(ThreeFloats s);
+    OneDouble one_double(OneDouble s);
+    TwoDoubles two_doubles(TwoDoubles s);
+    ThreeDoubles three_doubles(ThreeDoubles s);
+    FourDoubles four_doubles(FourDoubles s);
+    FiveDoubles five_doubles(FiveDoubles s);
+    DoubleLong double_long(DoubleLong s);
+    LongDouble long_double(LongDouble s);
+    IntFloat int_float(IntFloat s);
+    Mixed mixed(Mixed s);
+    Nested nested(Nested s);
+    NestedFloats nested_floats(NestedFloats s);
+    Small small(Small s);
+    Text text_of(Text s);
+
+    long ints_run_out(long a, long b, long c, long d, long e, TwoLongs s, long f);
+    double floats_run_out(double a, double b, double c, double d, double e, double f, double g, TwoDoubles s, double h);
+    long mixed_run_out(long a, long b, long c, long d, long e, DoubleLong s, double x);
+    double structs_after_registers(double a, double b, double c, double d, double e, double f, double g, double h,
+                                   TwoFloats s, ThreeFloats t, float x, OneFloat u);
+    ThreeLongs result_takes_register(long a, long b, long c, long d, long e, TwoLongs s);
+    double all_kinds(ThreeLongs big, int n, TwoDoubles d, float f, Small small, string? text, FourDoubles four);
+    long changes_its_copy(ThreeLongs s);
+
+    void scale(TwoDoubles* p, double factor);
+    Text* shared_text();
+    long sum_nodes(const Node* head);
+}
+
+int main() {
+    println("{} {}", one_char({'a'}), one_int({21}));
+    // expect: {c: 'b'} {a: 42}
+    println("{} {}", two_ints({1, 2}), three_ints({1, 2, 3}));
+    // expect: {a: 2, b: 1} {a: 3, b: 2, c: 1}
+    println("{} {}", two_longs({1, 2}), three_longs({1, 2, 3}));
+    // expect: {a: 2, b: 1} {a: 3, b: 2, c: 1}
+    println("{} {} {}", one_float({1.5}), two_floats({1.5, 2.5}), three_floats({1.5, 2.5, 3.5}));
+    // expect: {x: 3} {x: 2.5, y: 1.5} {x: 3.5, y: 2.5, z: 1.5}
+    println("{} {}", one_double({1.5}), two_doubles({1.5, 2.5}));
+    // expect: {x: 3} {x: 2.5, y: 1.5}
+    println("{}", three_doubles({1.5, 2.5, 3.5}));
+    // expect: {x: 3.5, y: 2.5, z: 1.5}
+    println("{}", four_doubles({1.5, 2.5, 3.5, 4.5}));
+    // expect: {x: 4.5, y: 3.5, z: 2.5, w: 1.5}
+    println("{}", five_doubles({1.5, 2.5, 3.5, 4.5, 5.5}));
+    // expect: {a: 5.5, b: 4.5, c: 3.5, d: 2.5, e: 1.5}
+    println("{} {}", double_long({1.5, 2}), long_double({2, 1.5}));
+    // expect: {x: 3, n: 4} {n: 4, x: 3}
+    println("{} {}", int_float({2, 1.5}), mixed({1.5, 2, 2.5}));
+    // expect: {n: 4, x: 3} {x: 3, n: 4, d: 5}
+    println("{}", nested({{1, 2}, 3}));
+    // expect: {inner: {a: 2, b: 1}, n: 6}
+    println("{}", nested_floats({{1.5, 2.5}, {3.5, 4.5}}));
+    // expect: {a: {x: 3.5, y: 4.5}, b: {x: 1.5, y: 2.5}}
+    println("{}", small({true, 'x', 41}));
+    // expect: {flag: false, c: 'y', n: 42}
+
+    // A pointer inside a struct, read as text.
+    const char* letters = shared_text()->text;
+    Text moved = text_of(*shared_text());
+    println("{} {} {}", string(letters), string(moved.text), moved.size);
+    // expect: hello ello 4
+
+    // When few registers are left.
+    println("{}", ints_run_out(1, 2, 3, 4, 5, {6, 7}, 8));
+    // expect: 87654321
+    println("{}", floats_run_out(1, 2, 3, 4, 5, 6, 7, {8, 9}, 1));
+    // expect: 1987654321
+    println("{}", mixed_run_out(1, 2, 3, 4, 5, {6, 7}, 8));
+    // expect: 36
+    println("{}", structs_after_registers(0, 0, 0, 0, 0, 0, 0, 0, {1, 2}, {3, 4, 5}, 6, {7}));
+    // expect: 76543210
+    println("{}", result_takes_register(1, 2, 3, 4, 5, {6, 7}));
+    // expect: {a: 15, b: 6, c: 7}
+
+    // Several kinds of value in one call, in variables and fields.
+    ThreeLongs big = {1, 2, 3};
+    TwoDoubles pair = {4, 5};
+    Small tiny = {false, 'q', 6};
+    FourDoubles four = {7, 8, 9, 10};
+    println("{}", all_kinds(big, 11, pair, 12, tiny, "A", four));
+    // expect: 143
+    println("{}", all_kinds(big, 11, pair, 12, tiny, null, four));
+    // expect: 78
+
+    // C changes its own copy, not the caller's struct.
+    println("{} {}", changes_its_copy(big), big);
+    // expect: 105 {a: 1, b: 2, c: 3}
+
+    // Through a pointer, C changes the caller's struct.
+    scale(&pair, 2);
+    println("{}", pair);
+    // expect: {x: 8, y: 10}
+    Node last = {3};
+    Node first = {4, &last};
+    println("{} {}", sum_nodes(&first), sum_nodes(null));
+    // expect: 7 0
+    return 0;
+}

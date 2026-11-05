@@ -843,6 +843,7 @@ int main() {
 | `char*` that the function writes to, or that must be freed | `char*` |
 | `int*`, `double*`, `void*` and other pointers | the same pointer type |
 | `FILE*`, `sqlite3*` and other types used only through pointers | the same, after [`extern "C" struct FILE;`](#c-types-known-by-name) |
+| `struct tm`, `div_t` and other structs whose fields C+ reads, by value or through a pointer | the same fields, [declared in C+](#c-structs) |
 
 - Parameter names are optional, as in C: `int abs(int);`. `int rand();` and
   `int rand(void);` both take no arguments.
@@ -871,9 +872,59 @@ int main() {
 - C's output functions, such as `puts`, share their buffer with `print` and `println`, so
   output comes out in the order it was written.
 - A C function cannot be named `main`, or start with `cplus_`, which the C+ runtime uses.
-- Not supported yet: passing structs by value; `long double`; functions with a variable
-  number of arguments, such as `printf`; callbacks; C variables such as `errno`; and
-  reading declarations from C headers.
+- Not supported yet: `long double`; functions with a variable number of arguments, such as
+  `printf`; callbacks; C variables such as `errno`; and reading declarations from C headers.
+
+#### C structs
+
+A struct whose fields are all C types has the same layout as the C struct with those fields
+in that order, as in C++. C functions can read and write it through a pointer, and take and
+return it by value.
+
+```cpp
+extern "C" {
+    struct tm {
+        int tm_sec; int tm_min; int tm_hour;
+        int tm_mday; int tm_mon; int tm_year;
+        int tm_wday; int tm_yday; int tm_isdst;
+        long tm_gmtoff;
+        const char* tm_zone;
+    };
+    struct ldiv_t { long quot; long rem; };
+
+    tm* gmtime_r(const long* time, tm* result);     // through a pointer
+    ldiv_t ldiv(long a, long b);                    // by value
+}
+
+int main() {
+    long now = 86400;
+    tm t = {};                                      // `&t` needs a value, so give it one
+    gmtime_r(&now, &t);
+    println("{} {}", t.tm_year, t.tm_mday);         // 70 2
+    println("{}", ldiv(17, 5).rem);                 // 2
+    return 0;
+}
+```
+
+- **C types** are numbers, `char`, `bool`, pointers to C types, `void*`, and other such
+  structs. C has no equivalent of a `string`, `vector`, class reference or optional, so a C
+  function cannot take or return a struct holding one, or a pointer to it. Text in a C struct
+  is a `char*` or `const char*` field, read with `string(p)`.
+- **Inside `extern "C"`**, every field is checked where the struct is defined. Otherwise
+  it is an ordinary struct, as it is in C++, with field defaults and methods if wanted, and a
+  struct written outside `extern "C"` works too when its fields are C types.
+- **Write the fields as the C header does**, with the types from the table above. C+ cannot
+  compare the struct with C's definition until it can read C headers, so a field that is left
+  out or has the wrong type makes C and C+ disagree about where the other fields are.
+- **By value**, a struct travels as the platform's C compiler passes it. This is supported
+  on Linux for x86-64 and aarch64; elsewhere it is an error, and a pointer still works. C gets
+  its own copy, and changing it does not change the caller's struct.
+- **As in C++, the type is written without the word `struct`**: `tm t;`, `tm* p`. C's
+  `typedef struct { ... } name;` is written `struct name { ... };`.
+- Not supported yet: fields that are C arrays, such as `char name[64]`; 16-bit fields, such
+  as `short` and `uint16_t`; unions and bit fields. A struct that has them can still be used
+  through pointers if C+ does not need its fields, by declaring it
+  [by name](#c-types-known-by-name).
 
 #### C types known by name
 
@@ -1220,6 +1271,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `extern "C"` functions taking and returning numbers, `char`, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
 | Pointers: `T*`, `&x`, `*p`, `p->x`, `p[i]`, arithmetic, `const T*`, `void*`, null checks, `sizeof` | implemented |
 | Pointers in `extern "C"`, and C types known by name, such as `FILE*` | implemented |
+| C structs: fields, through pointers, and by value on Linux x86-64 and aarch64 | implemented |
 | `new`, `new[]`, `delete`, `delete[]`, with a warning; `[[allow(new_delete)]]`, `-Wno-new-delete` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
@@ -1236,7 +1288,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Errors (`throws`, `try`, `catch`) | planned |
 | Generics | planned |
 | Pointers into vectors and strings | planned |
-| C structs, callbacks and variables in `extern "C"`; reading C headers | planned |
+| C callbacks and variables in `extern "C"`; arrays, 16-bit integers and unions in C structs; reading C headers | planned |
 | Reflection, JSON, HTTP | planned |
 | Threads, async | planned |
 

@@ -1,0 +1,52 @@
+// C structs: `tm` has the fields C's time functions use, in C's order, so C can fill one
+// through a pointer. `ldiv` returns a struct by value.
+extern "C" {
+    struct tm {
+        int tm_sec;
+        int tm_min;
+        int tm_hour;
+        int tm_mday;
+        int tm_mon;
+        int tm_year;
+        int tm_wday;
+        int tm_yday;
+        int tm_isdst;
+        long tm_gmtoff;
+        const char* tm_zone;
+    };
+    struct ldiv_t {
+        long quot;
+        long rem;
+    };
+    tm* gmtime_r(const long* time, tm* result);
+    long timegm(tm* t);
+    long strftime(char* buffer, long size, string format, const tm* t);
+    ldiv_t ldiv(long a, long b);
+    void* malloc(long size);
+    void free(void* p);
+}
+
+// Formats a time with C's strftime, which writes into a buffer we give it.
+string describe(const tm* t) {
+    char* buffer = (char*)malloc(64);
+    strftime(buffer, 64, "%A, %B %d, %Y", t);
+    string text = string(buffer);
+    free(buffer);
+    return text;
+}
+
+int main() {
+    long moment = 1000000000;
+    tm t = {};  // `&t` needs a value; C then fills in the fields
+    gmtime_r(&moment, &t);
+    println("{} seconds after 1970 is {}", moment, describe(&t));
+
+    // Change a field and C works out the rest: timegm fixes the day of the week too.
+    t.tm_mday += 100;
+    long later = timegm(&t);
+    println("100 days later is {}", describe(&t));
+
+    ldiv_t split = ldiv(later - moment, 3600);
+    println("that is {} hours and {} seconds", split.quot, split.rem);
+    return 0;
+}

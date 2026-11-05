@@ -535,6 +535,32 @@ void Sema::reportAccess(const StructDecl& sd, const std::string& member, bool is
                  spec::Classes);
 }
 
+// What in `t` has no equivalent in C, or "" when C can use it: C knows numbers, chars,
+// bools, pointers to those, and structs of those. `seen` stops at a struct already looked
+// at, such as one that points to itself.
+static std::string whatCLacks(const Type* t, std::set<const StructDecl*>& seen) {
+    if (t->is(K::String)) return "a string";
+    if (t->isVector()) return "a vector";
+    if (t->isClass()) return "a class reference";
+    if (t->isOptional()) return "an optional";
+    if (t->isPointer()) {
+        std::string lacks = t->elem->is(K::Void) ? "" : whatCLacks(t->elem, seen);
+        return lacks.empty() || lacks.rfind("field ", 0) == 0 ? lacks : "a pointer to " + lacks;
+    }
+    if (!t->isStruct() || !seen.insert(t->decl).second) return "";
+    for (auto& f : t->decl->fields) {
+        std::string lacks = whatCLacks(f.type, seen);
+        if (lacks.empty()) continue;
+        if (lacks.rfind("field ", 0) == 0) return lacks;
+        return "field '" + f.name + "' of '" + t->decl->name + "', which holds " + lacks;
+    }
+    return "";
+}
+
+static const char* kCTypesHelp =
+    "C knows numbers, chars, bools, pointers, and structs of those. For text, use a `char*` field and read it with "
+    "`string(p)`. To pass a C+ value through C without C looking inside, pass its address as a `void*`";
+
 void Sema::checkStructs(Program& program) {
     // A struct cannot contain itself, directly or through other structs.
     std::unordered_map<const StructDecl*, int> state;  // 1 = being visited, 2 = done
@@ -568,6 +594,14 @@ void Sema::checkStructs(Program& program) {
             if (f.type->is(K::Void) || f.type->is(K::Auto))
                 diags_.error(f.typeLoc, "a field cannot have type " + q(f.type), "", spec::Structs);
             checkStorable(f.type, f.typeLoc);
+            if (sd->externC) {
+                std::set<const StructDecl*> seen{sd.get()};
+                std::string lacks = whatCLacks(f.type, seen);
+                if (!lacks.empty())
+                    diags_.error(f.typeLoc, "a C struct cannot have a field of type " + q(f.type) +
+                                                ", because C has no equivalent of " + lacks,
+                                 kCTypesHelp, spec::CStructs);
+            }
             if (!f.defaultValue) continue;
             scopes_.emplace_back();
             Flow flow;
@@ -584,25 +618,34 @@ void Sema::checkStructs(Program& program) {
 void Sema::checkExternFunction(FuncDecl& fn) {
     auto check = [&](const Type* t, Loc loc, bool isReturn) {
         if (!checkStorable(t, loc)) return;
-        if (t->isNumber() || t->is(K::Char) || t->is(K::Bool) || t->is(K::String) || t->isPointer() || t->isError()) return;
+        if (t->isNumber() || t->is(K::Char) || t->is(K::Bool) || t->is(K::String) || t->isError()) return;
         if (t->isOptional() && t->elem->is(K::String)) return;
         if (isReturn && t->is(K::Void)) return;
+        if (t->isPointer() || t->isStruct()) {
+            std::set<const StructDecl*> seen;
+            std::string lacks = whatCLacks(t, seen);
+            if (!lacks.empty())
+                diags_.error(loc, std::string("a C function cannot ") + (isReturn ? "return " : "take ") + q(t) +
+                                      ", because C has no equivalent of " + lacks,
+                             kCTypesHelp, spec::CStructs);
+            else if (t->isStruct() && t->decl->fields.empty())
+                diags_.error(loc, std::string("a C function cannot ") + (isReturn ? "return " : "take ") + q(t) +
+                                      ", because it has no fields, which C does not allow",
+                             "add the fields the C struct has", spec::CStructs);
+            return;
+        }
         if (t->is(K::Void)) {
             diags_.error(loc, "parameters cannot have type void",
                          "a C function with no parameters is written `int rand();` or `int rand(void);`",
                          spec::CFunctions);
             return;
         }
-        std::string message = isReturn ? "a C function can return void, a number, char, bool, a pointer, string or "
-                                         "string?, but this is " + q(t)
-                                       : "a C function can take a number, char, bool, a pointer, string or string?, "
-                                         "but this parameter is " + q(t);
+        std::string message = isReturn ? "a C function can return void, a number, char, bool, a pointer, a struct, "
+                                         "string or string?, but this is " + q(t)
+                                       : "a C function can take a number, char, bool, a pointer, a struct, string or "
+                                         "string?, but this parameter is " + q(t);
         std::string help;
-        if (t->isStruct())
-            message = "this compiler does not support passing structs to or from C functions yet",
-            help = "pass a pointer to the struct, `" + std::string(t->name) + "*`, if the C function takes one, or the "
-                   "fields as separate arguments";
-        else if (t->isClass())
+        if (t->isClass())
             help = "C cannot hold a C+ object; pass the fields it needs as separate arguments";
         else if (t->isVector())
             message = "this compiler does not support passing vectors to or from C functions yet",

@@ -1,0 +1,88 @@
+// C structs with real C library functions. A struct of C types has the layout C gives it,
+// so C can fill one through a pointer, and pass or return one by value.
+extern "C" {
+    struct tm {
+        int tm_sec;
+        int tm_min;
+        int tm_hour;
+        int tm_mday;
+        int tm_mon;
+        int tm_year;
+        int tm_wday;
+        int tm_yday;
+        int tm_isdst;
+        long tm_gmtoff;
+        const char* tm_zone;
+    };
+    tm* gmtime_r(const long* time, tm* result);
+    long timegm(tm* t);
+    long strftime(char* buffer, long size, string format, const tm* t);
+
+    struct div_t { int quot; int rem; };
+    struct ldiv_t { long quot; long rem; };
+    div_t div(int a, int b);
+    ldiv_t ldiv(long a, long b);
+
+    // C's `double complex` is passed like a struct of two doubles.
+    struct complex { double re; double im; };
+    complex conj(complex z);
+    double cabs(complex z);
+
+    void* malloc(long size);
+    void free(void* p);
+}
+
+// A struct written outside extern "C" works the same, when its fields are all C types.
+struct timespec {
+    long tv_sec;
+    long tv_nsec = 0;
+};
+extern "C" int clock_gettime(int clock, timespec* out);
+
+int main() {
+    // C fills a struct of ours through a pointer. `{}` gives it a value first, since `&t`
+    // needs one.
+    long moment = 86400 + 3661;  // 1970-01-02 01:01:01
+    tm t = {};
+    tm* same = gmtime_r(&moment, &t);
+    println("{} {} {} {} {} {}", t.tm_year, t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
+    // expect: 70 0 2 1 1 1
+    println("{} {}", same == &t, t.tm_wday);
+    // expect: true 5
+
+    // We change a field, and C reads it.
+    t.tm_year = 100;
+    t.tm_mon = 1;
+    t.tm_mday = 29;
+    println("{}", timegm(&t));
+    // expect: 951786061
+    println("{}", t.tm_yday);
+    // expect: 59
+    char* buffer = (char*)malloc(32);
+    long length = strftime(buffer, 32, "%Y-%m-%d %H:%M", &t);
+    println("{} {}", string(buffer), length);
+    // expect: 2000-02-29 01:01 16
+    free(buffer);
+
+    // Returned by value, used directly or stored.
+    println("{} {}", div(17, 5).quot, div(17, 5).rem);
+    // expect: 3 2
+    ldiv_t big = ldiv(50000000000, 7);
+    println("{}", big);
+    // expect: {quot: 7142857142, rem: 6}
+
+    // Passed by value too.
+    complex z = {3, 4};
+    println("{} {}", cabs(z), conj(z));
+    // expect: 5 {re: 3, im: -4}
+    println("{}", cabs({6, 8}));
+    // expect: 10
+
+    // A struct from outside extern "C", and sizeof, which matches C's.
+    timespec now = {};
+    println("{} {}", clock_gettime(0, &now), now.tv_sec > 0);
+    // expect: 0 true
+    println("{} {} {}", sizeof(div_t), sizeof(ldiv_t), sizeof(tm));
+    // expect: 8 16 56
+    return 0;
+}

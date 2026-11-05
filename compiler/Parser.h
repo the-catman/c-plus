@@ -67,6 +67,7 @@ private:
     StmtPtr parseDeclarators(bool isConst, const Type* ty, Loc typeLoc);  // the part after the type
     StmtPtr parseFor();
     void checkUnknownType();
+    void rejectStructKeyword();  // `struct tm t`, where C+ writes `tm t`
     void checkUnknownPointerType();  // `FILE* f = ...` where FILE is not declared
     bool isOptionalDeclRest(size_t i) const;
 

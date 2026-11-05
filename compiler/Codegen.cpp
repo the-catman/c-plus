@@ -53,6 +53,21 @@ struct Codegen::Impl {
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
 
+    // How one value travels to a C function. A struct is passed in the values `parts`,
+    // read from its bytes; on the stack, where the callee finds a copy; or as a pointer to
+    // a copy. Anything else is passed as itself.
+    struct CPass {
+        enum Kind { Value, Parts, OnStack, ByPointer } kind = Value;
+        std::vector<llvm::Type*> parts;
+    };
+    struct CSignature {
+        std::vector<CPass> params;
+        bool memoryResult = false;           // a struct returned through a hidden first pointer
+        std::vector<llvm::Type*> resultParts;  // a struct returned in registers
+    };
+    std::unordered_map<const FuncDecl*, CSignature> cSignatures;
+    std::string abiError;  // this platform's rules for passing structs are not known
+
     // What is generated for each struct and class.
     struct TypeInfo {
         llvm::StructType* layout = nullptr;  // a struct's value, or a class object: { i64 refcount, fields... }
@@ -2118,37 +2133,193 @@ struct Codegen::Impl {
         return !(t.isARM() || t.isAArch64() || t.isPPC() || t.isRISCV() || t.isSystemZ());
     }
 
+    // ---- Structs and the C calling convention ------------------------------
+    //
+    // LLVM leaves it to the compiler to say how a struct travels to and from a C function,
+    // so this follows each platform's rules as a C compiler does. The fields of a C struct
+    // are only numbers and pointers, with no arrays, unions or bit fields, which keeps the
+    // rules short. See the System V x86-64 psABI, section 3.2.3, and AAPCS64, section 6.8.
+
+    // The scalars inside a struct, with their byte offsets.
+    void flattenStruct(llvm::Type* t, uint64_t offset, std::vector<std::pair<llvm::Type*, uint64_t>>& leaves) {
+        auto* st = llvm::dyn_cast<llvm::StructType>(t);
+        if (!st) {
+            leaves.push_back({t, offset});
+            return;
+        }
+        const llvm::StructLayout* layout = mod->getDataLayout().getStructLayout(st);
+        for (unsigned i = 0; i < st->getNumElements(); ++i)
+            flattenStruct(st->getElementType(i), offset + layout->getElementOffset(i), leaves);
+    }
+
+    // The values a struct is passed in when it goes in registers, each read from the
+    // struct's bytes in turn, or none when it goes in memory.
+    std::vector<llvm::Type*> cStructParts(llvm::StructType* st) {
+        uint64_t size = mod->getDataLayout().getTypeAllocSize(st);
+        std::vector<std::pair<llvm::Type*, uint64_t>> leaves;
+        flattenStruct(st, 0, leaves);
+        if (llvm::Triple(mod->getTargetTriple()).isAArch64()) {
+            // Up to four floats, or up to four doubles, go in floating-point registers.
+            bool sameFloat = leaves.size() <= 4;
+            for (auto& leaf : leaves) sameFloat = sameFloat && leaf.first->isFloatingPointTy() && leaf.first == leaves[0].first;
+            if (sameFloat) return {llvm::ArrayType::get(leaves[0].first, leaves.size())};
+            if (size > 16) return {};
+            if (size <= 8) return {b.getInt64Ty()};
+            return {llvm::ArrayType::get(b.getInt64Ty(), 2)};
+        }
+        // x86-64: each eight bytes go in a floating-point register if they hold only
+        // floating-point fields, and in an integer register otherwise.
+        if (size > 16) return {};
+        bool onlyFloats[2] = {true, true};
+        for (auto& leaf : leaves)
+            if (!leaf.first->isFloatingPointTy()) onlyFloats[leaf.second / 8] = false;
+        std::vector<llvm::Type*> parts;
+        for (uint64_t i = 0; i * 8 < size; ++i)
+            parts.push_back(onlyFloats[i] ? (llvm::Type*)b.getDoubleTy() : b.getInt64Ty());
+        return parts;
+    }
+
+    // Plans how each value of a C function travels.
+    CSignature planCSignature(const FuncDecl& f) {
+        CSignature sig;
+        bool x86 = llvm::Triple(mod->getTargetTriple()).getArch() == llvm::Triple::x86_64;
+        int intRegs = 6, floatRegs = 8;  // x86-64: a struct goes in registers only if all of it fits
+        const Type* rt = f.retType;
+        if (rt->isStruct()) {
+            std::vector<llvm::Type*> parts = cStructParts(llvm::cast<llvm::StructType>(llvmType(rt)));
+            sig.memoryResult = parts.empty();
+            sig.resultParts = parts;
+            if (sig.memoryResult) --intRegs;  // it holds the address of the result
+        }
+        for (auto& p : f.params) {
+            const Type* t = p->type;
+            CPass pass;
+            if (!t->isStruct()) {
+                if (t->isFloating()) floatRegs = std::max(0, floatRegs - 1);
+                else intRegs = std::max(0, intRegs - 1);
+                sig.params.push_back(pass);
+                continue;
+            }
+            pass.parts = cStructParts(llvm::cast<llvm::StructType>(llvmType(t)));
+            if (x86) {
+                int ints = 0, floats = 0;
+                for (llvm::Type* part : pass.parts) (part->isDoubleTy() ? floats : ints)++;
+                bool fits = !pass.parts.empty() && ints <= intRegs && floats <= floatRegs;
+                if (fits) intRegs -= ints, floatRegs -= floats;
+                else pass.parts.clear(), pass.kind = CPass::OnStack;
+            } else if (pass.parts.empty()) {
+                pass.kind = CPass::ByPointer;  // to a copy, which the function may change
+            }
+            if (!pass.parts.empty()) pass.kind = CPass::Parts;
+            sig.params.push_back(std::move(pass));
+        }
+        return sig;
+    }
+
+    // A buffer with room for a struct and for all the registers it is passed in, so that
+    // whole registers can be read from and written to it.
+    llvm::Value* cStructBuffer(llvm::Type* st) {
+        uint64_t size = std::max<uint64_t>(mod->getDataLayout().getTypeAllocSize(st), 16);
+        llvm::AllocaInst* buffer = entryAlloca(llvm::ArrayType::get(b.getInt8Ty(), size), "c.struct");
+        buffer->setAlignment(llvm::Align(8));
+        b.CreateMemSet(buffer, b.getInt8(0), size, llvm::Align(8));  // padding reaches C as zeros
+        return buffer;
+    }
+
     // A C function, under its own name. Text crosses as a `const char*`, a bool as a C
     // `bool`, which is zero-extended to a byte, and a char as a C `char`, extended as the
     // platform's C compiler does. The char's bits are the same either way.
     void declareCFunction(const FuncDecl& f) {
+        llvm::Triple triple(mod->getTargetTriple());
+        bool byValue = f.retType->isStruct();
+        for (auto& p : f.params) byValue = byValue || p->type->isStruct();
+        if (byValue && triple.getArch() != llvm::Triple::x86_64 && !triple.isAArch64() && abiError.empty())
+            abiError = "this compiler does not support passing structs by value to C functions such as '" + f.name +
+                       "' on " + triple.str() + " yet; pass a pointer to the struct instead";
+        CSignature sig = abiError.empty() ? planCSignature(f) : CSignature{};
+        sig.params.resize(f.params.size());
         auto cType = [&](const Type* t) -> llvm::Type* {
             return t->is(K::String) || t->isOptional() ? b.getPtrTy() : llvmType(t);
         };
         std::vector<llvm::Type*> params;
-        for (auto& p : f.params) params.push_back(cType(p->type));
-        auto* type = llvm::FunctionType::get(cType(f.retType), params, false);
+        if (sig.memoryResult) params.push_back(b.getPtrTy());
+        for (size_t i = 0; i < f.params.size(); ++i) {
+            switch (sig.params[i].kind) {
+                case CPass::Value: params.push_back(cType(f.params[i]->type)); break;
+                case CPass::Parts: params.insert(params.end(), sig.params[i].parts.begin(), sig.params[i].parts.end()); break;
+                case CPass::OnStack: case CPass::ByPointer: params.push_back(b.getPtrTy()); break;
+            }
+        }
+        llvm::Type* result = cType(f.retType);
+        if (sig.memoryResult) result = b.getVoidTy();
+        else if (sig.resultParts.size() == 1) result = sig.resultParts[0];
+        else if (sig.resultParts.size() == 2) result = llvm::StructType::get(ctx, sig.resultParts);
+        auto* type = llvm::FunctionType::get(result, params, false);
         auto* func = llvm::Function::Create(type, llvm::Function::ExternalLinkage, f.name, mod.get());
         auto extension = [&](const Type* t) {
             if (t->is(K::Bool)) return llvm::Attribute::ZExt;
             if (t->is(K::Char)) return cCharIsSigned() ? llvm::Attribute::SExt : llvm::Attribute::ZExt;
             return llvm::Attribute::None;
         };
-        for (size_t i = 0; i < f.params.size(); ++i)
-            if (auto ext = extension(f.params[i]->type); ext != llvm::Attribute::None)
-                func->addParamAttr((unsigned)i, ext);
+        unsigned index = 0;
+        if (sig.memoryResult) {
+            llvm::Type* st = llvmType(f.retType);
+            func->addParamAttr(0, llvm::Attribute::getWithStructRetType(ctx, st));
+            func->addParamAttr(0, llvm::Attribute::getWithAlignment(ctx, mod->getDataLayout().getABITypeAlign(st)));
+            index = 1;
+        }
+        for (size_t i = 0; i < f.params.size(); ++i) {
+            const CPass& pass = sig.params[i];
+            if (pass.kind == CPass::Parts) {
+                // AArch64: floats that run out of registers still take 8 bytes each on the stack.
+                if (auto* floats = llvm::dyn_cast<llvm::ArrayType>(pass.parts[0]))
+                    if (floats->getElementType()->isFloatingPointTy())
+                        func->addParamAttr(index, llvm::Attribute::getWithStackAlignment(ctx, llvm::Align(8)));
+                index += pass.parts.size();
+                continue;
+            }
+            if (pass.kind == CPass::OnStack) {
+                func->addParamAttr(index, llvm::Attribute::getWithByValType(ctx, llvmType(f.params[i]->type)));
+                func->addParamAttr(index, llvm::Attribute::getWithAlignment(ctx, llvm::Align(8)));
+            } else if (auto ext = extension(f.params[i]->type); ext != llvm::Attribute::None) {
+                func->addParamAttr(index, ext);
+            }
+            ++index;
+        }
         if (auto ext = extension(f.retType); ext != llvm::Attribute::None) func->addRetAttr(ext);
         funcs[&f] = func;
+        cSignatures[&f] = std::move(sig);
     }
 
     // A call to a C function. Each string is copied, with a zero byte at the end, right
     // after it is evaluated, and the copies are freed when the call returns. Text the
-    // function returns is copied into a string.
+    // function returns is copied into a string, and a struct is put back together from
+    // what the function returned it in.
     llvm::Value* genCCall(const CallExpr& call, const FuncDecl& f) {
+        const CSignature& sig = cSignatures.at(&f);
         std::vector<llvm::Value*> args, copies;
+        llvm::Value* resultSlot = nullptr;
+        if (sig.memoryResult) args.push_back(resultSlot = entryAlloca(llvmType(f.retType), "c.result"));
         for (size_t i = 0; i < call.args.size(); ++i) {
             const Type* t = f.params[i]->type;
             llvm::Value* v = genConverted(*call.args[i], t);
+            const CPass& pass = sig.params[i];
+            if (pass.kind == CPass::Parts) {
+                llvm::Value* buffer = cStructBuffer(v->getType());
+                b.CreateStore(v, buffer);
+                uint64_t offset = 0;
+                for (llvm::Type* part : pass.parts) {
+                    args.push_back(b.CreateLoad(part, byteOffset(buffer, offset, "c.part")));
+                    offset += 8;
+                }
+                continue;
+            }
+            if (pass.kind == CPass::OnStack || pass.kind == CPass::ByPointer) {
+                llvm::AllocaInst* copy = entryAlloca(v->getType(), "c.arg");
+                b.CreateStore(v, copy);
+                args.push_back(copy);
+                continue;
+            }
             if (!t->is(K::String) && !t->isOptional()) {
                 args.push_back(v);
                 continue;
@@ -2170,6 +2341,17 @@ struct Codegen::Impl {
         for (llvm::Value* copy : copies) b.CreateCall(rtCFree, {copy});
         const Type* rt = f.retType;
         if (rt->is(K::Void)) return nullptr;
+        if (sig.memoryResult) return b.CreateLoad(llvmType(rt), resultSlot, "c.result");
+        if (rt->isStruct()) {
+            llvm::Value* buffer = cStructBuffer(llvmType(rt));
+            if (sig.resultParts.size() == 1) {
+                b.CreateStore(result, buffer);
+            } else {
+                b.CreateStore(b.CreateExtractValue(result, {0}), buffer);
+                b.CreateStore(b.CreateExtractValue(result, {1}), byteOffset(buffer, 8, "c.part"));
+            }
+            return b.CreateLoad(llvmType(rt), buffer, "c.result");
+        }
         if (!rt->is(K::String) && !rt->isOptional()) return result;
         if (rt->is(K::String))
             trapIf(b.CreateIsNull(result),
@@ -2420,6 +2602,10 @@ struct Codegen::Impl {
         for (auto& f : program.funcs) {
             declareFunction(*f);
             if (f->name == "main") userMain = f.get();
+        }
+        if (!abiError.empty()) {
+            error = abiError;
+            return false;
         }
         for (const StructDecl* sd : structs) {
             for (auto& m : sd->methods) declareFunction(*m);

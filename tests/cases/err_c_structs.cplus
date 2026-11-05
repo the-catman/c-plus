@@ -1,0 +1,43 @@
+// A C struct can hold only what C knows about.
+class User {
+public:
+    string name = "a";
+};
+struct Inner {
+    string text;
+};
+struct Empty {};
+
+extern "C" {
+    struct Record {
+        string name;
+        vector<int> values;
+        User owner;
+        int? maybe;
+        string* text;
+        Inner inner;
+        Inner* other;
+        int fine;
+        char* alsoFine;
+        Record* next;
+        void* raw;
+    };
+    Empty nothing();
+    void takesEmpty(Empty e);
+    void pointsToEmpty(Empty* e);
+}
+
+int main() {
+    return 0;
+}
+// error: a C struct cannot have a field of type 'string', because C has no equivalent of a string
+// error: C knows numbers, chars, bools, pointers, and structs of those. For text, use a `char*` field and read it with `string(p)`
+// error: a C struct cannot have a field of type 'vector<int>', because C has no equivalent of a vector
+// error: a C struct cannot have a field of type 'User', because C has no equivalent of a class reference
+// error: a C struct cannot have a field of type 'int?', because C has no equivalent of an optional
+// error: a C struct cannot have a field of type 'string*', because C has no equivalent of a pointer to a string
+// error: a C struct cannot have a field of type 'Inner', because C has no equivalent of field 'text' of 'Inner', which holds a string
+// error: a C struct cannot have a field of type 'Inner*', because C has no equivalent of field 'text' of 'Inner', which holds a string
+// error: a C function cannot return 'Empty', because it has no fields, which C does not allow
+// error: a C function cannot take 'Empty', because it has no fields, which C does not allow
+// error: spec: docs/SPEC.md#c-structs

@@ -72,8 +72,14 @@ C++20, built with clang. Self-hosting in C+ is a later milestone, not a requirem
 - A C type used only through pointers, such as `FILE` or `sqlite3`, is declared by name:
   `extern "C" struct FILE;`, then written `FILE*`. Nothing but a pointer to it can be
   used. Decided 2026-11-05.
-- C structs by value, variadic functions and callbacks follow with the features they
-  need.
+- A struct of C types (numbers, `char`, `bool`, pointers, and such structs) has C's
+  layout, as in C++, with no special form. Inside `extern "C"` its fields are checked where it
+  is defined, and any struct is checked where a C function takes or returns it, directly or
+  through a pointer. Decided 2026-11-05.
+- Structs by value follow the C calling convention, written out in Codegen for x86-64 and
+  aarch64, the Tier 1 targets. Other targets report an error. Decided 2026-11-05.
+- C arrays and 16-bit integers in structs, unions, variadic functions and callbacks follow
+  with the features they need.
 
 ### 2.5 C++ interop — DECIDED
 None. C++ libraries are consumed through hand-written `extern "C"` shims. No tooling
@@ -406,8 +412,9 @@ fields), overflow and bounds traps, and `println`, all through LLVM. Destructors
 leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. C functions
 can be called through `extern "C"` declarations with number, `char`, `bool`, `string`
 and pointer values. Raw pointers work, with pointer arithmetic, `sizeof`, null traps and
-C types known by name such as `FILE*`, and `new` and `delete` with their warning. Next in
-Phase 1: C structs in `extern "C"`, `array<T, N>`, and debug builds with ASan and UBSan.
+C types known by name such as `FILE*`, `new` and `delete` with their warning, and C structs,
+through pointers and by value. Next in Phase 1: `array<T, N>`, which C structs need for array
+fields, and debug builds with ASan and UBSan.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

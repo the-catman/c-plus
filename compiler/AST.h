@@ -517,6 +517,7 @@ struct StructDecl {
     bool isClass;
     bool defined = false;  // false if only referenced, or its definition failed to parse
     bool opaque = false;   // `extern "C" struct sqlite3;`: a C type known only by name
+    bool externC = false;  // defined inside `extern "C"`: every field must be a C type
     std::vector<FieldDecl> fields;
     std::vector<std::unique_ptr<FuncDecl>> methods;
     FuncDecl* constructor = nullptr;

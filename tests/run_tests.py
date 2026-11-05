@@ -15,6 +15,8 @@ in its comments. A test can use these, one per line, anywhere in the file:
                        leak report, which otherwise fails the test
   // exit: <number>    the exit code the program must return (default 0)
   // flags: <flags>    options for the compiler, e.g. -Wno-new-delete
+  // link-c: <file>     a C file under tests/c, built with the C compiler ($CC or cc)
+                       and linked into the program
 
 A program that runs is built twice, without and with -O, and must behave the same
 both times. It runs with CPLUS_CHECK_LEAKS=1, so a class object that is never freed,
@@ -49,6 +51,17 @@ def check_spec_anchors():
     return not missing
 
 
+def build_c_library(source, workdir):
+    obj = workdir / (source.stem + ".o")
+    cc = os.environ.get("CC", "cc")
+    for command in ([cc, "-std=c11", "-O1", "-c", str(source), "-o", str(obj)],
+                    ["ar", "rcs", str(workdir / f"lib{source.stem}.a"), str(obj)]):
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            return f"could not build {source.name}:\n" + result.stderr
+    return None
+
+
 def run_case(cplus, path, workdir):
     text = path.read_text()
     expect = re.findall(r"//[ \t]*expect:[ \t]?(.*)$", text, re.M)
@@ -58,6 +71,11 @@ def run_case(cplus, path, workdir):
     stderr = re.findall(r"//[ \t]*stderr:[ \t]*(.*?)[ \t]*$", text, re.M)
     flags_m = re.search(r"//[ \t]*flags:[ \t]*(.*?)[ \t]*$", text, re.M)
     extra = flags_m.group(1).split() if flags_m else []
+    for c_file in re.findall(r"//[ \t]*link-c:[ \t]*(.*?)[ \t]*$", text, re.M):
+        problem = build_c_library(ROOT / c_file, workdir)
+        if problem:
+            return problem
+        extra += ["-L", str(workdir), "-l" + (ROOT / c_file).stem]
     exit_m = re.search(r"//[ \t]*exit:[ \t]*(-?\d+)", text)
     want_exit = int(exit_m.group(1)) if exit_m else 0
     rel = path.relative_to(ROOT)

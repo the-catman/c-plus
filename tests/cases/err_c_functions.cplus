@@ -9,12 +9,25 @@ public:
     User(string n) : name(n) {}
 };
 
+struct Named {
+    string name;
+};
+
+struct Outer {
+    Named inner;
+};
+
 extern "C" {
     int area(Point p);
+    Point origin();
+    int label(Named n);
+    Outer deep();
+    void hold(User* u);
+    void texts(string* s);
+    void holdsNamed(Named* n);
     void keep(User u);
     long total(vector<int> values);
     int maybe(int? n);
-    Point origin();
     int? find(string key);
     int empty(void x);
     int main();
@@ -32,14 +45,20 @@ int main() {
     int n = srand(3);
     return 0;
 }
-// error: this compiler does not support passing structs to or from C functions yet
-// error: pass a pointer to the struct, `Point*`, if the C function takes one, or the fields as separate arguments
-// error: a C function can take a number, char, bool, a pointer, string or string?, but this parameter is 'User'
+// error: a C function cannot take 'Named', because C has no equivalent of field 'name' of 'Named', which holds a string
+// error: C knows numbers, chars, bools, pointers, and structs of those. For text, use a `char*` field and read it with `string(p)`
+// error: a C function cannot return 'Outer', because C has no equivalent of field 'name' of 'Named', which holds a string
+// error: a C function cannot take 'User*', because C has no equivalent of a pointer to a class reference
+// error: To pass a C+ value through C without C looking inside, pass its address as a `void*`
+// error: a C function cannot take 'string*', because C has no equivalent of a pointer to a string
+// error: a C function cannot take 'Named*', because C has no equivalent of field 'name' of 'Named', which holds a string
+// error: spec: docs/SPEC.md#c-structs
+// error: a C function can take a number, char, bool, a pointer, a struct, string or string?, but this parameter is 'User'
 // error: C cannot hold a C+ object; pass the fields it needs as separate arguments
 // error: this compiler does not support passing vectors to or from C functions yet
-// error: a C function can take a number, char, bool, a pointer, string or string?, but this parameter is 'int?'
+// error: a C function can take a number, char, bool, a pointer, a struct, string or string?, but this parameter is 'int?'
 // error: in C, only text and pointers can be null. Pass a plain 'int' instead
-// error: a C function can return void, a number, char, bool, a pointer, string or string?, but this is 'int?'
+// error: a C function can return void, a number, char, bool, a pointer, a struct, string or string?, but this is 'int?'
 // error: Declare the result as a plain 'int' instead
 // error: parameters cannot have type void
 // error: 'main' is where a C+ program starts, so it cannot be a C function

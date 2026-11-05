@@ -253,15 +253,18 @@ void Parser::parseOpaqueStruct() {
     const Token& kw = advance();
     if (kw.kind == Tok::Ident)
         fail(kw.loc, "C+ has no typedef",
-             "to use a C type through pointers, declare it by name, e.g. `struct sqlite3;`. C+ code then writes "
-             "`sqlite3*`, without 'struct'",
+             "write a C struct as `struct div_t { int quot; int rem; };`, or, for one used only through pointers, "
+             "`struct sqlite3;`. C+ code then uses the name without 'struct'",
              spec::CTypes);
     if (kw.kind == Tok::KwClass)
         fail(kw.loc, "C has no classes", "declare a C type with `struct`, e.g. `struct sqlite3;`", spec::CTypes);
     const Token& name = expect(Tok::Ident, "for the name of the C struct");
-    if (check(Tok::LBrace))
-        notYet(peek().loc, "C structs with fields",
-               "declare it without fields, `struct " + name.text + ";`, to pass pointers to it to C functions");
+    if (check(Tok::LBrace)) {  // an ordinary struct, except that its fields must all be C types
+        pos_ -= 2;
+        parseRecord();
+        prog_->findStruct(name.text)->externC = true;
+        return;
+    }
     if (!check(Tok::Semi))
         fail(kw.loc, "C+ writes a C type without the word 'struct'",
              "declare the type once inside extern \"C\", `struct " + name.text + ";`, and then write `" + name.text +
@@ -379,8 +382,8 @@ const Type* Parser::parseCType(Loc& loc, bool isReturn) {
                  "declare the type once inside extern \"C\", `struct " + name.text + ";`, and then write `" +
                      name.text + "*`",
                  spec::CTypes);
-        notYet(t.loc, "passing C structs by value",
-               "pass a pointer to the struct, if the C library takes one, or its fields as separate arguments");
+        fail(base.loc, "C+ writes a C type without the word 'struct'",
+             "declare the struct once inside extern \"C\", and then write just `" + name.text + "`", spec::CStructs);
     }
     bool varConst = false;  // `const int n` in C means nothing to the caller
     const Type* ty = parseType(loc, &varConst);
@@ -478,8 +481,43 @@ bool Parser::isOptionalDeclRest(size_t i) const {
     }
 }
 
+// `struct tm t;` or `struct tm* next;`, as C writes them. `struct Name {` is left to the caller.
+void Parser::rejectStructKeyword() {
+    const Token& name = peek(1);
+    if (name.kind == Tok::Ident && peek(2).kind != Tok::LBrace)
+        fail(peek().loc, "C+ writes the type of a struct or class without the word '" + peek().text + "'",
+             "write just `" + name.text + "`, as in C++", spec::Structs);
+}
+
+// The C+ type with the size of a C integer type, or null.
+static const char* cIntegerEquivalent(const std::string& n) {
+    if (n == "size_t" || n == "ssize_t" || n == "ptrdiff_t" || n == "intptr_t" || n == "uintptr_t" || n == "int64_t" ||
+        n == "uint64_t" || n == "off_t" || n == "time_t")
+        return "long";
+    if (n == "int32_t" || n == "uint32_t" || n == "pid_t" || n == "uid_t" || n == "gid_t") return "int";
+    return nullptr;
+}
+
 void Parser::checkUnknownType() {
     checkUnknownPointerType();
+    // C's spellings of integers, where a wrong guess would put a C struct's fields in the
+    // wrong places.
+    if (check(Tok::Ident)) {
+        const std::string& n = peek().text;
+        const Token& next = peek(1);
+        bool sign = n == "unsigned" || n == "signed";
+        if (n == "short" || n == "int16_t" || n == "uint16_t" || (sign && next.kind == Tok::Ident && next.text == "short"))
+            notYet(peek().loc, "16-bit integer types such as '" + n + "'",
+                   "a C struct with such a field can still be used through pointers, by declaring it by name: "
+                   "`extern \"C\" struct name;`");
+        if ((n == "int8_t" || n == "uint8_t") && next.kind == Tok::Ident)
+            fail(peek().loc, "unknown type '" + n + "'", "write `char`, which is one byte", spec::CStructs);
+        if (sign && (next.kind == Tok::KwChar || next.kind == Tok::KwInt || next.kind == Tok::KwLong)) {
+            std::string use = tokSpelling(next.kind);
+            fail(peek().loc, "C+ has no '" + n + " " + use + "' type",
+                 "write `" + use + "`, which has the same size; C+ has no unsigned types yet", spec::IntegerTypes);
+        }
+    }
     bool optional = check(Tok::Ident) && peek(1).kind == Tok::Question && peek(2).kind == Tok::Ident &&
                     isOptionalDeclRest(3);
     if (!(check(Tok::Ident) && (peek(1).kind == Tok::Ident || optional))) return;
@@ -487,8 +525,9 @@ void Parser::checkUnknownType() {
     std::string help;
     if (t.text == "vector")
         fail(t.loc, "vector needs an element type", "write `vector<int> " + peek(1).text + ";`", spec::Vectors);
-    if (t.text == "size_t" || t.text == "int32_t" || t.text == "int64_t" || t.text == "uint32_t" ||
-        t.text == "uint64_t" || t.text == "unsigned")
+    if (const char* use = cIntegerEquivalent(t.text))
+        help = "write `" + std::string(use) + "`, which has the same size as '" + t.text + "'";
+    else if (t.text == "unsigned")
         help = "use int (32-bit) or long (64-bit); both are signed and the same size on every platform";
     else
         help = "the types available today are int, long, bool, string, void, vector<T>, and structs and classes you "
@@ -752,6 +791,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
             access = t.kind == Tok::KwPublic ? Access::Public : t.kind == Tok::KwPrivate ? Access::Private : Access::Protected;
             return;
         case Tok::KwStruct: case Tok::KwClass:
+            rejectStructKeyword();
             notYet(t.loc, "nested type definitions", "define it at the top level instead");
         case Tok::KwStatic: notYet(t.loc, "static members");
         case Tok::KwVirtual: notYet(t.loc, "virtual functions", "they arrive together with inheritance");
@@ -976,6 +1016,9 @@ StmtPtr Parser::parseStmt() {
     switch (t.kind) {
         case Tok::LBrace: return parseBlock();
         case Tok::Semi: advance(); return std::make_unique<BlockStmt>(t.loc);
+        case Tok::KwStruct: case Tok::KwClass:
+            rejectStructKeyword();
+            notYet(t.loc, "types defined inside a function", "define it at the top level of the file");
         case Tok::LBracket:
             if (atAttribute()) {
                 Loc attr = parseAttribute();
