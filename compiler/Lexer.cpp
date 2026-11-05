@@ -1,6 +1,11 @@
 #include "Lexer.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cfloat>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <unordered_map>
 
 #include "SpecRefs.h"
@@ -12,6 +17,7 @@ const char* tokSpelling(Tok kind) {
         case Tok::Eof: return "end of file";
         case Tok::Ident: return "identifier";
         case Tok::IntLit: return "number";
+        case Tok::FloatLit: return "number";
         case Tok::StringLit: return "string";
 #define X(name, text) \
     case Tok::Kw##name: return text;
@@ -30,6 +36,7 @@ std::string describeToken(const Token& t) {
         case Tok::Eof: return "end of file";
         case Tok::Ident: return "identifier '" + t.text + "'";
         case Tok::IntLit: return "number " + t.text;
+        case Tok::FloatLit: return "number " + t.text;
         case Tok::StringLit: return "a string";
         default: break;
     }
@@ -102,7 +109,8 @@ Token Lexer::next() {
     if (pos_ >= src_.size()) return Token{Tok::Eof, locHere(), "", 0};
 
     char c = peek();
-    if (std::isdigit((unsigned char)c)) return lexNumber();
+    if (std::isdigit((unsigned char)c) || (c == '.' && std::isdigit((unsigned char)peek(1))))
+        return atFloat() ? lexFloat() : lexNumber();
     if (std::isalpha((unsigned char)c) || c == '_') return lexIdentOrKeyword();
     if (c == '"') return lexString();
     if (c == '\'') {
@@ -154,6 +162,97 @@ Token Lexer::lexIdentOrKeyword() {
     loc.len = (uint32_t)text.size();
     auto it = keywords.find(text);
     return Token{it == keywords.end() ? Tok::Ident : it->second, loc, text, 0};
+}
+
+// Whether the decimal number here has a fraction or an exponent: `1.5`, `.5`, `2.`,
+// `1e10`. A '.' followed by a name is a member access instead.
+bool Lexer::atFloat() const {
+    size_t i = 0;
+    if (peek() == '0' && std::strchr("xXbBoO", peek(1)) && peek(1) != '\0') return false;  // 0x, 0b, 0o
+    while (std::isdigit((unsigned char)peek(i)) || (peek(i) == '\'' && std::isdigit((unsigned char)peek(i + 1)))) ++i;
+    if (peek(i) == '.') {
+        char after = peek(i + 1);
+        char next = peek(i + 2);
+        if ((after == 'f' || after == 'F') && !(std::isalnum((unsigned char)next) || next == '_')) return true;  // 1.f
+        return std::isdigit((unsigned char)after) || !(std::isalpha((unsigned char)after) || after == '_' || after == '.');
+    }
+    if (peek(i) == 'e' || peek(i) == 'E') {  // `1e5`, and `1e` or `1e+` with the digits missing
+        char after = peek(i + 1);
+        return std::isdigit((unsigned char)after) || after == '+' || after == '-' ||
+               !(std::isalpha((unsigned char)after) || after == '_');
+    }
+    return false;
+}
+
+// `1.5`, `.5`, `1e-9`, `2.5f`. Digits may be separated with ', as in C++.
+Token Lexer::lexFloat() {
+    Loc loc = locHere();
+    size_t start = pos_;
+    std::string clean;  // the number without separators, for strtod
+    auto digits = [&] {
+        while (std::isdigit((unsigned char)peek()) ||
+               (peek() == '\'' && pos_ > start && std::isdigit((unsigned char)src_[pos_ - 1]) &&
+                std::isdigit((unsigned char)peek(1)))) {
+            if (peek() != '\'') clean += peek();
+            advance();
+        }
+    };
+    digits();
+    if (peek() == '.') {
+        clean += advance();
+        digits();
+    }
+    if (peek() == 'e' || peek() == 'E') {
+        clean += advance();
+        if (peek() == '+' || peek() == '-') clean += advance();
+        size_t before = pos_;
+        digits();
+        if (pos_ == before) {
+            Loc expLoc = loc;
+            expLoc.len = (uint32_t)(pos_ - start);
+            diags_.error(expLoc, "the exponent of '" + src_.substr(start, pos_ - start) + "' has no digits",
+                         "write the power of ten after the e, e.g. `1e3` or `2.5e-4`", spec::FloatingPointTypes);
+            clean += '0';
+        }
+    }
+    bool isFloat = false;
+    if (std::isalpha((unsigned char)peek()) || peek() == '_') {
+        Loc suffixLoc = locHere();
+        size_t s = pos_;
+        while (std::isalnum((unsigned char)peek()) || peek() == '_') advance();
+        std::string suffix = src_.substr(s, pos_ - s);
+        suffixLoc.len = (uint32_t)suffix.size();
+        if (suffix == "f" || suffix == "F") isFloat = true;
+        else if (suffix == "l" || suffix == "L")
+            diags_.error(suffixLoc, "C+ has no long double type",
+                         "remove the L: a number with a fraction is a double, which has 64 bits",
+                         spec::FloatingPointTypes);
+        else
+            diags_.error(suffixLoc, "'" + suffix + "' is not a suffix for a floating-point number",
+                         "the only suffix is f, which makes the number a float, e.g. `1.5f`",
+                         spec::FloatingPointTypes);
+    }
+    if (peek() == '.' && std::isdigit((unsigned char)peek(1))) {  // `1.2.3`
+        while (peek() == '.' || std::isdigit((unsigned char)peek())) advance();
+        Loc all = loc;
+        all.len = (uint32_t)(pos_ - start);
+        diags_.error(all, "a number can have only one decimal point",
+                     "write one, e.g. `1.5`. Text such as a version number goes in quotes: `\"" +
+                         src_.substr(start, pos_ - start) + "\"`",
+                     spec::FloatingPointTypes);
+    }
+    std::string text = src_.substr(start, pos_ - start);
+    loc.len = (uint32_t)text.size();
+    double value = isFloat ? (double)std::strtof(clean.c_str(), nullptr) : std::strtod(clean.c_str(), nullptr);
+    if (std::isinf(value))
+        diags_.error(loc, "the number " + text + " is too large for a " + (isFloat ? "float" : "double"),
+                     isFloat ? "the largest float is about 3.4e38; leave out the f to make it a double"
+                             : "the largest double is about 1.8e308",
+                     spec::FloatingPointTypes);
+    Token t{Tok::FloatLit, loc, text, 0};
+    t.floatValue = value;
+    t.floatSuffix = isFloat;
+    return t;
 }
 
 Token Lexer::lexNumber() {
@@ -219,10 +318,31 @@ Token Lexer::lexNumber() {
                      spec::IntegerLiterals);
     }
 
-    if (peek() == '.' && std::isdigit((unsigned char)peek(1))) {
-        while (std::isdigit((unsigned char)peek()) || peek() == '.') advance();
+    if (peek() == '.' && std::isxdigit((unsigned char)peek(1))) {  // `0x1.8p3`, a C++ hexadecimal float
+        while (std::isalnum((unsigned char)peek()) || peek() == '.' ||
+               ((peek() == '+' || peek() == '-') && (src_[pos_ - 1] == 'p' || src_[pos_ - 1] == 'P')))
+            advance();
         loc.len = (uint32_t)(pos_ - start);
-        diags_.error(loc, "floating-point numbers are not supported yet", "use int or long for now", spec::Status);
+        diags_.error(loc, "a number with a fraction is written in decimal",
+                     "hexadecimal, octal and binary numbers have no fractions; write e.g. 1.5 or 1e-3",
+                     spec::FloatingPointTypes);
+    } else if (base == 16 && (peek() == 'p' || peek() == 'P')) {  // `0x1p3`, a C++ hexadecimal float
+        advance();
+        if (peek() == '+' || peek() == '-') advance();
+        while (std::isalnum((unsigned char)peek())) advance();
+        loc.len = (uint32_t)(pos_ - start);
+        diags_.error(loc, "C+ has no hexadecimal floating-point numbers",
+                     "write the number in decimal, e.g. 1.5 or 1e-3", spec::FloatingPointTypes);
+    } else if (peek() == '_' && std::isdigit((unsigned char)peek(1))) {  // `1_000`
+        while (std::isalnum((unsigned char)peek()) || peek() == '_' ||
+               (peek() == '.' && std::isdigit((unsigned char)peek(1))))
+            advance();
+        std::string written = src_.substr(start, pos_ - start);
+        loc.len = (uint32_t)written.size();
+        std::string fixed = written;
+        std::replace(fixed.begin(), fixed.end(), '_', '\'');
+        diags_.error(loc, "digits are separated with ', as in C++, not with _", "write `" + fixed + "`",
+                     spec::IntegerLiterals);
     } else if (std::isalpha((unsigned char)peek()) || peek() == '_') {
         Loc suffixLoc = locHere();
         size_t s = pos_;
@@ -241,8 +361,9 @@ Token Lexer::lexNumber() {
             diags_.error(suffixLoc, "this compiler does not support unsigned integer types yet",
                          "use a plain number, or L for a long", spec::Status);
         else if (upper == "F")
-            diags_.error(suffixLoc, "this compiler does not support floating-point numbers yet",
-                         "use int or long for now", spec::Status);
+            diags_.error(suffixLoc, "a float needs a decimal point or an exponent, as in C++",
+                         "write `" + text + ".0f`, or leave out the f, since an int converts to a float",
+                         spec::FloatingPointTypes);
         else
             diags_.error(suffixLoc, "'" + suffix + "' is not a number suffix",
                          "the only suffix is L, which makes a number a long, e.g. `1L << 40`",

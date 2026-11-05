@@ -17,6 +17,9 @@ extern "C" {
     int getpid(void);
     int rand();
     void srand(int seed);
+    double atof(string text);
+    double ldexp(double x, int exponent);
+    float nextafterf(float from, float to);
 }
 
 int twice(int n) { return n * 2; }
@@ -34,6 +37,8 @@ int main() {
     // expect: 42 -17 0
     println("{} {}", strcmp("a", "b") < 0, toupper(97));
     // expect: true 65
+    println("{} {} {}", atof("2.5e3"), ldexp(0.75, 4), nextafterf(1, 2));
+    // expect: 2500 12 1.0000001
 
     // Text a C function returns is copied into a string; NULL becomes null for `string?`.
     setenv("CPLUS_TEST_VALUE", "from C", 1);

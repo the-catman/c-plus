@@ -20,7 +20,10 @@ long square(long n) { return n * n; }
 
 | Area | C+ |
 |------|----|
-| Types | `int` (32-bit), `long` (64-bit), `bool`, `string`, `void`, `auto`, structs, classes, `vector<T>`, `T?` |
+| Types | `int` (32-bit), `long` (64-bit), `double` (64-bit), `float` (32-bit), `bool`, `string`, `void`, `auto`, structs, classes, `vector<T>`, `T?` |
+| Floating point | `1.5`, `.5`, `1e9`, `2.5f`, as in C++. `7 / 2` is 3, `7 / 2.0` is 3.5. IEEE: `1 / 0.0` is `inf`, no traps. `float f = 0.5;` works for a written number |
+| Casts | `int(x)`, `static_cast<int>(x)`, `(int)x` between numbers and `bool`. A fraction is dropped toward zero; a value that does not fit **stops the program** |
+| Math | `sqrt`, `pow`, `sin`, `floor`, `round`, `fmod`, `isnan`, `abs`, `min`, `max` and the rest of `<cmath>`, with no `std::` |
 | Structs | `struct P { int x; int y = 0; };` is a **value** that is copied. Build with `{1, 2}`, `{.y = 2}`, `P{1, 2}`, `P(1, 2)`, `{}` |
 | Fields | `p.x`, `p.x += 1`. `Point p;` can be filled field by field before use |
 | Classes | `class U {...}; U u = U("a");` is a **reference-counted object**: `U v = u;` shares it. No `new`; freed when the last reference goes away |
@@ -30,15 +33,15 @@ long square(long n) { return n * n; }
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
 | Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>` |
-| Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]` |
-| Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(n)` for an `int` or `long` |
+| Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them |
+| Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(x)` for any number |
 | Optionals | `User? u = find(name);` holds a `User` or `null`; `int? n;` starts out null. `u?.name` is null when `u` is, `u?.name ?? "nobody"` gives a fallback, `if (auto x = u)` runs with the `User` inside. `has_value()`, `value()`, `value_or(x)`, `u == null` |
 | C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`. Strings are converted at each call. Link other libraries with `-lname` |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)`, `break`, `continue`, `?:` |
-| Operators | all C++ integer operators, `&&` `\|\|` `!`, compound assignment, `++`/`--` |
+| Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
-| Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long) |
+| Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long), `1.5`, `1e-9`, `2.5f` (float) |
 | Conditions | `bool`, a number or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (opt)` (holds a value) |
 
 ## Different from C++. Do not write the C++ version
@@ -53,11 +56,17 @@ long square(long n) { return n * n; }
 | `std::`, `using namespace std` | no `std::`; built-ins have no prefix |
 | prototypes / headers | none. Define each function once, in any order |
 | `int x;` then read `x` | compile error until `x` is assigned on every path |
-| `int i = someLong;` | error: only `int`→`long` converts implicitly |
-| `(long)x`, `static_cast<long>(x)` | casts are planned; `int` to `long` and number to `bool` need none |
+| `int i = someLong;`, `int i = 2.5;` | error: a conversion that can lose information needs a cast: `int(x)`, which stops the program if `x` does not fit |
+| `float f = someDouble;` | error: write `float(x)`. Only a double written as a number, `float f = 0.5;`, converts by itself |
+| `reinterpret_cast`, `const_cast`, `dynamic_cast` | do not exist. `static_cast`, `int(x)` and `(int)x` convert numbers |
+| `std::sqrt(x)`, `#include <cmath>`, `M_PI` | `sqrt(x)`, with nothing to include. `acos(-1)` is π for now |
+| `x % 2.5` on a double | error: write `fmod(x, 2.5)` |
+| `printf("%.2f", x)`, `std::setprecision(2)` | `println("{:.2f}", x)` |
+| `std::stod(s)`, `std::stoi(s)` | planned; for now declare C's `atof` or `atoi` with `extern "C"` |
+| `long double`, `1.5L` | no `long double`; `double` is 64 bits |
 | `int n = true;` | error: `bool` does not convert to a number (numbers do convert to `bool`) |
 | `010` (octal) | `0o10`. A leading zero is an error |
-| `10u`, `1.5f` | unsigned and floating point are planned |
+| `10u`, `unsigned` | unsigned types are planned |
 | `long long`, `size_t`, `int32_t` | `long` / `int` |
 | `int f() { if (c) return 1; }` | error: every path must return |
 | signed overflow is UB | overflow, `/0`, bad shifts **stop the program** with file:line |
@@ -106,6 +115,7 @@ long square(long n) { return n * n; }
 | Containers | `array<T, N>`, `hashmap<K, V>`; `insert`, `erase` and iterators on vectors |
 | References | `T&` parameters, `for (auto& x : v)` |
 | Characters | `char`, `'a'`, `s[i]`, `for (char c : s)`, `s.push_back(c)` |
+| Format options | width and alignment, `{:x}`, `{:>8}` |
 | More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare`; parsing numbers from strings |
 | Concurrency | `spawn f()` → `Task<T>`; later `async`/`await` |
 

@@ -123,6 +123,7 @@ static int build(const Options& opts, const std::string& exePath) {
     }
     std::vector<std::string> link{CPLUS_LINKER, objPath, CPLUS_RUNTIME_LIB};
     link.insert(link.end(), opts.linkArgs.begin(), opts.linkArgs.end());
+    link.push_back("-lm");  // the math functions, part of the C standard library
     link.insert(link.end(), {"-o", exePath});
     int rc = runProcess(link);
     std::error_code ec;

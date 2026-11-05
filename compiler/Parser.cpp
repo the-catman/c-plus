@@ -283,6 +283,17 @@ void Parser::failStd(Loc loc, const Token& name) {
     if (n == "string" || n == "vector" || n == "to_string" || n == "format" || n == "println" || n == "print")
         fail(loc, "C+ has no std:: namespace", "built-ins need no prefix: write `" + n + "` instead of `std::" + n + "`",
              spec::Modules);
+    if (isMathFunction(n))
+        fail(loc, "C+ has no std:: namespace", "math functions are built in: write `" + n + "(...)` instead of `std::" +
+                                                   n + "(...)`",
+             spec::Math);
+    if (std::string reader = cNumberReader(n); !reader.empty())
+        fail(loc, "C+ has no std:: namespace",
+             "this compiler cannot read a number from a string yet. Until then, declare the C function: `extern \"C\" " +
+                 reader + ";`",
+             spec::Status);
+    if (n == "numbers")
+        fail(loc, "C+ has no std:: namespace", "math constants are planned. Until then, `acos(-1)` is pi", spec::Math);
     fail(loc, "C+ has no std:: namespace",
          "built-ins need no prefix: `std::cout << x << std::endl;` becomes `println(\"{}\", x);`", spec::Printing);
 }
@@ -367,6 +378,8 @@ const Type* Parser::parseBaseType(Loc& loc) {
     switch (t.kind) {
         case Tok::KwInt: return Type::intTy();
         case Tok::KwLong:
+            if (check(Tok::KwDouble))
+                fail(t.loc, "C+ has no long double type", "write `double`, which has 64 bits", spec::FloatingPointTypes);
             if (check(Tok::KwLong) || check(Tok::KwInt))
                 fail(t.loc, check(Tok::KwLong) ? "'long long' is not a C+ type" : "'long int' is not a C+ type",
                      "write just `long`; it is always 64 bits", spec::IntegerTypes);
@@ -375,7 +388,8 @@ const Type* Parser::parseBaseType(Loc& loc) {
         case Tok::KwString: return Type::stringTy();
         case Tok::KwVoid: return Type::voidTy();
         case Tok::KwAuto: return Type::autoTy();
-        case Tok::KwDouble: case Tok::KwFloat: notYet(t.loc, "floating-point types", "use int or long for now");
+        case Tok::KwDouble: return Type::doubleTy();
+        case Tok::KwFloat: return Type::floatTy();
         case Tok::KwChar: notYet(t.loc, "char types", "use string for text");
         case Tok::Ident:
             if (isTypeName(t)) return &prog_->findStruct(t.text)->type;
@@ -952,6 +966,12 @@ ExprPtr Parser::parseUnary() {
                 int64_t v = lit.intValue == (uint64_t)INT64_MAX + 1 ? INT64_MIN : -(int64_t)lit.intValue;
                 return parsePostfix(std::make_unique<IntLitExpr>(loc, v, lit.longSuffix));
             }
+            if (check(Tok::FloatLit)) {  // so that `float f = -1.5;` sees a constant
+                const Token& lit = advance();
+                Loc loc = t.loc;
+                loc.len = lit.loc.col + lit.loc.len - t.loc.col;
+                return parsePostfix(std::make_unique<FloatLitExpr>(loc, -lit.floatValue, lit.floatSuffix));
+            }
             return std::make_unique<UnaryExpr>(t.loc, UnOp::Neg, parseUnary());
         }
         case Tok::Plus: advance(); return std::make_unique<UnaryExpr>(t.loc, UnOp::Plus, parseUnary());
@@ -1054,9 +1074,11 @@ ExprPtr Parser::parsePostfix(ExprPtr e) {
     }
 }
 
-static const char* kCastHelp =
-    "an int already converts to a long and a number to a bool without a cast, so the cast can usually be "
-    "removed, e.g. `long total = count;`";
+// Whether the tokens from `i` on start a type that a cast can name: `int`, `double`, ...
+static bool isCastType(Tok k) {
+    return k == Tok::KwInt || k == Tok::KwLong || k == Tok::KwBool || k == Tok::KwFloat || k == Tok::KwDouble ||
+           k == Tok::KwString;
+}
 
 ExprPtr Parser::parsePrimary() {
     const Token& t = advance();
@@ -1078,7 +1100,8 @@ ExprPtr Parser::parsePrimary() {
         }
         case Tok::KwTrue: return std::make_unique<BoolLitExpr>(t.loc, true);
         case Tok::KwFalse: return std::make_unique<BoolLitExpr>(t.loc, false);
-        case Tok::KwInt: case Tok::KwLong: case Tok::KwBool: case Tok::KwString:
+        case Tok::FloatLit: return std::make_unique<FloatLitExpr>(t.loc, t.floatValue, t.floatSuffix);
+        case Tok::KwInt: case Tok::KwLong: case Tok::KwBool: case Tok::KwString: case Tok::KwFloat: case Tok::KwDouble:
             if (t.kind == Tok::KwString && match(Tok::ColonColon)) {
                 // `string::npos`, what find() returns when nothing is found. With no
                 // unsigned types it is -1, a long.
@@ -1094,24 +1117,62 @@ ExprPtr Parser::parsePrimary() {
                 if (member.loc.line == loc.line) loc.len = member.loc.col + member.loc.len - loc.col;
                 return std::make_unique<IntLitExpr>(loc, -1, true);
             }
-            if (check(Tok::LParen)) notYet(t.loc, "casts like '" + std::string(tokSpelling(t.kind)) + "(x)'", kCastHelp);
+            if (match(Tok::LParen)) {  // `int(x)`
+                --pos_;
+                --pos_;
+                Loc loc;
+                const Type* ty = parseBaseType(loc);
+                expect(Tok::LParen, "after the type");
+                if (check(Tok::RParen))  // `int()`, which is 0 in C++
+                    fail(peek().loc, std::string("a conversion to '") + ty->name + "' takes one value",
+                         "write `" + std::string(ty->name) + "(x)` to convert x. For a zero, write `" +
+                             (ty->is(Type::Kind::Bool) ? "false" : ty->isFloating() ? "0.0" : "0") + "`",
+                         spec::Casts);
+                ExprPtr operand = parseExpr();
+                if (check(Tok::Comma))
+                    fail(peek().loc, std::string("a conversion to '") + ty->name + "' takes one value",
+                         "write `" + std::string(ty->name) + "(x)`", spec::Casts);
+                expect(Tok::RParen, "to close the conversion");
+                return std::make_unique<CastExpr>(loc, ty, std::move(operand));
+            }
             fail(t.loc, "expected an expression, found " + describeToken(t),
                  "a type name can only start a declaration, e.g. `" + std::string(tokSpelling(t.kind)) + " x = ...;`");
         case Tok::KwNull: return std::make_unique<NullLitExpr>(t.loc);
         case Tok::KwThis: return std::make_unique<ThisExpr>(t.loc);
         case Tok::LParen: {
-            if ((check(Tok::KwInt) || check(Tok::KwLong) || check(Tok::KwBool) || check(Tok::KwString)) &&
-                peek(1).kind == Tok::RParen)
-                notYet(t.loc, "casts like '(" + std::string(tokSpelling(peek().kind)) + ")x'", kCastHelp);
+            if (isCastType(peek().kind) && peek(1).kind == Tok::RParen) {  // `(int)x`, as in C
+                Loc loc;
+                const Type* ty = parseBaseType(loc);
+                advance();
+                loc = t.loc;
+                loc.len = prev().loc.col + 1 - t.loc.col;
+                return std::make_unique<CastExpr>(loc, ty, parseUnary());
+            }
             ExprPtr e = parseExpr();
             expect(Tok::RParen, "to close the parenthesis");
             return e;
         }
         case Tok::LBrace: return parseInitList(t.loc, nullptr);
         case Tok::Ident: {
-            if (t.text == "static_cast" || t.text == "reinterpret_cast" || t.text == "const_cast" ||
-                t.text == "dynamic_cast")
-                notYet(t.loc, "casts like '" + t.text + "<T>(x)'", kCastHelp);
+            if (t.text == "static_cast" && check(Tok::Less)) {  // `static_cast<int>(x)`
+                advance();
+                Loc typeLoc;
+                const Type* ty = parseType(typeLoc);
+                expectCloseAngle("to close static_cast<...>");
+                expect(Tok::LParen, "after static_cast<" + std::string(ty->name) + ">");
+                ExprPtr operand = parseExpr();
+                expect(Tok::RParen, "to close the static_cast");
+                Loc loc = t.loc;
+                if (prev().loc.line == loc.line) loc.len = prev().loc.col + 1 - loc.col;
+                return std::make_unique<CastExpr>(loc, ty, std::move(operand));
+            }
+            if (t.text == "reinterpret_cast" || t.text == "const_cast" || t.text == "dynamic_cast")
+                fail(t.loc, "C+ has no " + t.text,
+                     t.text == "dynamic_cast" ? "inheritance is planned; until then every object has exactly one type"
+                     : t.text == "const_cast" ? "a const variable cannot be changed; copy it into a variable that is not const"
+                                              : "reinterpreting memory needs raw pointers, which are planned. To "
+                                                "convert a number, write `int(x)` or `static_cast<int>(x)`",
+                     spec::Casts);
             if (check(Tok::ColonColon)) {
                 if (t.text == "std") failStd(t.loc, peek(1));
                 notYet(t.loc, "module members like '" + t.text + "::" + peek(1).text + "'");

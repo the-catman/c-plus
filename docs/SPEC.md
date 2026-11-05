@@ -50,6 +50,8 @@ template this throw throws true try typename virtual void weak while
 - The suffix `L` (or `LL`) makes a literal a `long`: `1L << 40`. Both mean the same thing,
   because `long` is always 64 bits. `u` for unsigned arrives with unsigned types. No other
   suffixes exist.
+- A number with a decimal point or an exponent, such as `1.5` or `1e9`, is a floating-point
+  literal instead (see [Floating-point types](#floating-point-types)).
 
 ### String literals
 
@@ -69,6 +71,51 @@ template this throw throws true try typename virtual void weak while
 
 There are no unsigned types yet and no `size_t`, `int32_t` and so on. Use `int` or `long`.
 Arithmetic never wraps silently; see [Integer overflow](#integer-overflow).
+
+### Floating-point types
+
+| Type | Size | Notes |
+|------|------|-------|
+| `double` | 64-bit IEEE 754 | about 16 significant digits, up to about 1.8e308 |
+| `float` | 32-bit IEEE 754 | about 7 significant digits, up to about 3.4e38 |
+
+There is no `long double`.
+
+Literals are written as in C++. A number with a decimal point or an exponent is a
+`double`: `1.5`, `.5`, `2.`, `1e9`, `6.022e23`, `1'000.5`. The suffix `f` (or `F`) makes it
+a `float`: `2.5f`, `1.f`, `1e3f`.
+
+```cpp
+double price = 9.99;
+float ratio = 0.5f;
+float half = 0.5;                  // ok: a double written as a number converts to a float
+double average = total / 4.0;      // a double, since one side is
+```
+
+- `5f` is an error, as in C++: write `5.0f`, or just `5`, since an `int` converts to a
+  `float`. The suffix `L` is an error, since there is no `long double`, and so are C++'s
+  hexadecimal floating-point literals, such as `0x1.8p3`. A literal too large for its
+  type, such as `1e400`, or `1e39` for a `float`, is an error.
+- Arithmetic follows C++'s usual arithmetic conversions. When the two sides differ, an
+  `int` or `long` becomes the floating-point type, and a `float` becomes a `double`. So
+  `7 / 2` is `3` but `7 / 2.0` is `3.5`, and `f * 0.5` is a `double` even when `f` is a
+  `float`, because `0.5` is a double; write `f * 0.5f` to stay a `float`.
+- `+ - * /`, the comparisons, `++`, `--` and the compound assignments work as in C++. `%`
+  and the bit operators take only integers; the remainder of a division is `fmod(a, b)`
+  (see [Math functions](#math-functions)).
+- Floating-point arithmetic follows IEEE 754 and never stops the program: `1 / 0.0` is
+  infinity and `0 / 0.0` is NaN, "not a number". NaN is not equal to anything, itself
+  included, and every ordering comparison with it is false; test for it with `isnan(x)`.
+- As a condition, zero is false and anything else is true, NaN included, as in C++.
+- A `double` converts to a `float` by itself only when it is written as a number, so
+  `float x = 0.1;` works. Any other `double` needs `float(x)`, since it loses precision.
+  A floating-point value never converts to an integer by itself; see [Casts](#casts).
+- `{}` prints the fewest digits that read back as the same value, as C++'s `std::format`
+  does: `0.1` prints as `0.1`, `1.0 / 3` as `0.3333333333333333`, `100.0` as `100` and `1e21`
+  as `1e+21`. The infinities print as `inf` and `-inf`, and NaN always as `nan`; C++
+  prints `-nan` when its sign bit is set, which can change with optimization. `{:.2f}` and the
+  other options of [Printing](#printing) choose the digits. `to_string(x)` gives the same
+  text as `{}`, as in C++26; earlier C++ printed six decimals.
 
 ### bool
 
@@ -110,7 +157,8 @@ string digits = to_string(42);
   finds nothing, as in C++; a negative `pos` stops the program.
 - `contains(text)`, `starts_with(text)` and `ends_with(text)` return a `bool`.
 - `clear()` empties the string.
-- `to_string(n)` turns an `int` or a `long` into its digits. `format("...", values...)`,
+- `to_string(x)` turns a number into text: `to_string(42)` is `"42"` and `to_string(2.5)`
+  is `"2.5"`. `format("...", values...)`,
   C++20's `std::format`, builds a string with the rules of [Printing](#printing):
   `format("{}", true)` is `"true"`, and `format("{}", user)` describes an object.
 
@@ -124,23 +172,55 @@ Planned: `s[i]`, `for (char c : s)` and the methods that take or return one char
 
 ### Implicit conversions
 
-There are exactly three implicit conversions:
+These are the only implicit conversions:
 - **`int` to `long`**, which never loses information.
+- **an integer to a floating-point type, and `float` to `double`**, as in C++. A `long`
+  above 2^53 rounds to the nearest `double`.
+- **a `double` written as a number to `float`**: `float x = 0.1;`.
 - **a number to `bool`**: zero is `false`, anything else is `true`, as in C++.
 - **a value to an optional**: a `T`, or `null`, converts to `T?`. The value converts as it
   would to `T`, so an `int` also converts to `long?` (see [Optionals](#optionals)).
 
-Everything else is an error, including `long` to `int`, `bool` to a number, `T?` to `T`,
-and one optional type to another. Explicit casts are planned.
+Everything else is an error, including `long` to `int`, a floating-point value to an
+integer, any other `double` to `float`, `bool` to a number, `T?` to `T`, and one optional
+type to another. A [cast](#casts) converts between numbers and `bool` explicitly.
 
 ```cpp
 long big = 5;       // ok: int widens to long
+double d = big;     // ok: an integer converts to a double
 bool flag = 1;      // ok: true
-int small = big;    // error: a long may not fit in an int
-int n = true;       // error: bool does not convert to a number
+int small = big;    // error: a long may not fit in an int; write int(big)
+int whole = 2.5;    // error: the fraction would be lost; write int(2.5)
+int n = true;       // error: bool does not convert to a number; write int(true)
 ```
 
-In arithmetic with mixed types, the `int` side is widened: `int + long` is a `long`.
+In arithmetic with mixed types, the narrower side is converted, as in C++: `int + long` is
+a `long`, `long + float` is a `float`, and `float + double` is a `double`.
+
+### Casts
+
+A cast converts between the number types and `bool`. The three C++ spellings work and
+mean the same thing:
+
+```cpp
+int n = int(3.9);                   // 3
+long big = static_cast<long>(n);
+int k = (int)ratio;
+double share = double(n) / total;   // without the cast, n / total divides integers
+```
+
+- Converting to an integer drops the fraction, rounding toward zero, as in C++:
+  `int(-2.7)` is `-2`. For the nearest integer, write `int(round(x))`.
+- **A value the new type cannot hold stops the program** with file:line, as integer
+  overflow does: `int(3000000000L)`, `int(1e10)`, and NaN or an infinity converted to an
+  integer. C++ wraps the first around and leaves the others undefined.
+- `double(x)` and `float(x)` take any number; `float(x)` rounds to the nearest `float`.
+- `bool(x)` is true when `x` is not zero, and `int(b)` is 1 or 0.
+- A cast binds like a unary operator, as in C++: `(int)x * 2` is `((int)x) * 2`.
+- A cast cannot make a string: write `to_string(x)` or `format("{}", x)`. Reading a number
+  from a string is planned.
+- `reinterpret_cast` and `const_cast` do not exist, since C+ has no raw pointers yet and
+  `const` cannot be cast away. `dynamic_cast` would need inheritance, which is planned.
 
 ### Optionals
 
@@ -534,6 +614,7 @@ int main() {
 |-----------------|---------------------------------|
 | `int`, `int32_t`, `pid_t`, `unsigned`, `uint32_t` | `int` |
 | `long`, `long long`, `int64_t`, `size_t`, `ssize_t`, `time_t`, `uint64_t` | `long` |
+| `double`, `float` | `double`, `float` |
 | `bool` | `bool` |
 | `void` result | `void` |
 | `const char*` parameter | `string`, or `string?` when NULL may be passed |
@@ -561,8 +642,8 @@ int main() {
 - C's output functions, such as `puts`, share their buffer with `print` and `println`, so
   output comes out in the order it was written.
 - A C function cannot be named `main`, or start with `cplus_`, which the C+ runtime uses.
-- Not supported yet: pointers, including handles such as `sqlite3*`; structs; `double`,
-  `float` and `char`; functions with a variable number of arguments, such as `printf`;
+- Not supported yet: pointers, including handles such as `sqlite3*`; structs; `char`;
+  `long double`; functions with a variable number of arguments, such as `printf`;
   callbacks; C variables such as `errno`; and reading declarations from C headers.
 
 ### Modules
@@ -597,7 +678,7 @@ in C++. The step of a `for` loop may list several expressions: `for (...; ...; i
 
 The condition of `if`, `while`, `do`-`while`, `for` and `?:`, and the operands of `!`, `&&`
 and `||`, may be a `bool`, a number or an optional. As in C++, a number is true when it
-is not zero, and an optional is true when it holds a value. A `bool?` is not a condition
+is not zero (a floating-point NaN is true), and an optional is true when it holds a value. A `bool?` is not a condition
 (see [Optionals](#optionals)).
 
 ```cpp
@@ -655,8 +736,9 @@ Precedence and associativity match C++. From tightest to loosest:
 | `?:` | branches must have compatible types; `c ? user : null` is a `User?` |
 | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | right-associative |
 
-Arithmetic, bitwise and ordering operators take `int` and `long`. `+` also joins two
-strings, and the ordering operators also compare two strings (see [string](#string)).
+Arithmetic and ordering operators take any numbers, converting mixed operands as C++ does
+(see [Implicit conversions](#implicit-conversions)). `%` and the bit operators `~ & | ^ <<
+>>` take only `int` and `long`. `+` also joins two strings, and the ordering operators also compare two strings (see [string](#string)).
 `==` and `!=` take any two values of the same type: numbers, `bool`s, strings by
 contents, structs field by field, vectors element by element, and class references by
 identity. They also compare an optional with a value or `null` (see
@@ -685,7 +767,39 @@ When the shift amount is a literal, an out-of-range shift is a compile error ins
 `1 << 40` is rejected because `1` is a 32-bit `int`. Write `1L << 40`.
 
 C and C++ leave all of these undefined. Explicit wrapping operators for hashing and
-cryptography, and a flag to turn checks off in hot code, are planned.
+cryptography, and a flag to turn checks off in hot code, are planned. Floating-point
+arithmetic is not checked; see [Floating-point types](#floating-point-types).
+
+### Math functions
+
+The functions of C++'s `<cmath>` are built in, without `std::` and without an include:
+
+| Functions | Notes |
+|-----------|-------|
+| `sqrt` `cbrt` `pow(x, y)` `hypot(x, y)` | |
+| `exp` `exp2` `log` `log2` `log10` | `log` is the natural logarithm |
+| `sin` `cos` `tan` `asin` `acos` `atan` `atan2(y, x)` | angles in radians |
+| `sinh` `cosh` `tanh` | |
+| `floor` `ceil` `trunc` `round` | `round` takes halves away from zero, as in C |
+| `fabs` `fmod(x, y)` | `fmod` is the remainder, with the sign of `x` |
+| `isnan` `isinf` `isfinite` | return a `bool` |
+| `abs` `min(a, b)` `max(a, b)` | keep the type of their arguments |
+
+```cpp
+double r = sqrt(dx * dx + dy * dy);
+int cents = int(round(price * 100));
+long biggest = max(total, 0L);
+```
+
+- They take any numbers. The result is a `double`, or a `float` when every argument is a
+  `float`, as with C++'s overloads: `sqrt(2)` is a `double` and `sqrt(2.0f)` a `float`.
+- `abs`, `min` and `max` also take integers, and give the type that arithmetic on their
+  arguments would: `abs(-5)` is the `int` 5, `max(n, 5L)` is a `long`, `min(1, 2.5)` is a
+  `double`. `abs` of the smallest `int` or `long` stops the program, as negating it does.
+- The others never stop the program: `sqrt(-1)` is NaN and `log(0)` is `-inf`.
+- A function of the program, or an `extern "C"` function, with the same name takes the
+  place of the built-in one.
+- Constants such as C++20's `std::numbers::pi` are planned. Until then, `acos(-1)` is π.
 
 ---
 
@@ -702,8 +816,14 @@ println("{{literal braces}}");
 
 - The first argument must be a string literal. Each `{}` is replaced by the next argument.
 - The compiler checks that the number of `{}` matches the number of arguments.
-- `{{` and `}}` print literal braces. Format options such as `{:x}` are planned.
-- `int`, `long`, `bool`, `string`, structs, class objects and vectors can be printed. A
+- `{{` and `}}` print literal braces.
+- A floating-point value prints with the fewest digits that read back as the same value
+  (see [Floating-point types](#floating-point-types)). A placeholder can instead give a
+  precision and a type, as in C++: `{:.2f}` prints 2 decimals, `{:e}` uses an exponent,
+  `{:g}` the shorter of the two, and `{:.3}` 3 significant digits. These work only on
+  `float` and `double`. Other format options, such as a width, alignment and `{:x}`, are
+  planned.
+- Numbers, `bool`, `string`, structs, class objects and vectors can be printed. A
   struct prints its fields by name, with strings inside it in quotes:
   `{name: "Ada", born: 1815}`. A vector prints its elements: `[1, 2, 3]`, `["a", "b"]`.
   A class object prints its type name first: `User {name: "Ada", born: 1815}`. All fields
@@ -712,8 +832,8 @@ println("{{literal braces}}");
 - There is no `printf`, `cout` or `std::`.
 
 `format` takes the same arguments as `print` and returns the text as a string instead of
-printing it, like C++20's `std::format`. `to_string(n)` is the text of an `int` or
-`long`, as in C++. `string` covers the other ways to build strings.
+printing it, like C++20's `std::format`. `to_string(x)` is the text of a number, as in
+C++. `string` covers the other ways to build strings.
 
 ```cpp
 string label = format("{}/{}", done, total);   // "3/10"
@@ -823,14 +943,18 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Methods, `const` methods, `this`, `public:` / `private:` | implemented |
 | `==` and `!=` on strings, structs, vectors, class references and optionals | implemented |
 | Strings: `+`, `+=`, `<`, `size`, `substr`, `find`, `contains`, `starts_with`, `ends_with`, `clear` | implemented |
-| `format(...)` and `to_string(n)` | implemented |
+| `format(...)` and `to_string(x)` | implemented |
 | Vectors: `vector<T>`, checked `v[i]`, `push_back` and the other basic methods, copy-on-write | implemented |
 | Range-based `for` over vectors | implemented |
 | Optionals: `T?`, `null`, `?.`, `??`, `if (auto u = opt)`, `value()`, `value_or()` | implemented |
-| `extern "C"` functions taking and returning `int`, `long`, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
+| `double` and `float`: literals, IEEE arithmetic, shortest printing, `{:.2f}`, `{:e}`, `{:g}` | implemented |
+| Casts: `int(x)`, `static_cast<int>(x)`, `(int)x`, stopping when the value does not fit | implemented |
+| Math functions from `<cmath>`, `abs`, `min`, `max` | implemented |
+| `extern "C"` functions taking and returning numbers, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
-| Casts, unsigned types, floating point, `char` | planned |
+| Unsigned types, `char` | planned |
+| Format options for width, alignment and `{:x}`; math constants | planned |
 | Function overloading | planned |
 | Strings: `s[i]` and looping over characters (with `char`), `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
 | `array<T, N>`, `hashmap<K, V>`; vector `insert`, `erase`, iterators | planned |

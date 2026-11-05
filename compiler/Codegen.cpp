@@ -45,6 +45,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtTrapIndex, rtVecNew, rtVecRelease, rtVecReserve;
     llvm::FunctionCallee rtStrRelease, rtStrCompare, rtStrConcat, rtStrAppend, rtStrSubstr, rtStrFind;
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC;
+    llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
 
@@ -162,6 +163,11 @@ struct Codegen::Impl {
         rtStrFind = decl("cplus_str_find", i64, {ptrTy, i64, ptrTy, i64, i64});
         rtStrStartsWith = decl("cplus_str_starts_with", i32, {ptrTy, i64, ptrTy, i64});
         rtStrEndsWith = decl("cplus_str_ends_with", i32, {ptrTy, i64, ptrTy, i64});
+        rtPrintF32 = decl("cplus_print_f32", voidTy, {ptrTy, b.getFloatTy()});
+        rtPrintF64 = decl("cplus_print_f64", voidTy, {ptrTy, b.getDoubleTy()});
+        rtPrintFloatSpec = decl("cplus_print_float_spec", voidTy, {ptrTy, b.getDoubleTy(), i32, i32});
+        rtTrapNarrow = decl("cplus_trap_narrow", voidTy, {i64, ptrTy, i32, i32});
+        rtTrapFloatCast = decl("cplus_trap_float_cast", voidTy, {b.getDoubleTy(), ptrTy, ptrTy, i32, i32});
         rtCString = decl("cplus_c_string", ptrTy, {ptrTy, i64, i32, ptrTy, ptrTy, i32, i32});
         rtCFree = decl("cplus_c_free", voidTy, {ptrTy});
         rtStrFromC = decl("cplus_str_from_c", voidTy, {ptrTy, ptrTy});
@@ -182,6 +188,8 @@ struct Codegen::Impl {
             case K::Bool: return b.getInt1Ty();
             case K::Int: return b.getInt32Ty();
             case K::Long: return b.getInt64Ty();
+            case K::Float: return b.getFloatTy();
+            case K::Double: return b.getDoubleTy();
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
             case K::Class: case K::Vector: case K::Null: return b.getPtrTy();
@@ -266,6 +274,7 @@ struct Codegen::Impl {
     }
 
     llvm::Value* arith(BinOp op, llvm::Value* l, llvm::Value* r, const Type* ty, Loc loc) {
+        if (ty->isFloating()) return floatArith(op, l, r);
         const char* sym = binOpSpelling(op);
         switch (op) {
             case BinOp::Add: return checkedArith(llvm::Intrinsic::sadd_with_overflow, l, r, sym, ty, loc);
@@ -311,6 +320,24 @@ struct Codegen::Impl {
             case BinOp::LogOr: break;
         }
         llvm_unreachable("logical operators are lowered separately");
+    }
+
+    // IEEE arithmetic, as in C++: dividing by zero gives an infinity and overflow gives
+    // an infinity, so nothing traps. Comparisons with NaN are false, except !=.
+    llvm::Value* floatArith(BinOp op, llvm::Value* l, llvm::Value* r) {
+        switch (op) {
+            case BinOp::Add: return b.CreateFAdd(l, r);
+            case BinOp::Sub: return b.CreateFSub(l, r);
+            case BinOp::Mul: return b.CreateFMul(l, r);
+            case BinOp::Div: return b.CreateFDiv(l, r);
+            case BinOp::Eq: return b.CreateFCmpOEQ(l, r);
+            case BinOp::Ne: return b.CreateFCmpUNE(l, r);
+            case BinOp::Lt: return b.CreateFCmpOLT(l, r);
+            case BinOp::Le: return b.CreateFCmpOLE(l, r);
+            case BinOp::Gt: return b.CreateFCmpOGT(l, r);
+            case BinOp::Ge: return b.CreateFCmpOGE(l, r);
+            default: llvm_unreachable("Sema allowed an integer operator on floating-point values");
+        }
     }
 
     // ---- Reference counting ------------------------------------------------
@@ -757,7 +784,10 @@ struct Codegen::Impl {
         if (from->isNull()) return llvm::Constant::getNullValue(llvmType(to));
         if (to->isOptional()) return wrapOptional(convert(v, from, to->elem), to);
         if (from->is(K::Int) && to->is(K::Long)) return b.CreateSExt(v, b.getInt64Ty());
-        if (from->isInteger() && to->is(K::Bool)) return b.CreateICmpNE(v, llvm::ConstantInt::get(v->getType(), 0));
+        if (from->isNumber() && to->is(K::Bool)) return condValue(v, from);
+        if (from->isInteger() && to->isFloating()) return b.CreateSIToFP(v, llvmType(to));
+        if (from->is(K::Float) && to->is(K::Double)) return b.CreateFPExt(v, b.getDoubleTy());
+        if (from->is(K::Double) && to->is(K::Float)) return b.CreateFPTrunc(v, b.getFloatTy());  // a constant
         llvm_unreachable("Sema allowed a conversion Codegen does not know");
     }
 
@@ -808,6 +838,7 @@ struct Codegen::Impl {
         switch (t->kind) {
             case K::Bool: return b.getInt1(false);
             case K::Int: case K::Long: return llvm::ConstantInt::get(llvmType(t), 0);
+            case K::Float: case K::Double: return llvm::ConstantFP::get(llvmType(t), 0.0);
             case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct: return buildAggregate(*t->decl, {});
             case K::Class: case K::Vector: return llvm::ConstantPointerNull::get(b.getPtrTy());
@@ -883,6 +914,7 @@ struct Codegen::Impl {
 
     llvm::Value* condValue(llvm::Value* v, const Type* t) {
         if (t->isInteger()) return b.CreateICmpNE(v, llvm::ConstantInt::get(v->getType(), 0));
+        if (t->isFloating()) return b.CreateFCmpUNE(v, llvm::ConstantFP::get(v->getType(), 0.0));  // NaN is true
         if (t->isOptional()) return hasValue(v, t);
         return v;
     }
@@ -908,7 +940,9 @@ struct Codegen::Impl {
     static bool mayRunCode(const Expr& e) {
         switch (e.kind) {
             case Expr::Kind::IntLit: case Expr::Kind::BoolLit: case Expr::Kind::StringLit: case Expr::Kind::NullLit:
-            case Expr::Kind::Name: case Expr::Kind::This: case Expr::Kind::OptValue: return false;
+            case Expr::Kind::FloatLit: case Expr::Kind::Name: case Expr::Kind::This: case Expr::Kind::OptValue:
+                return false;
+            case Expr::Kind::Cast: return mayRunCode(*static_cast<const CastExpr&>(e).operand);
             case Expr::Kind::Member: return mayRunCode(*static_cast<const MemberExpr&>(e).base);
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
@@ -988,6 +1022,9 @@ struct Codegen::Impl {
         switch (e.kind) {
             case Expr::Kind::IntLit:
                 return llvm::ConstantInt::getSigned(llvmType(e.type), static_cast<const IntLitExpr&>(e).value);
+            case Expr::Kind::FloatLit:
+                return llvm::ConstantFP::get(llvmType(e.type), static_cast<const FloatLitExpr&>(e).value);
+            case Expr::Kind::Cast: return genCast(static_cast<const CastExpr&>(e));
             case Expr::Kind::BoolLit: return b.getInt1(static_cast<const BoolLitExpr&>(e).value);
             case Expr::Kind::StringLit: return stringValue(static_cast<const StringLitExpr&>(e).value);
             case Expr::Kind::NullLit: return llvm::ConstantPointerNull::get(b.getPtrTy());
@@ -1018,6 +1055,7 @@ struct Codegen::Impl {
                     case UnOp::Not:
                     case UnOp::BitNot: return b.CreateNot(v);
                     case UnOp::Neg:
+                        if (e.type->isFloating()) return b.CreateFNeg(v);
                         return checkedArith(llvm::Intrinsic::ssub_with_overflow, llvm::ConstantInt::get(v->getType(), 0),
                                             v, "-", e.type, e.loc);
                 }
@@ -1037,7 +1075,7 @@ struct Codegen::Impl {
                     llvm::Value* order = b.CreateCall(rtStrCompare, {strData(l), strLength(l), strData(r), strLength(r)}, "order");
                     return arith(bin.op, order, b.getInt32(0), Type::intTy(), bin.loc);
                 }
-                if (!bin.operandType->isInteger()) {  // == or != on bools, strings, structs, objects, optionals
+                if (!bin.operandType->isNumber()) {  // == or != on bools, strings, structs, objects, optionals
                     llvm::Value* l = genConverted(*bin.lhs, bin.operandType);
                     llvm::Value* same = genEquals(l, genConverted(*bin.rhs, bin.operandType), bin.operandType);
                     return bin.op == BinOp::Eq ? same : b.CreateNot(same);
@@ -1107,8 +1145,11 @@ struct Codegen::Impl {
                 llvm::Type* t = llvmType(e.type);
                 llvm::Value* old = b.CreateLoad(t, slot);
                 llvm::Value* updated =
-                    checkedArith(i.increment ? llvm::Intrinsic::sadd_with_overflow : llvm::Intrinsic::ssub_with_overflow,
-                                 old, llvm::ConstantInt::get(t, 1), i.increment ? "++" : "--", e.type, e.loc);
+                    e.type->isFloating()
+                        ? floatArith(i.increment ? BinOp::Add : BinOp::Sub, old, llvm::ConstantFP::get(t, 1.0))
+                        : checkedArith(i.increment ? llvm::Intrinsic::sadd_with_overflow
+                                                   : llvm::Intrinsic::ssub_with_overflow,
+                                       old, llvm::ConstantInt::get(t, 1), i.increment ? "++" : "--", e.type, e.loc);
                 b.CreateStore(updated, slot);
                 return i.prefix ? updated : old;
             }
@@ -1123,6 +1164,7 @@ struct Codegen::Impl {
     llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
         switch (t->kind) {
             case K::Bool: case K::Int: case K::Long: case K::Class: return b.CreateICmpEQ(l, r);
+            case K::Float: case K::Double: return b.CreateFCmpOEQ(l, r);
             case K::String: {
                 llvm::Value* eq = b.CreateCall(rtStrEq, {b.CreateExtractValue(l, 0), b.CreateExtractValue(l, 1),
                                                          b.CreateExtractValue(r, 0), b.CreateExtractValue(r, 1)});
@@ -1176,6 +1218,8 @@ struct Codegen::Impl {
         switch (t->kind) {
             case K::Int: b.CreateCall(rtPrintI32, {out, v}); break;
             case K::Long: b.CreateCall(rtPrintI64, {out, v}); break;
+            case K::Float: b.CreateCall(rtPrintF32, {out, v}); break;
+            case K::Double: b.CreateCall(rtPrintF64, {out, v}); break;
             case K::Bool: b.CreateCall(rtPrintBool, {out, b.CreateZExt(v, b.getInt32Ty())}); break;
             case K::String: b.CreateCall(nested ? rtPrintQuoted : rtPrintStr, {out, strData(v), strLength(v)}); break;
             case K::Struct:
@@ -1214,14 +1258,134 @@ struct Codegen::Impl {
         }
         for (size_t i = 0; i < call.formatPieces.size(); ++i) {
             printText(out, call.formatPieces[i]);
-            if (i < values.size()) printValue(out, values[i], call.args[i + first]->type);
+            if (i >= values.size()) continue;
+            const Type* t = call.args[i + first]->type;
+            FormatSpec spec = i < call.formatSpecs.size() ? call.formatSpecs[i] : FormatSpec{};
+            if (spec.type || spec.precision >= 0)  // `{:.2f}`, for a float or a double
+                b.CreateCall(rtPrintFloatSpec, {out, convert(values[i], t, Type::doubleTy()), b.getInt32(spec.type),
+                                                b.getInt32(spec.precision)});
+            else
+                printValue(out, values[i], t);
         }
         if (call.builtin == Builtin::Println) b.CreateCall(rtPrintNewline, {});
         return toString ? b.CreateLoad(stringTy, out, "text") : nullptr;  // a new string, owned
     }
 
+    // `int(x)` and the other conversions, as in C++, except that a value the new type
+    // cannot hold stops the program instead of wrapping around or being undefined.
+    llvm::Value* genCast(const CastExpr& c) {
+        const Type* from = c.operand->type;
+        const Type* to = c.target;
+        llvm::Value* v = gen(*c.operand);
+        if (from == to) return v;
+        llvm::Type* target = llvmType(to);
+        Loc loc = c.loc;
+        if (to->is(K::Bool)) return condValue(v, from);
+        if (from->is(K::Bool)) return to->isFloating() ? b.CreateUIToFP(v, target) : b.CreateZExt(v, target);
+        if (from->isInteger() && to->isInteger()) {
+            if (to->is(K::Long)) return b.CreateSExt(v, target);
+            llvm::Value* narrow = b.CreateTrunc(v, target);
+            auto* trapBB = llvm::BasicBlock::Create(ctx, "narrow.trap", fn);
+            auto* okBB = llvm::BasicBlock::Create(ctx, "narrow.ok", fn);
+            b.CreateCondBr(b.CreateICmpNE(b.CreateSExt(narrow, v->getType()), v), trapBB, okBB,
+                           llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
+            b.SetInsertPoint(trapBB);
+            b.CreateCall(rtTrapNarrow, {v, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+            b.CreateUnreachable();
+            b.SetInsertPoint(okBB);
+            return narrow;
+        }
+        if (from->isInteger()) return b.CreateSIToFP(v, target);
+        if (to->isFloating()) return from->is(K::Float) ? b.CreateFPExt(v, target) : b.CreateFPTrunc(v, target);
+        // A floating-point value becomes an integer by dropping its fraction. It must be
+        // a number, and the result must fit: from -2^31 to 2^31 - 1 for an int.
+        llvm::Value* x = convert(v, from, Type::doubleTy());
+        double lo = to->is(K::Int) ? -2147483649.0 : -9223372036854775808.0;
+        double hi = to->is(K::Int) ? 2147483648.0 : 9223372036854775808.0;
+        llvm::Value* above = to->is(K::Int) ? b.CreateFCmpOGT(x, llvm::ConstantFP::get(b.getDoubleTy(), lo))
+                                            : b.CreateFCmpOGE(x, llvm::ConstantFP::get(b.getDoubleTy(), lo));
+        llvm::Value* fits = b.CreateAnd(above, b.CreateFCmpOLT(x, llvm::ConstantFP::get(b.getDoubleTy(), hi)));
+        auto* trapBB = llvm::BasicBlock::Create(ctx, "cast.trap", fn);
+        auto* okBB = llvm::BasicBlock::Create(ctx, "cast.ok", fn);
+        b.CreateCondBr(fits, okBB, trapBB, llvm::MDBuilder(ctx).createBranchWeights(1u << 20, 1));
+        b.SetInsertPoint(trapBB);
+        b.CreateCall(rtTrapFloatCast, {x, cstring(to->name), fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+        b.CreateUnreachable();
+        b.SetInsertPoint(okBB);
+        return b.CreateFPToSI(v, target);
+    }
+
+    // The math functions. Most become LLVM intrinsics, which compile to an instruction
+    // where the processor has one; the rest call the C library's math functions.
+    llvm::Value* genMath(const CallExpr& call) {
+        MathFn f = call.math;
+        if (f == MathFn::IsNan || f == MathFn::IsInf || f == MathFn::IsFinite) {
+            const Type* t = call.args[0]->type->is(K::Float) ? Type::floatTy() : Type::doubleTy();
+            llvm::Value* v = genConverted(*call.args[0], t);
+            if (f == MathFn::IsNan) return b.CreateFCmpUNO(v, v);
+            llvm::Value* mag = b.CreateUnaryIntrinsic(llvm::Intrinsic::fabs, v);
+            llvm::Value* inf = llvm::ConstantFP::getInfinity(llvmType(t));
+            return f == MathFn::IsInf ? b.CreateFCmpOEQ(mag, inf) : b.CreateFCmpONE(mag, inf);
+        }
+        const Type* t = call.type;
+        std::vector<llvm::Value*> args;
+        for (auto& a : call.args) args.push_back(genConverted(*a, t));
+        llvm::Value* x = args[0];
+        if (t->isInteger()) {  // abs, min and max
+            if (f == MathFn::Abs) {
+                llvm::Value* negated = checkedArith(llvm::Intrinsic::ssub_with_overflow,
+                                                    llvm::ConstantInt::get(x->getType(), 0), x, "abs", t, call.loc);
+                return b.CreateSelect(b.CreateICmpSLT(x, llvm::ConstantInt::get(x->getType(), 0)), negated, x);
+            }
+            llvm::Value* less = b.CreateICmpSLT(f == MathFn::Min ? args[1] : args[0], f == MathFn::Min ? args[0] : args[1]);
+            return b.CreateSelect(less, args[1], args[0]);
+        }
+        auto unary = [&](llvm::Intrinsic::ID id) { return b.CreateUnaryIntrinsic(id, x); };
+        auto binary = [&](llvm::Intrinsic::ID id) { return b.CreateBinaryIntrinsic(id, x, args[1]); };
+        auto libm = [&](const char* name) {
+            std::string n = std::string(name) + (t->is(K::Float) ? "f" : "");
+            std::vector<llvm::Type*> params(args.size(), llvmType(t));
+            return b.CreateCall(mod->getOrInsertFunction(n, llvm::FunctionType::get(llvmType(t), params, false)), args);
+        };
+        switch (f) {
+            case MathFn::Sqrt: return unary(llvm::Intrinsic::sqrt);
+            case MathFn::Exp: return unary(llvm::Intrinsic::exp);
+            case MathFn::Exp2: return unary(llvm::Intrinsic::exp2);
+            case MathFn::Log: return unary(llvm::Intrinsic::log);
+            case MathFn::Log2: return unary(llvm::Intrinsic::log2);
+            case MathFn::Log10: return unary(llvm::Intrinsic::log10);
+            case MathFn::Sin: return unary(llvm::Intrinsic::sin);
+            case MathFn::Cos: return unary(llvm::Intrinsic::cos);
+            case MathFn::Floor: return unary(llvm::Intrinsic::floor);
+            case MathFn::Ceil: return unary(llvm::Intrinsic::ceil);
+            case MathFn::Round: return unary(llvm::Intrinsic::round);  // halves away from zero, as in C
+            case MathFn::Trunc: return unary(llvm::Intrinsic::trunc);
+            case MathFn::Fabs: case MathFn::Abs: return unary(llvm::Intrinsic::fabs);
+            case MathFn::Pow: return binary(llvm::Intrinsic::pow);
+            case MathFn::Fmod: return b.CreateFRem(x, args[1]);
+            case MathFn::Cbrt: return libm("cbrt");
+            case MathFn::Tan: return libm("tan");
+            case MathFn::Asin: return libm("asin");
+            case MathFn::Acos: return libm("acos");
+            case MathFn::Atan: return libm("atan");
+            case MathFn::Atan2: return libm("atan2");
+            case MathFn::Sinh: return libm("sinh");
+            case MathFn::Cosh: return libm("cosh");
+            case MathFn::Tanh: return libm("tanh");
+            case MathFn::Hypot: return libm("hypot");
+            case MathFn::Min: case MathFn::Max: {
+                // As std::min and std::max: `b < a ? b : a` and `a < b ? b : a`.
+                llvm::Value* less = f == MathFn::Min ? b.CreateFCmpOLT(args[1], x) : b.CreateFCmpOLT(x, args[1]);
+                return b.CreateSelect(less, args[1], x);
+            }
+            default: break;
+        }
+        llvm_unreachable("unknown math function");
+    }
+
     llvm::Value* genCall(const CallExpr& call) {
         if (call.vectorType) return genVectorConstruction(call);
+        if (call.builtin == Builtin::Math) return genMath(call);
         if (call.builtin != Builtin::None) return genFormatted(call);
         if (call.constructs) {  // `Point(1, 2)`
             const StructDecl& sd = *call.constructs;

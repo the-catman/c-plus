@@ -1,0 +1,9 @@
+// An infinity does not fit in any integer type.
+int main() {
+    float zero = 0;
+    long n = long(-1 / zero);
+    println("{}", n);
+    return 0;
+}
+// trap: long(x) was given -inf, which does not fit in a long
+// trap: trap_cast_infinity.cplus:4:14

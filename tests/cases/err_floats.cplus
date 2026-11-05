@@ -1,0 +1,85 @@
+// Mistakes with floating-point numbers, casts and math functions.
+struct Box {
+    float size;
+};
+
+double half(double x) { return x / 2; }
+
+int main() {
+    double d = 2.5;
+    float f = 1.5f;
+    int i = d;
+    long l = f;
+    float g = d;
+    float tooBig = 1e39;
+    Box b = {d};
+    int h = half(4);
+    int r = sqrt(4);
+    float q = sqrt(d);
+    double m = d % 2;
+    double bits = d & 1;
+    double flip = ~d;
+    double moved = d << 1;
+    f %= 2;
+    println("{:.2f}", i);
+    println("{:.2f}", "text");
+    println("{:x}", d);
+    println("{:.f}", d);
+    string s = string(d);
+    string t = static_cast<string>(i);
+    int n = int("42");
+    double e = double("2.5");
+    int? maybe = 4;
+    int fromOptional = int(maybe);
+    vector<int> v = {1};
+    long fromVector = (long)v;
+    double w = sqrt("4");
+    double x = pow(2);
+    double y = min(1, 2, 3);
+    int k = abs(true);
+    double z = sqrt();
+    double u = fmod(maybe, 2);
+    return 0;
+}
+// error: expected 'int' to initialize 'i', but this is 'double'
+// error: Write `int(x)` to drop it (rounding toward zero), or `int(round(x))` to round to the nearest
+// error: expected 'long' to initialize 'l', but this is 'float'
+// error: expected 'float' to initialize 'g', but this is 'double'
+// error: Write `float(x)`, or write numbers as floats, e.g. `0.5f`: as in C++, `f * 0.5` is a double
+// error: this number is too large for a float
+// error: the largest float is about 3.4e38; use a double instead
+// error: expected 'float' for field 'size' of 'Box', but this is 'double'
+// error: expected 'int' to initialize 'h', but this is 'double'
+// error: expected 'int' to initialize 'r', but this is 'double'
+// error: expected 'float' to initialize 'q', but this is 'double'
+// error: '%' needs an int or a long, but this is 'double'
+// error: for the remainder of a division of floating-point numbers, write `fmod(a, b)`, as in C++
+// error: '&' needs an int or a long, but this is 'double'
+// error: bit operations work on integers; convert with `long(x)` first
+// error: '~' needs an int or a long, but this is 'double'
+// error: '<<' needs an int or a long, but this is 'double'
+// error: '%=' needs an int or a long, but this is 'float'
+// error: for floating-point numbers, write `x = fmod(x, y)`
+// error: {:.2f} formats a float or a double, but this is 'int'
+// error: write {} for an integer, or convert it first: `double(n)`
+// error: {:.2f} formats a float or a double, but this is 'string'
+// error: this compiler does not support the format option {:x} yet
+// error: such as {:.2f}, {:e} or {:.3g}. Width and alignment are planned
+// error: this compiler does not support the format option {:.f} yet
+// error: a cast cannot turn a value into a string
+// error: write `to_string(x)`, or `format("{}", x)`
+// error: this compiler does not support reading a number from a string yet
+// error: until then, C's `atoi` or `strtol` can be declared with extern "C" and called
+// error: until then, C's `atof` or `strtod` can be declared with extern "C" and called
+// error: 'int(x)' converts a number or a bool, but this is 'int?'
+// error: 'long(x)' converts a number or a bool, but this is 'vector<int>'
+// error: convert one of its fields or elements instead, e.g. `long(v[0])`
+// error: sqrt() takes a number, but this is 'string'
+// error: C's `atof` can be declared with extern "C" and called
+// error: pow() takes two arguments but 1 was given
+// error: write `pow(base, exponent)`
+// error: min() takes two arguments but 3 were given
+// error: abs() takes a number, but this is 'bool'
+// error: a bool is not a number here; write `int(b)` for 1 or 0
+// error: sqrt() takes one argument but 0 were given
+// error: fmod() takes numbers, but this is 'int?'

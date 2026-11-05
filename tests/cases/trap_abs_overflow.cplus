@@ -1,0 +1,11 @@
+// The smallest int has no positive counterpart, so abs() of it overflows, as negating it
+// does.
+int main() {
+    int smallest = -2147483647 - 1;
+    println("{}", abs(smallest + 1));
+    println("{}", abs(smallest));
+    return 0;
+}
+// expect: 2147483647
+// trap: integer overflow: the result of 'abs' does not fit in 'int'
+// trap: trap_abs_overflow.cplus:6:19

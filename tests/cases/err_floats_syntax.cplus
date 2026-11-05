@@ -1,0 +1,43 @@
+// Mistakes in writing floating-point numbers and casts.
+int main() {
+    double a = 1.5L;
+    float b = 5f;
+    double c = 0x1.8p3;
+    double c2 = 0x1p-3;
+    double d = 1e400;
+    float d2 = 1e39f;
+    double e = 1e;
+    double f2 = 1.5e+;
+    long double g = 2.5;
+    double i = 1.5d;
+    int j = reinterpret_cast<int>(a);
+    int k = const_cast<int>(1);
+    int l = dynamic_cast<int>(a);
+    int m = int();
+    int n = int(1, 2);
+    double o = 1.2.3;
+    double p = 1_000.5;
+    return 0;
+}
+// error: C+ has no long double type
+// error: remove the L: a number with a fraction is a double, which has 64 bits
+// error: a float needs a decimal point or an exponent, as in C++
+// error: write `5.0f`, or leave out the f, since an int converts to a float
+// error: a number with a fraction is written in decimal
+// error: C+ has no hexadecimal floating-point numbers
+// error: the number 1e400 is too large for a double
+// error: the number 1e39f is too large for a float
+// error: the largest float is about 3.4e38; leave out the f to make it a double
+// error: the exponent of '1e' has no digits
+// error: the exponent of '1.5e+' has no digits
+// error: write `double`, which has 64 bits
+// error: 'd' is not a suffix for a floating-point number
+// error: C+ has no reinterpret_cast
+// error: To convert a number, write `int(x)` or `static_cast<int>(x)`
+// error: C+ has no const_cast
+// error: C+ has no dynamic_cast
+// error: write `int(x)` to convert x. For a zero, write `0`
+// error: a conversion to 'int' takes one value
+// error: a number can have only one decimal point
+// error: digits are separated with ', as in C++, not with _
+// error: write `1'000.5`

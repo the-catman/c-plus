@@ -1,0 +1,26 @@
+// C and C++ habits with numbers, and what the compiler suggests instead.
+int main() {
+    double r = std::sqrt(2.0);
+    double v = std::stod("2.5");
+    double pi = std::numbers::pi;
+    double p = M_PI;
+    double s = stod("2.5");
+    int n = atoi("2");
+    float z = fabsf(2.5f);
+    double q = sqrtl(2.5);
+    double w = mystery(2);
+    int u = undefinedThing;
+    return 0;
+}
+// error: math functions are built in: write `sqrt(...)` instead of `std::sqrt(...)`
+// error: Until then, declare the C function: `extern "C" double atof(string text);`
+// error: math constants are planned. Until then, `acos(-1)` is pi
+// error: 'M_PI' is not declared
+// error: math constants are planned. Until then, `acos(-1)` is pi and `exp(1)` is e
+// error: there is no function named 'stod'
+// error: this compiler cannot read a number from a string yet
+// error: a C function must be declared before it is called: `extern "C" int atoi(string text);`
+// error: write `fabs`, which returns a float when given floats, as in C++
+// error: C+ has no long double; write `sqrt`
+// error: define it in this file, in any order, or declare a C function with `extern "C"`
+// error: declare it before this line, e.g. `auto undefinedThing = ...;`

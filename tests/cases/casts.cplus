@@ -1,0 +1,43 @@
+// Conversions between numbers and bool, written as in C++: `int(x)`, `static_cast<int>(x)`
+// or `(int)x`. A value that the new type cannot hold stops the program (see the
+// trap_cast tests) instead of wrapping around or being undefined.
+int main() {
+    double d = 3.99;
+    long big = 1234567890123L;
+    int small = 1000;
+    bool yes = true;
+
+    // A fraction is dropped, rounding toward zero, as in C++.
+    println("{} {} {} {}", int(d), int(-d), long(2.5e15), static_cast<int>(-0.5));
+    // expect: 3 -3 2500000000000000 0
+    println("{} {}", int(round(d)), long(floor(-d)));
+    // expect: 4 -4
+
+    // All three spellings mean the same thing.
+    println("{} {} {}", int(d), static_cast<int>(d), (int)d);
+    // expect: 3 3 3
+
+    // Integers: long to int when the value fits, and int to long.
+    long fits = 2147483647L;
+    println("{} {} {}", int(fits), int(-2147483648L), long(small) * 3000000);
+    // expect: 2147483647 -2147483648 3000000000
+    println("{} {}", (int)(big % 1000), static_cast<long>(small));
+    // expect: 123 1000
+
+    // To and from floating point.
+    println("{} {} {}", double(small) / 3, float(d), double(big));
+    // expect: 333.3333333333333 3.99 1234567890123
+    println("{} {}", float(1.0 / 3), double(float(0.1)));
+    // expect: 0.33333334 0.10000000149011612
+
+    // bool: true is 1, and a number is true when it is not zero.
+    println("{} {} {} {}", int(yes), double(false), bool(small), bool(0.0));
+    // expect: 1 0 true false
+    println("{} {}", int(yes) + int(small > 10), (long)!yes);
+    // expect: 2 0
+
+    // A cast binds like a unary operator, as in C++.
+    println("{} {}", (int)d * 2, (int)(d * 2));
+    // expect: 6 7
+    return 0;
+}

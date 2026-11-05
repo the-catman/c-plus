@@ -84,8 +84,8 @@ int main() {
 // error: expected 'int' to initialize 'pos', but this is 'long'
 // error: clear() changes the string, so it must be called on a variable or a field
 // error: 'k' is const and cannot be changed
-// error: to_string() takes an int or a long, but this is 'bool'
-// error: to_string() takes an int or a long, but this is 'string'
+// error: to_string() takes a number, but this is 'bool'
+// error: to_string() takes a number, but this is 'string'
 // error: it is already a string
 // error: to_string() takes one argument but 2 were given
 // error: the first argument of format must be a format string written in quotes

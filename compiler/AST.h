@@ -16,7 +16,7 @@ namespace cplus {
 struct StructDecl;
 
 struct Type {
-    enum class Kind { Error, Void, Bool, Int, Long, String, Auto, Struct, Class, Vector, Optional, Null };
+    enum class Kind { Error, Void, Bool, Int, Long, Float, Double, String, Auto, Struct, Class, Vector, Optional, Null };
     Kind kind;
     const char* name;
     const StructDecl* decl = nullptr;  // for Kind::Struct and Kind::Class
@@ -28,15 +28,17 @@ struct Type {
     bool isNull() const { return kind == Kind::Null; }  // the type of `null`, which converts to any optional
     bool isError() const { return kind == Kind::Error; }
     bool isInteger() const { return kind == Kind::Int || kind == Kind::Long; }
+    bool isFloating() const { return kind == Kind::Float || kind == Kind::Double; }
+    bool isNumber() const { return isInteger() || isFloating(); }
     bool isStruct() const { return kind == Kind::Struct; }  // a value type
     bool isClass() const { return kind == Kind::Class; }    // a reference-counted object
     bool hasFields() const { return kind == Kind::Struct || kind == Kind::Class; }
     unsigned bits() const { return kind == Kind::Long ? 64 : kind == Kind::Int ? 32 : 0; }
 
     static const Type* get(Kind k) {
-        static const Type types[] = {{Kind::Error, "<error>"}, {Kind::Void, "void"}, {Kind::Bool, "bool"},
-                                     {Kind::Int, "int"},       {Kind::Long, "long"}, {Kind::String, "string"},
-                                     {Kind::Auto, "auto"}};
+        static const Type types[] = {{Kind::Error, "<error>"}, {Kind::Void, "void"},     {Kind::Bool, "bool"},
+                                     {Kind::Int, "int"},       {Kind::Long, "long"},     {Kind::Float, "float"},
+                                     {Kind::Double, "double"}, {Kind::String, "string"}, {Kind::Auto, "auto"}};
         return &types[(int)k];
     }
     static const Type* error() { return get(Kind::Error); }
@@ -44,6 +46,8 @@ struct Type {
     static const Type* boolTy() { return get(Kind::Bool); }
     static const Type* intTy() { return get(Kind::Int); }
     static const Type* longTy() { return get(Kind::Long); }
+    static const Type* floatTy() { return get(Kind::Float); }
+    static const Type* doubleTy() { return get(Kind::Double); }
     static const Type* stringTy() { return get(Kind::String); }
     static const Type* autoTy() { return get(Kind::Auto); }
     static const Type* nullTy() {
@@ -80,8 +84,8 @@ struct FuncDecl;
 // ---- Expressions -----------------------------------------------------------
 
 struct Expr {
-    enum class Kind { IntLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec, Call,
-                      MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce };
+    enum class Kind { IntLit, FloatLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
+                      Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -95,6 +99,20 @@ struct IntLitExpr : Expr {
     int64_t value;
     bool isLong;  // written with an L suffix
     IntLitExpr(Loc l, int64_t v, bool longSuffix) : Expr(Kind::IntLit, l), value(v), isLong(longSuffix) {}
+};
+
+struct FloatLitExpr : Expr {
+    double value;
+    bool isFloat;  // written with an f suffix
+    FloatLitExpr(Loc l, double v, bool f) : Expr(Kind::FloatLit, l), value(v), isFloat(f) {}
+};
+
+// `int(x)`, `static_cast<int>(x)` or `(int)x`: an explicit conversion between numbers
+// and bool.
+struct CastExpr : Expr {
+    const Type* target;
+    ExprPtr operand;
+    CastExpr(Loc l, const Type* t, ExprPtr e) : Expr(Kind::Cast, l), target(t), operand(std::move(e)) {}
 };
 
 struct NullLitExpr : Expr {
@@ -163,7 +181,30 @@ struct IncDecExpr : Expr {
         : Expr(Kind::IncDec, l), increment(inc), prefix(pre), target(std::move(t)) {}
 };
 
-enum class Builtin { None, Print, Println, Format, ToString };
+enum class Builtin { None, Print, Println, Format, ToString, Math };
+
+// The math functions of C++'s <cmath>, and abs, min and max.
+enum class MathFn {
+    Sqrt, Cbrt, Pow, Exp, Exp2, Log, Log2, Log10, Sin, Cos, Tan, Asin, Acos, Atan, Atan2, Sinh, Cosh, Tanh,
+    Floor, Ceil, Round, Trunc, Fabs, Fmod, Hypot, IsNan, IsInf, IsFinite, Abs, Min, Max
+};
+bool isMathFunction(const std::string& name);  // `sqrt`, `pow`, ...: defined in Sema.cpp
+
+// The C function that reads a number from text the way C++'s `std::stoi`, `std::stod`
+// and so on do, as a declaration to suggest: `int atoi(string text)`. Empty for other names.
+inline std::string cNumberReader(const std::string& name) {
+    if (name == "stoi" || name == "atoi") return "int atoi(string text)";
+    if (name == "stol" || name == "stoll" || name == "atol" || name == "strtol") return "long atol(string text)";
+    if (name == "stod" || name == "stof" || name == "atof" || name == "strtod") return "double atof(string text)";
+    return "";
+}
+
+// The options of one placeholder, `{:.2f}`: a precision, and f, e or g. Both are for
+// floating-point values only.
+struct FormatSpec {
+    char type = 0;       // 'f', 'e', 'g', or 0 for none
+    int precision = -1;  // -1 for none
+};
 
 // `f(args)`, a built-in like println, or `Point(1, 2)`, which builds a struct.
 struct CallExpr : Expr {
@@ -175,6 +216,8 @@ struct CallExpr : Expr {
     Builtin builtin = Builtin::None;       // set by Sema for built-ins
     const Type* vectorType = nullptr;      // `vector<int>(n)` or `vector<int>(n, value)`
     std::vector<std::string> formatPieces;  // print, println, format, to_string: literal text around each {}
+    std::vector<FormatSpec> formatSpecs;    // one for each {}
+    MathFn math{};                          // for Builtin::Math
     CallExpr(Loc l, std::string c, std::vector<ExprPtr> a)
         : Expr(Kind::Call, l), callee(std::move(c)), args(std::move(a)) {}
 };

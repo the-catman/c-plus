@@ -1,0 +1,39 @@
+// Floating-point numbers: a mean, a standard deviation and compound interest, printed
+// with {:.2f}. Converting a double to an int takes a cast, which rounds toward zero.
+struct Summary {
+    double mean;
+    double deviation;
+    double low;
+    double high;
+};
+
+Summary summarize(vector<double> values) {
+    double total = 0;
+    double low = values[0];
+    double high = values[0];
+    for (double v : values) {
+        total += v;
+        low = min(low, v);
+        high = max(high, v);
+    }
+    double mean = total / values.size();
+    double squares = 0;
+    for (double v : values) squares += pow(v - mean, 2);
+    return {mean, sqrt(squares / values.size()), low, high};
+}
+
+int main() {
+    vector<double> temperatures = {21.5, 19, 23.25, 18.75, 22, 25.5, 20};
+    Summary s = summarize(temperatures);
+    println("mean {:.2f}, deviation {:.2f}, from {} to {}", s.mean, s.deviation, s.low, s.high);
+
+    // A balance that grows by 4% a year.
+    double balance = 1000;
+    for (int year = 1; year <= 5; year++) {
+        balance *= 1.04;
+        println("year {}: {:.2f}", year, balance);
+    }
+    int cents = int(round(balance * 100));
+    println("{} cents: {} dollars and {} cents", cents, cents / 100, cents % 100);
+    return 0;
+}

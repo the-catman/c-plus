@@ -1,5 +1,6 @@
 // The C+ runtime. Intentionally small: everything here is called by generated code.
 #include <inttypes.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -339,6 +340,155 @@ void cplus_print_i32(cplus_string* out, int32_t value) {
 void cplus_print_i64(cplus_string* out, int64_t value) {
     char text[24];
     out_write(out, text, snprintf(text, sizeof text, "%" PRId64, value));
+}
+
+// ---- Floating-point numbers ------------------------------------------------
+//
+// `{}` prints a float or a double as C++'s std::format does: the fewest digits that read
+// back as the same value, in fixed or scientific notation, whichever is shorter (fixed
+// when they tie). So 0.1 prints as 0.1, 100.0 as 100, 1e20 as 1e+20 and 1e-5 as 1e-05.
+
+// Whether `text` reads back as `value`, as a float or a double.
+static int reads_back(const char* text, double value, int is_float) {
+    return is_float ? strtof(text, NULL) == (float)value : strtod(text, NULL) == value;
+}
+
+// Writes the digits of `value` rounded to `count` significant digits into `digits`, if
+// they read back as `value`, with the power of ten of the first digit. The nearest
+// `count` digits may miss the value by a little where the spacing of floats changes, so
+// the digits just above and below are tried too.
+static int digits_that_read_back(double value, int is_float, int count, char* digits, int* exponent) {
+    char text[40];
+    snprintf(text, sizeof text, "%.*e", count - 1, value);
+    char* e = strchr(text, 'e');
+    int exp10 = atoi(e + 1);
+    char mantissa[24];
+    int n = 0;
+    for (char* c = text; c < e; ++c)
+        if (*c != '.') mantissa[n++] = *c;
+    mantissa[n] = 0;
+    uint64_t m = strtoull(mantissa, NULL, 10);
+    uint64_t candidates[3] = {m, m + 1, m - 1};
+    for (int k = 0; k < 3; ++k) {
+        if (candidates[k] == 0) continue;
+        char attempt[48];
+        snprintf(attempt, sizeof attempt, "%" PRIu64 "e%d", candidates[k], exp10 - (count - 1));
+        if (!reads_back(attempt, value, is_float)) continue;
+        snprintf(digits, 24, "%" PRIu64, candidates[k]);
+        int len = (int)strlen(digits);
+        *exponent = exp10 + (len - count);  // 999 + 1 has one more digit
+        while (len > 1 && digits[len - 1] == '0') digits[--len] = 0;
+        return 1;
+    }
+    return 0;
+}
+
+// The shortest digits of a positive, finite value, with no trailing zeros, and the power
+// of ten of the first digit: 1234.5 gives "12345" and 3. Most computed values need all
+// 16 or 17 digits, so those are tried first; shorter ones are searched from 1 up.
+static void shortest_digits(double value, int is_float, char* digits, int* exponent) {
+    int max = is_float ? 9 : 17;
+    int guess = max - 2;
+    int start = digits_that_read_back(value, is_float, guess, digits, exponent) ? 1 : guess + 1;
+    for (int count = start; count <= max; ++count)
+        if (digits_that_read_back(value, is_float, count, digits, exponent)) return;
+}
+
+static void print_shortest(cplus_string* out, double value, int is_float) {
+    // Every NaN prints as "nan". C++ prints "-nan" when the sign bit is set, but whether
+    // it is set can change with optimization, and the output should not.
+    if (isnan(value)) {
+        out_write(out, "nan", 3);
+        return;
+    }
+    if (signbit(value)) out_write(out, "-", 1);
+    value = fabs(value);
+    if (isinf(value)) {
+        out_write(out, "inf", 3);
+        return;
+    }
+    if (value == 0) {
+        out_write(out, "0", 1);
+        return;
+    }
+    char digits[24];
+    int exp10;
+    shortest_digits(value, is_float, digits, &exp10);
+    int n = (int)strlen(digits);
+    // Scientific: d.ddde+XX, with at least two digits in the exponent.
+    char sci[48];
+    int s = snprintf(sci, sizeof sci, "%c%s%s", digits[0], n > 1 ? "." : "", digits + 1);
+    s += snprintf(sci + s, sizeof sci - s, "e%c%02d", exp10 < 0 ? '-' : '+', exp10 < 0 ? -exp10 : exp10);
+    // Fixed: as many zeros as the exponent needs.
+    int fixed_length = exp10 >= 0 ? (n > exp10 + 1 ? n + 1 : exp10 + 1) : n + 1 - exp10;
+    if (fixed_length > s) {
+        out_write(out, sci, s);
+        return;
+    }
+    char fixed[48];
+    int f = 0;
+    if (exp10 >= n - 1) {
+        // A whole number. Its exact digits are as short as the shortest digits padded
+        // with zeros, and closer to the value, so C++ prints them: 2^60 is
+        // 1152921504606846976, not 1152921504606847000.
+        out_write(out, fixed, snprintf(fixed, sizeof fixed, "%.0f", value));
+        return;
+    }
+    if (exp10 >= 0) {
+        for (int i = 0; i <= exp10; ++i) fixed[f++] = i < n ? digits[i] : '0';
+        if (n > exp10 + 1) {
+            fixed[f++] = '.';
+            for (int i = exp10 + 1; i < n; ++i) fixed[f++] = digits[i];
+        }
+    } else {
+        fixed[f++] = '0';
+        fixed[f++] = '.';
+        for (int i = 0; i < -exp10 - 1; ++i) fixed[f++] = '0';
+        for (int i = 0; i < n; ++i) fixed[f++] = digits[i];
+    }
+    out_write(out, fixed, f);
+}
+
+void cplus_print_f64(cplus_string* out, double value) { print_shortest(out, value, 0); }
+void cplus_print_f32(cplus_string* out, float value) { print_shortest(out, value, 1); }
+
+// `{:.2f}`, `{:e}`, `{:.3g}` and `{:.3}`, which print as printf's %f, %e and %g do. The
+// precision is 6 when it is left out, and `{:.3}` means `{:.3g}`.
+void cplus_print_float_spec(cplus_string* out, double value, int32_t type, int32_t precision) {
+    if (isnan(value)) {
+        out_write(out, "nan", 3);
+        return;
+    }
+    char format[8] = {'%', '.', '*', type ? (char)type : 'g', 0};
+    if (precision < 0) precision = 6;
+    int length = snprintf(NULL, 0, format, precision, value);
+    char small[64];
+    char* text = length < (int)sizeof small ? small : malloc((size_t)length + 1);
+    if (!text) out_of_memory();
+    snprintf(text, (size_t)length + 1, format, precision, value);
+    out_write(out, text, length);
+    if (text != small) free(text);
+}
+
+// `int(x)` given a long that an int cannot hold.
+_Noreturn void cplus_trap_narrow(int64_t value, const char* file, int32_t line, int32_t column) {
+    char message[160];
+    snprintf(message, sizeof message,
+             "int(x) was given %" PRId64 ", which does not fit in an int (from -2147483648 to 2147483647)", value);
+    cplus_trap(message, file, line, column);
+}
+
+// `int(x)` or `long(x)` given NaN, an infinity, or a value too large for the type.
+_Noreturn void cplus_trap_float_cast(double value, const char* type, const char* file, int32_t line, int32_t column) {
+    cplus_string text = {NULL, 0, NULL};
+    print_shortest(&text, value, 0);
+    char message[200];
+    if (isnan(value))
+        snprintf(message, sizeof message, "%s(x) was given NaN, which is not a number", type);
+    else
+        snprintf(message, sizeof message, "%s(x) was given %.*s, which does not fit in %s %s", type, (int)text.length,
+                 text.data, strcmp(type, "int") == 0 ? "an" : "a", type);
+    cplus_trap(message, file, line, column);
 }
 
 void cplus_print_bool(cplus_string* out, int32_t value) {

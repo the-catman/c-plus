@@ -64,8 +64,9 @@ C++20, built with clang. Self-hosting in C+ is a later milestone, not a requirem
   that is NULL stops the program, and a `string?` result makes it null.
 - Libraries are named on the command line, `-lname` and `-Ldir`, as with a C compiler.
   libc is always linked.
-- Pointers (and opaque handles), C structs, `double`, `char`, variadic functions and
-  callbacks follow with the features they need.
+- `double` and `float` are passed as they are, since C has the same types.
+- Pointers (and opaque handles), C structs, `char`, variadic functions and callbacks
+  follow with the features they need.
 
 ### 2.5 C++ interop — DECIDED
 None. C++ libraries are consumed through hand-written `extern "C"` shims. No tooling
@@ -277,6 +278,29 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
   cycles can now be built, and they leak until `weak` arrives (§2.7). Freeing a long chain
   of objects uses constant stack.
 
+### 2.19 Floating point and casts — DECIDED
+Decided 2026-11-05.
+- `double` (64-bit) and `float` (32-bit), IEEE 754, with C++'s literals (`1.5`, `1e9`,
+  `2.5f`) and C++'s usual arithmetic conversions. No `long double` and no hexadecimal
+  floating-point literals.
+- Implicit: an integer to a floating-point type, `float` to `double`, and a `double`
+  written as a number to `float` (`float f = 0.5;`). Never a floating-point value to an
+  integer, and no other `double` to `float`.
+- Floating-point arithmetic is not checked: division by zero gives an infinity, and NaN
+  is a value. `%` and the bit operators stay integer-only; `fmod` gives the remainder.
+- Casts use C++'s spellings, `int(x)`, `static_cast<int>(x)` and `(int)x`, all with the
+  same meaning, between the number types and `bool`. A value that does not fit the new
+  type, including NaN and the infinities converted to an integer, stops the program, as
+  integer overflow does. `reinterpret_cast` and `const_cast` do not exist; `dynamic_cast`
+  would come with inheritance. A cast never makes or reads a string.
+- `{}` prints the shortest digits that read back exactly, as C++'s `std::format` does,
+  except that NaN always prints as `nan`, so output does not change with optimization.
+  `{:.2f}`, `{:e}`, `{:g}` and `{:.3}` follow `std::format`. `to_string(x)` matches `{}`,
+  as in C++26.
+- The math functions of `<cmath>`, plus `abs`, `min` and `max`, are built in with their
+  C++ names and overload rules. A function of the program with the same name takes their
+  place, so C's own can still be declared.
+
 ---
 
 ## 3. Compiler architecture
@@ -305,14 +329,14 @@ Open implementation questions are listed in §6.
 
 Status: Phase 0 has a first draft (`docs/SPEC.md`, `docs/CHEATSHEET.md`). Phase 1 is in
 progress. The compiler builds programs with integers, bools, strings (joining, ordering,
-`substr`, `find`, `format`, `to_string`), structs, reference-counted classes with methods,
-constructors and destructors, vectors, and optionals (`T?`, `null`, `?.`, `??`), using
+`substr`, `find`, `format`, `to_string`), `double` and `float` with casts and the
+`<cmath>` functions, structs, reference-counted classes with methods, constructors and
+destructors, vectors, and optionals (`T?`, `null`, `?.`, `??`), using
 functions, control flow including range-based `for`, definite assignment (down to struct
 fields), overflow and bounds traps, and `println`, all through LLVM. Destructors and a
 leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. C functions
-can be called through `extern "C"` declarations with `int`, `long`, `bool` and `string`
-values. Next in Phase 1: `char`, floating point and raw pointers, which the rest of C
-interop needs.
+can be called through `extern "C"` declarations with number, `bool` and `string` values.
+Next in Phase 1: `char` and raw pointers, which the rest of C interop needs.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -365,7 +389,7 @@ will confidently write C++ wherever the two differ.
 
 ## 6. Open items
 
-- Remaining syntax: interfaces, casts, `unique<T>` and `local<T>` construction, `async`
+- Remaining syntax: interfaces, `unique<T>` and `local<T>` construction, `async`
   functions, lambdas, enums, `switch`. Settled in Phase 0 as each feature is reached.
 - Function overloading is planned, as in C++, after the v1 core.
 - References (`T&`): whether C+ gets them, and in what form. They decide how

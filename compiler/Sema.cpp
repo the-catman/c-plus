@@ -1,8 +1,11 @@
 #include "Sema.h"
 
 #include <algorithm>
-#include <set>
+#include <cctype>
+#include <cfloat>
+#include <cmath>
 #include <functional>
+#include <set>
 
 #include "SpecRefs.h"
 
@@ -19,12 +22,28 @@ static bool canConvert(const Type* from, const Type* to) {
         if (from->isNull()) return true;
         return !from->isOptional() && canConvert(from, to->elem);
     }
-    if (from->is(K::Int) && to->is(K::Long)) return true;  // widening never loses information
-    return from->isInteger() && to->is(K::Bool);           // as in C++: zero is false, anything else true
+    if (from->is(K::Int) && to->is(K::Long)) return true;      // widening never loses information
+    if (from->isInteger() && to->isFloating()) return true;    // as in C++; a very large long is rounded
+    if (from->is(K::Float) && to->is(K::Double)) return true;  // never loses information
+    return from->isNumber() && to->is(K::Bool);                // as in C++: zero is false, anything else true
 }
 
 static const Type* commonInteger(const Type* a, const Type* b) {
     return (a->is(K::Long) || b->is(K::Long)) ? Type::longTy() : Type::intTy();
+}
+
+// The type arithmetic on `a` and `b` happens in, as in C++: double, then float, then
+// the wider integer.
+static const Type* commonNumber(const Type* a, const Type* b) {
+    if (a->is(K::Double) || b->is(K::Double)) return Type::doubleTy();
+    if (a->is(K::Float) || b->is(K::Float)) return Type::floatTy();
+    return commonInteger(a, b);
+}
+
+// A double written as a number, such as `1.5` or `-0.25`, which also converts to a
+// float: `float f = 1.5;`.
+static bool isDoubleConstant(const Expr& e) {
+    return e.kind == Expr::Kind::FloatLit && !static_cast<const FloatLitExpr&>(e).isFloat;
 }
 
 // The type of `c ? x : y` when one branch is null or an optional and the other fits in
@@ -88,7 +107,7 @@ static const char* kChainOnlyReads =
 // How to turn a value of type `t` into text, for errors about joining it to a string
 // with `op` (+ or +=).
 static std::string textHelp(const Type* t, const char* op = "+") {
-    if (t->isInteger())
+    if (t->isNumber())
         return std::string("turn the number into a string first: `s ") + op +
                " to_string(n)`, or build the whole text with `format(\"{}{}\", s, n)`. Unlike C++, a number is "
                "never added as a character code";
@@ -374,9 +393,14 @@ void Sema::reportUnknownName(const NameExpr& n) {
     else if (funcs_.count(n.name)) help = "functions can only be called for now, e.g. `" + n.name + "()`";
     else if (n.name == "cout" || n.name == "endl" || n.name == "cerr") help = "C+ prints with `println(\"{}\", value);`";
     else if (n.name == "nullptr" || n.name == "NULL") help = "write `null`; only an optional, such as `User?`, can be null";
+    else if (n.name == "M_PI" || n.name == "M_E" || n.name == "INFINITY" || n.name == "NAN")
+        help = n.name == "INFINITY" || n.name == "NAN"
+                   ? "write `1.0 / 0` for infinity, or `0.0 / 0` for NaN; constants for them are planned"
+                   : "math constants are planned. Until then, `acos(-1)` is pi and `exp(1)` is e";
     else if (defaultsOf_ && defaultsOf_->fieldIndex(n.name) >= 0)
         help = "a field's default cannot read other fields; set this field in a constructor instead";
     else if (std::string guess = suggestName(n.name); !guess.empty()) help = "did you mean " + q(guess) + "?";
+    else help = "declare it before this line, e.g. `auto " + n.name + " = ...;`";
     diags_.error(n.loc, q(n.name) + " is not declared", help, spec::Variables);
 }
 
@@ -518,7 +542,7 @@ void Sema::checkStructs(Program& program) {
 // copy that ends in a zero byte, and a returned `const char*` becomes a string.
 void Sema::checkExternFunction(FuncDecl& fn) {
     auto check = [&](const Type* t, Loc loc, bool isReturn) {
-        if (t->is(K::Int) || t->is(K::Long) || t->is(K::Bool) || t->is(K::String) || t->isError()) return;
+        if (t->isNumber() || t->is(K::Bool) || t->is(K::String) || t->isError()) return;
         if (t->isOptional() && t->elem->is(K::String)) return;
         if (isReturn && t->is(K::Void)) return;
         if (t->is(K::Void)) {
@@ -527,9 +551,9 @@ void Sema::checkExternFunction(FuncDecl& fn) {
                          spec::CFunctions);
             return;
         }
-        std::string message = isReturn ? "a C function can return void, int, long, bool, string or string?, but "
+        std::string message = isReturn ? "a C function can return void, a number, bool, string or string?, but "
                                          "this is " + q(t)
-                                       : "a C function can take int, long, bool, string or string?, but this "
+                                       : "a C function can take a number, bool, string or string?, but this "
                                          "parameter is " + q(t);
         std::string help;
         if (t->isStruct())
@@ -643,7 +667,7 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
 // As in C++, a number used as a condition is true when it is not zero, and an optional
 // when it holds a value. A `bool?` would be ambiguous, so it is not a condition.
 static bool usableAsCondition(const Type* t) {
-    return t->isError() || t->is(K::Bool) || t->isInteger() || (t->isOptional() && !t->elem->is(K::Bool));
+    return t->isError() || t->is(K::Bool) || t->isNumber() || (t->isOptional() && !t->elem->is(K::Bool));
 }
 
 // Help for a bool? used as a condition.
@@ -869,15 +893,30 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
 void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& context) {
     const Type* from = e.type;
     if (canConvert(from, to)) return;
+    const Type* target = to->isOptional() ? to->elem : to;
+    if (target->is(K::Float) && isDoubleConstant(e)) {  // `float f = 1.5;`
+        if (std::fabs(static_cast<const FloatLitExpr&>(e).value) > FLT_MAX)
+            diags_.error(e.loc, "this number is too large for a float",
+                         "the largest float is about 3.4e38; use a double instead", spec::FloatingPointTypes);
+        return;
+    }
     std::string help;
     if (from->is(K::Long) && to->is(K::Int)) {
         help = e.kind == Expr::Kind::IntLit ? "this number is larger than an int can hold; use long instead"
-                                            : "a long may not fit in an int. Use long here; explicit casts are not "
-                                              "supported yet";
+                                            : "a long may not fit in an int. Use long here, or write `int(x)`, which "
+                                              "stops the program if the value does not fit";
+    } else if (from->isFloating() && target->isInteger()) {
+        help = std::string("a ") + from->name + " does not convert to " + (target->is(K::Int) ? "an " : "a ") +
+               target->name + " by itself, since that would drop the fraction. Write `" + target->name +
+               "(x)` to drop it (rounding toward zero), or `" + target->name + "(round(x))` to round to the nearest";
+    } else if (from->is(K::Double) && target->is(K::Float)) {
+        help = "a double does not convert to a float by itself, since that loses precision. Write `float(x)`, or "
+               "write numbers as floats, e.g. `0.5f`: as in C++, `f * 0.5` is a double";
     } else if (from->is(K::Void)) {
         help = "this expression produces no value";
-    } else if (from->is(K::Bool) && to->isInteger()) {
-        help = "a bool does not convert to a number; write `flag ? 1 : 0`";
+    } else if (from->is(K::Bool) && to->isNumber()) {
+        help = std::string("a bool does not convert to a number by itself; write `") + to->name + "(flag)` for 0 "
+               "or 1";
     } else if (from->isOptional() && !to->isOptional() && canConvert(from->elem, to)) {
         help = unwrapHelp(spelled(e));
     } else if (from->isOptional() && to->isOptional()) {
@@ -1275,6 +1314,10 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             result = (!lit.isLong && lit.value >= INT32_MIN && lit.value <= INT32_MAX) ? Type::intTy() : Type::longTy();
             break;
         }
+        case Expr::Kind::FloatLit:
+            result = static_cast<FloatLitExpr&>(e).isFloat ? Type::floatTy() : Type::doubleTy();
+            break;
+        case Expr::Kind::Cast: result = checkCast(static_cast<CastExpr&>(e), flow); break;
         case Expr::Kind::BoolLit: result = Type::boolTy(); break;
         case Expr::Kind::StringLit: result = Type::stringTy(); break;
         case Expr::Kind::NullLit: result = Type::nullTy(); break;
@@ -1315,9 +1358,11 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 result = Type::boolTy();
             } else {
                 const char* sym = u.op == UnOp::Neg ? "-" : u.op == UnOp::Plus ? "+" : "~";
-                if (!t->isInteger()) {
-                    diags_.error(u.operand->loc, std::string("'") + sym + "' needs an int or long, but this is " + q(t),
-                                 "", spec::Operators);
+                if (u.op == UnOp::BitNot ? !t->isInteger() : !t->isNumber()) {
+                    diags_.error(u.operand->loc,
+                                 std::string("'") + sym + "' needs " + (u.op == UnOp::BitNot ? "an int or a long" : "a number") +
+                                     ", but this is " + q(t),
+                                 t->isFloating() ? "'~' flips the bits of an integer" : "", spec::Operators);
                     break;
                 }
                 result = t;
@@ -1349,7 +1394,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             bool equality = b.op == BinOp::Eq || b.op == BinOp::Ne;
             // Values of the same type can always be compared for equality: strings by
             // contents, structs field by field, and class references by identity.
-            if (equality && l == r && !l->isInteger()) {
+            if (equality && l == r && !l->isNumber()) {
                 b.operandType = l;
                 result = Type::boolTy();
                 break;
@@ -1386,14 +1431,27 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                     diags_.error(other->loc, "'+' joins two strings, but this is " + q(ot), textHelp(ot), spec::Strings);
                 else
                     diags_.error(other->loc, std::string("'") + sym + "' compares two strings, but this is " + q(ot),
-                                 ot->isInteger() ? "turn the number into a string first with `to_string(n)`" : "",
+                                 ot->isNumber() ? "turn the number into a string first with `to_string(n)`" : "",
                                  spec::Strings);
                 if (comparison) result = Type::boolTy();
                 break;
             }
-            if (!l->isInteger() || !r->isInteger()) {
-                const Type* bad = !l->isInteger() ? l : r;
-                const Expr* side = !l->isInteger() ? b.lhs.get() : b.rhs.get();
+            bool integerOnly = b.op == BinOp::Rem || b.op == BinOp::Shl || b.op == BinOp::Shr ||
+                               b.op == BinOp::BitAnd || b.op == BinOp::BitOr || b.op == BinOp::BitXor;
+            if (integerOnly && l->isNumber() && r->isNumber() && (l->isFloating() || r->isFloating())) {
+                const Expr* side = l->isFloating() ? b.lhs.get() : b.rhs.get();
+                diags_.error(side->loc,
+                             std::string("'") + sym + "' needs an int or a long, but this is " +
+                                 q(l->isFloating() ? l : r),
+                             b.op == BinOp::Rem ? "for the remainder of a division of floating-point numbers, write "
+                                                  "`fmod(a, b)`, as in C++"
+                                                : "bit operations work on integers; convert with `long(x)` first",
+                             spec::Operators);
+                break;
+            }
+            if (!l->isNumber() || !r->isNumber()) {
+                const Type* bad = !l->isNumber() ? l : r;
+                const Expr* side = !l->isNumber() ? b.lhs.get() : b.rhs.get();
                 std::string help;
                 if (bad->isOptional()) help = unwrapHelp(spelled(*side));
                 else if (bad->isNull()) help = "null can only be compared with == and !=";
@@ -1410,7 +1468,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 result = l;
                 checkShiftAmount(l, b.lhs.get(), *b.rhs);
             } else {
-                b.operandType = commonInteger(l, r);
+                b.operandType = commonNumber(l, r);
                 result = comparison ? Type::boolTy() : b.operandType;
             }
             break;
@@ -1436,10 +1494,18 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 } else if (t->is(K::String))
                     diags_.error(a.target->loc, opName + " cannot be used with 'string'",
                                  "the only compound assignment on strings is +=, which appends", spec::Strings);
-                else if (!t->isError() && !t->isInteger())
-                    diags_.error(a.target->loc, opName + " needs an int or long, but this is " + q(t), "", spec::Operators);
-                else if (!a.value->type->isError() && !a.value->type->isInteger())
-                    diags_.error(a.value->loc, opName + " needs an int or long, but this is " + q(a.value->type), "",
+                else if (!t->isError() && !t->isNumber())
+                    diags_.error(a.target->loc, opName + " needs a number, but this is " + q(t), "", spec::Operators);
+                else if (!a.value->type->isError() && !a.value->type->isNumber())
+                    diags_.error(a.value->loc, opName + " needs a number, but this is " + q(a.value->type), "",
+                                 spec::Operators);
+                else if ((*a.op == BinOp::Rem || *a.op == BinOp::Shl || *a.op == BinOp::Shr || *a.op == BinOp::BitAnd ||
+                          *a.op == BinOp::BitOr || *a.op == BinOp::BitXor) &&
+                         (t->isFloating() || a.value->type->isFloating()))
+                    diags_.error(t->isFloating() ? a.target->loc : a.value->loc,
+                                 opName + " needs an int or a long, but this is " +
+                                     q(t->isFloating() ? t : a.value->type),
+                                 *a.op == BinOp::Rem ? "for floating-point numbers, write `x = fmod(x, y)`" : "",
                                  spec::Operators);
                 else if (*a.op != BinOp::Shl && *a.op != BinOp::Shr)
                     requireConvertible(*a.value, t, "on the right of " + opName);
@@ -1461,7 +1527,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             flow = merge(a, b);
             if (x->isError() || y->isError()) break;
             if (x == y) result = x;
-            else if (x->isInteger() && y->isInteger()) result = commonInteger(x, y);
+            else if (x->isNumber() && y->isNumber()) result = commonNumber(x, y);
             else if (const Type* opt = optionalOfBranches(x, y)) result = opt;
             else
                 diags_.error(t.loc, "the two branches of ?: have different types, " + q(x) + " and " + q(y),
@@ -1477,8 +1543,8 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             const Type* t = i.target->type ? i.target->type : Type::error();
             if (ok) {
                 if (var) requireAssigned(flow, var, path, t, i.target->loc);
-                if (!t->isInteger())
-                    diags_.error(i.target->loc, std::string("'") + sym + "' needs an int or long, but this is " + q(t),
+                if (!t->isNumber())
+                    diags_.error(i.target->loc, std::string("'") + sym + "' needs a number, but this is " + q(t),
                                  "", spec::Operators);
             }
             result = t;
@@ -1505,6 +1571,88 @@ void Sema::checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow,
         checkValue(*args[i], flow, fn.params[i]->declType,
                    (n.empty() ? "for argument " + std::to_string(i + 1) : "for parameter " + q(n)) + " of " + q(fn.name));
     }
+}
+
+namespace {
+// The math functions, from C++'s <cmath>. Floating ones return a float when every
+// argument is a float, and a double otherwise, as in C++; tests return a bool; and abs,
+// min and max keep the type of their arguments.
+enum class MathKind { Floating, Test, Same };
+struct MathInfo {
+    const char* name;
+    MathFn fn;
+    size_t args;
+    MathKind kind;
+};
+constexpr MathInfo kMath[] = {
+    {"sqrt", MathFn::Sqrt, 1, MathKind::Floating},     {"cbrt", MathFn::Cbrt, 1, MathKind::Floating},
+    {"pow", MathFn::Pow, 2, MathKind::Floating},       {"exp", MathFn::Exp, 1, MathKind::Floating},
+    {"exp2", MathFn::Exp2, 1, MathKind::Floating},     {"log", MathFn::Log, 1, MathKind::Floating},
+    {"log2", MathFn::Log2, 1, MathKind::Floating},     {"log10", MathFn::Log10, 1, MathKind::Floating},
+    {"sin", MathFn::Sin, 1, MathKind::Floating},       {"cos", MathFn::Cos, 1, MathKind::Floating},
+    {"tan", MathFn::Tan, 1, MathKind::Floating},       {"asin", MathFn::Asin, 1, MathKind::Floating},
+    {"acos", MathFn::Acos, 1, MathKind::Floating},     {"atan", MathFn::Atan, 1, MathKind::Floating},
+    {"atan2", MathFn::Atan2, 2, MathKind::Floating},   {"sinh", MathFn::Sinh, 1, MathKind::Floating},
+    {"cosh", MathFn::Cosh, 1, MathKind::Floating},     {"tanh", MathFn::Tanh, 1, MathKind::Floating},
+    {"floor", MathFn::Floor, 1, MathKind::Floating},   {"ceil", MathFn::Ceil, 1, MathKind::Floating},
+    {"round", MathFn::Round, 1, MathKind::Floating},   {"trunc", MathFn::Trunc, 1, MathKind::Floating},
+    {"fabs", MathFn::Fabs, 1, MathKind::Floating},     {"fmod", MathFn::Fmod, 2, MathKind::Floating},
+    {"hypot", MathFn::Hypot, 2, MathKind::Floating},   {"isnan", MathFn::IsNan, 1, MathKind::Test},
+    {"isinf", MathFn::IsInf, 1, MathKind::Test},       {"isfinite", MathFn::IsFinite, 1, MathKind::Test},
+    {"abs", MathFn::Abs, 1, MathKind::Same},           {"min", MathFn::Min, 2, MathKind::Same},
+    {"max", MathFn::Max, 2, MathKind::Same},
+};
+const MathInfo* findMath(const std::string& name) {
+    for (auto& m : kMath)
+        if (name == m.name) return &m;
+    return nullptr;
+}
+}  // namespace
+
+bool isMathFunction(const std::string& name) { return findMath(name) != nullptr; }
+
+// `sqrt(x)`, `pow(a, b)`, `max(a, b)`, ... A function of the program with the same name
+// takes its place, so `extern "C" double sqrt(double)` still works.
+const Type* Sema::checkMath(CallExpr& call, Flow& flow) {
+    const MathInfo& m = *findMath(call.callee);
+    call.builtin = Builtin::Math;
+    call.math = m.fn;
+    std::string usage = call.callee + (m.args == 1 ? "(x)" : m.fn == MathFn::Pow ? "(base, exponent)" : "(a, b)");
+    if (call.args.size() != m.args) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, call.callee + "() takes " + (m.args == 1 ? "one argument" : "two arguments") + " but " +
+                                   std::to_string(call.args.size()) + (call.args.size() == 1 ? " was" : " were") +
+                                   " given",
+                     "write `" + usage + "`", spec::Math);
+        return m.kind == MathKind::Test ? Type::boolTy() : Type::error();
+    }
+    const Type* common = nullptr;
+    bool allFloat = true, ok = true;
+    for (auto& a : call.args) {
+        const Type* t = checkExpr(*a, flow);
+        if (t->isError()) {
+            ok = false;
+            continue;
+        }
+        if (!t->isNumber()) {
+            std::string help = t->isOptional()   ? unwrapHelp(spelled(*a))
+                               : t->is(K::Bool)   ? "a bool is not a number here; write `int(b)` for 1 or 0"
+                               : t->is(K::String) ? "this compiler cannot read a number from a string yet; C's `atof` "
+                                                    "can be declared with extern \"C\" and called"
+                                                  : "pass an int, a long, a float or a double";
+            diags_.error(a->loc, call.callee + "() takes " + (m.args == 1 ? "a number" : "numbers") + ", but this is " +
+                                     q(t),
+                         help, spec::Math);
+            ok = false;
+            continue;
+        }
+        allFloat = allFloat && t->is(K::Float);
+        common = common ? commonNumber(common, t) : t;
+    }
+    if (m.kind == MathKind::Test) return Type::boolTy();
+    if (!ok) return Type::error();
+    if (m.kind == MathKind::Same) return common;
+    return allFloat ? Type::floatTy() : Type::doubleTy();
 }
 
 const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
@@ -1538,13 +1686,26 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     }
 
     auto it = funcs_.find(call.callee);
+    if (it == funcs_.end() && findMath(call.callee)) return checkMath(call, flow);
     if (it == funcs_.end()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         std::string help;
-        if (call.callee == "printf" || call.callee == "puts" || call.callee == "putchar")
+        const std::string& name = call.callee;
+        std::string stem = name.size() > 3 ? name.substr(0, name.size() - 1) : "";
+        if (name == "printf" || name == "puts" || name == "putchar")
             help = "C+ prints with println: `printf(\"%d\\n\", x)` becomes `println(\"{}\", x)`";
-        else if (std::string guess = suggestName(call.callee); !guess.empty())
+        else if (std::string reader = cNumberReader(name); !reader.empty())
+            help = (name.starts_with("sto") ? "this compiler cannot read a number from a string yet. Until then, "
+                                              "declare the C function: `extern \"C\" "
+                                            : "a C function must be declared before it is called: `extern \"C\" ") +
+                   reader + ";`";
+        else if ((name.back() == 'f' || name.back() == 'l') && isMathFunction(stem))
+            help = name.back() == 'f' ? "write `" + stem + "`, which returns a float when given floats, as in C++"
+                                      : "C+ has no long double; write `" + stem + "`";
+        else if (std::string guess = suggestName(name); !guess.empty())
             help = "did you mean " + q(guess) + "?";
+        else
+            help = "define it in this file, in any order, or declare a C function with `extern \"C\"`";
         diags_.error(nameLoc, "there is no function named " + q(call.callee), help, spec::Functions);
         return Type::error();
     }
@@ -1761,16 +1922,47 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
     }
     const std::string& fmt = static_cast<StringLitExpr&>(fmtExpr).value;
     std::vector<std::string> pieces{""};
+    std::vector<FormatSpec> specs;
+    std::vector<std::string> specTexts;  // as written, for errors
     for (size_t i = 0; i < fmt.size(); ++i) {
         char c = fmt[i];
         char n = i + 1 < fmt.size() ? fmt[i + 1] : '\0';
         if (c == '{' && n == '{') { pieces.back() += '{'; ++i; }
         else if (c == '}' && n == '}') { pieces.back() += '}'; ++i; }
-        else if (c == '{' && n == '}') { pieces.emplace_back(); ++i; }
         else if (c == '{') {
-            diags_.error(fmtExpr.loc, "only {} placeholders are supported in format strings so far",
-                         "write {{ for a literal '{'; format options like {:x} are not supported yet", spec::Printing);
-            return result;
+            // `{}`, or `{:.2f}`: a precision and a type, f, e or g, for a floating-point value.
+            size_t close = fmt.find('}', i);
+            std::string inside = close == std::string::npos ? "" : fmt.substr(i + 1, close - i - 1);
+            FormatSpec spec;
+            bool ok = close != std::string::npos && (inside.empty() || inside[0] == ':');
+            size_t j = 1;
+            if (ok && j < inside.size() && inside[j] == '.') {
+                size_t start = ++j;
+                while (j < inside.size() && std::isdigit((unsigned char)inside[j]) && j - start < 4) ++j;
+                ok = j > start;
+                if (ok) spec.precision = std::stoi(inside.substr(start, j - start));
+            }
+            if (ok && j < inside.size() && (inside[j] == 'f' || inside[j] == 'e' || inside[j] == 'g')) spec.type = inside[j++];
+            ok = ok && j >= inside.size();
+            if (!ok) {
+                std::string shown = close == std::string::npos ? fmt.substr(i) : "{" + inside + "}";
+                if (close != std::string::npos && !inside.empty() && std::isdigit((unsigned char)inside[0]))
+                    diags_.error(fmtExpr.loc, "this compiler does not support numbered placeholders like " + shown + " yet",
+                                 "write {} for each value, in order", spec::Printing);
+                else if (close == std::string::npos)
+                    diags_.error(fmtExpr.loc, "this format string has a '{' with no matching '}'",
+                                 "write {{ for a literal '{'", spec::Printing);
+                else
+                    diags_.error(fmtExpr.loc, "this compiler does not support the format option " + shown + " yet",
+                                 "a placeholder can give the precision of a floating-point value and f, e or g, such "
+                                 "as {:.2f}, {:e} or {:.3g}. Width and alignment are planned",
+                                 spec::Printing);
+                return result;
+            }
+            pieces.emplace_back();
+            specs.push_back(spec);
+            specTexts.push_back("{" + inside + "}");
+            i = close;
         } else if (c == '}') {
             diags_.error(fmtExpr.loc, "this format string has a '}' with no matching '{'",
                          "write }} for a literal '}'", spec::Printing);
@@ -1787,11 +1979,18 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
     }
     for (size_t i = 1; i < call.args.size(); ++i) {
         const Type* t = call.args[i]->type;
+        const FormatSpec& spec = specs[i - 1];
         if (t->is(K::Void))
             diags_.error(call.args[i]->loc, "this expression produces no value, so it cannot be printed", "",
                          spec::Printing);
+        else if ((spec.type || spec.precision >= 0) && !t->isFloating() && !t->isError())
+            diags_.error(call.args[i]->loc, specTexts[i - 1] + " formats a float or a double, but this is " + q(t),
+                         t->isInteger() ? "write {} for an integer, or convert it first: `double(n)`"
+                                        : "write {} to print it as it is",
+                         spec::Printing);
     }
     call.formatPieces = std::move(pieces);
+    call.formatSpecs = std::move(specs);
     return result;
 }
 
@@ -1808,10 +2007,52 @@ const Type* Sema::checkToString(CallExpr& call, Flow& flow) {
         return Type::stringTy();
     }
     const Type* t = checkExpr(*call.args[0], flow);
-    if (!t->isError() && !t->isInteger())
-        diags_.error(call.args[0]->loc, "to_string() takes an int or a long, but this is " + q(t),
+    if (!t->isError() && !t->isNumber())
+        diags_.error(call.args[0]->loc, "to_string() takes a number, but this is " + q(t),
                      t->is(K::String) ? "it is already a string" : textHelp(t), spec::Strings);
     return Type::stringTy();
+}
+
+// `int(x)`, `static_cast<int>(x)` and `(int)x` convert between the number types and bool,
+// as in C++. A conversion that cannot keep the value stops the program (see Codegen).
+const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
+    const Type* from = checkExpr(*c.operand, flow);
+    const Type* to = c.target;
+    std::string cast = std::string(to->name) + "(x)";
+    if (from->isError()) return to->isNumber() || to->is(K::Bool) ? to : Type::error();
+    if (to->is(K::String)) {
+        diags_.error(c.loc, "a cast cannot turn a value into a string",
+                     from->isNumber() ? "write `to_string(x)`, or `format(\"{}\", x)`"
+                                      : "write `format(\"{}\", x)`, which turns any value that can be printed into "
+                                        "a string",
+                     spec::Casts);
+        return Type::stringTy();
+    }
+    if (!to->isNumber() && !to->is(K::Bool)) {
+        diags_.error(c.loc, "a cast converts between numbers and bool, but this converts to " + q(to),
+                     to->isOptional() && canConvert(from, to) ? "no cast is needed: a value converts to an optional "
+                                                                "by itself"
+                                                              : "a cast can only convert to int, long, float, double "
+                                                                "or bool",
+                     spec::Casts);
+        return to;
+    }
+    if (from->isNumber() || from->is(K::Bool)) return to;
+    if (from->is(K::String))
+        diags_.error(c.loc, "this compiler does not support reading a number from a string yet",
+                     to->is(K::Bool)      ? "compare the text instead, e.g. `s == \"true\"`"
+                     : to->isFloating()   ? "until then, C's `atof` or `strtod` can be declared with extern \"C\" "
+                                            "and called"
+                                          : "until then, C's `atoi` or `strtol` can be declared with extern \"C\" "
+                                            "and called",
+                     spec::Status);
+    else
+        diags_.error(c.operand->loc, "'" + cast + "' converts a number or a bool, but this is " + q(from),
+                     from->isOptional() ? unwrapHelp(spelled(*c.operand))
+                                        : "only a number or a bool can be cast; convert one of its fields or "
+                                          "elements instead, e.g. `" + std::string(to->name) + "(v[0])`",
+                     spec::Casts);
+    return to;
 }
 
 namespace {

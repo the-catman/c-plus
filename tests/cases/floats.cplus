@@ -1,0 +1,108 @@
+// Floating-point numbers: double (64-bit) and float (32-bit), as in C++. `{}` prints the
+// fewest digits that read back as the same value, as C++'s std::format does.
+struct Sample {
+    string name;
+    double value;
+    float weight = 1.5f;
+};
+
+double average(vector<double> values) {
+    double total = 0;
+    for (double v : values) total += v;
+    return total / values.size();
+}
+
+int main() {
+    // Literals: a fraction or an exponent makes a double; f makes a float.
+    double a = 1.5;
+    double b = .25;
+    double c = 2.;
+    double d = 1e3;
+    double e = 6.022e23;
+    double f = 1'000.5;
+    float g = 2.5f;
+    float h = 1.f;
+    println("{} {} {} {} {} {} {} {}", a, b, c, d, e, f, g, h);
+    // expect: 1.5 0.25 2 1000 6.022e+23 1000.5 2.5 1
+
+    // Printing: the shortest digits that read back exactly, in fixed or scientific
+    // notation, whichever is shorter.
+    println("{} {} {} {} {} {}", 0.1, 1.0 / 3, 100.0, 1e5, 123456.0, 1e-5);
+    // expect: 0.1 0.3333333333333333 100 1e+05 123456 1e-05
+    println("{} {} {} {} {}", 0.1 + 0.2, 1e21, 0.001, -0.0, 1.0f / 3);
+    // expect: 0.30000000000000004 1e+21 0.001 -0 0.33333334
+    println("{} {}", 1152921504606846976.0, 4294967296.0f);
+    // expect: 1152921504606846976 4294967296
+
+    // A precision and a type, as in C++: f, e and g, as printf prints them.
+    println("{:.2f} {:.0f} {:f} {:e} {:.3e} {:g} {:.3} {:.3g}", 3.14159, 2.5, 2.0, 1234.5, 0.000123, 1e-5, 3.14159, 1234567.0);
+    // expect: 3.14 2 2.000000 1.234500e+03 1.230e-04 1e-05 3.14 1.23e+06
+    println("{:.1f}% of {:.2f}", g * 10, 1.0f / 3);
+    // expect: 25.0% of 0.33
+
+    // Arithmetic. An int or a long converts to a floating-point type, and a float to a
+    // double, as in C++.
+    int n = 7;
+    long big = 3000000000L;
+    println("{} {} {} {}", n / 2, n / 2.0, big * 0.5, n + g);
+    // expect: 3 3.5 1.5e+09 9.5
+    println("{} {} {}", -a, a * a - 0.25, (a + b) / 2);
+    // expect: -1.5 2 0.875
+    double x = 10;
+    x += 2.5;
+    x -= 0.5;
+    x *= 3;
+    x /= 4;
+    x++;
+    --x;
+    println("{} {}", x, average({1, 2, 3, 4}));
+    // expect: 9 2.5
+    float sum = 0;
+    for (int i = 0; i < 10; i++) sum += 0.1f;
+    println("{} {}", sum, sum == 1.0f);
+    // expect: 1.0000001 false
+
+    // Comparisons, and IEEE results instead of traps: dividing by zero gives an
+    // infinity, and NaN is not equal to anything.
+    double zero = 0;
+    double inf = 1 / zero;
+    double nan = zero / zero;
+    println("{} {} {} {}", inf, -inf, inf > 1e308, -1 / zero < 0);
+    // expect: inf -inf true true
+    println("{} {} {} {}", nan == nan, nan != nan, nan < 1, nan > 1);
+    // expect: false true false false
+    // Every NaN prints as nan, whatever its sign bit.
+    println("{} {} {:.2f} {}", nan, -nan, nan, to_string(-nan));
+    // expect: nan nan nan nan
+    println("{} {} {}", 0.1 + 0.2 == 0.3, 1.5 == 1.5f, 2 < 2.5);
+    // expect: false true true
+
+    // A double that is written as a number converts to a float; others need float(x).
+    float half = 0.5;
+    float third = -0.75;
+    float down = float(a * 3);
+    println("{} {} {}", half, third, down);
+    // expect: 0.5 -0.75 4.5
+
+    // As conditions, zero is false, anything else (including NaN) true.
+    if (b) println("b is not zero");
+    // expect: b is not zero
+    println("{} {} {}", zero ? "yes" : "no", !nan, bool(-0.0));
+    // expect: no false false
+
+    // Floating-point values in structs, vectors and optionals, and as text.
+    Sample s = {"pi", 3.14159};
+    vector<double> v = {1, 2.5, -0.125};
+    double? maybe;
+    double? some = 2;
+    println("{} {} {} {}", s, v, maybe, some);
+    // expect: {name: "pi", value: 3.14159, weight: 1.5} [1, 2.5, -0.125] null 2
+    println("{} {} {}", s == Sample{"pi", 3.14159}, v == vector<double>{1, 2.5, -0.125}, (maybe ?? 4.5) + 1);
+    // expect: true true 5.5
+    println("{} {} {}", to_string(2.5), to_string(1e100) + "!", format("{:.3f}", 2.0 / 3));
+    // expect: 2.5 1e+100! 0.667
+    auto t = n > 5 ? 1 : 0.5;
+    println("{}", t);
+    // expect: 1
+    return 0;
+}
