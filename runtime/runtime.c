@@ -21,6 +21,13 @@ _Noreturn void cplus_trap_index(int64_t index, int64_t size, const char* file, i
     cplus_trap(message, file, line, column);
 }
 
+// Called when an index is outside an array.
+_Noreturn void cplus_trap_array_index(int64_t index, int64_t size, const char* file, int32_t line, int32_t column) {
+    char message[128];
+    snprintf(message, sizeof message, "index %" PRId64 " is out of range for an array of size %" PRId64, index, size);
+    cplus_trap(message, file, line, column);
+}
+
 // Called when an index is outside a string.
 _Noreturn void cplus_trap_string_index(int64_t index, int64_t size, const char* file, int32_t line, int32_t column) {
     char message[128];
@@ -383,6 +390,20 @@ void cplus_c_free(char* text) { free(text); }
 
 // A string holding a copy of the text a C function returned. NULL gives the empty
 // string; for a `string?` result, the generated code makes that null.
+// `string(a)` for an `array<char, N>`: its text, which ends at the first zero byte or at
+// the end of the array, whichever comes first.
+void cplus_str_from_chars(cplus_string* out, const char* chars, int64_t size) {
+    const char* end = memchr(chars, 0, (size_t)size);
+    int64_t length = end ? end - chars : size;
+    if (length == 0) {
+        *out = (cplus_string){NULL, 0, NULL};
+        return;
+    }
+    cplus_str_buf* b = str_buf_new(length);
+    memcpy(buf_bytes(b), chars, (size_t)length);
+    *out = (cplus_string){buf_bytes(b), length, b};
+}
+
 void cplus_str_from_c(cplus_string* out, const char* text) {
     size_t length = text ? strlen(text) : 0;
     if (length == 0) {

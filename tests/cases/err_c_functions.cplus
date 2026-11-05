@@ -46,7 +46,7 @@ int main() {
     return 0;
 }
 // error: a C function cannot take 'Named', because C has no equivalent of field 'name' of 'Named', which holds a string
-// error: C knows numbers, chars, bools, pointers, and structs of those. For text, use a `char*` field and read it with `string(p)`
+// error: C knows numbers, chars, bools, pointers, and structs and arrays of those. For text, use an `array<char, 64>` or `char*` field and read it with `string(x)`
 // error: a C function cannot return 'Outer', because C has no equivalent of field 'name' of 'Named', which holds a string
 // error: a C function cannot take 'User*', because C has no equivalent of a pointer to a class reference
 // error: To pass a C+ value through C without C looking inside, pass its address as a `void*`

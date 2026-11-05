@@ -17,15 +17,17 @@ struct StructDecl;
 
 struct Type {
     enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, Struct, Class, Vector, Optional, Null,
-                      Pointer, Opaque };
+                      Pointer, Opaque, Array };
     Kind kind;
     const char* name;
     const StructDecl* decl = nullptr;  // for Kind::Struct, Kind::Class and Kind::Opaque
-    const Type* elem = nullptr;        // for Kind::Vector, the value type of Kind::Optional, what a Kind::Pointer points to
+    const Type* elem = nullptr;        // for Kind::Vector and Kind::Array, the value type of Kind::Optional, what a Kind::Pointer points to
     bool constElem = false;            // for Kind::Pointer: `const int*`, which only reads what it points to
+    int64_t length = 0;                // for Kind::Array: the N of `array<T, N>`
 
     bool is(Kind k) const { return kind == k; }
     bool isVector() const { return kind == Kind::Vector; }
+    bool isArray() const { return kind == Kind::Array; }
     bool isOptional() const { return kind == Kind::Optional; }
     bool isNull() const { return kind == Kind::Null; }  // the type of `null`, which converts to any optional or pointer
     bool isPointer() const { return kind == Kind::Pointer; }
@@ -71,6 +73,17 @@ struct Type {
         if (inserted) {
             it->second.first = "vector<" + std::string(elem->name) + ">";
             it->second.second = Type{Kind::Vector, it->second.first.c_str(), nullptr, elem};
+        }
+        return &it->second.second;
+    }
+
+    // `array<elem, length>`. One Type per element type and length, like vectorOf.
+    static const Type* arrayOf(const Type* elem, int64_t length) {
+        static std::map<std::pair<const Type*, int64_t>, std::pair<std::string, Type>> made;
+        auto [it, inserted] = made.try_emplace({elem, length});
+        if (inserted) {
+            it->second.first = "array<" + std::string(elem->name) + ", " + std::to_string(length) + ">";
+            it->second.second = Type{Kind::Array, it->second.first.c_str(), nullptr, elem, false, length};
         }
         return &it->second.second;
     }
@@ -290,8 +303,9 @@ struct CallExpr : Expr {
         : Expr(Kind::Call, l), callee(std::move(c)), args(std::move(a)) {}
 };
 
-// The methods every vector has.
-enum class VecMethod { None, Size, Empty, PushBack, PopBack, Front, Back, Clear };
+// The methods of vectors and arrays. `Fill` and `Data` are only on arrays, and `PushBack`,
+// `PopBack` and `Clear` only on vectors.
+enum class VecMethod { None, Size, Empty, PushBack, PopBack, Front, Back, Clear, Fill, Data };
 // The methods every string has. `length()` is `size()`.
 enum class StrMethod { None, Size, Empty, Substr, Find, Contains, StartsWith, EndsWith, Clear, PushBack, PopBack, Front,
                        Back };
@@ -304,7 +318,7 @@ struct MethodCallExpr : Expr {
     std::string name;
     std::vector<ExprPtr> args;
     FuncDecl* method = nullptr;               // set by Sema for a struct or class method
-    VecMethod vecMethod = VecMethod::None;    // set by Sema for a vector method
+    VecMethod vecMethod = VecMethod::None;    // set by Sema for a vector or array method
     StrMethod strMethod = StrMethod::None;    // set by Sema for a string method
     OptMethod optMethod = OptMethod::None;    // set by Sema for an optional method
     MethodCallExpr(Loc nameLoc, ExprPtr r, std::string n, std::vector<ExprPtr> a)
@@ -319,7 +333,7 @@ struct MemberExpr : Expr {
     MemberExpr(Loc fieldLoc, ExprPtr b, std::string f) : Expr(Kind::Member, fieldLoc), base(std::move(b)), field(std::move(f)) {}
 };
 
-// `base[index]`, an element of a vector or a char of a string.
+// `base[index]`, an element of a vector or an array, or a char of a string.
 struct IndexExpr : Expr {
     ExprPtr base, index;
     IndexExpr(Loc bracketLoc, ExprPtr b, ExprPtr i) : Expr(Kind::Index, bracketLoc), base(std::move(b)), index(std::move(i)) {}
@@ -334,7 +348,7 @@ struct InitListExpr : Expr {
         ExprPtr value;
         int fieldIndex = -1;  // set by Sema
     };
-    const Type* explicitType = nullptr;  // `Point{...}` or `vector<int>{...}`
+    const Type* explicitType = nullptr;  // `Point{...}`, `vector<int>{...}` or `array<int, 3>{...}`
     std::vector<Element> elements;
     explicit InitListExpr(Loc l) : Expr(Kind::InitList, l) {}
 };

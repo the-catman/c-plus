@@ -1,0 +1,7 @@
+int main() {
+    array<int, 3> a;
+    long i = -1;
+    a[i] = 5;
+    return 0;
+}
+// trap: index -1 is out of range for an array of size 3

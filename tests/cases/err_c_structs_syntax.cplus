@@ -45,7 +45,8 @@ int main() {
 // error: C+ has no 'unsigned int' type
 // error: write `int`, which has the same size; C+ has no unsigned types yet
 // error: C+ has no 'signed char' type
-// error: this compiler does not support arrays yet
+// error: C+ has no C-style arrays
+// error: write `array<char, 64> name`
 // error: C+ has no typedef
 // error: write a C struct as `struct div_t { int quot; int rem; };`
 // error: unknown type 'time_t'

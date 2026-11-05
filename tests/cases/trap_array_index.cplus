@@ -1,0 +1,7 @@
+int main() {
+    array<int, 3> a = {1, 2, 3};
+    int i = 3;
+    println("{}", a[i]);
+    return 0;
+}
+// trap: index 3 is out of range for an array of size 3

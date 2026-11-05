@@ -1,0 +1,58 @@
+// Writing array types and C-style arrays.
+void takes(int values[3]) {}
+void takesAny(int values[]) {}
+
+struct Row {
+    int cells[4];
+};
+
+int main() {
+    int n = 3;
+    array<> a1;
+    array<void, 3> a2;
+    array<auto, 3> a3;
+    array<int> a4;
+    array<int, n> a5;
+    array<int, -1> a6;
+    array<int, 2.5> a7;
+    array<int, 2 * 3> a8;
+    array<int, 2, 3> a9;
+    int c1[5];
+    int c2[] = {1, 2};
+    int c3[n];
+    auto b1 = array<int, 3>;
+    auto b2 = array<int, 3>(1, 2);
+    array<Missing, 3> b3;
+    std::array<int, 3> b4;
+    array<int, 3> b5{1, 2};
+    array<int, 3> b6(1, 2);
+    return 0;
+}
+// error: built-ins need no prefix: write `array` instead of `std::array`
+// error: list the elements after '=': `array<int, 3> b5 = {...};`
+// error: list the elements after '=': `array<int, 3> b6 = {...};`
+// error: write `array<int, 3> values`
+// error: a fixed-size array is written with its size in the type: `array<int, 5> values`
+// error: For a size known only while the program runs, use `vector<int> values`
+// error: write `array<int, 4> cells`
+// error: array needs an element type and a size
+// error: write e.g. `array<int, 5>`
+// error: an array cannot hold 'void' elements
+// error: an array cannot hold 'auto' elements
+// error: array needs a size after its element type
+// error: write e.g. `array<int, 5>`. For a list that can grow, use `vector<int>`
+// error: this compiler does not support array sizes given by a name yet
+// error: write the number itself, e.g. `array<int, 5>`. For a size known only while the program runs, use `vector<int>`
+// error: the size of an array is a whole number, zero or more, written out
+// error: the size of an array is a single number, written out
+// error: For rows and columns, use an array of arrays: `array<array<int, 3>, 2>`
+// error: C+ has no C-style arrays
+// error: write `array<int, 5> c1`
+// error: a fixed-size array is written with its size in the type: `array<int, 5> c2`
+// error: a fixed-size array is written with its size in the type: `array<int, 5> c3`
+// error: expected '{' or '(' after 'array<int, 3>'
+// error: write `array<int, 3>{1, 2, 3}` to list the elements, or `array<int, 3>()` for default values
+// error: 'array<int, 3>(...)' takes no values
+// error: to list the elements, use braces: `array<int, 3>{1, 2, 3}`. To set them all to one value, use `a.fill(value)`
+// error: unknown type 'Missing'
+// error: spec: docs/SPEC.md#arrays

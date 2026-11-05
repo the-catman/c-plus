@@ -1,0 +1,211 @@
+// Arrays of strings, vectors and objects: every copy holds its own references, and each
+// element is released once. The test runner fails this if anything leaks.
+class Tag {
+public:
+    string name;
+    Tag(string n) : name(n) {}
+    ~Tag() { println("free {}", name); }
+};
+
+struct Pair {
+    Tag first;
+    array<Tag?, 2> more;
+};
+
+struct Words {
+    array<string, 2> words;
+    vector<string> extra;
+};
+
+class Holder {
+public:
+    array<Tag?, 2> tags;
+    Words words;
+    array<Pair?, 1> pair;
+};
+
+class Node {
+public:
+    int value;
+    array<Node?, 2> kids;
+    Node(int v) : value(v) {}
+};
+
+array<Tag, 2> makeTags(string a, string b) {
+    return {Tag(a), Tag(b)};
+}
+
+array<string, 2> swapped(array<string, 2> s) {
+    string first = s[0];
+    s[0] = s[1];
+    s[1] = first;
+    return s;
+}
+
+Words makeWords() {
+    Words w;
+    w.words[0] = "made" + to_string(1);
+    w.extra.push_back("more" + to_string(2));
+    return w;
+}
+
+// `new` warns unless told otherwise, as this test does for this one function.
+[[allow(new_delete)]]
+array<string, 2> onHeap() {
+    array<string, 2>* heap = new array<string, 2>;
+    (*heap)[1] = "h" + to_string(1);
+    array<string, 2> out = *heap;
+    delete heap;
+    array<string, 2>* many = new array<string, 2>[2];
+    many[1][0] = "m" + to_string(1);
+    delete[] many;
+    return out;
+}
+
+int count(Node n) {
+    int total = 1;
+    for (auto kid : n.kids)
+        if (auto k = kid) total += count(k);
+    return total;
+}
+
+int main() {
+    // Strings: built at run time, so they have buffers to release.
+    array<string, 3> names;
+    names[0] = "a" + to_string(1);
+    names[1] = names[0];
+    auto copy = names;
+    copy[0] += "!";
+    println("{} {}", names, copy);
+    names = copy;
+    names = names;
+    names = {names[1], names[0]};
+    println("{}", names);
+    println("{}", swapped({"x" + to_string(1), "y" + to_string(2)}));
+    println("{}", swapped({"p" + to_string(1), "q" + to_string(2)})[1]);
+    names.fill("z" + to_string(9));
+    println("{} {}", names, names.front() + names.back());
+    println("{}", names == copy);
+
+    // Without a default, an array is assigned as a whole before it is used.
+    array<Tag, 2> tags;
+    tags = makeTags("one", "two");
+    println("{} {}", tags[0].name, tags[1].name);
+    auto shared = tags;
+    println("{}", shared[0] == tags[0]);
+    tags[1] = Tag("three");
+    println("{}", shared[1].name);
+    {
+        array<Tag, 2> inner = makeTags("in1", "in2");
+        println("{}", inner.back().name);
+    }
+    println("end of block");
+    makeTags("gone1", "gone2");
+    println("{}", makeTags("t1", "t2")[1].name);
+    println("after temporaries");
+    for (auto t : makeTags("loop1", "loop2")) println("{}", t.name);
+    println("after loop");
+    for (auto t : tags) {
+        tags[1] = Tag("during");
+        println("{}", t.name);
+    }
+    println("after changes");
+
+    // Inside structs, objects, vectors and optionals.
+    Tag keep = Tag("keep");
+    Pair p = {keep, {keep, null}};
+    Pair q = p;
+    q.more[1] = Tag("q1");
+    println("{} {}", p.more, q.more[1]?.name);
+    Holder h = Holder();
+    h.tags[0] = keep;
+    h.tags[1] = Tag("held");
+    h.words = makeWords();
+    h.pair[0] = q;
+    println("{}", h.words);
+    auto oldTags = h.tags;
+    h.tags.fill(null);
+    println("{} {}", h.tags, oldTags[1]?.name);
+    println("{}", makeWords().words[0]);
+    println("{}", makeWords().extra[0]);
+    vector<array<Tag?, 1>> many = {{keep}, {Tag("v1")}};
+    many.push_back({Tag("v2")});
+    many.pop_back();
+    println("after pop");
+    auto many2 = many;
+    many2[0] = {Tag("v3")};
+    println("{} {}", many[0][0]?.name, many2[0][0]?.name);
+    array<Tag, 1>? maybe = {Tag("opt")};
+    if (auto m = maybe) println("{}", m[0].name);
+    maybe = null;
+    println("optional cleared");
+    array<string, 1>? text = {"o" + to_string(1)};
+    println("{}", text ?? array<string, 1>{"none"});
+    println("{}", text.value_or({"none" + to_string(2)}));
+    println("{}", text.value()[0]);
+
+    println("{}", onHeap());
+
+    // A tree of objects, each holding an array of its children.
+    Node root = Node(1);
+    root.kids[0] = Node(2);
+    root.kids[1] = Node(3);
+    if (auto k = root.kids[1]) k.kids[0] = Node(4);
+    println("{}", count(root));
+    println("end of main");
+    return 0;
+}
+// expect: ["a1", "a1", ""] ["a1!", "a1", ""]
+// expect: ["a1", "a1!", ""]
+// expect: ["y2", "x1"]
+// expect: p1
+// expect: ["z9", "z9", "z9"] z9z9
+// expect: false
+// expect: one two
+// expect: true
+// expect: two
+// expect: in2
+// expect: free in2
+// expect: free in1
+// expect: end of block
+// expect: free gone2
+// expect: free gone1
+// expect: t2
+// expect: free t2
+// expect: free t1
+// expect: after temporaries
+// expect: loop1
+// expect: loop2
+// expect: free loop2
+// expect: free loop1
+// expect: after loop
+// expect: one
+// expect: free during
+// expect: three
+// expect: free three
+// expect: after changes
+// expect: [Tag {name: "keep"}, null] q1
+// expect: {words: ["made1", ""], extra: ["more2"]}
+// expect: [null, null] held
+// expect: made1
+// expect: more2
+// expect: free v2
+// expect: after pop
+// expect: keep v3
+// expect: opt
+// expect: free opt
+// expect: optional cleared
+// expect: ["o1"]
+// expect: ["o1"]
+// expect: o1
+// expect: ["", "h1"]
+// expect: 4
+// expect: end of main
+// expect: free v3
+// expect: free v1
+// expect: free held
+// expect: free q1
+// expect: free keep
+// expect: free two
+// expect: free during
+// expect: free one

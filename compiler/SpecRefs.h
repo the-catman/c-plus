@@ -30,6 +30,7 @@ inline constexpr const char* Structs = "structs";
 inline constexpr const char* Classes = "classes";
 inline constexpr const char* Methods = "methods";
 inline constexpr const char* Vectors = "vectors";
+inline constexpr const char* Arrays = "arrays";
 inline constexpr const char* RangeFor = "range-based-for-loops";
 inline constexpr const char* Printing = "printing";
 inline constexpr const char* Pointers = "pointers";

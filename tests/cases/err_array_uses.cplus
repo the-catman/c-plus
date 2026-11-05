@@ -1,0 +1,93 @@
+// More mistakes with arrays: pointers, other uses, and elements that cannot be made.
+extern "C" struct FILE;
+extern "C" {
+    void takesPointer(int* p);
+}
+
+class User {
+public:
+    string name = "a";
+};
+
+class Box {
+public:
+    array<int, 2> values;
+};
+
+struct NeedsArgs {
+    int x;
+    NeedsArgs(int v) : x(v) {}
+};
+
+struct Users {
+    array<User, 2> users;
+};
+
+array<int, 2> makeTwo() { return {1, 2}; }
+Box makeBox() { return Box(); }
+
+int main() {
+    array<int, 3> a = {1, 2, 3};
+    array<int, 2> two = {1, 2};
+    const array<int, 3> fixed = {1, 2, 3};
+
+    // Pointers.
+    int* p1 = a;
+    takesPointer(a);
+    int* p2 = (int*)a;
+    int* p3 = makeTwo().data();
+    int* p4 = &makeTwo()[0];
+    int* p5 = &makeBox().values[0];
+    int* p6 = makeBox().values.data();
+    int* p7 = fixed.data();
+    int* p8 = &fixed[0];
+    vector<array<int, 2>> rows;
+    int* p9 = &rows[0][1];
+    int* p10 = rows[0].data();
+
+    // Other uses.
+    if (a) println("yes");
+    bool less = a < a;
+    bool same = a == two;
+    for (string s : a) println("{}", s);
+    string text = string(a);
+    int number = int(a);
+
+    // Elements that cannot be made on their own.
+    array<User, 2> unset;
+    unset[0] = User();
+    array<NeedsArgs, 2> unsetArgs;
+    println("{}", unsetArgs);
+    Users u = {};
+    auto v = vector<array<User, 2>>(3);
+    array<FILE, 2> files;
+
+    // Too large.
+    array<long, 999999999999> huge;
+    return 0;
+}
+// error: an array does not turn into a pointer by itself: write `a.data()`
+// error: a cast to 'int*' converts another pointer, but this is 'array<int, 3>'
+// error: for a pointer to its first element, write `a.data()`
+// error: data() gives a pointer into the array, but this array is a temporary value
+// error: but this is part of a temporary value
+// error: expected 'int*' to initialize 'p7', but this is 'const int*'
+// error: expected 'int*' to initialize 'p8', but this is 'const int*'
+// error: this compiler does not support pointers into vectors and strings yet
+// error: Copy the array into a variable and call data() on that
+// error: the if condition must be a bool, a number, a pointer or an optional, but this is 'array<int, 3>'
+// error: an array always has its elements. To test one of them, write e.g. `a[0] != 0`
+// error: 'array<int, 3>' values can only be compared with == and !=
+// error: both sides of '==' must have the same type, but they are 'array<int, 3>' and 'array<int, 2>'
+// error: the elements of 'array<int, 3>' are 'int', which cannot be stored in 'string' 's'
+// error: a cast cannot turn a value into a string
+// error: 'int(x)' converts a number, a char or a bool, but this is 'array<int, 3>'
+// error: 'unset' is used before it is given a value
+// error: give it a value where it is declared, e.g. `array<User, 2> unset = {...};`
+// error: 'unsetArgs' is used before it is given a value
+// error: field 'users' of 'Users' needs a value
+// error: vector<array<User, 2>>(n) cannot make its elements on its own, because a 'User' reference cannot be empty
+// error: 'FILE' is a C type known only by name, so C+ can only hold a pointer to it
+// error: 'array<long, 999999999999>' is too large: it takes more than 1 TiB, and a value can take at most 2 GiB
+// error: a vector can hold more, split among its elements: `vector<long>`
+// error: spec: docs/SPEC.md#arrays

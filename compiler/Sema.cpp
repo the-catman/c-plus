@@ -170,6 +170,7 @@ static std::string zeroOf(const Type* t) {
     if (t->isStruct()) return "{}";
     if (t->isClass()) return std::string(t->name) + "(...)";
     if (t->isPointer()) return "null";
+    if (t->isArray()) return "{...}";
     return "0";
 }
 
@@ -181,16 +182,29 @@ static bool tooDeep(const std::string& path) { return std::count(path.begin(), p
 // struct field) must be given a value when an object is built.
 static bool needsValue(const Type* t, int depth = 0) {
     if (t->isClass()) return true;
+    if (t->isArray()) {  // its elements are made one by one, which may take a value or a constructor's arguments
+        const FuncDecl* ctor = t->elem->isStruct() ? t->elem->decl->constructor : nullptr;
+        return t->length > 0 && depth <= 32 && ((ctor && !ctor->params.empty()) || needsValue(t->elem, depth + 1));
+    }
     if (!t->isStruct() || depth > 32) return false;
     for (auto& f : t->decl->fields)
         if (!f.defaultValue && needsValue(f.type, depth + 1)) return true;
     return false;
 }
 
+// Why a value of type `t` cannot be made without being given one.
+static std::string elementDefaultProblem(const Type* t) {
+    if (t->isArray()) return elementDefaultProblem(t->elem);
+    if (t->isClass()) return "a " + q(t) + " reference cannot be empty";
+    if (needsValue(t)) return q(t) + " holds a class reference that cannot be empty";
+    return "the constructor of " + q(t) + " needs arguments";
+}
+
 // Whether building a `from` needs a `target` that already exists: true when fields
 // without defaults lead from one to the other. A type that needs itself, like a list
 // node with a `Node next` field, cannot be built until references can be empty.
 static bool needsExisting(const Type* from, const StructDecl* target, std::set<const StructDecl*>& seen) {
+    while (from->isArray()) from = from->elem;
     if (!from->hasFields()) return false;
     if (from->decl == target) return true;
     if (!seen.insert(from->decl).second) return false;
@@ -287,12 +301,14 @@ void Sema::markAssigned(Flow& flow, const VarDecl* var, const std::string& path)
 }
 
 // A declaration without an initializer still gives strings and vectors their empty
-// value, optionals null and fields their defaults, as in C++. Numbers and bools stay
-// unassigned.
+// value, optionals null, array elements and fields their defaults, as in C++. Numbers
+// and bools stay unassigned.
 void Sema::markDefaults(Flow& flow, const VarDecl* var, const Type* type, const std::string& path) {
     if (tooDeep(path)) return;
     if (type->is(K::String) || type->isVector() || type->isOptional()) {
         markAssigned(flow, var, path);
+    } else if (type->isArray()) {  // elements are not tracked one by one: all have their default, or none do
+        if (!needsValue(type)) markAssigned(flow, var, path);
     } else if (type->isStruct()) {
         for (auto& f : type->decl->fields) {
             if (f.defaultValue) markAssigned(flow, var, join(path, f.name));
@@ -536,13 +552,14 @@ void Sema::reportAccess(const StructDecl& sd, const std::string& member, bool is
 }
 
 // What in `t` has no equivalent in C, or "" when C can use it: C knows numbers, chars,
-// bools, pointers to those, and structs of those. `seen` stops at a struct already looked
+// bools, pointers to those, and structs and arrays of those. `seen` stops at a struct already looked
 // at, such as one that points to itself.
 static std::string whatCLacks(const Type* t, std::set<const StructDecl*>& seen) {
     if (t->is(K::String)) return "a string";
     if (t->isVector()) return "a vector";
     if (t->isClass()) return "a class reference";
     if (t->isOptional()) return "an optional";
+    if (t->isArray()) return t->length == 0 ? "an array with no elements" : whatCLacks(t->elem, seen);
     if (t->isPointer()) {
         std::string lacks = t->elem->is(K::Void) ? "" : whatCLacks(t->elem, seen);
         return lacks.empty() || lacks.rfind("field ", 0) == 0 ? lacks : "a pointer to " + lacks;
@@ -558,8 +575,9 @@ static std::string whatCLacks(const Type* t, std::set<const StructDecl*>& seen) 
 }
 
 static const char* kCTypesHelp =
-    "C knows numbers, chars, bools, pointers, and structs of those. For text, use a `char*` field and read it with "
-    "`string(p)`. To pass a C+ value through C without C looking inside, pass its address as a `void*`";
+    "C knows numbers, chars, bools, pointers, and structs and arrays of those. For text, use an `array<char, 64>` or "
+    "`char*` field and read it with `string(x)`. To pass a C+ value through C without C looking inside, pass its "
+    "address as a `void*`";
 
 void Sema::checkStructs(Program& program) {
     // A struct cannot contain itself, directly or through other structs.
@@ -567,15 +585,16 @@ void Sema::checkStructs(Program& program) {
     std::function<void(const StructDecl*)> visit = [&](const StructDecl* sd) {
         state[sd] = 1;
         for (auto& f : sd->fields) {
-            // An optional struct holds the struct itself, so it counts too.
-            const Type* ft = f.type->isOptional() ? f.type->elem : f.type;
+            // An optional struct or an array of structs holds the struct itself, so they count too.
+            const Type* ft = f.type;
+            while (ft->isOptional() || ft->isArray()) ft = ft->elem;
             if (!ft->isStruct()) continue;
             const StructDecl* inner = ft->decl;
             if (state[inner] == 1)
                 diags_.error(f.loc,
                              "struct " + q(sd->name) + " contains itself through field " + q(f.name) +
                                  ", so it would be infinitely large",
-                             "a struct can hold other structs, but not itself, not even as an optional. For a "
+                             "a struct can hold other structs, but not itself, not even as an optional or in an array. For a "
                              "linked structure, make it a class: a `" + std::string(sd->name) + "? next;` field in a "
                              "class refers to another object instead of holding it",
                              spec::Structs);
@@ -590,6 +609,7 @@ void Sema::checkStructs(Program& program) {
     // Field defaults are checked with no local variables in scope.
     for (auto& sd : program.structs) {
         if (!sd->defined) continue;
+        if (state[sd.get()] == 2 && !sd->isClass) checkSize(&sd->type, sd->nameLoc);
         for (auto& f : sd->fields) {
             if (f.type->is(K::Void) || f.type->is(K::Auto))
                 diags_.error(f.typeLoc, "a field cannot have type " + q(f.type), "", spec::Structs);
@@ -621,6 +641,15 @@ void Sema::checkExternFunction(FuncDecl& fn) {
         if (t->isNumber() || t->is(K::Char) || t->is(K::Bool) || t->is(K::String) || t->isError()) return;
         if (t->isOptional() && t->elem->is(K::String)) return;
         if (isReturn && t->is(K::Void)) return;
+        if (t->isArray()) {
+            diags_.error(loc, isReturn ? "a C function cannot return an array" : "a C function cannot take an array by value",
+                         isReturn ? "C returns an array as a pointer to its first element: declare the result as `" +
+                                        std::string(t->elem->name) + "*`"
+                                  : "C passes an array as a pointer to its first element: declare the parameter as `" +
+                                        std::string(t->elem->name) + "*`, and pass `a.data()`",
+                         spec::CFunctions);
+            return;
+        }
         if (t->isPointer() || t->isStruct()) {
             std::set<const StructDecl*> seen;
             std::string lacks = whatCLacks(t, seen);
@@ -779,6 +808,8 @@ void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
                (e.kind == Expr::Kind::Name ? static_cast<NameExpr&>(e).name
                                            : std::string(t->isVector() ? "items" : "text")) +
                ".empty()`";
+    else if (t->isArray())
+        help = "an array always has its elements. To test one of them, write e.g. `a[0] != 0`";
     diags_.error(e.loc, std::string("the ") + what + " must be a bool, a number, a pointer or an optional, but this is " + q(t),
                  help, spec::Conditions);
 }
@@ -938,16 +969,16 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
 void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
     const Type* rangeType = checkExpr(*st.range, flow);
     const Type* elem = Type::error();
-    if (rangeType->isVector()) {
+    if (rangeType->isVector() || rangeType->isArray()) {
         elem = rangeType->elem;
     } else if (rangeType->is(K::String)) {
         elem = Type::charTy();  // its bytes, as in C++
     } else if (!rangeType->isError()) {
         std::string n = spelled(*st.range, "items");
-        diags_.error(st.range->loc, "a range-based for loop goes over a vector or a string, but this is " + q(rangeType),
+        diags_.error(st.range->loc, "a range-based for loop goes over a vector, an array or a string, but this is " + q(rangeType),
                      rangeType->isOptional() ? "it may be null; unwrap it first: `if (auto v = " + n +
                                                    ") for (auto x : v) ...`"
-                                             : "write the vector or string to loop over after the ':'",
+                                             : "write the vector, array or string to loop over after the ':'",
                      spec::RangeFor);
         rangeType = Type::error();
     }
@@ -997,6 +1028,7 @@ static std::string pointerHelp(const Expr& e, const Type* from, const Type* to) 
         }
         if (e.kind == Expr::Kind::IntLit && static_cast<const IntLitExpr&>(e).value == 0) return "a pointer to nothing is `null`";
         if (from == to->elem && isPlaceKind(e)) return "write `&" + n + "` for the address of " + q(n);
+        if (from->isArray() && from->elem == to->elem) return "an array does not turn into a pointer by itself: write `" + n + ".data()`";
         if (from->is(K::String) && to->elem->is(K::Char))
             return "a string is not a pointer to its bytes. Declare a C function's text parameter as `string`, and C+ "
                    "passes a copy that ends in a zero byte";
@@ -1099,9 +1131,36 @@ void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
         }
         return;
     }
+    if (type->isArray()) {  // the first elements, in order; the others get their default
+        checkSize(type, list.loc);
+        for (auto& el : list.elements) {
+            if (!el.designator.empty()) {
+                diags_.error(el.loc, "an array's { } list holds its elements, not named fields",
+                             "write the values alone, e.g. `{1, 2, 3}`", spec::Arrays);
+                checkLooseValue(*el.value, flow);
+                continue;
+            }
+            checkValue(*el.value, flow, type->elem, "as an element of " + q(type));
+        }
+        int64_t given = (int64_t)list.elements.size();
+        if (given > type->length)
+            diags_.error(list.elements[type->length].loc,
+                         q(type) + " has room for " + std::to_string(type->length) + (type->length == 1 ? " element" : " elements") +
+                             ", but this list has " + std::to_string(given),
+                         "remove the extra values, or make the array larger: `array<" + std::string(type->elem->name) + ", " +
+                             std::to_string(given) + ">`",
+                         spec::Arrays);
+        else if (given < type->length && needsValue(type))
+            diags_.error(list.loc,
+                         "this list gives " + std::to_string(given) + " of the " + std::to_string(type->length) +
+                             " elements of " + q(type) + ", and the others cannot be made on their own, because " +
+                             elementDefaultProblem(type->elem),
+                         "list every element", spec::Arrays);
+        return;
+    }
     if (type->isError() || !type->hasFields()) {
         if (!type->isError())
-            diags_.error(list.loc, "a { } list builds a struct, a class object or a vector, but " + q(type) +
+            diags_.error(list.loc, "a { } list builds a struct, a class object, a vector or an array, but " + q(type) +
                                        " is expected here",
                          "write the value without braces", spec::Structs);
         list.type = Type::error();
@@ -1243,7 +1302,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         return e.type = pt->elem;
     }
     if (e.kind == Expr::Kind::Index) {
-        // An element of a vector always holds a value, so it is not tracked.
+        // An element of a vector or an array always holds a value, so it is not tracked.
         auto& ix = static_cast<IndexExpr&>(e);
         const Type* baseType = isPlaceKind(*ix.base) ? resolvePlace(*ix.base, flow, var, path) : checkExpr(*ix.base, flow);
         if (var && !baseType->isError()) requireAssigned(flow, var, path, baseType, ix.base->loc);
@@ -1272,24 +1331,33 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
             return e.type;
         }
         bool str = baseType->is(K::String);
-        if (!str && !baseType->isVector()) {
-            diags_.error(e.loc, "'[ ]' picks an element of a vector or a char of a string, but this is " + q(baseType),
+        bool arr = baseType->isArray();
+        if (!str && !arr && !baseType->isVector()) {
+            diags_.error(e.loc, "'[ ]' picks an element of a vector or an array, or a char of a string, but this is " + q(baseType),
                          baseType->hasFields() ? "read a field with '.', e.g. `p.x`" : "", spec::Vectors);
             return e.type;
         }
-        const char* what = str ? "a string" : "a vector";
+        const char* what = str ? "a string" : arr ? "an array" : "a vector";
+        const char* anchor = str ? spec::Strings : arr ? spec::Arrays : spec::Vectors;
         if (!indexType->isError() && !indexType->isInteger())
             diags_.error(ix.index->loc, std::string("an index into ") + what + " must be an int or long, but this is " +
                                             q(indexType),
                          indexType->is(K::Char) ? "convert the char to its code first: `int(c)`"
                          : indexType->isFloating() ? "convert it first: `int(x)`"
                                                    : "",
-                         str ? spec::Strings : spec::Vectors);
+                         anchor);
         else if (ix.index->kind == Expr::Kind::IntLit && static_cast<IntLitExpr&>(*ix.index).value < 0)
             diags_.error(ix.index->loc, std::string("an index into ") + what + " cannot be negative",
-                         str ? "positions are numbered from 0; the last char is `s[s.size() - 1]` or `s.back()`"
-                             : "elements are numbered from 0; the last one is `v[v.size() - 1]` or `v.back()`",
-                         str ? spec::Strings : spec::Vectors);
+                         str   ? "positions are numbered from 0; the last char is `s[s.size() - 1]` or `s.back()`"
+                         : arr ? "elements are numbered from 0; the last one is `a[a.size() - 1]` or `a.back()`"
+                               : "elements are numbered from 0; the last one is `v[v.size() - 1]` or `v.back()`",
+                         anchor);
+        else if (arr && ix.index->kind == Expr::Kind::IntLit && static_cast<IntLitExpr&>(*ix.index).value >= baseType->length)
+            diags_.error(ix.index->loc, "index " + std::to_string(static_cast<IntLitExpr&>(*ix.index).value) +
+                                            " is past the end of " + q(baseType),
+                         baseType->length == 0 ? "this array has no elements"
+                                               : "its elements are numbered from 0 to " + std::to_string(baseType->length - 1),
+                         anchor);
         return e.type = str ? Type::charTy() : baseType->elem;
     }
     if (e.kind != Expr::Kind::Member) return checkExpr(e, flow);
@@ -1328,14 +1396,19 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     if (!baseType->hasFields()) {
         std::string help;
         bool str = baseType->is(K::String);
-        if (str || baseType->isVector())
+        if (str || baseType->isVector() || baseType->isArray())
             help = m.field == "size" || m.field == "length" || m.field == "empty" || m.field == "front" ||
                            m.field == "back"
-                       ? q(m.field) + " is a method; call it with `" + m.field + "()`"
-                   : str ? "strings have methods like size(), substr(pos, n) and find(text)"
-                         : "vectors have methods like size(), push_back(x) and back(), and elements are read with `v[i]`";
+                       ? q(m.field == "length" && !str ? "size" : m.field) + " is a method; call it with `" +
+                             (m.field == "length" && !str ? "size" : m.field) + "()`"
+                   : str                  ? "strings have methods like size(), substr(pos, n) and find(text)"
+                   : baseType->isArray()  ? "arrays have methods like size(), fill(x) and data(), and elements are read with `a[i]`"
+                                          : "vectors have methods like size(), push_back(x) and back(), and elements are read with `v[i]`";
         diags_.error(e.loc, q(baseType) + " has no fields, so '." + m.field + "' cannot be used", help,
-                     str ? spec::Strings : baseType->isVector() ? spec::Vectors : spec::Structs);
+                     str                     ? spec::Strings
+                     : baseType->isVector()  ? spec::Vectors
+                     : baseType->isArray()   ? spec::Arrays
+                                             : spec::Structs);
         var = nullptr;
         return e.type;
     }
@@ -1395,15 +1468,19 @@ static const Expr& followedPointer(const Expr& root) {
 }
 
 // Whether a place lies in the elements of a vector or the bytes of a string, which move
-// when the vector grows or the string is copied before a change.
+// when the vector grows or the string is copied before a change. The elements of an array
+// stay where the array is.
 static bool insideContainer(const Expr& e) {
     switch (e.kind) {
         case Expr::Kind::Member: {
             const Expr& base = *static_cast<const MemberExpr&>(e).base;
             return !(base.type && base.type->isClass()) && insideContainer(base);
         }
-        case Expr::Kind::Index:
-            return !static_cast<const IndexExpr&>(e).base->type->isPointer();
+        case Expr::Kind::Index: {
+            const Expr& base = *static_cast<const IndexExpr&>(e).base;
+            if (base.type->isArray()) return insideContainer(base);
+            return !base.type->isPointer();
+        }
         default: return false;
     }
 }
@@ -1411,6 +1488,10 @@ static bool insideContainer(const Expr& e) {
 // Whether a place lies in a class object that only a temporary refers to, as in
 // `makeUser().name`. The object is freed when the statement ends.
 static bool inTemporaryObject(const Expr& e) {
+    if (e.kind == Expr::Kind::Index) {
+        const Expr& base = *static_cast<const IndexExpr&>(e).base;
+        return base.type && base.type->isArray() && inTemporaryObject(base);
+    }
     if (e.kind != Expr::Kind::Member) return false;
     const Expr& base = *static_cast<const MemberExpr&>(e).base;
     if (base.type && base.type->isClass() && base.kind != Expr::Kind::This) return !isPlaceKind(base);
@@ -1543,10 +1624,74 @@ void Sema::reportUnknownPointee(Loc loc, const Type* ptr, const std::string& op)
 
 bool Sema::checkStorable(const Type* t, Loc loc) {
     const Type* inner = t;
-    while (inner->isVector() || inner->isOptional()) inner = inner->elem;
+    while (inner->isVector() || inner->isOptional() || inner->isArray() || inner->isPointer()) {
+        if (inner->isArray() && !checkSize(inner, loc)) return false;
+        if (inner->isPointer() && inner->elem->isOpaque()) return true;  // what such a type is for
+        inner = inner->elem;
+    }
     if (!inner->isOpaque()) return true;
     diags_.error(loc, q(inner) + " is a C type known only by name, so C+ can only hold a pointer to it",
                  "write `" + std::string(inner->name) + "*`", spec::CTypes);
+    return false;
+}
+
+namespace {
+// How much memory a value takes, as LLVM lays it out on 64-bit targets. Sizes stop
+// growing at a value far above the limit, so they cannot overflow.
+constexpr uint64_t kMaxValueBytes = (uint64_t)1 << 31;  // 2 GiB
+constexpr uint64_t kSizeCap = (uint64_t)1 << 40;
+
+struct Layout {
+    uint64_t size = 0, align = 1;
+};
+
+// `seen` also stops at a struct that contains itself, which is already reported.
+Layout layoutOf(const Type* t, std::unordered_map<const StructDecl*, Layout>& seen) {
+    auto capped = [](uint64_t n) { return std::min(n, kSizeCap); };
+    switch (t->kind) {
+        case K::Bool: case K::Char: return {1, 1};
+        case K::Int: case K::Float: return {4, 4};
+        case K::String: return {24, 8};
+        case K::Array: {
+            Layout elem = layoutOf(t->elem, seen);
+            uint64_t length = capped((uint64_t)t->length);
+            return {elem.size && length > kSizeCap / elem.size ? kSizeCap : elem.size * length, elem.align};
+        }
+        case K::Optional: {
+            if (t->elem->isClass()) return {8, 8};
+            Layout elem = layoutOf(t->elem, seen);
+            uint64_t end = (elem.align + elem.size + elem.align - 1) / elem.align * elem.align;  // a bool comes first
+            return {capped(end), elem.align};
+        }
+        case K::Struct: {
+            auto [it, inserted] = seen.try_emplace(t->decl);
+            if (!inserted) return it->second;
+            Layout out;
+            for (auto& f : t->decl->fields) {
+                Layout field = layoutOf(f.type, seen);
+                out.size = capped((out.size + field.align - 1) / field.align * field.align + field.size);
+                out.align = std::max(out.align, field.align);
+            }
+            out.size = capped((out.size + out.align - 1) / out.align * out.align);
+            return seen[t->decl] = out;
+        }
+        default: return {8, 8};  // long, double, and everything held by a pointer
+    }
+}
+}  // namespace
+
+// A value larger than this cannot be stored, whatever holds it.
+bool Sema::checkSize(const Type* t, Loc loc) {
+    std::unordered_map<const StructDecl*, Layout> seen;
+    uint64_t size = layoutOf(t, seen).size;
+    if (size <= kMaxValueBytes) return true;
+    const Type* elem = t;
+    while (elem->isArray()) elem = elem->elem;
+    diags_.error(loc, q(t) + " is too large: " + (size >= kSizeCap ? "it takes more than 1 TiB" : "it takes " + std::to_string(size) + " bytes") +
+                          ", and a value can take at most 2 GiB",
+                 t->isArray() ? "a vector can hold more, split among its elements: `vector<" + std::string(elem->name) + ">`"
+                              : "hold the large parts in vectors, which keep their elements elsewhere",
+                 spec::Arrays);
     return false;
 }
 
@@ -1882,7 +2027,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 else if (bad->isNull()) help = "null can only be compared with == and !=";
                 else if (bad->is(K::String)) help = "strings work with + to join them, and with == != < <= > >= to compare them";
                 else if (equality) help = "both sides of '" + std::string(sym) + "' must have the same type, but they are " + q(l) + " and " + q(r);
-                else if (comparison && (bad->hasFields() || bad->isVector())) help = q(bad) + " values can only be compared with == and !=";
+                else if (comparison && (bad->hasFields() || bad->isVector() || bad->isArray())) help = q(bad) + " values can only be compared with == and !=";
                 else if (bad->is(K::Bool) && (b.op == BinOp::BitAnd || b.op == BinOp::BitOr)) help = std::string("use '") + (b.op == BinOp::BitAnd ? "&&" : "||") + "' for logic";
                 diags_.error(side->loc, std::string("'") + sym + "' cannot be used with " + q(bad), help, spec::Operators);
                 if (comparison) result = Type::boolTy();
@@ -2013,7 +2158,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             }
             const Type* t = z.target;
             result = Type::longTy();
-            if (t->isError()) break;
+            if (t->isError() || (t->isArray() && !checkStorable(t, e.loc))) break;
             if (t->is(K::Void) || t->isNull() || t->isOpaque() || t->is(K::Auto))
                 diags_.error(e.loc, "sizeof needs a type with a size, but this is " + q(t),
                              t->isOpaque() ? q(t) + " is a C type known only by name, so only C knows its size" : "",
@@ -2280,6 +2425,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         return Type::error();
     }
     if (t->isVector()) return checkVectorMethod(call, flow, t);
+    if (t->isArray()) return checkArrayMethod(call, flow, t);
     if (t->is(K::String)) return checkStringMethod(call, flow);
     if (!t->hasFields()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
@@ -2423,11 +2569,88 @@ const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type
     }
 }
 
+namespace {
+const VectorMethodInfo kArrayMethods[] = {
+    {"size", VecMethod::Size, false, false},   {"empty", VecMethod::Empty, false, false},
+    {"front", VecMethod::Front, false, false}, {"back", VecMethod::Back, false, false},
+    {"fill", VecMethod::Fill, true, true},     {"data", VecMethod::Data, false, false},
+};
+}  // namespace
+
+const Type* Sema::checkArrayMethod(MethodCallExpr& call, Flow& flow, const Type* arrayType) {
+    const VectorMethodInfo* info = nullptr;
+    for (auto& m : kArrayMethods)
+        if (call.name == m.name) info = &m;
+    if (!info) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        static const std::set<std::string> grow = {"push_back", "emplace_back", "pop_back", "clear", "insert",
+                                                   "erase",     "resize",       "reserve"};
+        std::string elem = arrayType->elem->name;
+        std::string help;
+        if (grow.count(call.name)) help = "an array always has the same number of elements. For a list that can grow, use `vector<" + elem + ">`";
+        else if (call.name == "at") help = "write `a[i]`; indexing is always checked in C+";
+        else if (call.name == "length" || call.name == "count") help = "did you mean 'size'?";
+        else if (call.name == "begin" || call.name == "end" || call.name == "swap") {
+            diags_.error(call.loc, "this compiler does not support " + call.name + "() on arrays yet",
+                         "the array methods today are size, empty, front, back, fill and data", spec::Status);
+            return Type::error();
+        } else {
+            std::vector<std::string> names;
+            for (auto& m : kArrayMethods) names.push_back(m.name);
+            std::string guess = closest(call.name, names);
+            help = guess.empty() ? "the array methods are size, empty, front, back, fill and data"
+                                 : "did you mean " + q(guess) + "?";
+        }
+        diags_.error(call.loc, q(arrayType) + " has no method named " + q(call.name), help, spec::Arrays);
+        return Type::error();
+    }
+    call.vecMethod = info->method;
+    Expr& recv = *call.receiver;
+    if (info->changes) checkChangingReceiver(recv, info->name, "array", spec::Arrays);
+    size_t want = info->takesElement ? 1 : 0;
+    if (call.args.size() != want) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, std::string(info->name) + "() takes " + (want ? "one argument" : "no arguments") + " but " +
+                                   std::to_string(call.args.size()) + (call.args.size() == 1 ? " was" : " were") +
+                                   " given",
+                     want ? "write `" + std::string(info->name) + "(value)`" : "write `" + std::string(info->name) + "()`",
+                     spec::Arrays);
+    } else if (want) {
+        checkValue(*call.args[0], flow, arrayType->elem, std::string("for ") + info->name + "() on " + q(arrayType));
+    }
+    switch (info->method) {
+        case VecMethod::Size: return Type::longTy();
+        case VecMethod::Empty: return Type::boolTy();
+        case VecMethod::Front:
+        case VecMethod::Back: return arrayType->elem;
+        case VecMethod::Data: {
+            // The same rules as `&a[0]`: the pointer must have something lasting to point to.
+            const Expr* root = nullptr;
+            if (!isPlaceKind(recv) || storageOf(recv, root) == Storage::Temporary || inTemporaryObject(recv) ||
+                throughOptionalChain(recv)) {
+                diags_.error(call.loc, "data() gives a pointer into the array, but this array is a temporary value",
+                             "it goes away when the statement ends. Store it in a variable first, and call data() on that",
+                             spec::Arrays);
+                return Type::error();
+            }
+            if (insideContainer(recv)) {
+                diags_.error(call.loc, "this compiler does not support pointers into vectors and strings yet",
+                             "their elements move when a vector grows or a shared string is changed. Copy the array into "
+                             "a variable and call data() on that",
+                             spec::Status);
+                return Type::error();
+            }
+            return Type::pointerTo(arrayType->elem, isReadOnlyPlace(recv));
+        }
+        default: return Type::voidTy();
+    }
+}
+
 // Whether a value of type `t` can be made without being given one: what `vector<T>(n)`
 // fills its elements with.
 static bool hasDefault(const Type* t) {
     if (t->isStruct()) return !needsValue(t) && (!t->decl->constructor || t->decl->constructor->params.empty());
-    return !t->isClass();
+    return !t->isClass() && !needsValue(t);
 }
 
 // `vector<T>()`, `vector<T>(n)` or `vector<T>(n, value)`.
@@ -2445,11 +2668,7 @@ const Type* Sema::checkVectorConstruction(CallExpr& call, Flow& flow) {
     if (call.args.size() == 2) {
         checkValue(*call.args[1], flow, vt->elem, "as the element value of " + q(vt));
     } else if (call.args.size() == 1 && !hasDefault(vt->elem)) {
-        const Type* elem = vt->elem;
-        std::string why = elem->isClass() ? "a " + q(elem) + " reference cannot be empty"
-                          : needsValue(elem) ? q(elem) + " holds a class reference that cannot be empty"
-                                             : "the constructor of " + q(elem) + " needs arguments";
-        diags_.error(call.loc, name + "(n) cannot make its elements on its own, because " + why,
+        diags_.error(call.loc, name + "(n) cannot make its elements on its own, because " + elementDefaultProblem(vt->elem),
                      "give the value to fill it with, as in `" + name + "(n, value)`, or start empty and use push_back",
                      spec::Vectors);
     }
@@ -2494,8 +2713,7 @@ const Type* Sema::checkNew(NewExpr& n, Flow& flow) {
     if (n.init) {
         checkValue(*n.init, flow, t, "for the value of `new " + name + "`");
     } else if (!hasDefault(t)) {
-        std::string why = needsValue(t) ? q(t) + " holds a class reference that cannot be empty"
-                                        : "the constructor of " + q(t) + " needs arguments";
+        std::string why = elementDefaultProblem(t);
         diags_.error(n.loc,
                      (n.count ? "`new " + name + "[n]` cannot make its elements" : "`new " + name + "` cannot make its value") +
                          " on its own, because " + why,
@@ -2679,6 +2897,7 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     bool castable = to->isNumber() || to->is(K::Char) || to->is(K::Bool);
     if (from->isError()) return castable ? to : Type::error();
     if (to->is(K::String) && from->is(K::String)) return to;  // `string("text")`, as in C++: a copy
+    if (to->is(K::String) && from->isArray() && from->elem->is(K::Char)) return to;  // its text, up to a zero byte
     if (to->is(K::String) && from->isPointer()) {  // `string(p)` copies the text a `char*` points to
         if (!from->elem->is(K::Char))
             diags_.error(c.operand->loc, "string(p) copies the text a char* points to, but this is " + q(from), "",
@@ -2738,6 +2957,7 @@ const Type* Sema::checkPointerCast(CastExpr& c, const Type* from, const Type* to
     if (!from->isPointer()) {
         diags_.error(c.operand->loc, "a cast to " + q(to) + " converts another pointer, but this is " + q(from),
                      from->isInteger()       ? "C+ does not turn numbers into pointers; a pointer to nothing is `null`"
+                     : from->isArray()         ? "for a pointer to its first element, write `" + spelled(*c.operand, "a") + ".data()`"
                      : isPlaceKind(*c.operand) ? "write `&" + spelled(*c.operand, "x") + "` for its address"
                                                : "",
                      spec::Casts);

@@ -20,7 +20,7 @@ long square(long n) { return n * n; }
 
 | Area | C+ |
 |------|----|
-| Types | `int` (32-bit), `long` (64-bit), `double` (64-bit), `float` (32-bit), `bool`, `char` (one byte, 0 to 255), `string`, `void`, `auto`, structs, classes, `vector<T>`, `T?`, `T*` |
+| Types | `int` (32-bit), `long` (64-bit), `double` (64-bit), `float` (32-bit), `bool`, `char` (one byte, 0 to 255), `string`, `void`, `auto`, structs, classes, `vector<T>`, `array<T, N>`, `T?`, `T*` |
 | Floating point | `1.5`, `.5`, `1e9`, `2.5f`, as in C++. `7 / 2` is 3, `7 / 2.0` is 3.5. IEEE: `1 / 0.0` is `inf`, no traps. `float f = 0.5;` works for a written number |
 | Casts | `int(x)`, `static_cast<int>(x)`, `(int)x` between numbers, `char` and `bool`. A fraction is dropped toward zero; a value that does not fit **stops the program**. `(int*)p`, `static_cast<int*>(p)` between pointer types |
 | Math | `sqrt`, `pow`, `sin`, `floor`, `round`, `fmod`, `isnan`, `abs`, `min`, `max` and the rest of `<cmath>`, with no `std::` |
@@ -33,6 +33,7 @@ long square(long n) { return n * n; }
 | Access | `public:` / `private:`; class members are private by default, struct members public |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
+| Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` written as a number. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
 | Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>` |
 | String chars | `s[i]` and `s[i] = 'x'` (checked), `for (char c : s)`, `s + '!'`, `s += c`, `s.push_back(c)`, `s.pop_back()`, `s.front()`, `s.back()`, `string(3, '-')`, `s.find('/')` |
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them |
@@ -42,10 +43,10 @@ long square(long n) { return n * n; }
 | Manual memory | `int* p = new int(5); delete p;`, `new Point{1, 2}`, `int* a = new int[n]; delete[] a;`. Values start as their default, and each `new`/`delete` **warns**. Turn it off with `[[allow(new_delete)]]` before a function, `[[allow(new_delete)]];` at the top of the file, or `-Wno-new-delete`. The wrong form of delete **stops the program** |
 | C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`, `void* malloc(long n);`, `double frexp(double x, int* e);`. Strings are converted at each call. Link other libraries with `-lname` |
 | C types by name | `extern "C" struct FILE;`, then `FILE* f = fopen(...)`. Only pointers to it can be used |
-| C structs | `extern "C" { struct ldiv_t { long quot; long rem; }; ldiv_t ldiv(long a, long b); tm* gmtime_r(const long* t, tm* out); }`. Fields are numbers, `char`, `bool`, pointers and such structs, in C's order. By value or through a pointer. Before C fills one: `tm t = {};` |
-| Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)`, `break`, `continue`, `?:` |
+| C structs | `extern "C" { struct ldiv_t { long quot; long rem; }; ldiv_t ldiv(long a, long b); tm* gmtime_r(const long* t, tm* out); }`. Fields are numbers, `char`, `bool`, pointers, such structs and arrays of those, in C's order. By value or through a pointer. Before C fills one: `tm t = {};` |
+| Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)` over a vector or an array, `break`, `continue`, `?:` |
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
-| Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors element by element, objects by identity. `opt == 3`, `opt == null` |
+| Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors and arrays element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
 | Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long), `1.5`, `1e-9`, `2.5f` (float), `'a'`, `'\n'` (char) |
 | Conditions | `bool`, a number, a pointer or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (p)` (not null), `if (opt)` (holds a value). Not a `char`: write `c != '\0'` |
@@ -57,7 +58,8 @@ long square(long n) { return n * n; }
 | `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;`; C functions are declared with `extern "C"` |
 | `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `int`. `char*` is a raw pointer, for buffers and text to free |
 | `struct FILE* f`, `struct tm t;`, `typedef struct x x;` | `extern "C" struct FILE;` once, then `FILE* f`; `tm t;`, no word `struct`; no `typedef` |
-| `char name[64]`, `short` in a C struct | not supported yet; use the struct through pointers, declared by name |
+| `char name[64];` in a C struct | `array<char, 64> name;`, read with `string(s.name)` |
+| `short` in a C struct | not supported yet; use the struct through pointers, declared by name |
 | `void f(int v[])` in `extern "C"` | `void f(int* v)` |
 | `extern "C" int printf(const char*, ...);` | variable arguments are not supported; use `println` |
 | `std::cout << x`, `printf` | `println("{}", x)` |
@@ -73,7 +75,7 @@ long square(long n) { return n * n; }
 | `int* a, b;` | error, since `b` would be a plain `int`. Write `int* a, * b;` or two declarations |
 | `int*? p` | error: a pointer can already be null; write `int*` |
 | `println("{}", charPtr)` | error: write `string(p)` for the text or `(void*)p` for the address |
-| `&v[0]`, `s.data()` | pointers into vectors and strings are planned |
+| `&v[0]`, `s.data()` | pointers into vectors and strings are planned; `&a[0]` and `a.data()` work on an array |
 | `std::sqrt(x)`, `#include <cmath>`, `M_PI` | `sqrt(x)`, with nothing to include. `acos(-1)` is π for now |
 | `x % 2.5` on a double | error: write `fmod(x, 2.5)` |
 | `printf("%.2f", x)`, `std::setprecision(2)` | `println("{:.2f}", x)` |
@@ -111,7 +113,11 @@ long square(long n) { return n * n; }
 | `void f(int& n)` | no references yet: `void f(int* n)`, called as `f(&x)` |
 | `vector<int> v(5);`, `vector<int> v{1, 2};` | `auto v = vector<int>(5);`, `vector<int> v = {1, 2};` |
 | `v.emplace_back(x)`, `v.at(i)` | `v.push_back(x)`, `v[i]` (always checked) |
-| `int a[5];` | `vector<int> a = vector<int>(5);`; `array<T, N>` is planned |
+| `int a[5];`, `int a[5] = {1, 2};` | `array<int, 5> a;`, `array<int, 5> a = {1, 2};`. Every element starts with a value, 0 if none is given |
+| `int a[n];`, `array<int, N>` with a named `N` | write the number: `array<int, 5>`. For a size known only at run time, `auto a = vector<int>(n);` |
+| `int* p = a;`, `f(a)` for a C array | an array does not turn into a pointer: `a.data()` |
+| `std::array<int, 3> a{1, 2};`, `a.at(i)` | `array<int, 3> a = {1, 2};`, `a[i]` (always checked) |
+| a huge local array, `array<int, 10000000> a;` | it is on the stack, like in C++, and running out of stack **stops the program**. Use a vector |
 | `if (v)`, `if (!v)` | `if (!v.empty())`, `if (v.empty())`; a vector itself is not a condition |
 | `s + 5`, `"abc" + 1` | error: `+` joins a string with a string or a `char` (`s + 'c'` works). Write `s + to_string(5)`; a number is never a character code |
 | `char c = 65;`, `char c = n;` | error: write `'A'`, or `char(n)`, which stops the program unless `n` is from 0 to 255 |
@@ -135,7 +141,7 @@ long square(long n) { return n * n; }
 | Generics | `template<typename T>`, `template<Comparable T>`; no specialization or SFINAE |
 | Modules | `import net.server;`, `http::get(url)` |
 | Memory | `weak` to break reference cycles, `unique<T>`, `local<T>`; pointers into vectors and strings |
-| Containers | `array<T, N>`, `hashmap<K, V>`; `insert`, `erase` and iterators on vectors |
+| Containers | `hashmap<K, V>`; `insert`, `erase` and iterators on vectors; array sizes given by a name |
 | References | `T&` parameters, `for (auto& x : v)` |
 | Format options | width and alignment, `{:x}`, `{:>8}` |
 | More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare`; parsing numbers from strings |

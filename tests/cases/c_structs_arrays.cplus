@@ -1,0 +1,117 @@
+// C structs with arrays as fields, by value and through pointers. tests/c/structs.c is
+// compiled by the C compiler, so it decides what the layouts and the calling convention are.
+// link-c: tests/c/structs.c
+extern "C" {
+    struct Named { array<char, 8> name; int id; };
+    struct Vec3f { array<float, 3> v; };
+    struct Mat2 { array<double, 4> m; };
+    struct FloatsDouble { array<float, 2> f; double d; };
+    struct IntsDouble { array<int, 2> i; double d; };
+    struct Block { array<int, 100> data; long tail; };
+    struct Cell { array<int, 2> xy; };
+    struct Cells { array<Cell, 2> cells; };
+    struct Text16 { array<char, 16> text; };
+    struct Text17 { array<char, 17> text; };
+    struct FloatAndTwo { float a; array<float, 2> rest; };
+    struct FiveFloats { array<float, 5> v; };
+
+    long named_sum(Named n);
+    Named named_make(string text, int id);
+    float vec3f_sum(Vec3f v);
+    Vec3f vec3f_scale(Vec3f v, float k);
+    double mat2_det(Mat2 m);
+    Mat2 mat2_identity();
+    double floats_double_sum(FloatsDouble x);
+    FloatsDouble floats_double_make(float a, float b, double d);
+    double ints_double_sum(IntsDouble x);
+    IntsDouble ints_double_make(int a, int b, double d);
+    long block_sum(Block b);
+    Block block_make(int start);
+    void block_set(Block* b, int i, int value);
+    int cells_sum(Cells c);
+    Cells cells_make(int a, int b, int c, int d);
+    long text16_len(Text16 t);
+    Text16 text16_make(string s);
+    long text17_len(Text17 t);
+    Text17 text17_make(string s);
+    float float_and_two_sum(FloatAndTwo t);
+    FloatAndTwo float_and_two_make(float a, float b, float c);
+    float five_floats_sum(FiveFloats f);
+    FiveFloats five_floats_make(float k);
+    long many_named(Named a, Named b, Named c, Named d);
+    float many_vec3f(Vec3f a, Vec3f b, Vec3f c, Vec3f d, Vec3f e);
+}
+
+int main() {
+    Named n = named_make("abc", 7);
+    println("{} {} {}", string(n.name), n.id, n.name);
+    println("{}", named_sum(n));
+    n.name[0] = 'A';
+    println("{} {}", string(n.name), named_sum(n));
+
+    Vec3f v = {{1.5f, 2, 3}};
+    println("{}", vec3f_sum(v));
+    println("{}", vec3f_scale(v, 2));
+    Mat2 m = mat2_identity();
+    println("{} {}", m, mat2_det(m));
+    m.m[1] = 2;
+    m.m[2] = 3;
+    println("{}", mat2_det(m));
+
+    println("{}", floats_double_make(1, 2, 3.5));
+    println("{}", floats_double_sum({{1, 2}, 3.5}));
+    println("{}", ints_double_make(1, 2, 3.5));
+    println("{}", ints_double_sum({{1, 2}, 3.5}));
+
+    Block b = block_make(1);
+    println("{} {} {}", b.data[99], b.tail, block_sum(b));
+    block_set(&b, 3, 1000);
+    println("{}", b.data[3]);
+    println("{}", block_sum(b));
+    Block copy = b;
+    copy.data[0] = -1;
+    println("{} {}", b.data[0], copy == b);
+
+    Cells c = cells_make(1, 2, 3, 4);
+    println("{} {}", c, cells_sum(c));
+
+    Text16 t = text16_make("0123456789abcdef");
+    println("{} {} {}", string(t.text), t.text.size(), text16_len(t));
+    Text17 l = text17_make("0123456789abcdefg");
+    println("{} {}", string(l.text), text17_len(l));
+
+    FloatAndTwo three = float_and_two_make(1, 2, 3);
+    println("{} {}", three, float_and_two_sum(three));
+    FiveFloats five = five_floats_make(1.5f);
+    println("{} {}", five, five_floats_sum(five));
+
+    Named n1 = named_make("a", 1);
+    Named n2 = named_make("b", 2);
+    Named n3 = named_make("c", 3);
+    Named n4 = named_make("d", 4);
+    println("{}", many_named(n1, n2, n3, n4));
+    println("{}", many_vec3f(v, v, v, v, v));
+    return 0;
+}
+// expect: abc 7 ['a', 'b', 'c', '\0', '\0', '\0', '\0', '\0']
+// expect: 301
+// expect: Abc 269
+// expect: 6.5
+// expect: {v: [3, 4, 6]}
+// expect: {m: [1, 0, 0, 1]} 1
+// expect: -5
+// expect: {f: [1, 2], d: 3.5}
+// expect: 6.5
+// expect: {i: [1, 2], d: 3.5}
+// expect: 6.5
+// expect: 100 1000 6050
+// expect: 1000
+// expect: 7046
+// expect: 1 false
+// expect: {cells: [{xy: [1, 2]}, {xy: [3, 4]}]} 10
+// expect: 0123456789abcdef 16 16
+// expect: 0123456789abcdefg 17
+// expect: {a: 1, rest: [2, 3]} 6
+// expect: {v: [1.5, 1.5, 1.5, 1.5, 1.5]} 7.5
+// expect: 4321
+// expect: 10

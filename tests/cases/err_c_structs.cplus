@@ -31,7 +31,7 @@ int main() {
     return 0;
 }
 // error: a C struct cannot have a field of type 'string', because C has no equivalent of a string
-// error: C knows numbers, chars, bools, pointers, and structs of those. For text, use a `char*` field and read it with `string(p)`
+// error: C knows numbers, chars, bools, pointers, and structs and arrays of those. For text, use an `array<char, 64>` or `char*` field and read it with `string(x)`
 // error: a C struct cannot have a field of type 'vector<int>', because C has no equivalent of a vector
 // error: a C struct cannot have a field of type 'User', because C has no equivalent of a class reference
 // error: a C struct cannot have a field of type 'int?', because C has no equivalent of an optional

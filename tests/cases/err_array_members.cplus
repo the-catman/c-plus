@@ -1,0 +1,41 @@
+// Arrays in const methods, and types that hold what an array cannot.
+extern "C" struct FILE;
+struct Point {
+    int x = 0;
+    void move(int d) { x += d; }
+};
+struct C {
+    array<int, 2> a;
+    array<Point, 2> pts;
+    void ok() { a[0] = 1; }
+    int get() const {
+        a[0] = 1;
+        a.fill(1);
+        pts[0].move(1);
+        return a[0];
+    }
+};
+int main() {
+    const array<Point, 2> fixed = {};
+    fixed[0].move(1);
+    fixed[0].x = 1;
+    long s = sizeof(array<FILE, 2>);
+    array<FILE, 2>* p = null;
+    vector<array<long, 999999999999>*> v;
+    to_string(fixed);
+    println("{:.2f}", fixed);
+    string text = "abc" + fixed;
+    array<int, 2>? o = 5;
+    return 0;
+}
+// error: the elements of 'a' cannot be assigned to inside const method 'get'
+// error: 'a' cannot be changed inside const method 'get'
+// error: const method 'get' cannot call 'move', which may change fields
+// error: cannot call 'move' on const 'fixed', because it may change fields
+// error: 'fixed' is const, so its elements cannot be assigned to
+// error: 'FILE' is a C type known only by name, so C+ can only hold a pointer to it
+// error: 'array<long, 999999999999>' is too large
+// error: to_string() takes a number, but this is 'array<Point, 2>'
+// error: {:.2f} formats a float or a double, but this is 'array<Point, 2>'
+// error: '+' joins a string with a string or a char, but this is 'array<Point, 2>'
+// error: expected 'array<int, 2>?' to initialize 'o', but this is 'int'

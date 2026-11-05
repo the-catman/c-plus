@@ -1,0 +1,95 @@
+// The elements of an array stay where the array is, so pointers to them are allowed. C
+// functions take an array as a pointer to its first element.
+extern "C" {
+    long strlen(char* s);
+    void* memset(void* p, int value, long n);
+    char* strcpy(char* to, string from);
+}
+
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+
+class Box {
+public:
+    array<int, 3> values = {1, 2, 3};
+};
+
+void bump(int* p, long n) {
+    for (long i = 0; i < n; i++) p[i] += 10;
+}
+
+long sum(const array<int, 3>* a) {
+    long total = 0;
+    for (long i = 0; i < a->size(); i++) total += (*a)[i];
+    return total;
+}
+
+int main() {
+    array<int, 3> a = {1, 2, 3};
+    int* first = &a[0];
+    *first = 5;
+    first[2] = 7;
+    println("{}", a);
+    int* second = first + 1;
+    *second = 6;
+    println("{} {} {}", a, second - first, *(a.data() + 2));
+    bump(a.data(), a.size());
+    println("{}", a);
+
+    array<int, 3>* whole = &a;
+    whole->fill(4);
+    (*whole)[1] = 8;
+    println("{} {} {}", *whole, whole->size(), sum(whole));
+    auto copied = *whole;
+    copied[0] = 0;
+    println("{} {}", copied[0], a[0]);
+
+    const array<int, 2> fixed = {1, 2};
+    const int* ro = fixed.data();
+    const int* ro2 = &fixed[1];
+    println("{} {}", *ro, *ro2);
+
+    // Through a struct, an object, and an array of arrays.
+    array<Point, 2> points;
+    Point* p = &points[1];
+    p->y = 3;
+    int* py = &points[0].x;
+    *py = 2;
+    println("{}", points);
+    Box box = Box();
+    int* inBox = box.values.data();
+    inBox[1] = 20;
+    int* last = &box.values[2];
+    *last = 30;
+    println("{}", box.values);
+    array<array<int, 2>, 2> grid;
+    int* cell = &grid[1][0];
+    *cell = 9;
+    array<int, 2>* row = grid.data();
+    row[0][1] = 8;
+    println("{}", grid);
+
+    // Buffers for C.
+    array<char, 16> buffer;
+    strcpy(buffer.data(), "hello");
+    println("{} {} {}", string(buffer), strlen(buffer.data()), string(buffer.data()));
+    memset(buffer.data(), 'x', buffer.size());
+    println("{}", string(buffer));   // no zero byte: it ends with the array
+    buffer[3] = '\0';
+    println("{}", string(buffer));
+    return 0;
+}
+// expect: [5, 2, 7]
+// expect: [5, 6, 7] 1 7
+// expect: [15, 16, 17]
+// expect: [4, 8, 4] 3 16
+// expect: 0 4
+// expect: 1 2
+// expect: [{x: 2, y: 0}, {x: 0, y: 3}]
+// expect: [1, 20, 30]
+// expect: [[0, 8], [9, 0]]
+// expect: hello 5 hello
+// expect: xxxxxxxxxxxxxxxx
+// expect: xxx

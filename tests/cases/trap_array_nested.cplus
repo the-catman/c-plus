@@ -1,0 +1,8 @@
+// An index into an inner array cannot reach the next row.
+int main() {
+    array<array<int, 2>, 2> grid;
+    int j = 2;
+    grid[0][j] = 1;
+    return 0;
+}
+// trap: index 2 is out of range for an array of size 2

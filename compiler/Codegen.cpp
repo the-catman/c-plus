@@ -43,9 +43,9 @@ struct Codegen::Impl {
     llvm::StructType* stringTy = nullptr;
     llvm::FunctionCallee rtPrintStr, rtPrintQuoted, rtPrintI32, rtPrintI64, rtPrintBool, rtPrintNewline, rtTrap;
     llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq;
-    llvm::FunctionCallee rtTrapIndex, rtVecNew, rtVecRelease, rtVecReserve;
+    llvm::FunctionCallee rtTrapIndex, rtTrapArrayIndex, rtVecNew, rtVecRelease, rtVecReserve;
     llvm::FunctionCallee rtStrRelease, rtStrCompare, rtStrConcat, rtStrAppend, rtStrSubstr, rtStrFind;
-    llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC;
+    llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
     llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree;
@@ -77,6 +77,7 @@ struct Codegen::Impl {
         llvm::Function* release = nullptr;  // classes, and structs that hold class references
         llvm::Function* destroy = nullptr;  // classes
         int managed = -1;                   // structs: whether they hold class references (-1: not computed)
+        int inMemory = -1;                  // structs: whether they hold arrays (-1: not computed)
     };
     std::unordered_map<const StructDecl*, TypeInfo> types;
 
@@ -92,6 +93,13 @@ struct Codegen::Impl {
         llvm::Constant* releaseElem = nullptr;
     };
     std::unordered_map<const Type*, VecInfo> vecs;
+    struct ArrayInfo {  // generated for each array type, when first needed; all take addresses
+        llvm::Function* print = nullptr;
+        llvm::Function* equals = nullptr;
+        llvm::Function* retain = nullptr;   // when elements hold references
+        llvm::Function* release = nullptr;
+    };
+    std::unordered_map<const Type*, ArrayInfo> arrays;
     llvm::Function* vecSizeFn = nullptr;
     llvm::Function* vecReserveFn = nullptr;
 
@@ -99,7 +107,7 @@ struct Codegen::Impl {
     std::unordered_map<const OptValueExpr*, llvm::Value*> optValues;
 
     std::unordered_map<const FuncDecl*, llvm::Function*> funcs;
-    std::unordered_map<const VarDecl*, llvm::AllocaInst*> locals;
+    std::unordered_map<const VarDecl*, llvm::Value*> locals;  // where each variable is stored
     llvm::Function* fn = nullptr;
     const FuncDecl* fnDecl = nullptr;
     llvm::Value* thisPtr = nullptr;  // in a method: the object, or the address of the struct
@@ -190,10 +198,12 @@ struct Codegen::Impl {
         rtCString = decl("cplus_c_string", ptrTy, {ptrTy, i64, i32, ptrTy, ptrTy, i32, i32});
         rtCFree = decl("cplus_c_free", voidTy, {ptrTy});
         rtStrFromC = decl("cplus_str_from_c", voidTy, {ptrTy, ptrTy});
+        rtStrFromChars = decl("cplus_str_from_chars", voidTy, {ptrTy, ptrTy, i64});
         rtTrapIndex = decl("cplus_trap_index", voidTy, {i64, i64, ptrTy, i32, i32});
+        rtTrapArrayIndex = decl("cplus_trap_array_index", voidTy, {i64, i64, ptrTy, i32, i32});
         rtTrapStringIndex = decl("cplus_trap_string_index", voidTy, {i64, i64, ptrTy, i32, i32});
         rtTrapChar = decl("cplus_trap_char", voidTy, {i64, ptrTy, ptrTy, i32, i32});
-        for (llvm::FunctionCallee trap : {rtTrapIndex, rtTrapStringIndex, rtTrapChar})
+        for (llvm::FunctionCallee trap : {rtTrapIndex, rtTrapArrayIndex, rtTrapStringIndex, rtTrapChar})
             if (auto* f = llvm::dyn_cast<llvm::Function>(trap.getCallee())) {
                 f->addFnAttr(llvm::Attribute::NoReturn);
                 f->addFnAttr(llvm::Attribute::Cold);
@@ -222,6 +232,7 @@ struct Codegen::Impl {
             case K::Char: return b.getInt8Ty();
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
+            case K::Array: return llvm::ArrayType::get(llvmType(t->elem), (uint64_t)t->length);
             case K::Class: case K::Vector: case K::Null: case K::Pointer: return b.getPtrTy();
             // An optional class reference is a pointer that may be null. Any other
             // optional is { i1 has, T value }, and its value is all zero bytes when it
@@ -233,12 +244,65 @@ struct Codegen::Impl {
         }
     }
 
+    // Whether values of this type are handled through their address: an array, or what
+    // holds one by value. LLVM is very slow at loading and storing a large aggregate as one
+    // value, as C and Rust compilers also avoid, so here a value in the generated code is
+    // the address of memory holding it, and copying one is a memory copy. That memory is
+    // the value's own: nothing else changes it, so it can be used like any other value,
+    // and a variable can take it over. See loadValue and storeValue.
+    bool inMemory(const Type* t) {
+        if (t->isArray()) return true;
+        if (t->isOptional()) return inMemory(t->elem);
+        if (!t->isStruct()) return false;
+        TypeInfo& info = types.at(t->decl);
+        if (info.inMemory < 0) {
+            info.inMemory = 0;
+            for (auto& f : t->decl->fields)
+                if (inMemory(f.type)) info.inMemory = 1;
+        }
+        return info.inMemory == 1;
+    }
+
+    // The LLVM type of a value of this type in the generated code; llvmType is how it is
+    // stored.
+    llvm::Type* valueType(const Type* t) { return inMemory(t) ? b.getPtrTy() : llvmType(t); }
+
+    llvm::Align alignOf(const Type* t) { return mod->getDataLayout().getABITypeAlign(llvmType(t)); }
+    uint64_t sizeOf(const Type* t) { return mod->getDataLayout().getTypeAllocSize(llvmType(t)); }
+
+    // A copy of the value stored at `addr`, for the value to outlive changes to the place.
+    llvm::Value* loadValue(const Type* t, llvm::Value* addr, const char* name = "") {
+        if (!inMemory(t)) return b.CreateLoad(llvmType(t), addr, name);
+        llvm::AllocaInst* copy = entryAlloca(llvmType(t), "copy");
+        b.CreateMemCpy(copy, alignOf(t), addr, alignOf(t), sizeOf(t));
+        return copy;
+    }
+
+    // The value stored at `addr`, for a use that ends before the place can change: it is
+    // released, printed, compared or copied right away.
+    llvm::Value* peekValue(const Type* t, llvm::Value* addr, const char* name = "") {
+        return inMemory(t) ? addr : b.CreateLoad(llvmType(t), addr, name);
+    }
+
+    void storeValue(llvm::Value* v, const Type* t, llvm::Value* addr) {
+        if (inMemory(t)) b.CreateMemMove(addr, alignOf(t), v, alignOf(t), sizeOf(t));  // `a = a` is allowed
+        else b.CreateStore(v, addr);
+    }
+
+    // The value of type `t` that is all zero bytes: an empty optional.
+    llvm::Value* zeroValue(const Type* t) {
+        if (!inMemory(t)) return llvm::Constant::getNullValue(llvmType(t));
+        llvm::AllocaInst* zero = entryAlloca(llvmType(t), "zero");
+        b.CreateMemSet(zero, b.getInt8(0), sizeOf(t), alignOf(t));
+        return zero;
+    }
+
     // Whether values of this type hold references to heap objects (class objects,
     // vector buffers, string buffers), which are retained when the value is copied and
     // released when it goes away.
     bool isManaged(const Type* t) {
         if (t->isClass() || t->isVector() || t->is(K::String)) return true;
-        if (t->isOptional()) return isManaged(t->elem);
+        if (t->isOptional() || t->isArray()) return isManaged(t->elem);
         if (!t->isStruct()) return false;
         TypeInfo& info = types.at(t->decl);
         if (info.managed < 0) {
@@ -305,14 +369,13 @@ struct Codegen::Impl {
     }
 
     // Stops the program unless 0 <= index < size; `index` and `size` are i64.
-    void checkIndex(llvm::Value* index, llvm::Value* size, Loc loc, bool inString = false) {
+    void checkIndex(llvm::Value* index, llvm::Value* size, Loc loc, llvm::FunctionCallee trap) {
         auto* trapBB = llvm::BasicBlock::Create(ctx, "bad.index", fn);
         auto* okBB = llvm::BasicBlock::Create(ctx, "ok", fn);
         // An unsigned compare also catches negative indexes.
         b.CreateCondBr(b.CreateICmpUGE(index, size), trapBB, okBB, llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
         b.SetInsertPoint(trapBB);
-        auto* call = b.CreateCall(inString ? rtTrapStringIndex : rtTrapIndex,
-                                  {index, size, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+        auto* call = b.CreateCall(trap, {index, size, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
         call->setDoesNotReturn();
         b.CreateUnreachable();
         b.SetInsertPoint(okBB);
@@ -420,16 +483,24 @@ struct Codegen::Impl {
 
     llvm::Value* hasValue(llvm::Value* opt, const Type* t) {
         if (t->elem->isClass()) return b.CreateIsNotNull(opt, "has");
+        if (inMemory(t)) return b.CreateLoad(b.getInt1Ty(), b.CreateStructGEP(llvmType(t), opt, 0), "has");
         return b.CreateExtractValue(opt, 0, "has");
     }
 
     llvm::Value* valueOf(llvm::Value* opt, const Type* t) {
         if (t->elem->isClass()) return opt;
+        if (inMemory(t)) return b.CreateStructGEP(llvmType(t), opt, 1, "value");
         return b.CreateExtractValue(opt, 1, "value");
     }
 
     llvm::Value* wrapOptional(llvm::Value* v, const Type* t) {
         if (t->elem->isClass()) return v;
+        if (inMemory(t)) {
+            llvm::AllocaInst* opt = entryAlloca(llvmType(t), "opt");
+            b.CreateStore(b.getInt1(true), b.CreateStructGEP(llvmType(t), opt, 0));
+            storeValue(v, t->elem, b.CreateStructGEP(llvmType(t), opt, 1));
+            return opt;
+        }
         llvm::Value* opt = b.CreateInsertValue(llvm::PoisonValue::get(llvmType(t)), b.getInt1(true), {0});
         return b.CreateInsertValue(opt, v, {1});
     }
@@ -438,7 +509,9 @@ struct Codegen::Impl {
         if (t->isOptional()) return retainValue(valueOf(v, t), t->elem);
         if (t->isClass() || t->isVector()) b.CreateCall(rtRetain, {v});
         else if (t->is(K::String)) b.CreateCall(rtRetain, {b.CreateExtractValue(v, 2, "owner")});
-        else if (isManaged(t)) b.CreateCall(types.at(t->decl).retain, {v});
+        else if (!isManaged(t)) return;
+        else if (t->isArray()) b.CreateCall(arrayInfo(t).retain, {v});
+        else b.CreateCall(types.at(t->decl).retain, {v});
     }
 
     void releaseValue(llvm::Value* v, const Type* t) {
@@ -448,7 +521,11 @@ struct Codegen::Impl {
         } else if (t->isVector()) {
             VecInfo& info = vecInfo(t);
             b.CreateCall(rtVecRelease, {v, b.getInt64(info.elemSize), info.releaseElem});
-        } else if (isManaged(t)) {
+        } else if (!isManaged(t)) {
+            return;
+        } else if (t->isArray()) {
+            b.CreateCall(arrayInfo(t).release, {v});
+        } else {
             b.CreateCall(types.at(t->decl).release, {v});
         }
     }
@@ -713,7 +790,7 @@ struct Codegen::Impl {
             printText(out, ", ");
             b.CreateBr(elemBB);
             b.SetInsertPoint(elemBB);
-            printValue(out, b.CreateLoad(info.elemTy, elementAt(v, i, vt)), elem, true);
+            printValue(out, peekValue(elem, elementAt(v, i, vt)), elem, true);
         });
         printText(out, "]");
         b.CreateRetVoid();
@@ -732,8 +809,8 @@ struct Codegen::Impl {
         b.CreateCondBr(b.CreateICmpEQ(size, vecSize(r)), elemsBB, differBB);
         b.SetInsertPoint(elemsBB);
         countedLoop(size, [&](llvm::Value* i) {
-            llvm::Value* x = b.CreateLoad(info.elemTy, elementAt(l, i, vt));
-            llvm::Value* y = b.CreateLoad(info.elemTy, elementAt(r, i, vt));
+            llvm::Value* x = peekValue(elem, elementAt(l, i, vt));
+            llvm::Value* y = peekValue(elem, elementAt(r, i, vt));
             auto* nextBB = llvm::BasicBlock::Create(ctx, "next", fn);
             b.CreateCondBr(genEquals(x, y, elem), nextBB, differBB);
             b.SetInsertPoint(nextBB);
@@ -748,7 +825,7 @@ struct Codegen::Impl {
         for (auto [f, retain] : {std::pair{retainElem, true}, std::pair{releaseElem, false}}) {
             if (!f) continue;
             startHelper(f);
-            llvm::Value* x = b.CreateLoad(info.elemTy, f->getArg(0));
+            llvm::Value* x = peekValue(elem, f->getArg(0));
             retain ? retainValue(x, elem) : releaseValue(x, elem);
             b.CreateRetVoid();
         }
@@ -772,7 +849,7 @@ struct Codegen::Impl {
         VecInfo& info = vecInfo(vt);
         llvm::Value* buf = b.CreateCall(rtVecNew, {b.getInt64(info.elemSize), b.getInt64(list.elements.size())}, "vec");
         for (size_t i = 0; i < list.elements.size(); ++i)
-            b.CreateStore(genOwned(*list.elements[i].value, vt->elem), elementAt(buf, b.getInt64(i), vt));
+            storeValue(genOwned(*list.elements[i].value, vt->elem), vt->elem, elementAt(buf, b.getInt64(i), vt));
         return buf;
     }
 
@@ -786,16 +863,12 @@ struct Codegen::Impl {
         llvm::Value* value = call.args.size() == 2 ? genOwned(*call.args[1], elem) : nullptr;
         trapIf(b.CreateICmpSLT(count, b.getInt64(0)), "a vector cannot have a negative size", call.loc);
         llvm::Value* buf = b.CreateCall(rtVecNew, {b.getInt64(info.elemSize), count}, "vec");
-        // New elements are zero bytes, which is already the default of every type but a struct.
-        if (value || elem->isStruct()) {
+        // New elements are zero bytes, which is the default of most types.
+        if (value || !defaultIsZero(elem)) {
             countedLoop(count, [&](llvm::Value* i) {
-                size_t mark = temps.size();
-                llvm::Value* x = value;
-                if (value) retainValue(value, elem);  // each element holds its own reference
-                else if (elem->decl->constructor) x = construct(*elem->decl, {});
-                else x = genDefault(elem);
-                flushTemps(mark);
-                b.CreateStore(x, elementAt(buf, i, vt));
+                if (!value) return fillElement(elementAt(buf, i, vt), elem);
+                retainValue(value, elem);  // each element holds its own reference
+                storeValue(value, elem, elementAt(buf, i, vt));
             });
             if (value) releaseValue(value, elem);
         }
@@ -805,7 +878,6 @@ struct Codegen::Impl {
     llvm::Value* genVectorMethod(const MethodCallExpr& call) {
         const Expr& recv = *call.receiver;
         const Type* vt = recv.type;
-        VecInfo& info = vecInfo(vt);
         switch (call.vecMethod) {
             case VecMethod::Size: return vecSize(vectorForRead(recv));
             case VecMethod::Empty: return b.CreateICmpEQ(vecSize(vectorForRead(recv)), b.getInt64(0), "empty");
@@ -817,7 +889,7 @@ struct Codegen::Impl {
                 trapIf(b.CreateICmpEQ(size, b.getInt64(0)),
                        std::string(front ? "front()" : "back()") + " was called on an empty vector", call.loc);
                 llvm::Value* index = front ? b.getInt64(0) : b.CreateSub(size, b.getInt64(1));
-                llvm::Value* v = b.CreateLoad(info.elemTy, elementAt(buf, index, vt), call.name);
+                llvm::Value* v = loadValue(vt->elem, elementAt(buf, index, vt), call.name.c_str());
                 retainValue(v, vt->elem);  // a method call's result is owned
                 return v;
             }
@@ -829,7 +901,7 @@ struct Codegen::Impl {
                 llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "vec");
                 llvm::Value* size = vecSize(buf);
                 buf = reserve(slot, buf, vt, b.CreateAdd(size, b.getInt64(1)));
-                b.CreateStore(value, elementAt(buf, size, vt));
+                storeValue(value, vt->elem, elementAt(buf, size, vt));
                 b.CreateStore(b.CreateAdd(size, b.getInt64(1)), sizeAddress(buf));
                 return nullptr;
             }
@@ -842,7 +914,7 @@ struct Codegen::Impl {
                 llvm::Value* last = b.CreateSub(size, b.getInt64(1));
                 b.CreateStore(last, sizeAddress(buf));
                 // Released after the vector is updated, in case a destructor looks at it.
-                if (isManaged(vt->elem)) releaseValue(b.CreateLoad(info.elemTy, elementAt(buf, last, vt)), vt->elem);
+                if (isManaged(vt->elem)) releaseValue(peekValue(vt->elem, elementAt(buf, last, vt)), vt->elem);
                 return nullptr;
             }
             case VecMethod::Clear: {
@@ -852,9 +924,147 @@ struct Codegen::Impl {
                 releaseValue(old, vt);
                 return nullptr;
             }
+            case VecMethod::Fill: case VecMethod::Data:
             case VecMethod::None: break;
         }
         llvm_unreachable("unknown vector method");
+    }
+
+    // ---- Arrays ------------------------------------------------------------
+
+    llvm::Value* arrayElement(llvm::Value* array, llvm::Value* index, const Type* at) {
+        return b.CreateInBoundsGEP(llvmType(at->elem), array, index, "elem.addr");
+    }
+
+    ArrayInfo& arrayInfo(const Type* at) {
+        auto [it, inserted] = arrays.try_emplace(at);
+        ArrayInfo& info = it->second;
+        if (!inserted) return info;
+        const Type* elem = at->elem;
+        auto* ptrTy = b.getPtrTy();
+        std::string prefix = std::string("cplus.") + at->name + "#";
+        llvm::Value* length = b.getInt64(at->length);
+        // Everything is declared before any body is generated, so element types that lead
+        // back to this array find its helpers.
+        info.print = internalFunction(prefix + "print", b.getVoidTy(), {ptrTy, ptrTy});  // the array, the output
+        info.equals = internalFunction(prefix + "equals", b.getInt1Ty(), {ptrTy, ptrTy});
+        if (isManaged(elem)) {
+            info.retain = internalFunction(prefix + "retain", b.getVoidTy(), {ptrTy});
+            info.release = internalFunction(prefix + "release", b.getVoidTy(), {ptrTy});
+        }
+        SavedPoint saved(*this);
+
+        // Printing: `[1, 2, 3]`, as a vector prints.
+        startHelper(info.print);
+        llvm::Value* a = info.print->getArg(0);
+        llvm::Value* out = info.print->getArg(1);
+        printText(out, "[");
+        countedLoop(length, [&](llvm::Value* i) {
+            auto* sepBB = llvm::BasicBlock::Create(ctx, "sep", fn);
+            auto* elemBB = llvm::BasicBlock::Create(ctx, "elem", fn);
+            b.CreateCondBr(b.CreateICmpNE(i, b.getInt64(0)), sepBB, elemBB);
+            b.SetInsertPoint(sepBB);
+            printText(out, ", ");
+            b.CreateBr(elemBB);
+            b.SetInsertPoint(elemBB);
+            printValue(out, peekValue(elem, arrayElement(a, i, at)), elem, true);
+        });
+        printText(out, "]");
+        b.CreateRetVoid();
+
+        // Equality: each pair of elements equal.
+        startHelper(info.equals);
+        llvm::Value* l = info.equals->getArg(0);
+        llvm::Value* r = info.equals->getArg(1);
+        auto* differBB = llvm::BasicBlock::Create(ctx, "differ", fn);
+        countedLoop(length, [&](llvm::Value* i) {
+            llvm::Value* same = genEquals(peekValue(elem, arrayElement(l, i, at)), peekValue(elem, arrayElement(r, i, at)), elem);
+            auto* nextBB = llvm::BasicBlock::Create(ctx, "next", fn);
+            b.CreateCondBr(same, nextBB, differBB);
+            b.SetInsertPoint(nextBB);
+        });
+        b.CreateRet(b.getInt1(true));
+        b.SetInsertPoint(differBB);
+        b.CreateRet(b.getInt1(false));
+
+        // Retaining and releasing every element, the last one first, as C++ destroys them.
+        if (info.retain) {
+            startHelper(info.retain);
+            countedLoop(length, [&](llvm::Value* i) {
+                retainValue(peekValue(elem, arrayElement(info.retain->getArg(0), i, at)), elem);
+            });
+            b.CreateRetVoid();
+            startHelper(info.release);
+            countedLoop(length, [&](llvm::Value* i) {
+                llvm::Value* index = b.CreateSub(b.CreateSub(length, b.getInt64(1)), i);
+                releaseValue(peekValue(elem, arrayElement(info.release->getArg(0), index, at)), elem);
+            });
+            b.CreateRetVoid();
+        }
+        return info;
+    }
+
+    // `{1, 2, 3}` for an array: the elements are evaluated in order, and those not listed
+    // get their default.
+    llvm::Value* genArrayList(const InitListExpr& list, const Type* at) {
+        const Type* elem = at->elem;
+        llvm::AllocaInst* out = entryAlloca(llvmType(at), "array");
+        uint64_t given = list.elements.size();
+        for (uint64_t i = 0; i < given; ++i)
+            storeValue(genOwned(*list.elements[i].value, elem), elem, arrayElement(out, b.getInt64(i), at));
+        uint64_t rest = (uint64_t)at->length - given;
+        if (defaultIsZero(elem)) {
+            if (rest) b.CreateMemSet(arrayElement(out, b.getInt64(given), at), b.getInt8(0), rest * sizeOf(elem), alignOf(elem));
+        } else {
+            countedLoop(b.getInt64(rest), [&](llvm::Value* i) {
+                fillElement(arrayElement(out, b.CreateAdd(i, b.getInt64(given)), at), elem);
+            });
+        }
+        return out;
+    }
+
+    // The value of an array that is only read right away, in place if it is stored somewhere.
+    llvm::Value* arrayForRead(const Expr& e) { return isPlace(e) ? addressOf(e) : gen(e); }
+
+    llvm::Value* genArrayMethod(const MethodCallExpr& call) {
+        const Expr& recv = *call.receiver;
+        const Type* at = recv.type;
+        const Type* elem = at->elem;
+        switch (call.vecMethod) {
+            case VecMethod::Size:
+            case VecMethod::Empty:
+                if (!isPlace(recv) || mayRunCode(recv)) gen(recv);  // evaluated for what it does
+                if (call.vecMethod == VecMethod::Size) return b.getInt64(at->length);
+                return b.getInt1(at->length == 0);
+            case VecMethod::Front:
+            case VecMethod::Back: {
+                bool front = call.vecMethod == VecMethod::Front;
+                llvm::Value* a = arrayForRead(recv);
+                if (at->length == 0)
+                    trapIf(b.getInt1(true), std::string(front ? "front()" : "back()") + " was called on an array with no elements", call.loc);
+                llvm::Value* index = b.getInt64(front ? 0 : at->length - 1);
+                llvm::Value* v = loadValue(elem, arrayElement(a, index, at), call.name.c_str());
+                retainValue(v, elem);  // a method call's result is owned
+                return v;
+            }
+            case VecMethod::Fill: {
+                // The value is evaluated first, and each element gets its own copy.
+                llvm::Value* value = genOwned(*call.args[0], elem);
+                llvm::Value* a = addressOf(recv, false, true);
+                countedLoop(b.getInt64(at->length), [&](llvm::Value* i) {
+                    llvm::Value* place = arrayElement(a, i, at);
+                    llvm::Value* old = isManaged(elem) ? loadValue(elem, place, "old") : nullptr;
+                    retainValue(value, elem);
+                    storeValue(value, elem, place);
+                    if (old) releaseValue(old, elem);
+                });
+                releaseValue(value, elem);
+                return nullptr;
+            }
+            case VecMethod::Data: return addressOf(recv);
+            default: break;
+        }
+        llvm_unreachable("unknown array method");
     }
 
     // Releases the temporaries made since `mark`, newest first.
@@ -862,7 +1072,7 @@ struct Codegen::Impl {
         while (temps.size() > mark) {
             Temp t = temps.back();
             temps.pop_back();
-            releaseValue(t.inMemory ? b.CreateLoad(llvmType(t.type), t.value) : t.value, t.type);
+            releaseValue(t.inMemory ? peekValue(t.type, t.value) : t.value, t.type);
         }
     }
 
@@ -870,7 +1080,7 @@ struct Codegen::Impl {
     void releaseScopes(size_t depth) {
         for (size_t i = scopes.size(); i-- > depth;)
             for (auto it = scopes[i].rbegin(); it != scopes[i].rend(); ++it)
-                releaseValue(b.CreateLoad(llvmType((*it)->type), locals.at(*it), (*it)->name), (*it)->type);
+                releaseValue(peekValue((*it)->type, locals.at(*it), (*it)->name.c_str()), (*it)->type);
     }
 
     void popScope() {
@@ -882,7 +1092,7 @@ struct Codegen::Impl {
 
     llvm::Value* convert(llvm::Value* v, const Type* from, const Type* to) {
         if (from == to) return v;
-        if (from->isNull()) return llvm::Constant::getNullValue(llvmType(to));
+        if (from->isNull()) return zeroValue(to);
         if (to->isOptional()) return wrapOptional(convert(v, from, to->elem), to);
         if (from->is(K::Int) && to->is(K::Long)) return b.CreateSExt(v, b.getInt64Ty());
         if (from->is(K::Char) && to->isInteger()) return b.CreateZExt(v, llvmType(to));  // its code, 0 to 255
@@ -929,6 +1139,11 @@ struct Codegen::Impl {
 
     // Evaluates an expression whose value is not used.
     void genDiscarded(const Expr& e) {
+        if (e.kind == Expr::Kind::Assign && inMemory(e.type)) {  // no copy of the value is made to return it
+            genMemoryAssign(static_cast<const AssignExpr&>(e));
+            flushTemps();
+            return;
+        }
         bool owned = false;
         llvm::Value* v = genRaw(e, owned);
         if (v && owned) releaseValue(v, e.type);
@@ -939,6 +1154,11 @@ struct Codegen::Impl {
     // false, strings empty, struct fields their defaults, and class references none.
     // Definite assignment makes sure a missing class reference is never read.
     llvm::Value* genDefault(const Type* t) {
+        if (inMemory(t)) {
+            llvm::AllocaInst* out = entryAlloca(llvmType(t), "default");
+            fillDefault(out, t);
+            return out;
+        }
         switch (t->kind) {
             case K::Bool: return b.getInt1(false);
             case K::Int: case K::Long: case K::Char: return llvm::ConstantInt::get(llvmType(t), 0);
@@ -946,9 +1166,47 @@ struct Codegen::Impl {
             case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct: return buildAggregate(*t->decl, {});
             case K::Class: case K::Vector: case K::Pointer: return llvm::ConstantPointerNull::get(b.getPtrTy());
-            case K::Optional: return llvm::Constant::getNullValue(llvmType(t));  // null
+            case K::Optional: return zeroValue(t);  // null
             default: llvm_unreachable("no default value for this type");
         }
+    }
+
+    // Whether the default value of `t` is all zero bytes, so that memory set to zero
+    // already holds it. So it is for a type whose constructor needs arguments, which has no
+    // default: Sema makes sure the zero bytes are replaced before they are read.
+    bool defaultIsZero(const Type* t) {
+        if (t->isArray()) return t->length == 0 || defaultIsZero(t->elem);
+        if (!t->isStruct()) return true;
+        if (const FuncDecl* ctor = t->decl->constructor) return !ctor->params.empty();
+        for (auto& f : t->decl->fields)
+            if (f.defaultValue || !defaultIsZero(f.type)) return false;
+        return true;
+    }
+
+    // Puts the value genDefault gives into the memory at `addr`.
+    void fillDefault(llvm::Value* addr, const Type* t) {
+        if (!inMemory(t)) {
+            b.CreateStore(genDefault(t), addr);
+        } else if (defaultIsZero(t) || t->isOptional()) {
+            b.CreateMemSet(addr, b.getInt8(0), sizeOf(t), alignOf(t));
+        } else if (t->isArray()) {
+            countedLoop(b.getInt64(t->length), [&](llvm::Value* i) { fillElement(arrayElement(addr, i, t), t->elem); });
+        } else {
+            fillFields(addr, *t->decl, std::vector<llvm::Value*>(t->decl->fields.size(), nullptr));
+        }
+    }
+
+    // Puts a new element into memory that belongs to a vector, an array or `new`. Unlike a
+    // variable, which can be filled field by field, an element runs a constructor without
+    // parameters.
+    void fillElement(llvm::Value* addr, const Type* t) {
+        size_t mark = temps.size();
+        if (t->isStruct() && t->decl->constructor) {
+            if (t->decl->constructor->params.empty()) storeValue(construct(*t->decl, {}), t, addr);
+        } else {
+            fillDefault(addr, t);
+        }
+        flushTemps(mark);
     }
 
     llvm::Value* allocObject(const StructDecl& sd) {
@@ -965,20 +1223,35 @@ struct Codegen::Impl {
     // when present, is the owned value of field i; the others get their default.
     llvm::Value* buildAggregate(const StructDecl& sd, std::vector<llvm::Value*> given) {
         given.resize(sd.fields.size(), nullptr);
+        if (sd.isClass) {
+            llvm::Value* object = allocObject(sd);
+            fillFields(object, sd, given);
+            return object;
+        }
+        if (inMemory(&sd.type)) {
+            llvm::AllocaInst* out = entryAlloca(types.at(&sd).layout, sd.name);
+            fillFields(out, sd, given);
+            return out;
+        }
         auto valueOf = [&](size_t i) {
             const FieldDecl& f = sd.fields[i];
             if (given[i]) return given[i];
             return f.defaultValue ? genOwned(*f.defaultValue, f.type) : genDefault(f.type);
         };
-        if (sd.isClass) {
-            llvm::Value* object = allocObject(sd);
-            for (size_t i = 0; i < sd.fields.size(); ++i)
-                b.CreateStore(valueOf(i), fieldAddress(&sd.type, object, (int)i, sd.fields[i].name));
-            return object;
-        }
         llvm::Value* agg = llvm::PoisonValue::get(types.at(&sd).layout);
         for (size_t i = 0; i < sd.fields.size(); ++i) agg = b.CreateInsertValue(agg, valueOf(i), {(unsigned)i});
         return agg;
+    }
+
+    // Fills the fields of the struct or class object at `object`, as buildAggregate does.
+    void fillFields(llvm::Value* object, const StructDecl& sd, const std::vector<llvm::Value*>& given) {
+        for (size_t i = 0; i < sd.fields.size(); ++i) {
+            const FieldDecl& f = sd.fields[i];
+            llvm::Value* place = fieldAddress(&sd.type, object, (int)i, f.name);
+            if (given[i]) storeValue(given[i], f.type, place);
+            else if (f.defaultValue) storeValue(genOwned(*f.defaultValue, f.type), f.type, place);
+            else fillDefault(place, f.type);
+        }
     }
 
     // Calls the constructor of `sd`, returning the new owned value.
@@ -994,12 +1267,13 @@ struct Codegen::Impl {
         llvm::AllocaInst* slot = entryAlloca(types.at(&sd).layout, sd.name);
         values[0] = slot;
         b.CreateCall(funcs.at(&ctor), values);
-        return b.CreateLoad(types.at(&sd).layout, slot, sd.name);
+        return peekValue(&sd.type, slot, sd.name.c_str());
     }
 
     llvm::Value* genInitList(const InitListExpr& list, const Type* to) {
         const Type* type = list.explicitType ? list.explicitType : to;
         if (type->isVector()) return genVectorList(list, type);
+        if (type->isArray()) return genArrayList(list, type);
         const StructDecl& sd = *type->decl;
         if (sd.constructor) {  // the values are the constructor's arguments
             std::vector<const Expr*> args;
@@ -1026,7 +1300,7 @@ struct Codegen::Impl {
 
     // Whether `e` is storage that can be read in place or assigned: a variable, a field
     // of one, `this` in a struct method, any field of a class object, or an element of
-    // a vector stored in one of those.
+    // a vector or an array stored in one of those.
     static bool isPlace(const Expr& e) {
         switch (e.kind) {
             case Expr::Kind::Name: return true;
@@ -1110,6 +1384,13 @@ struct Codegen::Impl {
                     checkNotNull(p, "[ ]", ix.loc);
                     return b.CreateGEP(llvmType(vt->elem), p, index, "elem.addr");
                 }
+                if (vt->isArray()) {
+                    // As for a vector below, the array's place stays alive while the index is computed.
+                    llvm::Value* array = isPlace(*ix.base) ? addressOf(*ix.base, hold || mayRunCode(*ix.index), write) : gen(*ix.base);
+                    llvm::Value* index = genIndex(*ix.index);
+                    checkIndex(index, b.getInt64(vt->length), ix.loc, rtTrapArrayIndex);
+                    return arrayElement(array, index, vt);
+                }
                 llvm::Value* slot = nullptr;
                 llvm::Value* buf;
                 llvm::Value* index;
@@ -1124,7 +1405,7 @@ struct Codegen::Impl {
                     buf = gen(*ix.base);  // a temporary, kept until the statement ends
                     index = genIndex(*ix.index);
                 }
-                checkIndex(index, vecSize(buf), ix.loc);
+                checkIndex(index, vecSize(buf), ix.loc, rtTrapIndex);
                 if (write) {
                     if (!slot) llvm_unreachable("Sema allowed changing an element of a temporary vector");
                     buf = reserve(slot, buf, vt, b.getInt64(0));
@@ -1153,7 +1434,7 @@ struct Codegen::Impl {
             s = gen(*ix.base);  // a temporary, kept until the statement ends
             index = genIndex(*ix.index);
         }
-        checkIndex(index, strLength(s), ix.loc, true);
+        checkIndex(index, strLength(s), ix.loc, rtTrapStringIndex);
         llvm::Value* data = strData(s);
         if (write) {
             if (!slot) llvm_unreachable("Sema allowed changing a char of a temporary string");
@@ -1184,17 +1465,17 @@ struct Codegen::Impl {
             case Expr::Kind::OptChain: return genOptChain(static_cast<const OptChainExpr&>(e), owned);
             case Expr::Kind::Coalesce: return genCoalesce(static_cast<const CoalesceExpr&>(e), owned);
             case Expr::Kind::Name:
-                return b.CreateLoad(llvmType(e.type), addressOf(e), static_cast<const NameExpr&>(e).name);
+                return loadValue(e.type, addressOf(e), static_cast<const NameExpr&>(e).name.c_str());
             case Expr::Kind::This:
                 if (e.type->isClass()) return thisPtr;
-                return b.CreateLoad(llvmType(e.type), thisPtr, "this");
+                return loadValue(e.type, thisPtr, "this");
             case Expr::Kind::Member: {
                 auto& m = static_cast<const MemberExpr&>(e);
-                if (isPlace(e)) return b.CreateLoad(llvmType(e.type), addressOf(e), m.field);
+                if (isPlace(e)) return loadValue(e.type, addressOf(e), m.field.c_str());
                 // A field of a struct value that is not stored anywhere, e.g. makePoint().x
-                return b.CreateExtractValue(gen(*m.base), {(unsigned)m.fieldIndex}, m.field);
+                return loadField(*m.base->type->decl, gen(*m.base), m.fieldIndex);
             }
-            case Expr::Kind::Index: return b.CreateLoad(llvmType(e.type), addressOf(e), "elem");
+            case Expr::Kind::Index: return loadValue(e.type, addressOf(e), "elem");
             case Expr::Kind::InitList:
                 owned = true;
                 return genInitList(static_cast<const InitListExpr&>(e), e.type);
@@ -1206,7 +1487,7 @@ struct Codegen::Impl {
             }
             case Expr::Kind::Unary: {
                 auto& u = static_cast<const UnaryExpr&>(e);
-                if (u.op == UnOp::Deref) return b.CreateLoad(llvmType(e.type), addressOf(e), "deref");
+                if (u.op == UnOp::Deref) return loadValue(e.type, addressOf(e), "deref");
                 if (u.op == UnOp::AddrOf) return addressOf(*u.operand);
                 if (u.op == UnOp::Not) return b.CreateNot(genCond(*u.operand));
                 llvm::Value* v = genConverted(*u.operand, e.type);  // a char becomes an int first
@@ -1239,8 +1520,8 @@ struct Codegen::Impl {
                     return arith(bin.op, order, b.getInt32(0), Type::intTy(), bin.loc);
                 }
                 if (!bin.operandType->isNumber()) {  // == or != on bools, strings, structs, objects, optionals
-                    llvm::Value* l = genConverted(*bin.lhs, bin.operandType);
-                    llvm::Value* same = genEquals(l, genConverted(*bin.rhs, bin.operandType), bin.operandType);
+                    llvm::Value* l = genComparedSide(*bin.lhs, bin.operandType, mayRunCode(*bin.rhs));
+                    llvm::Value* same = genEquals(l, genComparedSide(*bin.rhs, bin.operandType, false), bin.operandType);
                     return bin.op == BinOp::Eq ? same : b.CreateNot(same);
                 }
                 llvm::Value* l = genConverted(*bin.lhs, bin.operandType);
@@ -1287,6 +1568,10 @@ struct Codegen::Impl {
                     b.CreateStore(v, slot);
                     return v;
                 }
+                if (inMemory(ty)) {
+                    llvm::Value* place = genMemoryAssign(a);
+                    return loadValue(ty, place);
+                }
                 llvm::Value* v = genOwned(*a.value, ty);
                 llvm::Value* slot = addressOf(*a.target, false, true);
                 llvm::Value* old = isManaged(ty) ? b.CreateLoad(llvmType(ty), slot, "old") : nullptr;
@@ -1316,7 +1601,7 @@ struct Codegen::Impl {
                 auto [y, elseEnd] = branch(*t.elseExpr, elseBB);
                 b.SetInsertPoint(endBB);
                 if (e.type->is(K::Void)) return nullptr;
-                llvm::PHINode* phi = b.CreatePHI(llvmType(e.type), 2);
+                llvm::PHINode* phi = b.CreatePHI(valueType(e.type), 2);
                 phi->addIncoming(x, thenEnd);
                 phi->addIncoming(y, elseEnd);
                 owned = managed;
@@ -1356,25 +1641,45 @@ struct Codegen::Impl {
         llvm_unreachable("unknown expression kind");
     }
 
+    // `a = b` for a value handled through its address, returning the place assigned to.
+    // A value read from a place is copied straight there, when nothing runs in between.
+    llvm::Value* genMemoryAssign(const AssignExpr& a) {
+        const Type* ty = a.target->type;
+        llvm::Value* v;
+        if (a.value->type == ty && isPlace(*a.value) && !mayRunCode(*a.target)) {
+            v = addressOf(*a.value);
+            retainValue(v, ty);
+        } else {
+            v = genOwned(*a.value, ty);
+        }
+        llvm::Value* slot = addressOf(*a.target, false, true);
+        llvm::Value* old = isManaged(ty) ? loadValue(ty, slot, "old") : nullptr;
+        storeValue(v, ty, slot);
+        if (old) releaseValue(old, ty);  // after the store, in case a destructor looks at the place
+        return slot;
+    }
+
+    // One side of `==`. A value handled through its address is compared in place, unless
+    // the code of the other side, which runs later, could change it.
+    llvm::Value* genComparedSide(const Expr& e, const Type* type, bool codeRunsLater) {
+        if (e.type == type && inMemory(type) && isPlace(e) && !codeRunsLater) return addressOf(e);
+        return genConverted(e, type);
+    }
+
     // `new T...`: memory from the runtime, which records before it how many elements
     // there are, filled with the value given or the default of T.
     llvm::Value* genNew(const NewExpr& n) {
         const Type* t = n.target;
         llvm::Type* lt = llvmType(t);
-        uint64_t size = mod->getDataLayout().getTypeAllocSize(lt);
+        uint64_t size = sizeOf(t);
         llvm::Value* count = n.count ? genConverted(*n.count, Type::longTy()) : b.getInt64(1);
         llvm::Value* p = b.CreateCall(rtNew, {b.getInt64(size), count, b.getInt32(n.count ? 1 : 0), fileName,
                                               b.getInt32(n.loc.line), b.getInt32(n.loc.col)},
                                       "new");
         if (n.init) {
-            b.CreateStore(genOwned(*n.init, t), p);
-        } else if (t->isStruct()) {  // the memory starts as zero bytes, the default of every other type
-            countedLoop(count, [&](llvm::Value* i) {
-                size_t mark = temps.size();
-                llvm::Value* x = t->decl->constructor ? construct(*t->decl, {}) : genDefault(t);
-                flushTemps(mark);
-                b.CreateStore(x, b.CreateInBoundsGEP(lt, p, i));
-            });
+            storeValue(genOwned(*n.init, t), t, p);
+        } else if (!defaultIsZero(t)) {  // the memory starts as zero bytes, the default of most types
+            countedLoop(count, [&](llvm::Value* i) { fillElement(b.CreateInBoundsGEP(lt, p, i), t); });
         }
         return p;
     }
@@ -1395,7 +1700,7 @@ struct Codegen::Impl {
             llvm::Type* lt = llvmType(t);
             countedLoop(count, [&](llvm::Value* i) {
                 llvm::Value* index = b.CreateSub(b.CreateSub(count, b.getInt64(1)), i);
-                releaseValue(b.CreateLoad(lt, b.CreateInBoundsGEP(lt, p, index)), t);
+                releaseValue(peekValue(t, b.CreateInBoundsGEP(lt, p, index)), t);
             });
         }
         b.CreateCall(rtDeleteFree, {p});
@@ -1446,6 +1751,7 @@ struct Codegen::Impl {
             }
             case K::Struct: return b.CreateCall(types.at(t->decl).equals, {l, r});
             case K::Vector: return b.CreateCall(vecInfo(t).equals, {l, r});
+            case K::Array: return b.CreateCall(arrayInfo(t).equals, {l, r});
             case K::Null: return b.getInt1(true);
             case K::Optional: {
                 // Both null, or both holding equal values. An empty optional holds zero
@@ -1503,6 +1809,7 @@ struct Codegen::Impl {
             case K::Struct:
             case K::Class: b.CreateCall(types.at(t->decl).print, {v, out}); break;
             case K::Vector: b.CreateCall(vecInfo(t).print, {v, out}); break;
+            case K::Array: b.CreateCall(arrayInfo(t).print, {v, out}); break;
             case K::Null: printText(out, "null"); break;
             case K::Pointer: b.CreateCall(rtPrintPtr, {out, v}); break;  // the address, as std::format prints a void*
             case K::Optional: {
@@ -1527,8 +1834,19 @@ struct Codegen::Impl {
     // before anything is written.
     llvm::Value* genFormatted(const CallExpr& call) {
         size_t first = call.builtin == Builtin::ToString ? 0 : 1;  // the others start with the format string
+        // A value handled through its address is printed in place, unless a later value's
+        // code could change it.
+        std::vector<bool> codeRunsLater(call.args.size());
+        bool later = false;
+        for (size_t i = call.args.size(); i-- > first;) {
+            codeRunsLater[i] = later;
+            later = later || mayRunCode(*call.args[i]);
+        }
         std::vector<llvm::Value*> values;
-        for (size_t i = first; i < call.args.size(); ++i) values.push_back(gen(*call.args[i]));
+        for (size_t i = first; i < call.args.size(); ++i) {
+            const Expr& arg = *call.args[i];
+            values.push_back(inMemory(arg.type) && isPlace(arg) && !codeRunsLater[i] ? addressOf(arg) : gen(arg));
+        }
         bool toString = call.builtin == Builtin::Format || call.builtin == Builtin::ToString;
         llvm::Value* out = llvm::ConstantPointerNull::get(b.getPtrTy());
         if (toString) {
@@ -1566,6 +1884,13 @@ struct Codegen::Impl {
             trapIf(b.CreateIsNull(v), "null pointer: string(p) was given a pointer that is null", loc);
             llvm::AllocaInst* slot = entryAlloca(stringTy, "text");
             b.CreateCall(rtStrFromC, {slot, v});
+            llvm::Value* text = b.CreateLoad(stringTy, slot, "text");
+            temps.push_back({text, Type::stringTy(), false});
+            return text;
+        }
+        if (from->isArray()) {  // `string(a)`: a copy of the text in an array of chars
+            llvm::AllocaInst* slot = entryAlloca(stringTy, "text");
+            b.CreateCall(rtStrFromChars, {slot, v, b.getInt64(from->length)});
             llvm::Value* text = b.CreateLoad(stringTy, slot, "text");
             temps.push_back({text, Type::stringTy(), false});
             return text;
@@ -1752,14 +2077,27 @@ struct Codegen::Impl {
         std::vector<llvm::Value*> args;
         if (call.method) args.push_back(thisPtr);
         for (size_t i = 0; i < call.args.size(); ++i) args.push_back(genOwned(*call.args[i], target->params[i]->type));
-        llvm::CallInst* inst = b.CreateCall(funcs.at(target), args);
-        return target->retType->is(K::Void) ? nullptr : inst;
+        return callFunction(*target, std::move(args));
+    }
+
+    // Calls a function of the program. One that returns a value handled through its address
+    // writes it to memory the caller gives it, as a hidden first argument.
+    llvm::Value* callFunction(const FuncDecl& f, std::vector<llvm::Value*> args) {
+        if (inMemory(f.retType)) {
+            llvm::AllocaInst* result = entryAlloca(llvmType(f.retType), "result");
+            args.insert(args.begin(), result);
+            b.CreateCall(funcs.at(&f), args);
+            return result;
+        }
+        llvm::CallInst* inst = b.CreateCall(funcs.at(&f), args);
+        return f.retType->is(K::Void) ? nullptr : inst;
     }
 
     llvm::Value* genMethodCall(const MethodCallExpr& call) {
         const Expr& recv = *call.receiver;
         if (recv.type->isOptional()) return genOptionalMethod(call);
         if (recv.type->isVector()) return genVectorMethod(call);
+        if (recv.type->isArray()) return genArrayMethod(call);
         if (recv.type->is(K::String)) return genStringMethod(call);
         llvm::Value* self;
         if (recv.type->isClass()) {
@@ -1771,16 +2109,18 @@ struct Codegen::Impl {
             // A struct value that is not stored anywhere, e.g. makePoint().move(1): the
             // method works on a temporary, which is released when the statement ends.
             llvm::Value* v = genOwned(recv, recv.type);
-            llvm::AllocaInst* slot = entryAlloca(llvmType(recv.type), "tmp");
-            b.CreateStore(v, slot);
+            llvm::Value* slot = v;  // a value handled through its address already has its place
+            if (!inMemory(recv.type)) {
+                slot = entryAlloca(llvmType(recv.type), "tmp");
+                b.CreateStore(v, slot);
+            }
             if (isManaged(recv.type)) temps.push_back({slot, recv.type, true});
             self = slot;
         }
         std::vector<llvm::Value*> args{self};
         for (size_t i = 0; i < call.args.size(); ++i)
             args.push_back(genOwned(*call.args[i], call.method->params[i]->type));
-        llvm::CallInst* inst = b.CreateCall(funcs.at(call.method), args);
-        return call.method->retType->is(K::Void) ? nullptr : inst;
+        return callFunction(*call.method, std::move(args));
     }
 
     // `base?.rest`: when `base` holds a value, the rest of the chain runs on it and its
@@ -1791,6 +2131,7 @@ struct Codegen::Impl {
         llvm::Value* opt = gen(*c.base);  // kept until the statement ends
         auto* someBB = llvm::BasicBlock::Create(ctx, "chain.value", fn);
         auto* endBB = llvm::BasicBlock::Create(ctx, "chain.end", fn);
+        llvm::Value* none = resultTy->is(K::Void) ? nullptr : zeroValue(resultTy);
         llvm::BasicBlock* noneFrom = b.GetInsertBlock();
         b.CreateCondBr(hasValue(opt, optTy), someBB, endBB);
         b.SetInsertPoint(someBB);
@@ -1811,9 +2152,9 @@ struct Codegen::Impl {
         b.CreateBr(endBB);
         b.SetInsertPoint(endBB);
         if (!v) return nullptr;
-        llvm::PHINode* phi = b.CreatePHI(llvmType(resultTy), 2);
+        llvm::PHINode* phi = b.CreatePHI(valueType(resultTy), 2);
         phi->addIncoming(v, someEnd);
-        phi->addIncoming(llvm::Constant::getNullValue(llvmType(resultTy)), noneFrom);
+        phi->addIncoming(none, noneFrom);
         owned = managed;
         return phi;
     }
@@ -1841,7 +2182,7 @@ struct Codegen::Impl {
         llvm::BasicBlock* noneEnd = b.GetInsertBlock();
         b.CreateBr(endBB);
         b.SetInsertPoint(endBB);
-        llvm::PHINode* phi = b.CreatePHI(llvmType(resultTy), 2);
+        llvm::PHINode* phi = b.CreatePHI(valueType(resultTy), 2);
         phi->addIncoming(x, someEnd);
         phi->addIncoming(y, noneEnd);
         owned = managed;
@@ -1889,7 +2230,7 @@ struct Codegen::Impl {
             value = convert(init, t, var.type);
             cond = condValue(value, var.type);
         }
-        b.CreateStore(value, allocaFor(var));
+        storeValue(value, var.type, allocaFor(var));
         return cond;
     }
 
@@ -1926,12 +2267,13 @@ struct Codegen::Impl {
                 auto& v = static_cast<const VarDecl&>(s);
                 llvm::Value* init = v.init ? genOwned(*v.init, v.type)
                                     : v.type->is(K::String) || v.type->hasFields() || v.type->isVector() ||
-                                              v.type->isOptional()
+                                              v.type->isOptional() || v.type->isArray()
                                         ? genDefault(v.type)
                                         : nullptr;
                 flushTemps();
-                llvm::AllocaInst* slot = allocaFor(v);
-                if (init) b.CreateStore(init, slot);
+                if (inMemory(v.type)) locals[&v] = init;  // the value's own memory becomes the variable
+                else if (init) b.CreateStore(init, allocaFor(v));
+                else allocaFor(v);
                 if (isManaged(v.type)) scopes.back().push_back(&v);
                 return;
             }
@@ -2033,7 +2375,23 @@ struct Codegen::Impl {
             case Stmt::Kind::ForEach: genForEach(static_cast<const ForEachStmt&>(s)); return;
             case Stmt::Kind::Return: {
                 auto& st = static_cast<const ReturnStmt&>(s);
-                llvm::Value* v = st.value ? genOwned(*st.value, fnDecl->retType) : nullptr;
+                const Type* rt = fnDecl->retType;
+                if (st.value && inMemory(rt)) {  // written to the memory the caller gave, the hidden first argument
+                    llvm::Value* v;
+                    if (st.value->type == rt && isPlace(*st.value)) {
+                        v = addressOf(*st.value);
+                        retainValue(v, rt);
+                    } else {
+                        v = genOwned(*st.value, rt);
+                    }
+                    storeValue(v, rt, fn->getArg(0));
+                    flushTemps();
+                    releaseScopes(0);
+                    b.CreateRetVoid();
+                    startDeadBlock();
+                    return;
+                }
+                llvm::Value* v = st.value ? genOwned(*st.value, rt) : nullptr;
                 flushTemps();
                 releaseScopes(0);
                 if (v) b.CreateRet(v);
@@ -2057,17 +2415,19 @@ struct Codegen::Impl {
 
     // The loop goes over the vector as it was when the loop started: it holds its own
     // reference, so a change made in the body copies the vector instead of moving the
-    // elements under the loop.
+    // elements under the loop. For an array, it holds its own copy.
     void genForEach(const ForEachStmt& st) {
         const Type* vt = st.rangeVar->type;
         const VarDecl& var = *st.var;
         bool str = vt->is(K::String);  // a string goes over its bytes
-        scopes.emplace_back();  // holds the vector or string
+        bool arr = vt->isArray();
+        scopes.emplace_back();  // holds the vector, array or string
         llvm::Value* range = genOwned(*st.range, vt);
         flushTemps();
-        b.CreateStore(range, allocaFor(*st.rangeVar));
+        if (arr) locals[st.rangeVar.get()] = range;
+        else b.CreateStore(range, allocaFor(*st.rangeVar));
         scopes.back().push_back(st.rangeVar.get());
-        llvm::Value* size = str ? strLength(range) : vecSize(range);
+        llvm::Value* size = arr ? b.getInt64(vt->length) : str ? strLength(range) : vecSize(range);
         llvm::AllocaInst* counter = entryAlloca(b.getInt64Ty(), "index");
         b.CreateStore(b.getInt64(0), counter);
         auto* condBB = llvm::BasicBlock::Create(ctx, "foreach.cond", fn);
@@ -2082,11 +2442,12 @@ struct Codegen::Impl {
         b.SetInsertPoint(bodyBB);
         loops.push_back({endBB, stepBB, scopes.size()});
         scopes.emplace_back();  // the loop variable: a new one for each element
-        llvm::Value* elem = str ? b.CreateLoad(b.getInt8Ty(), b.CreateInBoundsGEP(b.getInt8Ty(), strData(range), i), "c")
-                                : b.CreateLoad(vecInfo(vt).elemTy, elementAt(range, i, vt), "elem");
+        llvm::Value* elem = arr ? peekValue(vt->elem, arrayElement(range, i, vt), "elem")
+                            : str ? b.CreateLoad(b.getInt8Ty(), b.CreateInBoundsGEP(b.getInt8Ty(), strData(range), i), "c")
+                                  : peekValue(vt->elem, elementAt(range, i, vt), "elem");
         llvm::Value* value = convert(elem, str ? Type::charTy() : vt->elem, var.type);
         retainValue(value, var.type);
-        b.CreateStore(value, allocaFor(var));
+        storeValue(value, var.type, allocaFor(var));
         if (isManaged(var.type)) scopes.back().push_back(&var);
         genScoped(*st.body);
         popScope();
@@ -2105,9 +2466,11 @@ struct Codegen::Impl {
     void declareFunction(const FuncDecl& f) {
         if (f.isExtern) return declareCFunction(f);
         std::vector<llvm::Type*> params;
+        bool result = inMemory(f.retType);
+        if (result) params.push_back(b.getPtrTy());  // where the result goes; see callFunction
         if (f.owner) params.push_back(b.getPtrTy());  // `this`
-        for (auto& p : f.params) params.push_back(llvmType(p->type));
-        auto* type = llvm::FunctionType::get(llvmType(f.retType), params, false);
+        for (auto& p : f.params) params.push_back(valueType(p->type));
+        auto* type = llvm::FunctionType::get(result ? b.getVoidTy() : llvmType(f.retType), params, false);
         // User functions get a prefixed, internal symbol so they never collide with C
         // library names; `main` is wrapped by a C-ABI entry point below. Generated
         // functions use '#', which no user name contains.
@@ -2119,8 +2482,9 @@ struct Codegen::Impl {
             case FuncDecl::Role::Destructor: name += f.owner->name + "#deinit"; break;
         }
         auto* func = llvm::Function::Create(type, llvm::Function::InternalLinkage, name, mod.get());
-        unsigned first = f.owner ? 1 : 0;
-        if (f.owner) func->getArg(0)->setName("this");
+        unsigned first = (result ? 1 : 0) + (f.owner ? 1 : 0);
+        if (result) func->getArg(0)->setName("result");
+        if (f.owner) func->getArg(first - 1)->setName("this");
         for (size_t i = 0; i < f.params.size(); ++i) func->getArg(first + i)->setName(f.params[i]->name);
         funcs[&f] = func;
     }
@@ -2137,11 +2501,16 @@ struct Codegen::Impl {
     //
     // LLVM leaves it to the compiler to say how a struct travels to and from a C function,
     // so this follows each platform's rules as a C compiler does. The fields of a C struct
-    // are only numbers and pointers, with no arrays, unions or bit fields, which keeps the
-    // rules short. See the System V x86-64 psABI, section 3.2.3, and AAPCS64, section 6.8.
+    // are only numbers, pointers and arrays of those, with no unions or bit fields, which
+    // keeps the rules short. See the System V x86-64 psABI, section 3.2.3, and AAPCS64, section 6.8.
 
     // The scalars inside a struct, with their byte offsets.
     void flattenStruct(llvm::Type* t, uint64_t offset, std::vector<std::pair<llvm::Type*, uint64_t>>& leaves) {
+        if (auto* at = llvm::dyn_cast<llvm::ArrayType>(t)) {
+            uint64_t size = mod->getDataLayout().getTypeAllocSize(at->getElementType());
+            for (uint64_t i = 0; i < at->getNumElements(); ++i) flattenStruct(at->getElementType(), offset + i * size, leaves);
+            return;
+        }
         auto* st = llvm::dyn_cast<llvm::StructType>(t);
         if (!st) {
             leaves.push_back({t, offset});
@@ -2156,6 +2525,7 @@ struct Codegen::Impl {
     // struct's bytes in turn, or none when it goes in memory.
     std::vector<llvm::Type*> cStructParts(llvm::StructType* st) {
         uint64_t size = mod->getDataLayout().getTypeAllocSize(st);
+        if (size > 32) return {};  // larger than any struct that goes in registers
         std::vector<std::pair<llvm::Type*, uint64_t>> leaves;
         flattenStruct(st, 0, leaves);
         if (llvm::Triple(mod->getTargetTriple()).isAArch64()) {
@@ -2305,8 +2675,8 @@ struct Codegen::Impl {
             llvm::Value* v = genConverted(*call.args[i], t);
             const CPass& pass = sig.params[i];
             if (pass.kind == CPass::Parts) {
-                llvm::Value* buffer = cStructBuffer(v->getType());
-                b.CreateStore(v, buffer);
+                llvm::Value* buffer = cStructBuffer(llvmType(t));
+                storeValue(v, t, buffer);
                 uint64_t offset = 0;
                 for (llvm::Type* part : pass.parts) {
                     args.push_back(b.CreateLoad(part, byteOffset(buffer, offset, "c.part")));
@@ -2315,8 +2685,8 @@ struct Codegen::Impl {
                 continue;
             }
             if (pass.kind == CPass::OnStack || pass.kind == CPass::ByPointer) {
-                llvm::AllocaInst* copy = entryAlloca(v->getType(), "c.arg");
-                b.CreateStore(v, copy);
+                llvm::AllocaInst* copy = entryAlloca(llvmType(t), "c.arg");
+                storeValue(v, t, copy);
                 args.push_back(copy);
                 continue;
             }
@@ -2341,7 +2711,7 @@ struct Codegen::Impl {
         for (llvm::Value* copy : copies) b.CreateCall(rtCFree, {copy});
         const Type* rt = f.retType;
         if (rt->is(K::Void)) return nullptr;
-        if (sig.memoryResult) return b.CreateLoad(llvmType(rt), resultSlot, "c.result");
+        if (sig.memoryResult) return peekValue(rt, resultSlot, "c.result");
         if (rt->isStruct()) {
             llvm::Value* buffer = cStructBuffer(llvmType(rt));
             if (sig.resultParts.size() == 1) {
@@ -2350,7 +2720,7 @@ struct Codegen::Impl {
                 b.CreateStore(b.CreateExtractValue(result, {0}), buffer);
                 b.CreateStore(b.CreateExtractValue(result, {1}), byteOffset(buffer, 8, "c.part"));
             }
-            return b.CreateLoad(llvmType(rt), buffer, "c.result");
+            return peekValue(rt, buffer, "c.result");
         }
         if (!rt->is(K::String) && !rt->isOptional()) return result;
         if (rt->is(K::String))
@@ -2375,11 +2745,15 @@ struct Codegen::Impl {
             if (init.fieldIndex >= 0) inits[init.fieldIndex] = init.value.get();
         for (size_t i = 0; i < sd.fields.size(); ++i) {
             const FieldDecl& f = sd.fields[i];
-            llvm::Value* v = inits[i] ? genOwned(*inits[i], f.type)
-                             : f.defaultValue ? genOwned(*f.defaultValue, f.type)
-                                              : genDefault(f.type);
+            llvm::Value* place = fieldAddress(&sd.type, thisPtr, (int)i, f.name);
+            if (!inits[i] && !f.defaultValue) {
+                fillDefault(place, f.type);
+                flushTemps();
+                continue;
+            }
+            llvm::Value* v = genOwned(inits[i] ? *inits[i] : *f.defaultValue, f.type);
             flushTemps();
-            b.CreateStore(v, fieldAddress(&sd.type, thisPtr, (int)i, f.name));
+            storeValue(v, f.type, place);
         }
     }
 
@@ -2389,12 +2763,13 @@ struct Codegen::Impl {
         fnDecl = &f;
         locals.clear();
         b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
-        unsigned first = f.owner ? 1 : 0;
-        thisPtr = f.owner ? fn->getArg(0) : nullptr;
+        unsigned first = (inMemory(f.retType) ? 1 : 0) + (f.owner ? 1 : 0);
+        thisPtr = f.owner ? fn->getArg(first - 1) : nullptr;
         // Parameters own their values, like locals, and are released when the function ends.
         scopes.emplace_back();
         for (size_t i = 0; i < f.params.size(); ++i) {
-            b.CreateStore(fn->getArg(first + i), allocaFor(*f.params[i]));
+            if (inMemory(f.params[i]->type)) locals[f.params[i].get()] = fn->getArg(first + i);  // the caller's copy
+            else b.CreateStore(fn->getArg(first + i), allocaFor(*f.params[i]));
             if (isManaged(f.params[i]->type)) scopes.back().push_back(f.params[i].get());
         }
         if (f.role == FuncDecl::Role::Constructor) genFieldInits(f);
@@ -2425,7 +2800,7 @@ struct Codegen::Impl {
 
     void declareHelpers(const StructDecl& sd) {
         TypeInfo& info = types.at(&sd);
-        llvm::Type* self = llvmType(&sd.type);
+        llvm::Type* self = valueType(&sd.type);
         info.print = helper(sd, "print", b.getVoidTy(), {self, b.getPtrTy()});  // the value, the output
         if (!sd.isClass) info.equals = helper(sd, "equals", b.getInt1Ty(), {self, self});
         if (sd.isClass) {
@@ -2442,11 +2817,11 @@ struct Codegen::Impl {
         b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", f));
     }
 
-    // Reads field i of a struct value or class object.
+    // Reads field i of a struct value or class object, for a use that comes right away.
     llvm::Value* loadField(const StructDecl& sd, llvm::Value* self, size_t i) {
-        if (!sd.isClass) return b.CreateExtractValue(self, {(unsigned)i}, sd.fields[i].name);
-        return b.CreateLoad(llvmType(sd.fields[i].type), fieldAddress(&sd.type, self, (int)i, sd.fields[i].name),
-                            sd.fields[i].name);
+        if (!sd.isClass && !inMemory(&sd.type)) return b.CreateExtractValue(self, {(unsigned)i}, sd.fields[i].name);
+        return peekValue(sd.fields[i].type, fieldAddress(&sd.type, self, (int)i, sd.fields[i].name),
+                         sd.fields[i].name.c_str());
     }
 
     void defineHelpers(const StructDecl& sd) {
@@ -2546,7 +2921,11 @@ struct Codegen::Impl {
             if (mayRunDestructor(ft, seen)) break;
         }
         std::vector<llvm::Value*> values;
-        for (size_t i : order) values.push_back(loadField(sd, self, i));
+        for (size_t i : order) {  // a value in the object's memory is copied out of it first
+            const Type* ft = sd.fields[i].type;
+            values.push_back(inMemory(ft) ? loadValue(ft, fieldAddress(&sd.type, self, (int)i, sd.fields[i].name))
+                                          : loadField(sd, self, i));
+        }
         b.CreateCall(rtFree, {self});
         for (size_t k = 0; k < order.size(); ++k) {
             const Type* ft = sd.fields[order[k]].type;
@@ -2569,7 +2948,7 @@ struct Codegen::Impl {
     // Whether releasing a value of this type could free an object, and so run a
     // destructor.
     static bool mayRunDestructor(const Type* t, std::set<const StructDecl*>& seen) {
-        if (t->isOptional() || t->isVector()) return mayRunDestructor(t->elem, seen);
+        if (t->isOptional() || t->isVector() || t->isArray()) return mayRunDestructor(t->elem, seen);
         if (t->isClass()) return true;
         if (!t->isStruct() || !seen.insert(t->decl).second) return false;
         for (auto& f : t->decl->fields)
@@ -2616,6 +2995,12 @@ struct Codegen::Impl {
         for (const StructDecl* sd : structs)
             for (auto& m : sd->methods) defineFunction(*m);
         if (userMain) defineEntryPoint(*userMain);
+
+        // A large array on the stack must not step over the guard page below it into other
+        // memory: each new page is touched in turn, so running out of stack always stops
+        // the program.
+        for (llvm::Function& f : *mod)
+            if (!f.isDeclaration()) f.addFnAttr("probe-stack", "inline-asm");
 
         std::string verifyErrors;
         llvm::raw_string_ostream os(verifyErrors);

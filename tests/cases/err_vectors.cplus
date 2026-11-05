@@ -69,7 +69,7 @@ int main() {
 // error: an index into a vector must be an int or long, but this is 'bool'
 // error: an index into a vector cannot be negative
 // error: the last one is `v[v.size() - 1]` or `v.back()`
-// error: '[ ]' picks an element of a vector or a char of a string, but this is 'int'
+// error: '[ ]' picks an element of a vector or an array, or a char of a string, but this is 'int'
 // error: 'vector<int>' has no method named 'add'
 // error: did you mean 'size'?
 // error: 'size' is a method; call it with `size()`
@@ -79,7 +79,7 @@ int main() {
 // error: 'c' is const and cannot be changed
 // error: 'c' is const, so its elements cannot be assigned to
 // error: push_back() changes the vector, so it must be called on a variable or a field
-// error: a range-based for loop goes over a vector or a string, but this is 'int'
+// error: a range-based for loop goes over a vector, an array or a string, but this is 'int'
 // error: the elements of 'vector<string>' are 'string', which cannot be stored in 'int' 's'
 // error: vector<User>(n) cannot make its elements on its own, because a 'User' reference cannot be empty
 // error: because the constructor of 'Range' needs arguments

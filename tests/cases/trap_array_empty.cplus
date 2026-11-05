@@ -1,0 +1,6 @@
+int main() {
+    array<int, 0> none;
+    println("{}", none.back());
+    return 0;
+}
+// trap: back() was called on an array with no elements

@@ -1,0 +1,58 @@
+// Conway's Game of Life on a small board whose edges wrap around. An array holds its
+// elements itself, so a Board is one block of memory, and copying one copies every cell.
+// Every index is checked, even on the inner rows.
+
+struct Board {
+    array<array<bool, 8>, 8> cells;
+
+    int neighbors(int row, int col) const {
+        int count = 0;
+        for (int dr = -1; dr <= 1; dr++) {
+            for (int dc = -1; dc <= 1; dc++) {
+                if (dr == 0 && dc == 0) continue;
+                if (cells[(row + dr + 8) % 8][(col + dc + 8) % 8]) count++;
+            }
+        }
+        return count;
+    }
+
+    Board next() const {
+        Board after;
+        for (int row = 0; row < 8; row++) {
+            for (int col = 0; col < 8; col++) {
+                int around = neighbors(row, col);
+                after.cells[row][col] = around == 3 || (cells[row][col] && around == 2);
+            }
+        }
+        return after;
+    }
+
+    void show() const {
+        for (auto row : cells) {
+            string line;
+            for (bool alive : row) line += alive ? '#' : '.';
+            println("{}", line);
+        }
+    }
+};
+
+int main() {
+    // A glider, which moves one square diagonally every four generations.
+    Board board;
+    board.cells[0][1] = true;
+    board.cells[1][2] = true;
+    board.cells[2][0] = true;
+    board.cells[2][1] = true;
+    board.cells[2][2] = true;
+
+    Board start = board;
+    int generation = 0;
+    while (generation < 4) {
+        board = board.next();
+        generation++;
+    }
+    println("after {} generations:", generation);
+    board.show();
+    println("back where it started: {}", board == start);
+    return 0;
+}

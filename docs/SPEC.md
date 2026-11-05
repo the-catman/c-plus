@@ -579,14 +579,101 @@ Building a vector:
 - `push_back`, `pop_back` and `clear` cannot be called on a temporary, such as
   `makeList().push_back(1)`, because the change would be lost.
 - A vector is not a [condition](#conditions); write `!v.empty()`.
-- Not yet: `insert`, `erase`, `resize`, `reserve`, iterators (`begin()`, `end()`), the
-  fixed-size `array<T, N>`, and `hashmap<K, V>`.
+- Not yet: `insert`, `erase`, `resize`, `reserve`, iterators (`begin()`, `end()`), and
+  `hashmap<K, V>`.
 
 **Copies are cheap.** The copies of a vector share one buffer of elements until one of them
 changes; that copy first gets a buffer of its own (copy-on-write). Passing or returning a
 vector therefore costs about as much as passing a class reference, so there is no need for
 `const vector<int>&` parameters, which C+ does not support. See
 [Memory model](#memory-model).
+
+### Arrays
+
+`array<T, N>` holds exactly `N` elements of type `T`, as `std::array` does. The elements
+are kept in the array itself, so it needs no allocation, and an array field lies inside
+its struct, as a C array does. Like a struct, an array is a **value**: assigning or passing
+one copies every element.
+
+```cpp
+array<int, 3> a = {1, 2, 3};
+a[0] = 30;                          // elements are numbered from 0
+println("{} {}", a, a.size());      // [30, 2, 3] 3
+
+array<int, 3> b = a;                // a copy
+b[1] = 0;
+println("{}", a == b);              // false
+
+array<array<int, 2>, 3> grid;       // three rows of two, all 0
+grid[2][1] = 5;
+for (auto row : grid) println("{}", row);
+```
+
+Building an array:
+- `array<int, 3> a;` gives every element its default value: `0`, `false`, `""`, an empty
+  vector, or a struct built from its field defaults (or by its constructor, if it takes no
+  arguments). This is the one difference from `std::array`, whose numbers would start out
+  unknown.
+- `{1, 2}` lists the first elements, and the others get their default, as in C++.
+  Too many values are an error. Nested lists fill arrays of arrays: `{{1, 2}, {3, 4}}`.
+- `array<int, 3>{1, 2}` names the type, and `array<int, 3>()` is the same as `array<int, 3>{}`.
+- **A class reference cannot be empty**, and a struct whose constructor needs arguments
+  cannot be made on its own. An array of those has no default, so a list must give every
+  element, and an array declared without one must be assigned as a whole before it is used.
+  An array of `User?` starts out holding nulls.
+- `N` is a whole number, zero or more, written out. A name such as `array<int, N>` is not
+  supported yet. For a size known only while the program runs, use a [vector](#vectors).
+- The two sizes are part of the type: `array<int, 3>` and `array<int, 4>` do not convert into
+  each other, and neither do `array<int, 3>` and `array<long, 3>`.
+- A value can take at most 2 GiB, so a larger array is an error.
+
+| Method | What it does |
+|--------|--------------|
+| `a.size()` | the number of elements, as a `long` |
+| `a.empty()` | whether the array has no elements, which only `array<T, 0>` does |
+| `a.front()`, `a.back()` | a copy of the first or the last element |
+| `a.fill(x)` | sets every element to `x` |
+| `a.data()` | a pointer to the first element |
+
+- **Every index is checked**, as for a vector. An index that is not from 0 to `size() - 1`
+  stops the program with an error naming the file and line, and a written index that is
+  out of range, such as `a[3]` for `array<int, 3>`, is a compile error. An index never
+  reaches the next row of an array of arrays.
+- `a[i]` takes an `int` or a `long`, and an element is used in place as in a vector:
+  `points[i].x = 1`, `grid[i][j] += 1`, `points[i].move(1)`.
+- `==` and `!=` compare each pair of elements, in order. An array prints as `[1, 2, 3]`,
+  with strings and chars in quotes.
+- `for (auto x : a)` goes over the array as it was when the loop started, as for a vector,
+  by keeping its own copy. To change the elements, loop over the indexes.
+- A `const` array cannot change at all. `fill` cannot be called on a temporary, such as
+  `makeThree().fill(1)`, because the change would be lost.
+- An array is not a [condition](#conditions).
+
+**Pointers.** Unlike the elements of a vector, the elements of an array do not move, so
+`&a[i]` and `a.data()` give pointers to them, and these are `const int*` for a `const` array.
+They last as long as the array does. As with `&x`, nothing checks that, and following
+one after the array has gone away is undefined. An array does not turn into a pointer by
+itself, as a C array does: `int* p = a;` is an error, and a C function that takes a pointer
+is called with `a.data()`. A pointer to a whole array, `array<int, 3>* p = &a;`, lets a
+function change an array without copying it: `(*p)[0] = 1`, `p->size()`.
+
+**Text.** `string(a)` for an `array<char, N>` copies its text, which ends at its first
+zero byte or at the end of the array, whichever comes first. This is how C stores text in a
+fixed-size buffer. Unlike `string(a.data())`, it cannot read past the array.
+
+```cpp
+extern "C" char* strcpy(char* to, string from);
+
+array<char, 16> buffer;
+strcpy(buffer.data(), "hello");
+println("{}", string(buffer));      // hello
+```
+
+**Large arrays.** A local array is on the stack, like any other local variable, and the stack
+is small, usually 8 MiB on Linux. Each copy takes that much stack again: a by-value parameter
+or the copy a `for` loop keeps, for example. Running out of stack stops the program with a
+crash; it never overwrites other memory. Use a vector for large amounts of data. An array in
+a class object, or from `new`, is not on the stack.
 
 ### Pointers
 
@@ -619,7 +706,8 @@ if (p) println("{}", *p);       // a pointer is true when it is not null
   cannot tell whether the code that gets the pointer writes to it before reading. `&` of
   something `const` is a `const T*`. A temporary, `this`, and a value reached through `?.`
   have no address. Pointers into vectors and strings, such as `&v[0]`, are not supported
-  yet.
+  yet, since their elements can move. The elements of an [array](#arrays) do not, so `&a[0]`
+  is allowed.
 - **`*p`, `p->x` and `p->m()`** reach what `p` points to. Fields and methods are reached
   with `->`, not `.`: `pp.x` is an error. A `const T*` can only call `const` methods.
 - **Following a null pointer stops the program** with file:line, whether by `*`, `->` or
@@ -906,10 +994,16 @@ int main() {
 }
 ```
 
-- **C types** are numbers, `char`, `bool`, pointers to C types, `void*`, and other such
-  structs. C has no equivalent of a `string`, `vector`, class reference or optional, so a C
-  function cannot take or return a struct holding one, or a pointer to it. Text in a C struct
-  is a `char*` or `const char*` field, read with `string(p)`.
+- **C types** are numbers, `char`, `bool`, pointers to C types, `void*`, other such structs,
+  and [arrays](#arrays) of those, with at least one element. C has no equivalent of a
+  `string`, `vector`, class reference or optional, so a C function cannot take or return a
+  struct holding one, or a pointer to it.
+- **A C array field**, `char name[64];`, is written `array<char, 64> name;`, which has the
+  same layout. Text in a C struct is an `array<char, N>` field, read with `string(s.name)`, or
+  a `char*` or `const char*` field, read with `string(p)`.
+- **A C function cannot take or return an array itself**, since C has no such thing. A C
+  array parameter is written as the pointer C passes, and called with `a.data()`. A struct
+  holding an array does travel by value, as in C.
 - **Inside `extern "C"`**, every field is checked where the struct is defined. Otherwise
   it is an ordinary struct, as it is in C++, with field defaults and methods if wanted, and a
   struct written outside `extern "C"` works too when its fields are C types.
@@ -921,8 +1015,7 @@ int main() {
   its own copy, and changing it does not change the caller's struct.
 - **As in C++, the type is written without the word `struct`**: `tm t;`, `tm* p`. C's
   `typedef struct { ... } name;` is written `struct name { ... };`.
-- Not supported yet: fields that are C arrays, such as `char name[64]`; 16-bit fields, such
-  as `short` and `uint16_t`; unions and bit fields. A struct that has them can still be used
+- Not supported yet: 16-bit fields, such as `short` and `uint16_t`; unions and bit fields. A struct that has them can still be used
   through pointers if C+ does not need its fields, by declaring it
   [by name](#c-types-known-by-name).
 
@@ -997,7 +1090,7 @@ Strings, vectors, chars and `void` values are not conditions. For a vector, writ
 
 #### Range-based for loops
 
-`for (T x : v)` runs the body once for each element of the vector `v`, in order, as in
+`for (T x : v)` runs the body once for each element of the vector or array `v`, in order, as in
 C++. The variable can be `auto`, `const`, or of a type the elements convert to, as in
 `for (long x : ints)`.
 
@@ -1012,9 +1105,9 @@ for (const Point p : points) total += p.x;
   no references. Write `for (const auto x : v)`; copying an element is cheap.
 - The loop goes over the vector as it was when the loop started. Changing the vector in
   the body, even with `push_back` or `clear`, does not affect the loop; in C++ it is
-  undefined behavior.
+  undefined behavior. An [array](#arrays) works the same way.
 - A string can be looped over too: `for (char c : s)` goes over its bytes.
-- Only vectors and strings can be looped over for now.
+- Only vectors, arrays and strings can be looped over for now.
 
 ---
 
@@ -1093,7 +1186,8 @@ int* squares = (int*)malloc(5 * sizeof(int));
   `sizeof(double)` and a pointer are 8 on 64-bit systems. A struct includes padding, as in
   C: a struct with an `int` field and then a `long` field is 16.
 - For a string, a vector or a class, `sizeof` gives the size of the variable, not of the
-  text, the elements or the object it refers to.
+  text, the elements or the object it refers to. An array holds its elements, so
+  `sizeof(array<int, 3>)` is 12.
 - `sizeof(void)` and the size of a C type known only by name are errors.
 
 ### Math functions
@@ -1219,6 +1313,10 @@ change is seen only through that vector (copy-on-write). The buffer is freed, an
 objects in it released, when the last vector using it goes away. An element is released
 when it is removed: by `pop_back`, by `clear`, or by being overwritten.
 
+An array holds its elements itself, so it has no buffer. Each copy holds its own references
+to the objects in its elements, which are released when the array goes away, the last
+element first.
+
 Set the environment variable `CPLUS_CHECK_LEAKS=1` when running a program to have it
 report, at exit, any class objects, vector buffers or string buffers that were never freed,
 and any memory from `new` that was never deleted. The test suite runs every program this way.
@@ -1271,7 +1369,8 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `extern "C"` functions taking and returning numbers, `char`, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
 | Pointers: `T*`, `&x`, `*p`, `p->x`, `p[i]`, arithmetic, `const T*`, `void*`, null checks, `sizeof` | implemented |
 | Pointers in `extern "C"`, and C types known by name, such as `FILE*` | implemented |
-| C structs: fields, through pointers, and by value on Linux x86-64 and aarch64 | implemented |
+| C structs: fields, array fields, through pointers, and by value on Linux x86-64 and aarch64 | implemented |
+| `array<T, N>`: checked `a[i]`, `size`, `empty`, `front`, `back`, `fill`, `data`, range-based `for`, `==`, pointers to elements, `string(a)` | implemented |
 | `new`, `new[]`, `delete`, `delete[]`, with a warning; `[[allow(new_delete)]]`, `-Wno-new-delete` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
@@ -1279,7 +1378,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Format options for width, alignment and `{:x}`; math constants | planned |
 | Function overloading | planned |
 | Strings: `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
-| `array<T, N>`, `hashmap<K, V>`; vector `insert`, `erase`, iterators | planned |
+| `hashmap<K, V>`; vector `insert`, `erase`, iterators; array sizes given by a name | planned |
 | References (`T&`), including `for (auto& x : v)` | planned |
 | Inheritance, `virtual`, `protected:` | planned |
 | Operator overloading | planned |
@@ -1288,7 +1387,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Errors (`throws`, `try`, `catch`) | planned |
 | Generics | planned |
 | Pointers into vectors and strings | planned |
-| C callbacks and variables in `extern "C"`; arrays, 16-bit integers and unions in C structs; reading C headers | planned |
+| C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; reading C headers | planned |
 | Reflection, JSON, HTTP | planned |
 | Threads, async | planned |
 

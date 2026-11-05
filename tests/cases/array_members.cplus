@@ -1,0 +1,109 @@
+// Arrays in constructors, methods, field defaults, recursion and casts, and a long chain
+// of objects with arrays, freed without using up the stack.
+class User { public: string name = "u"; };
+struct Point {
+    int x = 0;
+    void move(int d) { x += d; }
+    int get() const { return x; }
+};
+struct S {
+    array<int, 2> a = {1, 2};
+    array<Point, 2> pts;
+    S(int v) : a({v, v}) { a[1] = v + 1; pts[1].move(v); }
+    array<int, 2> copy() const { return a; }
+    S self() const { return this; }
+    void reset() { a = {0, 0}; pts[0].x = 5; }
+};
+struct D {
+    array<int, 2> a = {1, 2};
+    string s = "d";
+};
+class H {
+public:
+    array<User, 2> users;
+    array<string, 2> words = {"a" + to_string(1), "b"};
+    H(User u) : users({u, u}) {}
+    array<string, 2> getWords() const { return words; }
+};
+class Link {
+public:
+    array<string, 2> words;
+    int n;
+    Link? next;
+    Link(int v) : n(v) {}
+};
+array<int, 2> fact(array<int, 2> a, int n) {
+    if (n == 0) return a;
+    a[0] *= n;
+    a[1] += 1;
+    return fact(a, n - 1);
+}
+array<int, 2>? nextItem(int* n) {
+    if (*n == 0) return null;
+    (*n)--;
+    return {*n, *n};
+}
+int main() {
+    S s = S(3);
+    println("{}", s);
+    println("{}", s.copy());
+    println("{}", s.self().a);
+    s.reset();
+    println("{}", s);
+    D d;
+    D e = {};
+    D f = {.s = "f"};
+    println("{} {} {}", d, e, f);
+    auto many = vector<D>(2);
+    many[1].a[0] = 5;
+    println("{}", many);
+    array<D, 2> ds;
+    ds[1].a[1] = 7;
+    println("{}", ds);
+    H h = H(User());
+    println("{} {}", h.users[0] == h.users[1], h.getWords());
+    array<Point, 2> pts;
+    pts[1].move(4);
+    println("{} {}", pts[1].get(), pts);
+    println("{}", fact({1, 0}, 4));
+    int n = 3;
+    while (auto it = nextItem(&n)) print("{} ", it[0]);
+    println();
+    array<array<int, 2>, 2> m;
+    m.fill({3, 4});
+    m[0].fill(9);
+    println("{}", m);
+    array<int, 3> a = {1, 2, 3};
+    array<int, 3>* p = &a;
+    println("{} {}", *p == a, p[0][1]);
+    auto q = static_cast<array<int, 3>*>(p);
+    println("{}", (*q).front());
+    void* raw = p;
+    println("{}", (*(array<int, 3>*)raw)[2]);
+    Link head = Link(0);
+    Link cur = head;
+    for (int i = 1; i < 100000; i++) {
+        Link next = Link(i);
+        next.words[0] = "w" + to_string(i);
+        cur.next = next;
+        cur = next;
+    }
+    println("{}", cur.words);
+    return 0;
+}
+// expect: {a: [3, 4], pts: [{x: 0}, {x: 3}]}
+// expect: [3, 4]
+// expect: [3, 4]
+// expect: {a: [0, 0], pts: [{x: 5}, {x: 3}]}
+// expect: {a: [1, 2], s: "d"} {a: [1, 2], s: "d"} {a: [1, 2], s: "f"}
+// expect: [{a: [1, 2], s: "d"}, {a: [5, 2], s: "d"}]
+// expect: [{a: [1, 2], s: "d"}, {a: [1, 7], s: "d"}]
+// expect: true ["a1", "b"]
+// expect: 4 [{x: 0}, {x: 4}]
+// expect: [24, 4]
+// expect: 2 1 0 
+// expect: [[9, 9], [3, 4]]
+// expect: true 2
+// expect: 1
+// expect: 3
+// expect: ["w99999", ""]

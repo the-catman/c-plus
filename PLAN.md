@@ -78,8 +78,10 @@ C++20, built with clang. Self-hosting in C+ is a later milestone, not a requirem
   through a pointer. Decided 2026-11-05.
 - Structs by value follow the C calling convention, written out in Codegen for x86-64 and
   aarch64, the Tier 1 targets. Other targets report an error. Decided 2026-11-05.
-- C arrays and 16-bit integers in structs, unions, variadic functions and callbacks follow
-  with the features they need.
+- A C array field is written `array<char, 64> name;` (see §2.23). A C array parameter stays
+  a pointer. Decided 2026-11-06.
+- 16-bit integers in structs, unions, variadic functions and callbacks follow with the
+  features they need.
 
 ### 2.5 C++ interop — DECIDED
 None. C++ libraries are consumed through hand-written `extern "C"` shims. No tooling
@@ -377,6 +379,29 @@ Decided 2026-11-05.
 
 ---
 
+### 2.23 Arrays — DECIDED
+`array<T, N>`, spelled and behaving as `std::array`. Decided 2026-11-06.
+- A value that holds its elements in itself, with C's layout, so it is also how a C struct
+  writes an array field. There is no C-style form, `int a[5]`, because that form turns into a
+  pointer. The error for it gives the `array` to write.
+- `N` is a written whole number, zero or more. Named sizes wait for constants or generics.
+- `array<int, 3> a;` gives every element its default, since elements cannot be tracked one
+  by one by definite assignment. C++ would leave numbers unknown. A shorter `{ }` list fills
+  the rest with defaults, as in C++. With no default, as for class references, every element
+  must be given.
+- Every index is checked; a written index out of range is a compile error.
+- No implicit conversion to a pointer. `a.data()` and `&a[i]` are allowed, since elements
+  do not move.
+- A range-based `for` keeps its own copy, so it means the same as on a vector, and changes
+  to what holds the array cannot free it under the loop.
+- `string(a)` on `array<char, N>` stops at a zero byte or the end, so it cannot over-read.
+- A value can take at most 2 GiB. The stack is not limited at compile time: as in C++, a
+  local array can be too large, but stack probes make that a crash and never let the
+  program step over the guard page into other memory. A clear message for it is open (§6).
+- Codegen handles an array, and whatever holds one by value, through its address, with
+  memory copies. LLVM needed 95 seconds at -O0 to compile one load and store of
+  `[65536 x i32]` as a single value, while memory copies take no time.
+
 ## 3. Compiler architecture
 
 ```
@@ -413,8 +438,8 @@ leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. C fun
 can be called through `extern "C"` declarations with number, `char`, `bool`, `string`
 and pointer values. Raw pointers work, with pointer arithmetic, `sizeof`, null traps and
 C types known by name such as `FILE*`, `new` and `delete` with their warning, and C structs,
-through pointers and by value. Next in Phase 1: `array<T, N>`, which C structs need for array
-fields, and debug builds with ASan and UBSan.
+through pointers and by value, including array fields, and `array<T, N>`. Next in Phase 1:
+debug builds with ASan and UBSan.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -473,6 +498,8 @@ will confidently write C++ wherever the two differ.
 - References (`T&`): whether C+ gets them, and in what form. They decide how
   `for (auto& x : v)` and `const T&` parameters work; today both are errors that point to a
   copy, which is cheap for vectors.
+- A clear message when the stack runs out, from deep recursion or a large local array,
+  in place of a plain crash. It needs a signal handler on its own stack.
 - Event loop and threads: one loop per thread versus a work-stealing scheduler. Decided
   in Phase 5 with real workloads.
 - Package manager, after v1.

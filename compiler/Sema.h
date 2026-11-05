@@ -60,6 +60,7 @@ private:
     const Type* checkCall(CallExpr& call, Flow& flow);
     const Type* checkMethodCall(MethodCallExpr& call, Flow& flow);
     const Type* checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type* vecType);
+    const Type* checkArrayMethod(MethodCallExpr& call, Flow& flow, const Type* arrayType);
     const Type* checkVectorConstruction(CallExpr& call, Flow& flow);
     const Type* checkNew(NewExpr& n, Flow& flow);
     const Type* checkDelete(DeleteExpr& d, Flow& flow);
@@ -79,6 +80,7 @@ private:
     bool isReadOnlyPlace(const Expr& target);
     // Reports a C type known only by name used as a value, not through a pointer.
     bool checkStorable(const Type* t, Loc loc);
+    bool checkSize(const Type* t, Loc loc);
     const Type* checkMath(CallExpr& call, Flow& flow);
     const Type* checkCharFn(CallExpr& call, Flow& flow);
     const Type* checkStringFill(CallExpr& call, Flow& flow);

@@ -60,6 +60,8 @@ private:
     // repeat the first one's.
     void parseLaterStars(const Type* ty, const std::string& firstName, const char* what);
     void expectCloseAngle(const std::string& context);
+    [[noreturn]] void failCStyleArray(const Type* elem, const std::string& name);
+    size_t afterAngles(size_t ahead) const;
     std::unique_ptr<FuncDecl> parseFunction(const Type* retType, Loc retLoc);
     std::unique_ptr<BlockStmt> parseBlock();
     StmtPtr parseStmt();

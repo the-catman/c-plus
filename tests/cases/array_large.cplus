@@ -1,0 +1,73 @@
+// Large arrays are copied as memory, so they compile quickly and take no more stack than
+// their copies need. A loaded aggregate this size would take LLVM minutes.
+struct Big {
+    array<int, 100000> values;
+    int tag = 1;
+};
+
+class Heavy {
+public:
+    array<long, 1000000> cells;   // 8 MB, in the object rather than on the stack
+    array<Big, 5> bigs;
+    long sum() const {
+        long total = 0;
+        for (long i = 0; i < cells.size(); i++) total += cells[i];
+        return total;
+    }
+};
+
+array<int, 100000> makeAll(int value) {
+    array<int, 100000> a;
+    a.fill(value);
+    return a;
+}
+
+long total(array<int, 100000> a) {
+    long sum = 0;
+    for (int x : a) sum += x;
+    a[0] = -1;   // only this copy
+    return sum;
+}
+
+Big makeBig() {
+    Big b;
+    b.values[99999] = 7;
+    return b;
+}
+
+int main() {
+    auto a = makeAll(2);
+    auto b = a;
+    b[99999] = 3;
+    println("{} {} {}", total(a), total(b), a[0]);
+    println("{} {}", a == b, a == a);
+    a = b;
+    println("{}", a == b);
+
+    Big big = makeBig();
+    Big other = big;
+    other.values[0] = 5;
+    println("{} {} {}", big.values[99999], other.values[0], big == other);
+    println("{}", makeBig().values[99999]);
+
+    Heavy h = Heavy();
+    h.cells[999999] = 41;
+    h.cells[0] = 1;
+    h.bigs[4].values[99999] = 6;
+    println("{} {} {}", h.sum(), h.bigs[4].values[99999], h.bigs[0].tag);
+
+    vector<Big> many = vector<Big>(3);
+    many[2].values[1] = 8;
+    many.push_back(big);
+    println("{} {} {}", many.size(), many[2].values[1], many[3].values[99999]);
+    println("{}", sizeof(Big));
+    return 0;
+}
+// expect: 200000 200001 2
+// expect: false true
+// expect: true
+// expect: 7 5 false
+// expect: 7
+// expect: 42 6 1
+// expect: 4 8 7
+// expect: 400004

@@ -1,0 +1,279 @@
+// array<T, N>: a fixed number of elements, kept in the value itself.
+struct Point {
+    int x = 1;
+    int y = 2;
+};
+
+struct Grid {
+    string name = "grid";
+    array<array<int, 2>, 2> cells;
+    int used = 0;
+
+    void set(int r, int c, int v) {
+        cells[r][c] = v;
+        used++;
+    }
+    int total() const {
+        int sum = 0;
+        for (auto row : cells)
+            for (int v : row) sum += v;
+        return sum;
+    }
+};
+
+class Board {
+public:
+    array<int, 3> scores = {7, 8, 9};
+    array<string, 2> names;
+    int best() const {
+        int top = 0;
+        for (int s : scores) top = max(top, s);
+        return top;
+    }
+};
+
+array<int, 3> makeThree(int start) {
+    return {start, start + 1, start + 2};
+}
+
+array<int, 3> identity(array<int, 3> a) {
+    return a;
+}
+
+// A parameter is the function's own copy.
+int changeCopy(array<int, 3> a) {
+    a[0] = 100;
+    return a[0];
+}
+
+void changeThrough(array<int, 3>* p) {
+    (*p)[1] = 55;
+    p->fill(6);
+    (*p)[2] = 7;
+}
+
+Grid makeGrid() {
+    Grid g;
+    g.set(0, 0, 1);
+    g.set(1, 1, 4);
+    return g;
+}
+
+int main() {
+    array<int, 3> zeros;
+    println("{}", zeros);
+    println("{} {} {}", zeros.size(), zeros.empty(), sizeof(array<int, 3>));
+
+    array<int, 4> some = {1, 2};
+    println("{}", some);
+    some[3] = 40;
+    some[2] += 5;
+    println("{} {} {}", some, some.front(), some.back());
+
+    long i = 1;
+    int j = 2;
+    println("{} {}", some[i], some[j]);
+
+    // A value: copies do not share elements.
+    auto copy = some;
+    copy[0] = 99;
+    println("{} {}", some[0], copy[0]);
+    println("{}", some == copy);
+    copy[0] = 1;
+    println("{} {}", some == copy, some != copy);
+
+    auto typed = array<double, 2>{1.5, 2};
+    auto defaults = array<bool, 2>();
+    auto empty = array<string, 2>{};
+    println("{} {} {}", typed, defaults, empty);
+
+    println("{}", makeThree(5));
+    println("{}", makeThree(5)[2]);
+    println("{}", makeThree(5).size());
+    println("{}", identity(makeThree(1)));
+    array<int, 3> mine = {1, 2, 3};
+    println("{} {}", changeCopy(mine), mine);
+    changeThrough(&mine);
+    println("{}", mine);
+
+    // Whole assignment, including from the array itself and a list that reads it.
+    array<int, 3> other = {4, 5, 6};
+    mine = other;
+    other[0] = 0;
+    println("{} {}", mine, other);
+    mine = mine;
+    println("{}", mine);
+    mine = {mine[2], mine[1], mine[0]};
+    println("{}", mine);
+    auto chained = (other = mine);
+    chained[1] = -1;
+    println("{} {}", chained, other);
+
+    // The loop goes over the array as it was when the loop started.
+    for (auto x : mine) {
+        mine[2] = 1000;
+        print("{} ", x);
+    }
+    println();
+    println("{}", mine);
+    for (long x : makeThree(1)) print("{} ", x);
+    println();
+
+    // Arrays of arrays.
+    array<array<int, 2>, 3> table = {{1, 2}, {3}};
+    table[2][1] = 8;
+    auto row = table[0];
+    row[0] = 50;
+    println("{} {}", table, row);
+    table[1] = row;
+    println("{}", table[1][0]);
+    println("{}", table == table);
+
+    // Arrays of structs, which run field defaults and methods.
+    array<Point, 2> points;
+    points[1].x = 9;
+    println("{}", points);
+    auto listed = array<Point, 3>{{5, 6}, {.y = 7}};
+    println("{}", listed);
+
+    // Structs and objects holding arrays.
+    Grid g = makeGrid();
+    Grid h = g;
+    h.cells[0][1] = 2;
+    println("{} {} {}", g, g.total(), h.total());
+    println("{} {}", g == h, g == g);
+    println("{}", makeGrid().cells[1][1]);
+    println("{}", makeGrid().total());
+    println("{}", sizeof(Grid) >= 40L);
+    Board b = Board();
+    b.scores[0] = 20;
+    b.names[1] = "Ada";
+    println("{} {}", b, b.best());
+    auto held = b.scores;
+    b.scores[1] = 21;
+    println("{} {}", held, b.scores);
+
+    // A ternary and const.
+    bool yes = true;
+    auto chosen = yes ? mine : other;
+    chosen[0] = -5;
+    println("{} {}", chosen, mine);
+    const array<int, 2> fixed = {3, 4};
+    println("{} {}", fixed, fixed[1]);
+    auto thawed = fixed;
+    thawed[0] = 30;
+    println("{}", thawed);
+
+    // A vector of arrays and an array of vectors.
+    vector<array<int, 2>> pairs = {{1, 2}, {3, 4}};
+    pairs.push_back({5, 6});
+    auto second = pairs;
+    pairs[0][1] = 20;
+    pairs[1] = {7, 7};
+    println("{} {}", pairs, second);
+    println("{} {}", pairs.back(), pairs.front());
+    pairs.pop_back();
+    auto filled = vector<array<int, 2>>(2, {1, 1});
+    auto blank = vector<array<Point, 1>>(1);
+    println("{} {} {}", pairs.size(), filled, blank);
+    array<vector<int>, 2> lists;
+    lists[1].push_back(3);
+    auto lists2 = lists;
+    lists2[1].push_back(4);
+    println("{} {}", lists, lists2);
+
+    // Optional arrays, and arrays reached through '?.'.
+    array<int, 2>? maybe;
+    println("{} {}", maybe, maybe == null);
+    maybe = {1, 2};
+    println("{} {}", maybe, maybe.value());
+    if (auto m = maybe) println("{}", m[1]);
+    array<int, 2>? none = null;
+    println("{}", none ?? array<int, 2>{9, 9});
+    println("{}", maybe ?? array<int, 2>{9, 9});
+    println("{}", none.value_or({8, 8}));
+    println("{}", maybe == array<int, 2>{1, 2});
+    Board? noBoard;
+    Board? someBoard = b;
+    println("{} {}", noBoard?.scores, someBoard?.scores);
+    println("{} {}", noBoard?.scores[1], someBoard?.scores[1]);
+    Grid? optGrid = g;
+    println("{}", optGrid?.total());
+    println("{}", optGrid?.cells[1]);
+
+    // No elements at all.
+    array<int, 0> nothing;
+    println("{} {} {}", nothing, nothing.size(), nothing.empty());
+    println("{}", nothing == array<int, 0>{});
+    for (int x : nothing) println("{}", x);
+
+    // The text in an array of chars ends at a zero byte, or at the end of the array.
+    auto text = array<char, 4>{'a', 'b'};
+    println("{} {}", string(text), string(text).size());
+    text = {'w', 'x', 'y', 'z'};
+    println("{} {}", string(text), text);
+
+    // A variable may still be called array.
+    {
+        int array = 3;
+        if (array < 5) println("{}", array);
+    }
+    return 0;
+}
+// expect: [0, 0, 0]
+// expect: 3 false 12
+// expect: [1, 2, 0, 0]
+// expect: [1, 2, 5, 40] 1 40
+// expect: 2 5
+// expect: 1 99
+// expect: false
+// expect: true false
+// expect: [1.5, 2] [false, false] ["", ""]
+// expect: [5, 6, 7]
+// expect: 7
+// expect: 3
+// expect: [1, 2, 3]
+// expect: 100 [1, 2, 3]
+// expect: [6, 6, 7]
+// expect: [4, 5, 6] [0, 5, 6]
+// expect: [4, 5, 6]
+// expect: [6, 5, 4]
+// expect: [6, -1, 4] [6, 5, 4]
+// expect: 6 5 4 
+// expect: [6, 5, 1000]
+// expect: 1 2 3 
+// expect: [[1, 2], [3, 0], [0, 8]] [50, 2]
+// expect: 50
+// expect: true
+// expect: [{x: 1, y: 2}, {x: 9, y: 2}]
+// expect: [{x: 5, y: 6}, {x: 1, y: 7}, {x: 1, y: 2}]
+// expect: {name: "grid", cells: [[1, 0], [0, 4]], used: 2} 5 7
+// expect: false true
+// expect: 4
+// expect: 5
+// expect: true
+// expect: Board {scores: [20, 8, 9], names: ["", "Ada"]} 20
+// expect: [20, 8, 9] [20, 21, 9]
+// expect: [-5, 5, 1000] [6, 5, 1000]
+// expect: [3, 4] 4
+// expect: [30, 4]
+// expect: [[1, 20], [7, 7], [5, 6]] [[1, 2], [3, 4], [5, 6]]
+// expect: [5, 6] [1, 20]
+// expect: 2 [[1, 1], [1, 1]] [[{x: 1, y: 2}]]
+// expect: [[], [3]] [[], [3, 4]]
+// expect: null true
+// expect: [1, 2] [1, 2]
+// expect: 2
+// expect: [9, 9]
+// expect: [1, 2]
+// expect: [8, 8]
+// expect: true
+// expect: null [20, 21, 9]
+// expect: null 21
+// expect: 5
+// expect: [0, 4]
+// expect: [] 0 true
+// expect: true
+// expect: ab 2
+// expect: wxyz ['w', 'x', 'y', 'z']
+// expect: 3

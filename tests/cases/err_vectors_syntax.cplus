@@ -26,8 +26,8 @@ int main() {
 // error: To change the elements, loop over the indexes: `for (long i = 0; i < items.size(); i++) items[i] = ...;`
 // error: this compiler does not support brace and constructor initializers yet
 // error: write `vector<int> sized = {1, 2, 3};` or `auto sized = vector<int>(count, value);`
-// error: this compiler does not support C-style arrays yet
-// error: use a vector: `vector<int> arr;`
+// error: C+ has no C-style arrays
+// error: write `array<int, 5> arr`
 // error: expected an index inside [ ]
 // error: an element is picked with one index
 // error: this compiler does not support hash maps (hashmap<K, V>) yet

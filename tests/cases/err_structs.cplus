@@ -28,7 +28,7 @@ int main() {
 // error: 'Point' has no field named 'q'
 // error: field 'x' is given more than once
 // error: this { } list needs a type here
-// error: a { } list builds a struct, a class object or a vector, but 'int' is expected here
+// error: a { } list builds a struct, a class object, a vector or an array, but 'int' is expected here
 // error: 'int' has no fields, so '.x' cannot be used
 // error: 'Point' values can only be compared with == and !=
 // error: both sides of '==' must have the same type, but they are 'Point' and 'int'
