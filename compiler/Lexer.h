@@ -43,6 +43,7 @@ enum class Tok {
     IntLit,
     FloatLit,
     StringLit,
+    CharLit,
 #define X(name, text) Kw##name,
     CPLUS_KEYWORDS(X)
 #undef X
@@ -55,7 +56,7 @@ struct Token {
     Tok kind = Tok::Eof;
     Loc loc;
     std::string text;       // identifier name, string literal contents, or source spelling
-    uint64_t intValue = 0;  // for IntLit
+    uint64_t intValue = 0;  // for IntLit, and the byte of a CharLit
     bool longSuffix = false;  // IntLit written with L or LL, e.g. 1L
     double floatValue = 0;    // for FloatLit
     bool floatSuffix = false; // FloatLit written with f, e.g. 1.5f
@@ -76,6 +77,8 @@ private:
     bool atFloat() const;
     Token lexFloat();
     Token lexString();
+    Token lexChar();
+    bool lexEscape(std::string& value, const char* anchor);
     Token lexIdentOrKeyword();
     char peek(size_t ahead = 0) const;
     char advance();

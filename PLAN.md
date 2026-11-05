@@ -64,8 +64,9 @@ C++20, built with clang. Self-hosting in C+ is a later milestone, not a requirem
   that is NULL stops the program, and a `string?` result makes it null.
 - Libraries are named on the command line, `-lname` and `-Ldir`, as with a C compiler.
   libc is always linked.
-- `double` and `float` are passed as they are, since C has the same types.
-- Pointers (and opaque handles), C structs, `char`, variadic functions and callbacks
+- `double` and `float` are passed as they are, since C has the same types. A `char` is
+  passed as C's `char`, the same byte whether the platform's `char` is signed or not.
+- Pointers (and opaque handles), C structs, variadic functions and callbacks
   follow with the features they need.
 
 ### 2.5 C++ interop — DECIDED
@@ -172,9 +173,9 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
   grows it by doubling, so building a string in a loop is linear. `substr` shares the
   buffer when the part is at least a quarter of it and copies smaller parts, so a
   substring never keeps alive more than four times its own size.
-- `+` joins two strings only. `s + 5`, which C++ compiles as appending character 5, is
-  an error that points to `to_string(n)` and `format`. `a + b + c` is joined with one
-  allocation.
+- `+` joins two strings, or a string and a `char`, as `std::string` does. `s + 5`, which
+  C++ compiles as appending character 5, is an error that points to `to_string(n)` and
+  `format`. `a + b + c` is joined with one allocation.
 - `<` and the other orderings compare bytes, as C++ does (code point order for UTF-8).
 - C++ names and meanings: `size`, `length`, `empty`, `substr`, `find`, `contains`,
   `starts_with`, `ends_with`, `clear`. Where C++ throws `out_of_range`, the program stops.
@@ -183,8 +184,11 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
 - `format(...)`, C++20's `std::format`, returns what `print` would print. `to_string(n)`
   takes an `int` or `long`; `to_string(true)`, which is `"1"` in C++, is an error that
   points to `format`.
-- `s[i]`, `for (char c : s)` and the methods that take or return one character wait for
-  `char`.
+- `s[i]` is a checked `char`, for reading and writing, and `s[s.size()]` stops the
+  program. Writing copies the buffer first unless nothing else holds it. `for (char c :
+  s)` goes over the bytes. `push_back`, `pop_back`, `front`, `back` and `string(n, c)`
+  have C++'s meanings, and stop the program where C++ is undefined. `s.at(i)` is left
+  out, since `s[i]` is always checked.
 
 ### 2.13 Modules — DECIDED
 - No header files. One file is one module. Imports are dotted names mapped to paths:
@@ -301,6 +305,24 @@ Decided 2026-11-05.
   C++ names and overload rules. A function of the program with the same name takes their
   place, so C's own can still be declared.
 
+### 2.20 Characters — DECIDED
+Decided 2026-11-05.
+- `char` is one byte, unsigned, from 0 to 255: what a string holds. Unicode code points
+  would be a separate type later, if at all. Literals are C++'s, `'a'` and `'\n'`; a
+  literal of more than one byte (`'ab'`, `'é'`) and the prefixed forms are errors.
+- In arithmetic a char is promoted to `int`, as in C++, so `c - '0'` is an `int`. A char
+  converts to every number type by itself. A number never becomes a char by itself:
+  `char(n)` is a checked cast. `c++`, `c--`, `c += n` and `c -= n` keep a char, as in
+  C#, and stop the program outside 0 to 255.
+- A char is not a condition and does not convert to `bool`: with no NUL-terminated
+  strings, `if (c)` is rarely the intent. `c != '\0'` says it.
+- `{}` prints the character. Inside a struct, vector or optional it prints quoted, with
+  escapes, so `'\0'` and `' '` stay visible. `to_string(c)` is an error, since C++ gives
+  the code.
+- The `<cctype>` functions are built in, ASCII only, and take a `char`. The tests return
+  `bool` and `toupper`/`tolower` a `char`, not C's `int`, since there is no `EOF` to
+  return. As with `<cmath>`, a function of the program with the same name replaces them.
+
 ---
 
 ## 3. Compiler architecture
@@ -329,14 +351,15 @@ Open implementation questions are listed in §6.
 
 Status: Phase 0 has a first draft (`docs/SPEC.md`, `docs/CHEATSHEET.md`). Phase 1 is in
 progress. The compiler builds programs with integers, bools, strings (joining, ordering,
-`substr`, `find`, `format`, `to_string`), `double` and `float` with casts and the
+`substr`, `find`, `format`, `to_string`, checked `s[i]`), `char` with the `<cctype>`
+functions, `double` and `float` with casts and the
 `<cmath>` functions, structs, reference-counted classes with methods, constructors and
 destructors, vectors, and optionals (`T?`, `null`, `?.`, `??`), using
 functions, control flow including range-based `for`, definite assignment (down to struct
 fields), overflow and bounds traps, and `println`, all through LLVM. Destructors and a
 leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. C functions
-can be called through `extern "C"` declarations with number, `bool` and `string` values.
-Next in Phase 1: `char` and raw pointers, which the rest of C interop needs.
+can be called through `extern "C"` declarations with number, `char`, `bool` and `string`
+values. Next in Phase 1: raw pointers, which the rest of C interop needs.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

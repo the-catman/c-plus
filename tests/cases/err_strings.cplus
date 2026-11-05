@@ -20,7 +20,7 @@ int main() {
     s -= "a";
     println("{}", s - "a");
     println("{}", s < n);
-    println("{}", s[0]);
+    println("{}", s[true]);
     for (string ch : s) println("{}", ch);
     s.append("x");
     s.push_back("x");
@@ -48,28 +48,27 @@ int main() {
     return 0;
 }
 // error: 'format' is a built-in function and cannot be redefined
-// error: '+' joins two strings, but this is 'int'
+// error: '+' joins a string with a string or a char, but this is 'int'
 // error: turn the number into a string first: `s + to_string(n)`
 // error: Unlike C++, a number is never added as a character code
-// error: '+' joins two strings, but this is 'bool'
+// error: '+' joins a string with a string or a char, but this is 'bool'
 // error: `format("{}", b)` turns a bool into "true" or "false"
-// error: '+' joins two strings, but this is 'Point'
+// error: '+' joins a string with a string or a char, but this is 'Point'
 // error: `format("{}", value)` turns any value that can be printed into a string
-// error: '+=' on a string adds another string, but this is 'int'
+// error: '+=' on a string adds a string or a char, but this is 'int'
 // error: turn the number into a string first: `s += to_string(n)`
 // error: '-=' cannot be used with 'string'
 // error: the only compound assignment on strings is +=, which appends
 // error: '-' cannot be used with 'string'
 // error: strings work with + to join them, and with == != < <= > >= to compare them
 // error: '<' compares two strings, but this is 'int'
-// error: this compiler does not support indexing strings yet
-// error: `s[i]` needs the `char` type, which is planned; until then `s.substr(i, 1)` is the character at position i
-// error: a range-based for loop goes over a vector, but this is 'string'
-// error: looping over the characters of a string needs the `char` type
+// error: an index into a string must be an int or long, but this is 'bool'
+// error: the elements of 'string' are 'char', which cannot be stored in 'string' 'ch'
+// error: write `for (auto ch : ...)` or `for (char ch : ...)`
 // error: this compiler does not support append() on strings yet
 // error: write `s += text`
-// error: this compiler does not support push_back() on strings yet
-// error: it works with single characters, which need the `char` type
+// error: expected 'char' for push_back(), but this is 'string'
+// error: 'x' in single quotes is a char; "x" is a string
 // error: this compiler does not support insert() on strings yet
 // error: 'string' has no method named 'lenght'
 // error: did you mean 'length'?

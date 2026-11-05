@@ -61,15 +61,15 @@ int main() {
     const vector<Point> ps = {{1}};
     ps[0].move();
     string s = "ab";
-    println("{}", s[0]);
+    println("{}", s[-1]);
     return 0;
 }
 // error: expected 'int' as an element of 'vector<int>', but this is 'string'
 // error: expected 'int' for push_back() on 'vector<int>', but this is 'string'
-// error: a vector index must be an int or long, but this is 'bool'
-// error: a vector index cannot be negative
+// error: an index into a vector must be an int or long, but this is 'bool'
+// error: an index into a vector cannot be negative
 // error: the last one is `v[v.size() - 1]` or `v.back()`
-// error: '[ ]' picks an element of a vector, but this is 'int'
+// error: '[ ]' picks an element of a vector or a char of a string, but this is 'int'
 // error: 'vector<int>' has no method named 'add'
 // error: did you mean 'size'?
 // error: 'size' is a method; call it with `size()`
@@ -79,7 +79,7 @@ int main() {
 // error: 'c' is const and cannot be changed
 // error: 'c' is const, so its elements cannot be assigned to
 // error: push_back() changes the vector, so it must be called on a variable or a field
-// error: a range-based for loop goes over a vector, but this is 'int'
+// error: a range-based for loop goes over a vector or a string, but this is 'int'
 // error: the elements of 'vector<string>' are 'string', which cannot be stored in 'int' 's'
 // error: vector<User>(n) cannot make its elements on its own, because a 'User' reference cannot be empty
 // error: because the constructor of 'Range' needs arguments
@@ -93,7 +93,8 @@ int main() {
 // error: this compiler does not support insert() on vectors yet
 // error: 'bag' is const, so its fields cannot be changed
 // error: cannot call 'move' on const 'ps', because it may change fields
-// error: this compiler does not support indexing strings yet
+// error: an index into a string cannot be negative
+// error: the last char is `s[s.size() - 1]` or `s.back()`
 // error: 'items' cannot be changed inside const method 'peek'
 // error: the elements of 'items' cannot be assigned to inside const method 'peek'
 // error: spec: docs/SPEC.md#vectors

@@ -1,0 +1,69 @@
+// Mistakes with chars, and what to write instead.
+string name() { return "x"; }
+
+int main() {
+    const string k = "abc";
+    k[0] = 'x';
+    name()[0] = 'y';
+    char c = 65;
+    char d = "a";
+    char e = "ab";
+    string s = c;
+    bool b = c;
+    if (c) println("x");
+    while (!c) {}
+    c *= 2;
+    c += 1.5;
+    c = c + 1;
+    println("{}", s == 'a');
+    println("{}", to_string(c));
+    println("{}", isdigit(5));
+    println("{}", isdigit("5"));
+    println("{}", toupper());
+    println("{:.2f}", c);
+    char f = char("a");
+    string g = string(c);
+    string h = string(3, "ab");
+    string i = string(1, 2, 3);
+    println("{}", s[c]);
+    s.push_back("ab");
+    s.at(0);
+    double x = c % 2.5;
+    return 0;
+}
+// error: 'k' is const, so its chars cannot be assigned to
+// error: only a variable or one of its fields can be assigned to
+// error: expected 'char' to initialize 'c', but this is 'int'
+// error: Write a character such as 'A', or `char(n)`, which stops the program unless n is from 0 to 255
+// error: expected 'char' to initialize 'd', but this is 'string'
+// error: 'a' in single quotes is a char; "a" is a string
+// error: a string does not convert to a char; `s[i]` is the char at position i
+// error: write `string(1, c)` for a string holding the char
+// error: a char is not a bool; compare it, e.g. `c != '\0'`
+// error: the if condition must be a bool, a number or an optional, but this is 'char'
+// error: a char is not a condition; compare it, e.g. `c != '\0'` or `c == 'y'`
+// error: '!' needs a bool, a number or an optional, but this is 'char'
+// error: '*=' cannot be used with 'char'
+// error: a char steps with `c += n` and `c -= n`
+// error: '+=' on a char needs an int or a long, but this is 'double'
+// error: expected 'char' when assigning to 'c', but this is 'int'
+// error: To step to the next character, write `c++` or `c += 1`
+// error: '==' compares two strings, but this is 'char'
+// error: compare chars with chars, e.g. `s[0] == 'a'`, or strings with strings: `s == "a"`
+// error: in C++, to_string(c) gives the code of the char, such as "97"
+// error: isdigit() takes a char, but this is 'int'
+// error: isdigit() takes a char, but this is 'string'
+// error: pass one char of it, e.g. `isdigit(s[0])`
+// error: toupper() takes one argument but 0 were given
+// error: {:.2f} formats a float or a double, but this is 'char'
+// error: a cast cannot turn a string into a char
+// error: a cast cannot turn a value into a string
+// error: string(count, c) repeats one char, but this is 'string'
+// error: 'string' is built from no arguments or two, but 3 were given
+// error: an index into a string must be an int or long, but this is 'char'
+// error: convert the char to its code first: `int(c)`
+// error: push_back() adds one char, but this is 'string'
+// error: write `s += text` to add a string
+// error: 'string' has no method named 'at'
+// error: write `s[i]`, which always checks that i is a position in the string
+// error: '%' needs an int or a long, but this is 'double'

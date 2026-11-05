@@ -16,7 +16,7 @@ namespace cplus {
 struct StructDecl;
 
 struct Type {
-    enum class Kind { Error, Void, Bool, Int, Long, Float, Double, String, Auto, Struct, Class, Vector, Optional, Null };
+    enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, Struct, Class, Vector, Optional, Null };
     Kind kind;
     const char* name;
     const StructDecl* decl = nullptr;  // for Kind::Struct and Kind::Class
@@ -30,6 +30,8 @@ struct Type {
     bool isInteger() const { return kind == Kind::Int || kind == Kind::Long; }
     bool isFloating() const { return kind == Kind::Float || kind == Kind::Double; }
     bool isNumber() const { return isInteger() || isFloating(); }
+    // A number, or a char, which arithmetic turns into an int first, as in C++.
+    bool isArithmetic() const { return isNumber() || kind == Kind::Char; }
     bool isStruct() const { return kind == Kind::Struct; }  // a value type
     bool isClass() const { return kind == Kind::Class; }    // a reference-counted object
     bool hasFields() const { return kind == Kind::Struct || kind == Kind::Class; }
@@ -38,7 +40,8 @@ struct Type {
     static const Type* get(Kind k) {
         static const Type types[] = {{Kind::Error, "<error>"}, {Kind::Void, "void"},     {Kind::Bool, "bool"},
                                      {Kind::Int, "int"},       {Kind::Long, "long"},     {Kind::Float, "float"},
-                                     {Kind::Double, "double"}, {Kind::String, "string"}, {Kind::Auto, "auto"}};
+                                     {Kind::Double, "double"}, {Kind::Char, "char"},     {Kind::String, "string"},
+                                     {Kind::Auto, "auto"}};
         return &types[(int)k];
     }
     static const Type* error() { return get(Kind::Error); }
@@ -48,6 +51,7 @@ struct Type {
     static const Type* longTy() { return get(Kind::Long); }
     static const Type* floatTy() { return get(Kind::Float); }
     static const Type* doubleTy() { return get(Kind::Double); }
+    static const Type* charTy() { return get(Kind::Char); }
     static const Type* stringTy() { return get(Kind::String); }
     static const Type* autoTy() { return get(Kind::Auto); }
     static const Type* nullTy() {
@@ -84,7 +88,7 @@ struct FuncDecl;
 // ---- Expressions -----------------------------------------------------------
 
 struct Expr {
-    enum class Kind { IntLit, FloatLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
+    enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
                       Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast };
     const Kind kind;
     Loc loc;
@@ -107,8 +111,14 @@ struct FloatLitExpr : Expr {
     FloatLitExpr(Loc l, double v, bool f) : Expr(Kind::FloatLit, l), value(v), isFloat(f) {}
 };
 
-// `int(x)`, `static_cast<int>(x)` or `(int)x`: an explicit conversion between numbers
-// and bool.
+// `'a'`: one byte, from 0 to 255.
+struct CharLitExpr : Expr {
+    uint8_t value;
+    CharLitExpr(Loc l, uint8_t v) : Expr(Kind::CharLit, l), value(v) {}
+};
+
+// `int(x)`, `static_cast<int>(x)` or `(int)x`: an explicit conversion between numbers,
+// char and bool.
 struct CastExpr : Expr {
     const Type* target;
     ExprPtr operand;
@@ -181,7 +191,7 @@ struct IncDecExpr : Expr {
         : Expr(Kind::IncDec, l), increment(inc), prefix(pre), target(std::move(t)) {}
 };
 
-enum class Builtin { None, Print, Println, Format, ToString, Math };
+enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill };
 
 // The math functions of C++'s <cmath>, and abs, min and max.
 enum class MathFn {
@@ -189,6 +199,10 @@ enum class MathFn {
     Floor, Ceil, Round, Trunc, Fabs, Fmod, Hypot, IsNan, IsInf, IsFinite, Abs, Min, Max
 };
 bool isMathFunction(const std::string& name);  // `sqrt`, `pow`, ...: defined in Sema.cpp
+
+// The character tests and conversions of C++'s <cctype>, for one char.
+enum class CharFn { IsAlpha, IsDigit, IsAlnum, IsSpace, IsUpper, IsLower, IsPunct, IsXDigit, ToUpper, ToLower };
+bool isCharFunction(const std::string& name);  // `isdigit`, `toupper`, ...: defined in Sema.cpp
 
 // The C function that reads a number from text the way C++'s `std::stoi`, `std::stod`
 // and so on do, as a declaration to suggest: `int atoi(string text)`. Empty for other names.
@@ -218,6 +232,7 @@ struct CallExpr : Expr {
     std::vector<std::string> formatPieces;  // print, println, format, to_string: literal text around each {}
     std::vector<FormatSpec> formatSpecs;    // one for each {}
     MathFn math{};                          // for Builtin::Math
+    CharFn charFn{};                        // for Builtin::CharFn
     CallExpr(Loc l, std::string c, std::vector<ExprPtr> a)
         : Expr(Kind::Call, l), callee(std::move(c)), args(std::move(a)) {}
 };
@@ -225,7 +240,8 @@ struct CallExpr : Expr {
 // The methods every vector has.
 enum class VecMethod { None, Size, Empty, PushBack, PopBack, Front, Back, Clear };
 // The methods every string has. `length()` is `size()`.
-enum class StrMethod { None, Size, Empty, Substr, Find, Contains, StartsWith, EndsWith, Clear };
+enum class StrMethod { None, Size, Empty, Substr, Find, Contains, StartsWith, EndsWith, Clear, PushBack, PopBack, Front,
+                       Back };
 // The methods every optional has, as in std::optional.
 enum class OptMethod { None, HasValue, Value, ValueOr };
 
@@ -250,7 +266,7 @@ struct MemberExpr : Expr {
     MemberExpr(Loc fieldLoc, ExprPtr b, std::string f) : Expr(Kind::Member, fieldLoc), base(std::move(b)), field(std::move(f)) {}
 };
 
-// `base[index]`, an element of a vector.
+// `base[index]`, an element of a vector or a char of a string.
 struct IndexExpr : Expr {
     ExprPtr base, index;
     IndexExpr(Loc bracketLoc, ExprPtr b, ExprPtr i) : Expr(Kind::Index, bracketLoc), base(std::move(b)), index(std::move(i)) {}

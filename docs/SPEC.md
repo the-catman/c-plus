@@ -56,7 +56,16 @@ template this throw throws true try typename virtual void weak while
 ### String literals
 
 `"text"` with escapes `\n \t \r \0 \\ \" \'` and `\xHH`. Adjacent literals are joined:
-`"a" "b"` is `"ab"`. A string cannot span lines. Character literals (`'a'`) are planned.
+`"a" "b"` is `"ab"`. A string cannot span lines.
+
+### Character literals
+
+`'a'` is a [char](#char), one byte, with the same escapes as strings: `'\n'`, `'\''`,
+`'\0'`, `'\x41'`. A literal holds exactly one byte, so `'ab'`, which C++ reads as an
+`int` whose value depends on the compiler, is an error, and so is `'é'`, which takes two
+bytes in UTF-8: write text of any length as a string, `"é"`. `''` is an error too. C++'s
+prefixed literals, `L'a'`, `u'a'`, `U'a'` and `u8"text"`, do not exist; strings are
+UTF-8 already.
 
 ---
 
@@ -124,6 +133,45 @@ anything else is `true`. So `bool b = 1;` works, and so does `if (count)` (see
 [Conditions](#conditions)). A `bool` does not convert back to a number: `int n = true;`
 is an error.
 
+### char
+
+A `char` is one byte, from 0 to 255, as an `unsigned char` is in C++. It is what a string
+holds: `s[i]` is a `char`, and so is each `c` in `for (char c : s)`.
+
+```cpp
+char c = 'a';
+int code = c;                     // 97: a char converts to its code
+char next = char(c + 1);          // 'b': arithmetic gives an int, as in C++
+for (char x = 'a'; x <= 'z'; x++) print("{}", x);
+if (isdigit(s[0])) value = s[0] - '0';
+string word = string(1, c);       // "a"
+```
+
+- **A char is its code in arithmetic.** As in C++, `c + 1`, `c - '0'` and `-c` are `int`s,
+  and a char converts to `int`, `long`, `float` or `double` by itself. A number does not
+  convert to a `char`: write a character such as `'A'`, or `char(n)`, which stops the
+  program unless n is from 0 to 255 (see [Casts](#casts)).
+- **`++`, `--`, `+=` and `-=` step through the characters** and keep a char: `c++`,
+  `c += 2`. A result outside 0 to 255 stops the program instead of wrapping around. The
+  other compound assignments, such as `c *= 2`, are errors.
+- **Comparisons** order chars by their codes: `'a' < 'b'`, `'Z' < 'a'`, and a byte above
+  127 is above every ASCII character. A char compares with a number by its code.
+- **A char is not a condition**, unlike in C++: write `c != '\0'` instead of `if (c)`.
+  Without NUL-terminated strings, a test for the zero byte is rarely what was meant.
+- **Printing** a char prints the character, as `std::format` does: `println("{}", c)`
+  prints `a`. Inside a struct or a vector it prints in quotes, `'a'`, with escapes such as
+  `'\n'`, and a byte that is not ASCII prints as `'\xc8'`. `int(c)` prints the code.
+- `to_string(c)` is an error: C++ gives the code, `"97"`. Write `string(1, c)` for the
+  character, or `to_string(int(c))` for the code.
+- The character functions of C++'s `<cctype>` are built in and take a `char`:
+  `isalpha`, `isdigit`, `isalnum`, `isspace`, `isupper`, `islower`, `ispunct` and
+  `isxdigit` return a `bool`, and `toupper` and `tolower` return a `char`; in C++ all of
+  them take and return an `int`. They know only ASCII, as C's do in the default locale,
+  so `isalpha` is false for each byte of `"é"`. A function of the program with the same
+  name takes their place.
+- A `char` is not Unicode text: one letter can take several chars in UTF-8. Strings hold
+  text; a char holds a byte.
+
 ### string
 
 A string is a value, as in C++: assigning or passing one gives an independent copy, and
@@ -139,11 +187,20 @@ string word = greeting.substr(7, 3);        // "Ada": 3 bytes from position 7
 if (greeting.find("Ada") != string::npos) println("found");
 string line = format("{} is {}", name, 36); // built the way println prints
 string digits = to_string(42);
+char first = name[0];                       // 'A'
+name[0] = 'E';                              // "Eda"; other copies keep "Ada"
 ```
 
-- `a + b` joins two strings, and `s += t` appends. Both sides must be strings: `s + 5`,
-  which C++ compiles as adding the character with code 5, is an error. Write
-  `s + to_string(5)` or `format("{}{}", s, 5)`. Two literals can be joined: `"a" + "b"`.
+- `a + b` joins two strings, and `s += t` appends. One side may be a `char` instead, as
+  with `std::string`: `s + '!'`, `'>' + s`, `s += c`. A number cannot: `s + 5`, which C++
+  compiles as adding the character with code 5, is an error. Write `s + to_string(5)` or
+  `format("{}{}", s, 5)`. Two literals can be joined: `"a" + "b"`.
+- `s[i]` is the `char` at position `i`, and `s[i] = c` changes it. Every index is checked:
+  a position outside the string stops the program, including `s[s.size()]`, which C++
+  allows for reading. Changing a char changes only this string; copies and substrings
+  that shared its bytes keep their text.
+- `for (char c : s)` goes over the bytes of the string, in order. As with vectors, the
+  loop goes over the string as it was when the loop started.
 - `==` and `!=` compare contents, and `<`, `<=`, `>`, `>=` compare bytes in order, as
   C++ does. For UTF-8 text this is the order of the code points, so `"Z" < "a"`.
 - `size()` and `length()` give the number of bytes, and `empty()` is `size() == 0`.
@@ -155,8 +212,14 @@ string digits = to_string(42);
   `pos`, or `string::npos` when there is none. With no unsigned types, `string::npos` is
   `-1`, a `long`, so both `pos != string::npos` and `pos >= 0` work. A `pos` past the end
   finds nothing, as in C++; a negative `pos` stops the program.
-- `contains(text)`, `starts_with(text)` and `ends_with(text)` return a `bool`.
+- `contains(text)`, `starts_with(text)` and `ends_with(text)` return a `bool`. These and
+  `find` also take a `char`: `s.find('/')`.
+- `push_back(c)` adds a char at the end, `pop_back()` removes the last one, and `front()`
+  and `back()` return the first and last. On an empty string, `pop_back()`, `front()`
+  and `back()` stop the program; in C++ they are undefined.
 - `clear()` empties the string.
+- `string(count, c)` is `count` copies of the char `c`, as in C++: `string(3, '-')` is
+  `"---"`. `string()` is empty, and `string(s)` is a copy of the string `s`.
 - `to_string(x)` turns a number into text: `to_string(42)` is `"42"` and `to_string(2.5)`
   is `"2.5"`. `format("...", values...)`,
   C++20's `std::format`, builds a string with the rules of [Printing](#printing):
@@ -166,9 +229,8 @@ Copies of a string, and large substrings, share their bytes instead of copying t
 `+=` adds to a string in place when no other string shares it, so building a string in a
 loop takes linear time. See [Memory model](#memory-model).
 
-Planned: `s[i]`, `for (char c : s)` and the methods that take or return one character
-(`push_back`, `front`, `back`, `at`), which need the `char` type; `append`, `insert`,
-`erase`, `replace`, `rfind` and `compare`; and parsing numbers out of strings.
+`s.at(i)` does not exist, since `s[i]` is always checked. Planned: `append`, `insert`,
+`erase`, `replace`, `rfind` and `compare`, and parsing numbers out of strings.
 
 ### Implicit conversions
 
@@ -177,13 +239,15 @@ These are the only implicit conversions:
 - **an integer to a floating-point type, and `float` to `double`**, as in C++. A `long`
   above 2^53 rounds to the nearest `double`.
 - **a `double` written as a number to `float`**: `float x = 0.1;`.
+- **a `char` to a number**, its code from 0 to 255, as in C++: `int code = 'a';`.
 - **a number to `bool`**: zero is `false`, anything else is `true`, as in C++.
 - **a value to an optional**: a `T`, or `null`, converts to `T?`. The value converts as it
   would to `T`, so an `int` also converts to `long?` (see [Optionals](#optionals)).
 
 Everything else is an error, including `long` to `int`, a floating-point value to an
-integer, any other `double` to `float`, `bool` to a number, `T?` to `T`, and one optional
-type to another. A [cast](#casts) converts between numbers and `bool` explicitly.
+integer, any other `double` to `float`, a number to `char`, `char` to `string` or `bool`,
+`bool` to a number, `T?` to `T`, and one optional type to another. A [cast](#casts)
+converts between numbers, `char` and `bool` explicitly.
 
 ```cpp
 long big = 5;       // ok: int widens to long
@@ -199,7 +263,7 @@ a `long`, `long + float` is a `float`, and `float + double` is a `double`.
 
 ### Casts
 
-A cast converts between the number types and `bool`. The three C++ spellings work and
+A cast converts between the number types, `char` and `bool`. The three C++ spellings work and
 mean the same thing:
 
 ```cpp
@@ -216,8 +280,11 @@ double share = double(n) / total;   // without the cast, n / total divides integ
   integer. C++ wraps the first around and leaves the others undefined.
 - `double(x)` and `float(x)` take any number; `float(x)` rounds to the nearest `float`.
 - `bool(x)` is true when `x` is not zero, and `int(b)` is 1 or 0.
+- `char(x)` is the char whose code is `x`, which must be from 0 to 255: `char(65)` is
+  `'A'`. `int(c)` is the code of `c`.
 - A cast binds like a unary operator, as in C++: `(int)x * 2` is `((int)x) * 2`.
-- A cast cannot make a string: write `to_string(x)` or `format("{}", x)`. Reading a number
+- A cast cannot make a string: write `to_string(x)` or `format("{}", x)`, or
+  `string(1, c)` for a char. `string(s)` of a string is allowed, and is a copy. Reading a number
   from a string is planned.
 - `reinterpret_cast` and `const_cast` do not exist, since C+ has no raw pointers yet and
   `const` cannot be cast away. `dynamic_cast` would need inheritance, which is planned.
@@ -615,6 +682,7 @@ int main() {
 | `int`, `int32_t`, `pid_t`, `unsigned`, `uint32_t` | `int` |
 | `long`, `long long`, `int64_t`, `size_t`, `ssize_t`, `time_t`, `uint64_t` | `long` |
 | `double`, `float` | `double`, `float` |
+| `char`, `signed char`, `unsigned char` | `char`, which passes the same byte |
 | `bool` | `bool` |
 | `void` result | `void` |
 | `const char*` parameter | `string`, or `string?` when NULL may be passed |
@@ -642,7 +710,7 @@ int main() {
 - C's output functions, such as `puts`, share their buffer with `print` and `println`, so
   output comes out in the order it was written.
 - A C function cannot be named `main`, or start with `cplus_`, which the C+ runtime uses.
-- Not supported yet: pointers, including handles such as `sqlite3*`; structs; `char`;
+- Not supported yet: pointers, including handles such as `sqlite3*`; structs;
   `long double`; functions with a variable number of arguments, such as `printf`;
   callbacks; C variables such as `errno`; and reading declarations from C headers.
 
@@ -688,7 +756,8 @@ if (!found) ...         // found is null
 if (auto u = found) ... // runs with the User inside found
 ```
 
-Strings, vectors and `void` values are not conditions. For a vector, write `!v.empty()`.
+Strings, vectors, chars and `void` values are not conditions. For a vector, write
+`!v.empty()`; for a char, `c != '\0'`.
 
 #### Range-based for loops
 
@@ -708,7 +777,8 @@ for (const Point p : points) total += p.x;
 - The loop goes over the vector as it was when the loop started. Changing the vector in
   the body, even with `push_back` or `clear`, does not affect the loop; in C++ it is
   undefined behavior.
-- Only vectors can be looped over for now.
+- A string can be looped over too: `for (char c : s)` goes over its bytes.
+- Only vectors and strings can be looped over for now.
 
 ---
 
@@ -738,8 +808,11 @@ Precedence and associativity match C++. From tightest to loosest:
 
 Arithmetic and ordering operators take any numbers, converting mixed operands as C++ does
 (see [Implicit conversions](#implicit-conversions)). `%` and the bit operators `~ & | ^ <<
->>` take only `int` and `long`. `+` also joins two strings, and the ordering operators also compare two strings (see [string](#string)).
-`==` and `!=` take any two values of the same type: numbers, `bool`s, strings by
+>>` take only integers. A `char` is an integer here, and is promoted to `int` first, as in
+C++: `c - '0'`, `c & 0x20` and `-c` are `int`s (see [char](#char)). `+` also joins two
+strings, or a string and a char, and the ordering operators also compare two strings (see
+[string](#string)).
+`==` and `!=` take any two values of the same type: numbers, `bool`s, `char`s, strings by
 contents, structs field by field, vectors element by element, and class references by
 identity. They also compare an optional with a value or `null` (see
 [Optionals](#optionals)). Operands are evaluated left
@@ -796,6 +869,8 @@ long biggest = max(total, 0L);
 - `abs`, `min` and `max` also take integers, and give the type that arithmetic on their
   arguments would: `abs(-5)` is the `int` 5, `max(n, 5L)` is a `long`, `min(1, 2.5)` is a
   `double`. `abs` of the smallest `int` or `long` stops the program, as negating it does.
+- A `char` counts as its code, as in other arithmetic: `abs(c)` is an `int`. `min` and
+  `max` of chars only give a `char`: `max('a', c)`.
 - The others never stop the program: `sqrt(-1)` is NaN and `log(0)` is `-inf`.
 - A function of the program, or an `extern "C"` function, with the same name takes the
   place of the built-in one.
@@ -823,7 +898,7 @@ println("{{literal braces}}");
   `{:g}` the shorter of the two, and `{:.3}` 3 significant digits. These work only on
   `float` and `double`. Other format options, such as a width, alignment and `{:x}`, are
   planned.
-- Numbers, `bool`, `string`, structs, class objects and vectors can be printed. A
+- Numbers, `bool`, `char`, `string`, structs, class objects and vectors can be printed. A
   struct prints its fields by name, with strings inside it in quotes:
   `{name: "Ada", born: 1815}`. A vector prints its elements: `[1, 2, 3]`, `["a", "b"]`.
   A class object prints its type name first: `User {name: "Ada", born: 1815}`. All fields
@@ -950,13 +1025,14 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `double` and `float`: literals, IEEE arithmetic, shortest printing, `{:.2f}`, `{:e}`, `{:g}` | implemented |
 | Casts: `int(x)`, `static_cast<int>(x)`, `(int)x`, stopping when the value does not fit | implemented |
 | Math functions from `<cmath>`, `abs`, `min`, `max` | implemented |
-| `extern "C"` functions taking and returning numbers, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
+| `char`: `'a'`, checked `s[i]`, `for (char c : s)`, `push_back`, `pop_back`, `front`, `back`, `string(n, c)`, `<cctype>` functions | implemented |
+| `extern "C"` functions taking and returning numbers, `char`, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
-| Unsigned types, `char` | planned |
+| Unsigned types | planned |
 | Format options for width, alignment and `{:x}`; math constants | planned |
 | Function overloading | planned |
-| Strings: `s[i]` and looping over characters (with `char`), `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
+| Strings: `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
 | `array<T, N>`, `hashmap<K, V>`; vector `insert`, `erase`, iterators | planned |
 | References (`T&`), including `for (auto& x : v)` | planned |
 | Inheritance, `virtual`, `protected:` | planned |

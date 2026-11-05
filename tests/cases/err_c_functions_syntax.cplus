@@ -10,7 +10,6 @@ extern "C" int square(int n) { return n * n; }
 extern "C" unsigned sleep(unsigned seconds);
 extern "C" {
     extern "C" int abs(int);
-    char first(string s);
     static int helper();
     int sum(int values[], int count);
     uint64_t hash(string s);
@@ -36,7 +35,6 @@ int main() {
 // error: a function declared extern "C" is defined in C, so it has no body here
 // error: 'unsigned' is a C type; write `int` here
 // error: extern "C" blocks cannot be nested
-// error: this compiler does not support char types yet
 // error: 'static' does not belong in an extern "C" declaration
 // error: arrive with raw pointers, which are planned
 // error: this compiler does not support C array parameters yet

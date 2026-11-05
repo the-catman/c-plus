@@ -1,0 +1,11 @@
+// pop_back() on an empty string is undefined in C++; here it stops the program.
+int main() {
+    string s = "a";
+    s.pop_back();
+    println("[{}]", s);
+    s.pop_back();
+    return 0;
+}
+// expect: []
+// trap: pop_back() was called on an empty string
+// trap: trap_string_pop_back.cplus:6:7

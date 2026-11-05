@@ -20,6 +20,8 @@ extern "C" {
     double atof(string text);
     double ldexp(double x, int exponent);
     float nextafterf(float from, float to);
+    int putchar(int c);
+    char first_char_of(string text);  // only declared: a C char crosses as a char
 }
 
 int twice(int n) { return n * 2; }
@@ -39,6 +41,13 @@ int main() {
     // expect: true 65
     println("{} {} {}", atof("2.5e3"), ldexp(0.75, 4), nextafterf(1, 2));
     // expect: 2500 12 1.0000001
+
+    // A char converts to the int that C's character functions take. The toupper declared
+    // above takes the place of the built-in one, so it returns an int.
+    print("{} ", toupper('q'));
+    putchar('!');
+    putchar('\n');
+    // expect: 81 !
 
     // Text a C function returns is copied into a string; NULL becomes null for `string?`.
     setenv("CPLUS_TEST_VALUE", "from C", 1);

@@ -12,7 +12,7 @@ int main() {
     int u = undefinedThing;
     return 0;
 }
-// error: math functions are built in: write `sqrt(...)` instead of `std::sqrt(...)`
+// error: it is built in: write `sqrt(...)` instead of `std::sqrt(...)`
 // error: Until then, declare the C function: `extern "C" double atof(string text);`
 // error: math constants are planned. Until then, `acos(-1)` is pi
 // error: 'M_PI' is not declared

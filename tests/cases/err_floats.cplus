@@ -71,8 +71,8 @@ int main() {
 // error: this compiler does not support reading a number from a string yet
 // error: until then, C's `atoi` or `strtol` can be declared with extern "C" and called
 // error: until then, C's `atof` or `strtod` can be declared with extern "C" and called
-// error: 'int(x)' converts a number or a bool, but this is 'int?'
-// error: 'long(x)' converts a number or a bool, but this is 'vector<int>'
+// error: 'int(x)' converts a number, a char or a bool, but this is 'int?'
+// error: 'long(x)' converts a number, a char or a bool, but this is 'vector<int>'
 // error: convert one of its fields or elements instead, e.g. `long(v[0])`
 // error: sqrt() takes a number, but this is 'string'
 // error: C's `atof` can be declared with extern "C" and called

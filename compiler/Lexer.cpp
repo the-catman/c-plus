@@ -19,6 +19,7 @@ const char* tokSpelling(Tok kind) {
         case Tok::IntLit: return "number";
         case Tok::FloatLit: return "number";
         case Tok::StringLit: return "string";
+        case Tok::CharLit: return "character";
 #define X(name, text) \
     case Tok::Kw##name: return text;
             CPLUS_KEYWORDS(X)
@@ -38,6 +39,7 @@ std::string describeToken(const Token& t) {
         case Tok::IntLit: return "number " + t.text;
         case Tok::FloatLit: return "number " + t.text;
         case Tok::StringLit: return "a string";
+        case Tok::CharLit: return "the character " + t.text;
         default: break;
     }
     if (t.kind >= Tok::KwAsync && t.kind <= Tok::KwWhile) return std::string("keyword '") + tokSpelling(t.kind) + "'";
@@ -113,15 +115,7 @@ Token Lexer::next() {
         return atFloat() ? lexFloat() : lexNumber();
     if (std::isalpha((unsigned char)c) || c == '_') return lexIdentOrKeyword();
     if (c == '"') return lexString();
-    if (c == '\'') {
-        Loc loc = locHere();
-        diags_.error(loc, "character literals like 'a' are not supported yet",
-                     "use a string such as \"a\" for now", spec::Status);
-        advance();
-        while (pos_ < src_.size() && peek() != '\'' && peek() != '\n') advance();
-        if (peek() == '\'') advance();
-        return next();
-    }
+    if (c == '\'') return lexChar();
 
     static const struct {
         const char* text;
@@ -160,6 +154,16 @@ Token Lexer::lexIdentOrKeyword() {
     while (std::isalnum((unsigned char)peek()) || peek() == '_') advance();
     std::string text = src_.substr(start, pos_ - start);
     loc.len = (uint32_t)text.size();
+    // C++'s prefixed literals: L'a', u8"text", u"text" and U'a'. C+ text is UTF-8 already.
+    if ((text == "L" || text == "u" || text == "U" || text == "u8") && (peek() == '\'' || peek() == '"')) {
+        bool isChar = peek() == '\'';
+        diags_.error(loc, "C+ has no " + text + (isChar ? "'...' character literals" : "\"...\" string literals"),
+                     isChar ? "a char is one byte; write a plain character literal such as 'a', or a string for "
+                              "text that needs more bytes in UTF-8"
+                            : "strings hold UTF-8 text already; leave out the " + text,
+                     isChar ? spec::CharacterLiterals : spec::StringLiterals);
+        return isChar ? lexChar() : lexString();
+    }
     auto it = keywords.find(text);
     return Token{it == keywords.end() ? Tok::Ident : it->second, loc, text, 0};
 }
@@ -388,36 +392,99 @@ Token Lexer::lexString() {
             value += c;
             continue;
         }
-        Loc escLoc{line_, col_ - 1, 2};
-        char e = pos_ < src_.size() ? advance() : '\0';
-        switch (e) {
-            case 'n': value += '\n'; break;
-            case 't': value += '\t'; break;
-            case 'r': value += '\r'; break;
-            case '0': value += '\0'; break;
-            case '\\': value += '\\'; break;
-            case '"': value += '"'; break;
-            case '\'': value += '\''; break;
-            case 'x': {
-                int v = 0, n = 0;
-                while (n < 2 && std::isxdigit((unsigned char)peek())) {
-                    char h = advance();
-                    v = v * 16 + (std::isdigit((unsigned char)h) ? h - '0' : (std::tolower(h) - 'a' + 10));
-                    ++n;
-                }
-                if (n == 0)
-                    diags_.error(escLoc, "\\x must be followed by hex digits", "write e.g. \\x41 for 'A'",
-                                 spec::StringLiterals);
-                value += (char)v;
-                break;
-            }
-            default:
-                diags_.error(escLoc, std::string("unknown escape sequence '\\") + e + "'",
-                             "valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\' and \\xHH", spec::StringLiterals);
-        }
+        lexEscape(value, spec::StringLiterals);
     }
     loc.len = loc.line == line_ ? col_ - loc.col : 1;
     return Token{Tok::StringLit, loc, value, 0};
+}
+
+// The escape after a backslash, which has been read: `\n`, `\x41`, ... Its byte is
+// added to `value`. Returns false, after reporting it, for an unknown escape.
+bool Lexer::lexEscape(std::string& value, const char* anchor) {
+    Loc escLoc{line_, col_ - 1, 2};
+    char e = pos_ < src_.size() && peek() != '\n' ? advance() : '\0';
+    switch (e) {
+        case 'n': value += '\n'; return true;
+        case 't': value += '\t'; return true;
+        case 'r': value += '\r'; return true;
+        case '0': value += '\0'; return true;
+        case '\\': value += '\\'; return true;
+        case '"': value += '"'; return true;
+        case '\'': value += '\''; return true;
+        case 'x': {
+            int v = 0, n = 0;
+            while (n < 2 && std::isxdigit((unsigned char)peek())) {
+                char h = advance();
+                v = v * 16 + (std::isdigit((unsigned char)h) ? h - '0' : (std::tolower(h) - 'a' + 10));
+                ++n;
+            }
+            if (n == 0) {
+                diags_.error(escLoc, "\\x must be followed by hex digits", "write e.g. \\x41 for 'A'", anchor);
+                return false;
+            }
+            value += (char)v;
+            return true;
+        }
+        default:
+            diags_.error(escLoc, std::string("unknown escape sequence '\\") + e + "'",
+                         "valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\' and \\xHH", anchor);
+            return false;
+    }
+}
+
+// The number of bytes of the UTF-8 sequence starting with `lead`, or 0 if it does not
+// start one.
+static size_t utf8Length(unsigned char lead) {
+    return lead >= 0xF0 && lead < 0xF8 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 0;
+}
+
+// `'a'`, `'\n'`, `'\x41'`: one byte, as a C++ char. Text of more bytes is a string.
+Token Lexer::lexChar() {
+    Loc loc = locHere();
+    size_t start = pos_;
+    advance();  // opening quote
+    std::string value;
+    bool ok = true;
+    while (true) {
+        if (pos_ >= src_.size() || peek() == '\n') {
+            // Take only the quote and the character after it, so that what follows, such
+            // as the ';' in `char c = 'x;`, is still read as code.
+            size_t k = 1;
+            auto at = [&](size_t i) { return start + i < src_.size() ? src_[start + i] : '\n'; };
+            if (at(1) != '\n') k += at(1) == '\\' && at(2) != '\n' ? 2 : 1;
+            col_ = loc.col + (uint32_t)k;
+            pos_ = start + k;
+            loc.len = (uint32_t)k;
+            diags_.error(loc, "this character literal is never closed",
+                         "end it with ' on the same line, as in 'a'. Text goes in double quotes: \"text\"",
+                         spec::CharacterLiterals);
+            return Token{Tok::CharLit, loc, src_.substr(start, k), k > 1 ? (uint64_t)(unsigned char)at(k - 1) : 0};
+        }
+        char c = advance();
+        if (c == '\'') break;
+        if (c == '\\') ok = lexEscape(value, spec::CharacterLiterals) && ok;
+        else value += c;
+    }
+    std::string text = src_.substr(start, pos_ - start);
+    loc.len = (uint32_t)text.size();
+    if (ok && value.empty()) {
+        diags_.error(loc, "a character literal cannot be empty",
+                     "write '\\0' for the zero byte, or \"\" for an empty string", spec::CharacterLiterals);
+    } else if (ok && value.size() > 1) {
+        std::string inner = text.substr(1, text.size() - 2);
+        size_t n = utf8Length((unsigned char)value[0]);
+        bool oneCodePoint = n == value.size();
+        for (size_t i = 1; oneCodePoint && i < n; ++i) oneCodePoint = ((unsigned char)value[i] & 0xC0) == 0x80;
+        if (oneCodePoint)
+            diags_.error(loc, "'" + inner + "' takes " + std::to_string(n) + " bytes in UTF-8, but a char holds one byte",
+                         "write it as a string, \"" + inner + "\", which holds UTF-8 text of any length",
+                         spec::CharacterLiterals);
+        else
+            diags_.error(loc, "a character literal holds one character, but this has " + std::to_string(value.size()),
+                         "write text in double quotes: \"" + inner + "\"", spec::CharacterLiterals);
+    }
+    Token t{Tok::CharLit, loc, text, value.empty() ? 0 : (uint64_t)(unsigned char)value[0]};
+    return t;
 }
 
 }  // namespace cplus

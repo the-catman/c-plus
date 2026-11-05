@@ -15,5 +15,6 @@ int main() {
 // error: the only one is `string::npos`, the value find() returns when nothing is found
 // error: expected a name after 'string::', found ';'
 // error: built-ins need no prefix: write `to_string` instead of `std::to_string`
-// error: character literals like 'a' are not supported yet
+// error: expected 'string' to initialize 'ch', but this is 'char'
+// error: write `string(1, c)` for a string holding the char
 // error: spec: docs/SPEC.md#string

@@ -1,0 +1,11 @@
+// Every s[i] is checked. Unlike C++, s[s.size()] is out of range too.
+int main() {
+    string s = "abc";
+    println("{}", s[2]);
+    long i = s.size();
+    println("{}", s[i]);
+    return 0;
+}
+// expect: c
+// trap: index 3 is out of range for a string of size 3
+// trap: trap_string_index.cplus:6:20

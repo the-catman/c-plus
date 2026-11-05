@@ -1,0 +1,11 @@
+// A floating-point value converted to a char drops its fraction, and must then fit.
+int main() {
+    double x = 65.9;
+    println("{}", char(x));
+    x = -1.5;
+    println("{}", char(x));
+    return 0;
+}
+// expect: A
+// trap: char(x) was given -1.5, which does not fit in a char
+// trap: trap_char_float_cast.cplus:6:19

@@ -1,0 +1,11 @@
+// string(count, c) needs a count of at least 0.
+int main() {
+    int width = 2;
+    println("[{}]", string(width, '*'));
+    width -= 3;
+    string pad = string(width, ' ');
+    return 0;
+}
+// expect: [**]
+// trap: string(count, c) was given the negative count -1
+// trap: trap_string_fill.cplus:6:18

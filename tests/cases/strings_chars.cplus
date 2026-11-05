@@ -1,0 +1,95 @@
+// The chars of a string: s[i], loops over the bytes, and the methods that take or
+// return one char. Positions are byte positions, as in C++.
+class Note {
+public:
+    string text;
+    Note(string t) : text(t) {}
+};
+
+string shout(string s) {
+    for (long i = 0; i < s.size(); i++) s[i] = toupper(s[i]);
+    return s;
+}
+
+int main() {
+    string s = "hello";
+    println("{} {} {}", s[0], s[s.size() - 1], "abc"[1]);
+    // expect: h o b
+
+    // Changing a char changes only this string: copies keep their own text.
+    string copy = s;
+    s[0] = 'j';
+    s[1]++;
+    s[4] -= 1;
+    println("{} {} {}", s, copy, shout(copy));
+    // expect: jflln hello HELLO
+    string literal = "same";
+    string other = literal;
+    other[0] = 'n';
+    println("{} {}", literal, other);
+    // expect: same name
+
+    // A substring shares the bytes of its string until one of them changes.
+    string line = "key=value";
+    string key = line.substr(0, 3);
+    key[0] = 'K';
+    println("{} {}", line, key);
+    // expect: key=value Key
+
+    // Chars in a field of an object, and in a vector of strings.
+    Note n = Note("draft");
+    n.text[0] = 'D';
+    vector<string> words = {"one", "two"};
+    words[1][0] = 'T';
+    println("{} {}", n.text, words);
+    // expect: Draft ["one", "Two"]
+
+    // Looping over a string goes over its bytes.
+    int vowels = 0;
+    for (char c : "programming language") {
+        if (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u') vowels++;
+    }
+    println("{}", vowels);
+    // expect: 7
+    int value = 0;
+    for (auto c : "4096") value = value * 10 + (c - '0');
+    println("{}", value + 1);
+    // expect: 4097
+    string word = "abc";
+    for (char c : word) word += c;  // the loop goes over the string as it was
+    println("{}", word);
+    // expect: abcabc
+
+    // Adding chars, as with std::string.
+    string built;
+    built += 'x';
+    built.push_back('y');
+    built = built + 'z' + "!";
+    built = '>' + built;
+    println("{} {} {}", built, built.front(), built.back());
+    // expect: >xyz! > !
+    built.pop_back();
+    built.pop_back();
+    println("{} {}", built, built.size());
+    // expect: >xy 3
+    built += "w";
+    println("{}", built);
+    // expect: >xyw
+
+    // string(count, c), and the methods that take a char as the text.
+    println("[{}] [{}] [{}]", string(3, '-'), string(0, 'x'), string());
+    // expect: [---] [] []
+    string path = "a/b/c";
+    println("{} {} {}", path.find('/'), path.find('/', 2), path.find('x'));
+    // expect: 1 3 -1
+    println("{} {} {}", path.contains('b'), path.starts_with('a'), path.ends_with('/'));
+    // expect: true true false
+
+    // Non-ASCII text is UTF-8, so one letter can take several chars.
+    string e = "é";
+    println("{} {} {}", e.size(), int(e[0]), int(e[1]));
+    // expect: 2 195 169
+    println("{}", string("copy"));
+    // expect: copy
+    return 0;
+}

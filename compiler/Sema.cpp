@@ -25,8 +25,12 @@ static bool canConvert(const Type* from, const Type* to) {
     if (from->is(K::Int) && to->is(K::Long)) return true;      // widening never loses information
     if (from->isInteger() && to->isFloating()) return true;    // as in C++; a very large long is rounded
     if (from->is(K::Float) && to->is(K::Double)) return true;  // never loses information
+    if (from->is(K::Char) && to->isNumber()) return true;      // its code, from 0 to 255, as in C++
     return from->isNumber() && to->is(K::Bool);                // as in C++: zero is false, anything else true
 }
+
+// As in C++, arithmetic on a char works on its code, as an int.
+static const Type* promoted(const Type* t) { return t->is(K::Char) ? Type::intTy() : t; }
 
 static const Type* commonInteger(const Type* a, const Type* b) {
     return (a->is(K::Long) || b->is(K::Long)) ? Type::longTy() : Type::intTy();
@@ -35,6 +39,8 @@ static const Type* commonInteger(const Type* a, const Type* b) {
 // The type arithmetic on `a` and `b` happens in, as in C++: double, then float, then
 // the wider integer.
 static const Type* commonNumber(const Type* a, const Type* b) {
+    a = promoted(a);
+    b = promoted(b);
     if (a->is(K::Double) || b->is(K::Double)) return Type::doubleTy();
     if (a->is(K::Float) || b->is(K::Float)) return Type::floatTy();
     return commonInteger(a, b);
@@ -129,6 +135,7 @@ static std::string placeName(const VarDecl* v, const std::string& path) {
 }
 static std::string zeroOf(const Type* t) {
     if (t->is(K::Bool)) return "false";
+    if (t->is(K::Char)) return "'\\0'";
     if (t->is(K::String)) return "\"\"";
     if (t->isStruct()) return "{}";
     if (t->isClass()) return std::string(t->name) + "(...)";
@@ -542,7 +549,7 @@ void Sema::checkStructs(Program& program) {
 // copy that ends in a zero byte, and a returned `const char*` becomes a string.
 void Sema::checkExternFunction(FuncDecl& fn) {
     auto check = [&](const Type* t, Loc loc, bool isReturn) {
-        if (t->isNumber() || t->is(K::Bool) || t->is(K::String) || t->isError()) return;
+        if (t->isNumber() || t->is(K::Char) || t->is(K::Bool) || t->is(K::String) || t->isError()) return;
         if (t->isOptional() && t->elem->is(K::String)) return;
         if (isReturn && t->is(K::Void)) return;
         if (t->is(K::Void)) {
@@ -551,10 +558,10 @@ void Sema::checkExternFunction(FuncDecl& fn) {
                          spec::CFunctions);
             return;
         }
-        std::string message = isReturn ? "a C function can return void, a number, bool, string or string?, but "
-                                         "this is " + q(t)
-                                       : "a C function can take a number, bool, string or string?, but this "
-                                         "parameter is " + q(t);
+        std::string message = isReturn ? "a C function can return void, a number, char, bool, string or string?, "
+                                         "but this is " + q(t)
+                                       : "a C function can take a number, char, bool, string or string?, but "
+                                         "this parameter is " + q(t);
         std::string help;
         if (t->isStruct())
             message = "this compiler does not support passing structs to or from C functions yet",
@@ -682,6 +689,7 @@ void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
     std::string help;
     if (t->is(K::Void)) help = "this expression produces no value";
     else if (t->isOptional()) help = boolOptionalHelp(spelled(e, "b"));
+    else if (t->is(K::Char)) help = "a char is not a condition; compare it, e.g. `c != '\\0'` or `c == 'y'`";
     else if (t->isVector() || t->is(K::String))
         help = std::string("to check whether it has ") + (t->isVector() ? "elements" : "any text") + ", write `!" +
                (e.kind == Expr::Kind::Name ? static_cast<NameExpr&>(e).name
@@ -848,15 +856,14 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
     const Type* elem = Type::error();
     if (rangeType->isVector()) {
         elem = rangeType->elem;
+    } else if (rangeType->is(K::String)) {
+        elem = Type::charTy();  // its bytes, as in C++
     } else if (!rangeType->isError()) {
         std::string n = spelled(*st.range, "items");
-        diags_.error(st.range->loc, "a range-based for loop goes over a vector, but this is " + q(rangeType),
+        diags_.error(st.range->loc, "a range-based for loop goes over a vector or a string, but this is " + q(rangeType),
                      rangeType->isOptional() ? "it may be null; unwrap it first: `if (auto v = " + n +
                                                    ") for (auto x : v) ...`"
-                     : rangeType->is(K::String)
-                         ? "looping over the characters of a string needs the `char` type, which is planned; until "
-                           "then loop over the positions and use `s.substr(i, 1)`"
-                         : "write the vector to loop over after the ':'",
+                                             : "write the vector or string to loop over after the ':'",
                      spec::RangeFor);
         rangeType = Type::error();
     }
@@ -905,6 +912,20 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         help = e.kind == Expr::Kind::IntLit ? "this number is larger than an int can hold; use long instead"
                                             : "a long may not fit in an int. Use long here, or write `int(x)`, which "
                                               "stops the program if the value does not fit";
+    } else if (target->is(K::Char) && (from->isInteger() || from->is(K::String) || from->isFloating())) {
+        if (e.kind == Expr::Kind::StringLit && static_cast<const StringLitExpr&>(e).value.size() == 1)
+            help = "'" + static_cast<const StringLitExpr&>(e).value + "' in single quotes is a char; \"" +
+                   static_cast<const StringLitExpr&>(e).value + "\" is a string";
+        else if (from->is(K::String))
+            help = "a string does not convert to a char; `s[i]` is the char at position i";
+        else
+            help = "a number does not convert to a char by itself. Write a character such as 'A', or `char(n)`, "
+                   "which stops the program unless n is from 0 to 255. To step to the next character, write "
+                   "`c++` or `c += 1`";
+    } else if (from->is(K::Char) && target->is(K::String)) {
+        help = "write `string(1, c)` for a string holding the char";
+    } else if (from->is(K::Char) && target->is(K::Bool)) {
+        help = "a char is not a bool; compare it, e.g. `c != '\\0'`";
     } else if (from->isFloating() && target->isInteger()) {
         help = std::string("a ") + from->name + " does not convert to " + (target->is(K::Int) ? "an " : "a ") +
                target->name + " by itself, since that would drop the fraction. Write `" + target->name +
@@ -1107,25 +1128,26 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
                          "unwrap it first: `if (auto v = " + n + ") ... v[i]`", spec::Optionals);
             return e.type;
         }
-        if (baseType->is(K::String)) {
-            diags_.error(e.loc, "this compiler does not support indexing strings yet",
-                         "`s[i]` needs the `char` type, which is planned; until then `s.substr(i, 1)` is the "
-                         "character at position i, as a string",
-                         spec::Strings);
+        bool str = baseType->is(K::String);
+        if (!str && !baseType->isVector()) {
+            diags_.error(e.loc, "'[ ]' picks an element of a vector or a char of a string, but this is " + q(baseType),
+                         baseType->hasFields() ? "read a field with '.', e.g. `p.x`" : "", spec::Vectors);
             return e.type;
         }
-        if (!baseType->isVector()) {
-            diags_.error(e.loc, "'[ ]' picks an element of a vector, but this is " + q(baseType), "", spec::Vectors);
-            return e.type;
-        }
+        const char* what = str ? "a string" : "a vector";
         if (!indexType->isError() && !indexType->isInteger())
-            diags_.error(ix.index->loc, "a vector index must be an int or long, but this is " + q(indexType), "",
-                         spec::Vectors);
+            diags_.error(ix.index->loc, std::string("an index into ") + what + " must be an int or long, but this is " +
+                                            q(indexType),
+                         indexType->is(K::Char) ? "convert the char to its code first: `int(c)`"
+                         : indexType->isFloating() ? "convert it first: `int(x)`"
+                                                   : "",
+                         str ? spec::Strings : spec::Vectors);
         else if (ix.index->kind == Expr::Kind::IntLit && static_cast<IntLitExpr&>(*ix.index).value < 0)
-            diags_.error(ix.index->loc, "a vector index cannot be negative",
-                         "elements are numbered from 0; the last one is `v[v.size() - 1]` or `v.back()`",
-                         spec::Vectors);
-        return e.type = baseType->elem;
+            diags_.error(ix.index->loc, std::string("an index into ") + what + " cannot be negative",
+                         str ? "positions are numbered from 0; the last char is `s[s.size() - 1]` or `s.back()`"
+                             : "elements are numbered from 0; the last one is `v[v.size() - 1]` or `v.back()`",
+                         str ? spec::Strings : spec::Vectors);
+        return e.type = str ? Type::charTy() : baseType->elem;
     }
     if (e.kind != Expr::Kind::Member) return checkExpr(e, flow);
 
@@ -1246,15 +1268,19 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
     const VarDecl* rootVar = rootVariable(*root);
     if (!rootVar) return false;  // an unknown name, already reported
     bool element = containsIndex(target);
+    bool inString = target.kind == Expr::Kind::Index && static_cast<const IndexExpr&>(target).base->type &&
+                    static_cast<const IndexExpr&>(target).base->type->is(K::String);
+    const char* parts = inString ? "chars" : "elements";
     if (rootVar == thisVar() && fn_->isConst) {
-        std::string what = element ? "the elements of " + q(outerVectorName(target)) : q(var ? path : rootVar->name);
+        std::string what = element ? std::string("the ") + parts + " of " + q(outerVectorName(target))
+                                   : q(var ? path : rootVar->name);
         diags_.error(target.loc, what + " cannot be " + action + " inside const method " + q(fn_->name),
                      "remove `const` after the parameter list of " + q(fn_->name) + " if it needs to change fields",
                      spec::Methods);
         return false;
     }
     if (rootVar->isConst) {
-        std::string what = element ? "its elements" : "its fields";
+        std::string what = element ? std::string("its ") + parts : "its fields";
         if (!element && path.empty())
             diags_.error(target.loc, q(rootVar->name) + " is const and cannot be " + action,
                          "remove `const` from its declaration if it needs to change", spec::Variables);
@@ -1318,6 +1344,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             result = static_cast<FloatLitExpr&>(e).isFloat ? Type::floatTy() : Type::doubleTy();
             break;
         case Expr::Kind::Cast: result = checkCast(static_cast<CastExpr&>(e), flow); break;
+        case Expr::Kind::CharLit: result = Type::charTy(); break;
         case Expr::Kind::BoolLit: result = Type::boolTy(); break;
         case Expr::Kind::StringLit: result = Type::stringTy(); break;
         case Expr::Kind::NullLit: result = Type::nullTy(); break;
@@ -1354,10 +1381,14 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (u.op == UnOp::Not) {
                 if (!usableAsCondition(t))
                     diags_.error(u.operand->loc, "'!' needs a bool, a number or an optional, but this is " + q(t),
-                                 t->isOptional() ? boolOptionalHelp(spelled(*u.operand, "b")) : "", spec::Conditions);
+                                 t->isOptional()  ? boolOptionalHelp(spelled(*u.operand, "b"))
+                                 : t->is(K::Char) ? "compare the char instead, e.g. `c == '\\0'`"
+                                                  : "",
+                                 spec::Conditions);
                 result = Type::boolTy();
             } else {
                 const char* sym = u.op == UnOp::Neg ? "-" : u.op == UnOp::Plus ? "+" : "~";
+                t = promoted(t);  // `-c` and `+c` are ints, as in C++
                 if (u.op == UnOp::BitNot ? !t->isInteger() : !t->isNumber()) {
                     diags_.error(u.operand->loc,
                                  std::string("'") + sym + "' needs " + (u.op == UnOp::BitNot ? "an int or a long" : "a number") +
@@ -1420,7 +1451,13 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             // Strings are joined with + and ordered by their bytes, as in C++.
             bool lStr = l->is(K::String), rStr = r->is(K::String);
             if ((lStr || rStr) && (b.op == BinOp::Add || comparison)) {
-                if (lStr && rStr) {
+                // `s + c` and `c + s` add one character, as with std::string.
+                if ((lStr && rStr) || (b.op == BinOp::Add && (l->is(K::Char) || r->is(K::Char)))) {
+                    if (!lStr || !rStr) {
+                        b.operandType = Type::stringTy();
+                        result = Type::stringTy();
+                        break;
+                    }
                     b.operandType = l;
                     result = comparison ? Type::boolTy() : l;
                     break;
@@ -1428,17 +1465,21 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 const Expr* other = lStr ? b.rhs.get() : b.lhs.get();
                 const Type* ot = lStr ? r : l;
                 if (b.op == BinOp::Add)
-                    diags_.error(other->loc, "'+' joins two strings, but this is " + q(ot), textHelp(ot), spec::Strings);
+                    diags_.error(other->loc, "'+' joins a string with a string or a char, but this is " + q(ot),
+                                 textHelp(ot), spec::Strings);
                 else
                     diags_.error(other->loc, std::string("'") + sym + "' compares two strings, but this is " + q(ot),
-                                 ot->isNumber() ? "turn the number into a string first with `to_string(n)`" : "",
+                                 ot->isNumber()    ? "turn the number into a string first with `to_string(n)`"
+                                 : ot->is(K::Char) ? "compare chars with chars, e.g. `s[0] == 'a'`, or strings with "
+                                                     "strings: `s == \"a\"`"
+                                                   : "",
                                  spec::Strings);
                 if (comparison) result = Type::boolTy();
                 break;
             }
             bool integerOnly = b.op == BinOp::Rem || b.op == BinOp::Shl || b.op == BinOp::Shr ||
                                b.op == BinOp::BitAnd || b.op == BinOp::BitOr || b.op == BinOp::BitXor;
-            if (integerOnly && l->isNumber() && r->isNumber() && (l->isFloating() || r->isFloating())) {
+            if (integerOnly && l->isArithmetic() && r->isArithmetic() && (l->isFloating() || r->isFloating())) {
                 const Expr* side = l->isFloating() ? b.lhs.get() : b.rhs.get();
                 diags_.error(side->loc,
                              std::string("'") + sym + "' needs an int or a long, but this is " +
@@ -1449,9 +1490,9 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                              spec::Operators);
                 break;
             }
-            if (!l->isNumber() || !r->isNumber()) {
-                const Type* bad = !l->isNumber() ? l : r;
-                const Expr* side = !l->isNumber() ? b.lhs.get() : b.rhs.get();
+            if (!l->isArithmetic() || !r->isArithmetic()) {
+                const Type* bad = !l->isArithmetic() ? l : r;
+                const Expr* side = !l->isArithmetic() ? b.lhs.get() : b.rhs.get();
                 std::string help;
                 if (bad->isOptional()) help = unwrapHelp(spelled(*side));
                 else if (bad->isNull()) help = "null can only be compared with == and !=";
@@ -1464,9 +1505,9 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 break;
             }
             if (b.op == BinOp::Shl || b.op == BinOp::Shr) {
-                b.operandType = l;  // a shift keeps the type of its left side
-                result = l;
-                checkShiftAmount(l, b.lhs.get(), *b.rhs);
+                b.operandType = promoted(l);  // a shift keeps the type of its left side
+                result = b.operandType;
+                checkShiftAmount(b.operandType, b.lhs.get(), *b.rhs);
             } else {
                 b.operandType = commonNumber(l, r);
                 result = comparison ? Type::boolTy() : b.operandType;
@@ -1488,15 +1529,25 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 std::string opName = std::string("'") + binOpSpelling(*a.op) + "='";
                 const Type* vt = a.value->type;
                 if (t->is(K::String) && *a.op == BinOp::Add) {
-                    if (!vt->isError() && !vt->is(K::String))
-                        diags_.error(a.value->loc, "'+=' on a string adds another string, but this is " + q(vt),
+                    if (!vt->isError() && !vt->is(K::String) && !vt->is(K::Char))
+                        diags_.error(a.value->loc, "'+=' on a string adds a string or a char, but this is " + q(vt),
                                      textHelp(vt, "+="), spec::Strings);
+                } else if (t->is(K::Char)) {
+                    // `c += 1` and `c -= 1` step through the characters; the result must be a char.
+                    if (*a.op != BinOp::Add && *a.op != BinOp::Sub)
+                        diags_.error(a.target->loc, opName + " cannot be used with 'char'",
+                                     "a char steps with `c += n` and `c -= n`; for other arithmetic, convert it to its "
+                                     "code first: `int(c)`",
+                                     spec::Char);
+                    else if (!vt->isError() && !vt->isInteger() && !vt->is(K::Char))
+                        diags_.error(a.value->loc, opName + " on a char needs an int or a long, but this is " + q(vt),
+                                     vt->isFloating() ? "convert it first: `int(x)`" : "", spec::Char);
                 } else if (t->is(K::String))
                     diags_.error(a.target->loc, opName + " cannot be used with 'string'",
                                  "the only compound assignment on strings is +=, which appends", spec::Strings);
                 else if (!t->isError() && !t->isNumber())
                     diags_.error(a.target->loc, opName + " needs a number, but this is " + q(t), "", spec::Operators);
-                else if (!a.value->type->isError() && !a.value->type->isNumber())
+                else if (!a.value->type->isError() && !a.value->type->isArithmetic())
                     diags_.error(a.value->loc, opName + " needs a number, but this is " + q(a.value->type), "",
                                  spec::Operators);
                 else if ((*a.op == BinOp::Rem || *a.op == BinOp::Shl || *a.op == BinOp::Shr || *a.op == BinOp::BitAnd ||
@@ -1527,7 +1578,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             flow = merge(a, b);
             if (x->isError() || y->isError()) break;
             if (x == y) result = x;
-            else if (x->isNumber() && y->isNumber()) result = commonNumber(x, y);
+            else if (x->isArithmetic() && y->isArithmetic()) result = commonNumber(x, y);
             else if (const Type* opt = optionalOfBranches(x, y)) result = opt;
             else
                 diags_.error(t.loc, "the two branches of ?: have different types, " + q(x) + " and " + q(y),
@@ -1543,8 +1594,8 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             const Type* t = i.target->type ? i.target->type : Type::error();
             if (ok) {
                 if (var) requireAssigned(flow, var, path, t, i.target->loc);
-                if (!t->isNumber())
-                    diags_.error(i.target->loc, std::string("'") + sym + "' needs a number, but this is " + q(t),
+                if (!t->isNumber() && !t->is(K::Char))
+                    diags_.error(i.target->loc, std::string("'") + sym + "' needs a number or a char, but this is " + q(t),
                                  "", spec::Operators);
             }
             result = t;
@@ -1611,6 +1662,78 @@ const MathInfo* findMath(const std::string& name) {
 
 bool isMathFunction(const std::string& name) { return findMath(name) != nullptr; }
 
+namespace {
+// The <cctype> functions, for one char. The tests return a bool, and toupper and tolower a
+// char. They know only ASCII, like C's in the default "C" locale.
+struct CharFnInfo {
+    const char* name;
+    CharFn fn;
+};
+constexpr CharFnInfo kCharFns[] = {
+    {"isalpha", CharFn::IsAlpha}, {"isdigit", CharFn::IsDigit}, {"isalnum", CharFn::IsAlnum},
+    {"isspace", CharFn::IsSpace}, {"isupper", CharFn::IsUpper}, {"islower", CharFn::IsLower},
+    {"ispunct", CharFn::IsPunct}, {"isxdigit", CharFn::IsXDigit}, {"toupper", CharFn::ToUpper},
+    {"tolower", CharFn::ToLower},
+};
+const CharFnInfo* findCharFn(const std::string& name) {
+    for (auto& f : kCharFns)
+        if (name == f.name) return &f;
+    return nullptr;
+}
+}  // namespace
+
+bool isCharFunction(const std::string& name) { return findCharFn(name) != nullptr; }
+
+// `isdigit(c)`, `toupper(c)`, ... A function of the program with the same name takes
+// their place, as with the math functions.
+const Type* Sema::checkCharFn(CallExpr& call, Flow& flow) {
+    const CharFnInfo& f = *findCharFn(call.callee);
+    call.builtin = Builtin::CharFn;
+    call.charFn = f.fn;
+    bool converts = f.fn == CharFn::ToUpper || f.fn == CharFn::ToLower;
+    const Type* result = converts ? Type::charTy() : Type::boolTy();
+    if (call.args.size() != 1) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, call.callee + "() takes one argument but " + std::to_string(call.args.size()) +
+                                   (call.args.size() == 1 ? " was" : " were") + " given",
+                     "write `" + call.callee + "(c)` for a char c", spec::Char);
+        return result;
+    }
+    Expr& arg = *call.args[0];
+    const Type* t = checkExpr(arg, flow);
+    if (!t->isError() && !t->is(K::Char))
+        diags_.error(arg.loc, call.callee + "() takes a char, but this is " + q(t),
+                     t->is(K::String)  ? "pass one char of it, e.g. `" + call.callee + "(s[0])`"
+                     : t->isInteger()  ? "C's version takes a char's code as an int; here pass the char itself, or "
+                                         "convert the code with `char(n)`"
+                     : t->isOptional() ? unwrapHelp(spelled(arg))
+                                       : "pass a char, such as 'a' or `s[i]`",
+                     spec::Char);
+    return result;
+}
+
+// `string(count, c)`: count copies of the char c, as in C++. `string()` is empty.
+const Type* Sema::checkStringFill(CallExpr& call, Flow& flow) {
+    call.builtin = Builtin::StringFill;
+    if (call.args.size() != 2 && !call.args.empty()) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, "'string' is built from no arguments or two, but " + std::to_string(call.args.size()) +
+                                   " were given",
+                     "write `string(count, c)` for count copies of the char c, e.g. `string(3, '-')`", spec::Strings);
+        return Type::stringTy();
+    }
+    if (call.args.empty()) return Type::stringTy();
+    checkValue(*call.args[0], flow, Type::longTy(), "as the count for string(count, c)");
+    Expr& c = *call.args[1];
+    bool oneLetter = c.kind == Expr::Kind::StringLit && static_cast<StringLitExpr&>(c).value.size() == 1;
+    if (checkExpr(c, flow)->is(K::String) && !oneLetter)
+        diags_.error(c.loc, "string(count, c) repeats one char, but this is 'string'",
+                     "build repeated text with a loop: `for (int i = 0; i < n; i++) s += text;`", spec::Strings);
+    else
+        requireConvertible(c, Type::charTy(), "as the char for string(count, c)");
+    return Type::stringTy();
+}
+
 // `sqrt(x)`, `pow(a, b)`, `max(a, b)`, ... A function of the program with the same name
 // takes its place, so `extern "C" double sqrt(double)` still works.
 const Type* Sema::checkMath(CallExpr& call, Flow& flow) {
@@ -1627,14 +1750,14 @@ const Type* Sema::checkMath(CallExpr& call, Flow& flow) {
         return m.kind == MathKind::Test ? Type::boolTy() : Type::error();
     }
     const Type* common = nullptr;
-    bool allFloat = true, ok = true;
+    bool allFloat = true, allChar = true, ok = true;
     for (auto& a : call.args) {
         const Type* t = checkExpr(*a, flow);
         if (t->isError()) {
             ok = false;
             continue;
         }
-        if (!t->isNumber()) {
+        if (!t->isArithmetic()) {  // a char counts as its code, as in C++
             std::string help = t->isOptional()   ? unwrapHelp(spelled(*a))
                                : t->is(K::Bool)   ? "a bool is not a number here; write `int(b)` for 1 or 0"
                                : t->is(K::String) ? "this compiler cannot read a number from a string yet; C's `atof` "
@@ -1647,11 +1770,13 @@ const Type* Sema::checkMath(CallExpr& call, Flow& flow) {
             continue;
         }
         allFloat = allFloat && t->is(K::Float);
-        common = common ? commonNumber(common, t) : t;
+        allChar = allChar && t->is(K::Char);
+        common = common ? commonNumber(common, t) : promoted(t);
     }
     if (m.kind == MathKind::Test) return Type::boolTy();
     if (!ok) return Type::error();
-    if (m.kind == MathKind::Same) return common;
+    // `max('a', c)` is a char, as with std::max; `abs(c)` is an int.
+    if (m.kind == MathKind::Same) return allChar && m.fn != MathFn::Abs ? Type::charTy() : common;
     return allFloat ? Type::floatTy() : Type::doubleTy();
 }
 
@@ -1659,6 +1784,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (call.vectorType) return checkVectorConstruction(call, flow);
     if (call.callee == "println" || call.callee == "print" || call.callee == "format") return checkPrint(call, flow);
     if (call.callee == "to_string") return checkToString(call, flow);
+    if (call.callee == "string") return checkStringFill(call, flow);
     Loc nameLoc = call.loc;
     nameLoc.len = (uint32_t)call.callee.size();
 
@@ -1687,6 +1813,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
 
     auto it = funcs_.find(call.callee);
     if (it == funcs_.end() && findMath(call.callee)) return checkMath(call, flow);
+    if (it == funcs_.end() && findCharFn(call.callee)) return checkCharFn(call, flow);
     if (it == funcs_.end()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         std::string help;
@@ -2009,7 +2136,11 @@ const Type* Sema::checkToString(CallExpr& call, Flow& flow) {
     const Type* t = checkExpr(*call.args[0], flow);
     if (!t->isError() && !t->isNumber())
         diags_.error(call.args[0]->loc, "to_string() takes a number, but this is " + q(t),
-                     t->is(K::String) ? "it is already a string" : textHelp(t), spec::Strings);
+                     t->is(K::String) ? "it is already a string"
+                     : t->is(K::Char) ? "in C++, to_string(c) gives the code of the char, such as \"97\". Write "
+                                        "`string(1, c)` for the char itself, or `to_string(int(c))` for its code"
+                                      : textHelp(t),
+                     spec::Strings);
     return Type::stringTy();
 }
 
@@ -2019,26 +2150,32 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     const Type* from = checkExpr(*c.operand, flow);
     const Type* to = c.target;
     std::string cast = std::string(to->name) + "(x)";
-    if (from->isError()) return to->isNumber() || to->is(K::Bool) ? to : Type::error();
+    bool castable = to->isNumber() || to->is(K::Char) || to->is(K::Bool);
+    if (from->isError()) return castable ? to : Type::error();
+    if (to->is(K::String) && from->is(K::String)) return to;  // `string("text")`, as in C++: a copy
     if (to->is(K::String)) {
         diags_.error(c.loc, "a cast cannot turn a value into a string",
-                     from->isNumber() ? "write `to_string(x)`, or `format(\"{}\", x)`"
-                                      : "write `format(\"{}\", x)`, which turns any value that can be printed into "
-                                        "a string",
+                     from->isNumber()   ? "write `to_string(x)`, or `format(\"{}\", x)`"
+                     : from->is(K::Char) ? "write `string(1, c)` for a string holding the char"
+                                         : "write `format(\"{}\", x)`, which turns any value that can be printed "
+                                           "into a string",
                      spec::Casts);
         return Type::stringTy();
     }
-    if (!to->isNumber() && !to->is(K::Bool)) {
-        diags_.error(c.loc, "a cast converts between numbers and bool, but this converts to " + q(to),
+    if (!castable) {
+        diags_.error(c.loc, "a cast converts between numbers, char and bool, but this converts to " + q(to),
                      to->isOptional() && canConvert(from, to) ? "no cast is needed: a value converts to an optional "
                                                                 "by itself"
-                                                              : "a cast can only convert to int, long, float, double "
-                                                                "or bool",
+                                                              : "a cast can only convert to int, long, float, double, "
+                                                                "char or bool",
                      spec::Casts);
         return to;
     }
-    if (from->isNumber() || from->is(K::Bool)) return to;
-    if (from->is(K::String))
+    if (from->isNumber() || from->is(K::Char) || from->is(K::Bool)) return to;
+    if (from->is(K::String) && to->is(K::Char))
+        diags_.error(c.loc, "a cast cannot turn a string into a char",
+                     "`s[i]` is the char at position i of a string, and 'a' in single quotes is a char", spec::Casts);
+    else if (from->is(K::String))
         diags_.error(c.loc, "this compiler does not support reading a number from a string yet",
                      to->is(K::Bool)      ? "compare the text instead, e.g. `s == \"true\"`"
                      : to->isFloating()   ? "until then, C's `atof` or `strtod` can be declared with extern \"C\" "
@@ -2047,10 +2184,10 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
                                             "and called",
                      spec::Status);
     else
-        diags_.error(c.operand->loc, "'" + cast + "' converts a number or a bool, but this is " + q(from),
+        diags_.error(c.operand->loc, "'" + cast + "' converts a number, a char or a bool, but this is " + q(from),
                      from->isOptional() ? unwrapHelp(spelled(*c.operand))
-                                        : "only a number or a bool can be cast; convert one of its fields or "
-                                          "elements instead, e.g. `" + std::string(to->name) + "(v[0])`",
+                                        : "only a number, a char or a bool can be cast; convert one of its fields "
+                                          "or elements instead, e.g. `" + std::string(to->name) + "(v[0])`",
                      spec::Casts);
     return to;
 }
@@ -2074,9 +2211,14 @@ const StringMethodInfo kStringMethods[] = {
     {"starts_with", StrMethod::StartsWith, "starts_with(text)", 1, 1, true, false},
     {"ends_with", StrMethod::EndsWith, "ends_with(text)", 1, 1, true, false},
     {"clear", StrMethod::Clear, "clear()", 0, 0, false, true},
+    {"push_back", StrMethod::PushBack, "push_back(c)", 1, 1, false, true},
+    {"pop_back", StrMethod::PopBack, "pop_back()", 0, 0, false, true},
+    {"front", StrMethod::Front, "front()", 0, 0, false, false},
+    {"back", StrMethod::Back, "back()", 0, 0, false, false},
 };
 const char* kStringMethodList =
-    "the string methods today are size, length, empty, substr, find, contains, starts_with, ends_with and clear";
+    "the string methods today are size, length, empty, substr, find, contains, starts_with, ends_with, clear, "
+    "push_back, pop_back, front and back";
 
 std::string argumentCount(size_t min, size_t max) {
     if (max == 0) return "no arguments";
@@ -2094,11 +2236,9 @@ const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         const std::string& n = call.name;
         std::string notYet = "this compiler does not support " + n + "() on strings yet";
-        if (n == "push_back" || n == "pop_back" || n == "front" || n == "back" || n == "at")
-            diags_.error(call.loc, notYet,
-                         "it works with single characters, which need the `char` type; until then `s += \"x\"` "
-                         "appends and `s.substr(i, 1)` reads one character",
-                         spec::Status);
+        if (n == "at")
+            diags_.error(call.loc, "'string' has no method named 'at'",
+                         "write `s[i]`, which always checks that i is a position in the string", spec::Strings);
         else if (n == "append")
             diags_.error(call.loc, notYet, "write `s += text`", spec::Status);
         else if (n == "insert" || n == "erase" || n == "replace" || n == "rfind" || n == "compare" ||
@@ -2125,10 +2265,23 @@ const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
                      "write `s." + std::string(info->usage) + "`", spec::Strings);
     } else {
         for (size_t i = 0; i < call.args.size(); ++i) {
-            bool text = info->takesText && i == 0;
+            bool text = info->takesText && i == 0;  // a string, or one char, as in C++
             std::string what = text ? "for " : info->method == StrMethod::Substr && i == 1 ? "as the length for "
                                                                                              : "as the position for ";
-            checkValue(*call.args[i], flow, text ? Type::stringTy() : Type::longTy(), what + info->name + "()");
+            if (info->method == StrMethod::PushBack) {
+                Expr& arg = *call.args[i];
+                bool oneLetter = arg.kind == Expr::Kind::StringLit && static_cast<StringLitExpr&>(arg).value.size() == 1;
+                if (checkExpr(arg, flow)->is(K::String) && !oneLetter)
+                    diags_.error(arg.loc, "push_back() adds one char, but this is 'string'",
+                                 "write `s += text` to add a string", spec::Strings);
+                else
+                    requireConvertible(arg, Type::charTy(), "for push_back()");
+            } else if (text) {
+                if (!checkExpr(*call.args[i], flow)->is(K::Char))
+                    requireConvertible(*call.args[i], Type::stringTy(), what + info->name + "()");
+            } else {
+                checkValue(*call.args[i], flow, Type::longTy(), what + info->name + "()");
+            }
         }
     }
     switch (info->method) {
@@ -2139,6 +2292,8 @@ const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
         case StrMethod::StartsWith:
         case StrMethod::EndsWith: return Type::boolTy();
         case StrMethod::Substr: return Type::stringTy();
+        case StrMethod::Front:
+        case StrMethod::Back: return Type::charTy();
         default: return Type::voidTy();
     }
 }

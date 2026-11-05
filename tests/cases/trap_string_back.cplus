@@ -1,0 +1,11 @@
+// front() and back() need at least one char.
+int main() {
+    string s = "ab";
+    println("{} {}", s.front(), s.back());
+    s.clear();
+    println("{}", s.back());
+    return 0;
+}
+// expect: a b
+// trap: back() was called on an empty string
+// trap: trap_string_back.cplus:6:21

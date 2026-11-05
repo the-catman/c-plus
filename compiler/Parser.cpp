@@ -283,10 +283,9 @@ void Parser::failStd(Loc loc, const Token& name) {
     if (n == "string" || n == "vector" || n == "to_string" || n == "format" || n == "println" || n == "print")
         fail(loc, "C+ has no std:: namespace", "built-ins need no prefix: write `" + n + "` instead of `std::" + n + "`",
              spec::Modules);
-    if (isMathFunction(n))
-        fail(loc, "C+ has no std:: namespace", "math functions are built in: write `" + n + "(...)` instead of `std::" +
-                                                   n + "(...)`",
-             spec::Math);
+    if (isMathFunction(n) || isCharFunction(n))
+        fail(loc, "C+ has no std:: namespace", "it is built in: write `" + n + "(...)` instead of `std::" + n + "(...)`",
+             isMathFunction(n) ? spec::Math : spec::Char);
     if (std::string reader = cNumberReader(n); !reader.empty())
         fail(loc, "C+ has no std:: namespace",
              "this compiler cannot read a number from a string yet. Until then, declare the C function: `extern \"C\" " +
@@ -390,7 +389,7 @@ const Type* Parser::parseBaseType(Loc& loc) {
         case Tok::KwAuto: return Type::autoTy();
         case Tok::KwDouble: return Type::doubleTy();
         case Tok::KwFloat: return Type::floatTy();
-        case Tok::KwChar: notYet(t.loc, "char types", "use string for text");
+        case Tok::KwChar: return Type::charTy();
         case Tok::Ident:
             if (isTypeName(t)) return &prog_->findStruct(t.text)->type;
             if (t.text == "vector" && check(Tok::Less)) {
@@ -1077,7 +1076,7 @@ ExprPtr Parser::parsePostfix(ExprPtr e) {
 // Whether the tokens from `i` on start a type that a cast can name: `int`, `double`, ...
 static bool isCastType(Tok k) {
     return k == Tok::KwInt || k == Tok::KwLong || k == Tok::KwBool || k == Tok::KwFloat || k == Tok::KwDouble ||
-           k == Tok::KwString;
+           k == Tok::KwChar || k == Tok::KwString;
 }
 
 ExprPtr Parser::parsePrimary() {
@@ -1101,7 +1100,9 @@ ExprPtr Parser::parsePrimary() {
         case Tok::KwTrue: return std::make_unique<BoolLitExpr>(t.loc, true);
         case Tok::KwFalse: return std::make_unique<BoolLitExpr>(t.loc, false);
         case Tok::FloatLit: return std::make_unique<FloatLitExpr>(t.loc, t.floatValue, t.floatSuffix);
+        case Tok::CharLit: return std::make_unique<CharLitExpr>(t.loc, (uint8_t)t.intValue);
         case Tok::KwInt: case Tok::KwLong: case Tok::KwBool: case Tok::KwString: case Tok::KwFloat: case Tok::KwDouble:
+        case Tok::KwChar:
             if (t.kind == Tok::KwString && match(Tok::ColonColon)) {
                 // `string::npos`, what find() returns when nothing is found. With no
                 // unsigned types it is -1, a long.
@@ -1123,10 +1124,25 @@ ExprPtr Parser::parsePrimary() {
                 Loc loc;
                 const Type* ty = parseBaseType(loc);
                 expect(Tok::LParen, "after the type");
+                if (ty->is(Type::Kind::String)) {
+                    // `string(count, c)` and `string()`, as in C++. `string(x)` is a cast, which Sema rejects.
+                    std::vector<ExprPtr> args;
+                    if (!check(Tok::RParen)) {
+                        do args.push_back(parseExpr());
+                        while (match(Tok::Comma));
+                    }
+                    expect(Tok::RParen, "to close the argument list of 'string'");
+                    if (args.size() == 1) return std::make_unique<CastExpr>(loc, ty, std::move(args[0]));
+                    return std::make_unique<CallExpr>(loc, "string", std::move(args));
+                }
                 if (check(Tok::RParen))  // `int()`, which is 0 in C++
                     fail(peek().loc, std::string("a conversion to '") + ty->name + "' takes one value",
                          "write `" + std::string(ty->name) + "(x)` to convert x. For a zero, write `" +
-                             (ty->is(Type::Kind::Bool) ? "false" : ty->isFloating() ? "0.0" : "0") + "`",
+                             (ty->is(Type::Kind::Bool)   ? "false"
+                              : ty->isFloating()         ? "0.0"
+                              : ty->is(Type::Kind::Char) ? "'\\0'"
+                                                         : "0") +
+                             "`",
                          spec::Casts);
                 ExprPtr operand = parseExpr();
                 if (check(Tok::Comma))

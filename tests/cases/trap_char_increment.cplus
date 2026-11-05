@@ -1,0 +1,11 @@
+// ++ on the last char, 255, does not wrap around to 0.
+int main() {
+    char c = char(254);
+    c++;
+    println("{}", int(c));
+    c++;
+    return 0;
+}
+// expect: 255
+// trap: the result of '++' is 256, which does not fit in a char (from 0 to 255)
+// trap: trap_char_increment.cplus:6:6

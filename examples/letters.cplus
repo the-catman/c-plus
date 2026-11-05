@@ -1,0 +1,44 @@
+// Characters: s[i] is a char, for (char c : s) goes over a string, and the <cctype>
+// functions are built in. Arithmetic on a char gives an int, as in C++, so turning the
+// result back into a char takes char(...), which checks that it fits.
+
+string rotate(string text, int shift) {
+    string out;
+    for (char c : text) {
+        if (isupper(c)) out += char('A' + (c - 'A' + shift) % 26);
+        else if (islower(c)) out += char('a' + (c - 'a' + shift) % 26);
+        else out += c;
+    }
+    return out;
+}
+
+string capitalize(string text) {
+    bool start = true;
+    for (long i = 0; i < text.size(); i++) {
+        if (start) text[i] = toupper(text[i]);
+        start = isspace(text[i]);
+    }
+    return text;
+}
+
+int main() {
+    string message = "Meet me at the old bridge, 9 pm.";
+    string secret = rotate(message, 13);
+    println("{}", secret);
+    println("{}", rotate(secret, 13));
+    println("{}", capitalize(message));
+
+    vector<int> counts = vector<int>(26);
+    int digits = 0;
+    for (char c : message) {
+        if (isalpha(c)) counts[tolower(c) - 'a']++;
+        else if (isdigit(c)) digits++;
+    }
+    char common = 'a';
+    for (char c = 'a'; c <= 'z'; c++) {
+        if (counts[c - 'a'] > counts[common - 'a']) common = c;
+    }
+    println("most common letter: {} ({} times), digits: {}", common, counts[common - 'a'], digits);
+    println("{} {}", string(10, '='), message.back());
+    return 0;
+}

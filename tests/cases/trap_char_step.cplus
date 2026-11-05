@@ -1,0 +1,11 @@
+// c -= n must leave a char; stepping back past 0 stops the program.
+int main() {
+    char c = 'c';
+    c -= 2;
+    println("{}", c);
+    c -= 'b';
+    return 0;
+}
+// expect: a
+// trap: the result of '-=' is -1, which does not fit in a char (from 0 to 255)
+// trap: trap_char_step.cplus:6:7

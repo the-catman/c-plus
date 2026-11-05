@@ -19,6 +19,7 @@
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/Triple.h>
 
 #include <algorithm>
 #include <functional>
@@ -46,6 +47,8 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtStrRelease, rtStrCompare, rtStrConcat, rtStrAppend, rtStrSubstr, rtStrFind;
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
+    llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat;
+    llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
 
@@ -172,11 +175,17 @@ struct Codegen::Impl {
         rtCFree = decl("cplus_c_free", voidTy, {ptrTy});
         rtStrFromC = decl("cplus_str_from_c", voidTy, {ptrTy, ptrTy});
         rtTrapIndex = decl("cplus_trap_index", voidTy, {i64, i64, ptrTy, i32, i32});
-        if (auto* f = llvm::dyn_cast<llvm::Function>(rtTrapIndex.getCallee())) {
-            f->addFnAttr(llvm::Attribute::NoReturn);
-            f->addFnAttr(llvm::Attribute::Cold);
-            f->addFnAttr(llvm::Attribute::NoUnwind);
-        }
+        rtTrapStringIndex = decl("cplus_trap_string_index", voidTy, {i64, i64, ptrTy, i32, i32});
+        rtTrapChar = decl("cplus_trap_char", voidTy, {i64, ptrTy, ptrTy, i32, i32});
+        for (llvm::FunctionCallee trap : {rtTrapIndex, rtTrapStringIndex, rtTrapChar})
+            if (auto* f = llvm::dyn_cast<llvm::Function>(trap.getCallee())) {
+                f->addFnAttr(llvm::Attribute::NoReturn);
+                f->addFnAttr(llvm::Attribute::Cold);
+                f->addFnAttr(llvm::Attribute::NoUnwind);
+            }
+        rtPrintCharQuoted = decl("cplus_print_char_quoted", voidTy, {ptrTy, i32});
+        rtStrMutable = decl("cplus_str_mutable", ptrTy, {ptrTy});
+        rtStrRepeat = decl("cplus_str_repeat", voidTy, {ptrTy, i64, i32, ptrTy, i32, i32});
         rtVecNew = decl("cplus_vec_new", ptrTy, {i64, i64});
         rtVecRelease = decl("cplus_vec_release", voidTy, {ptrTy, i64, ptrTy});
         rtVecReserve = decl("cplus_vec_reserve", ptrTy, {ptrTy, i64, i64, ptrTy, ptrTy});
@@ -190,6 +199,7 @@ struct Codegen::Impl {
             case K::Long: return b.getInt64Ty();
             case K::Float: return b.getFloatTy();
             case K::Double: return b.getDoubleTy();
+            case K::Char: return b.getInt8Ty();
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
             case K::Class: case K::Vector: case K::Null: return b.getPtrTy();
@@ -231,6 +241,29 @@ struct Codegen::Impl {
     }
 
     llvm::Value* strData(llvm::Value* s) { return b.CreateExtractValue(s, 0, "data"); }
+
+    // Where the byte `c` lies in a table of all 256, so that a char can be passed where
+    // text is expected, like a one-byte string literal.
+    llvm::Value* charBytes(llvm::Value* c) {
+        if (!charTable) {
+            std::vector<uint8_t> bytes(256);
+            for (int i = 0; i < 256; ++i) bytes[i] = (uint8_t)i;
+            auto* init = llvm::ConstantDataArray::get(ctx, bytes);
+            charTable = new llvm::GlobalVariable(*mod, init->getType(), true, llvm::GlobalValue::PrivateLinkage, init,
+                                                 "cplus.chars");
+            charTable->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        }
+        return b.CreateInBoundsGEP(b.getInt8Ty(), charTable, b.CreateZExt(c, b.getInt64Ty()), "char");
+    }
+
+    // A char as a string of one byte, which needs no buffer of its own.
+    llvm::Value* charString(llvm::Value* c) {
+        llvm::Value* s = b.CreateInsertValue(llvm::Constant::getNullValue(stringTy), charBytes(c), {0});
+        return b.CreateInsertValue(s, b.getInt64(1), {1});
+    }
+
+    // A string, or a char made into one: what the text arguments of string methods take.
+    llvm::Value* textValue(llvm::Value* v, const Type* t) { return t->is(K::Char) ? charString(v) : v; }
     llvm::Value* strLength(llvm::Value* s) { return b.CreateExtractValue(s, 1, "length"); }
 
     llvm::AllocaInst* entryAlloca(llvm::Type* t, const std::string& name) {
@@ -252,16 +285,31 @@ struct Codegen::Impl {
     }
 
     // Stops the program unless 0 <= index < size; `index` and `size` are i64.
-    void checkIndex(llvm::Value* index, llvm::Value* size, Loc loc) {
+    void checkIndex(llvm::Value* index, llvm::Value* size, Loc loc, bool inString = false) {
         auto* trapBB = llvm::BasicBlock::Create(ctx, "bad.index", fn);
         auto* okBB = llvm::BasicBlock::Create(ctx, "ok", fn);
         // An unsigned compare also catches negative indexes.
         b.CreateCondBr(b.CreateICmpUGE(index, size), trapBB, okBB, llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
         b.SetInsertPoint(trapBB);
-        auto* call = b.CreateCall(rtTrapIndex, {index, size, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+        auto* call = b.CreateCall(inString ? rtTrapStringIndex : rtTrapIndex,
+                                  {index, size, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
         call->setDoesNotReturn();
         b.CreateUnreachable();
         b.SetInsertPoint(okBB);
+    }
+
+    // The char a computed code stands for. `wide` is an i64; a value that is not from 0
+    // to 255 stops the program, saying `what` gave it.
+    llvm::Value* checkedChar(llvm::Value* wide, const std::string& what, Loc loc) {
+        auto* trapBB = llvm::BasicBlock::Create(ctx, "char.trap", fn);
+        auto* okBB = llvm::BasicBlock::Create(ctx, "char.ok", fn);
+        b.CreateCondBr(b.CreateICmpUGT(wide, b.getInt64(255)), trapBB, okBB,  // also catches negative values
+                       llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
+        b.SetInsertPoint(trapBB);
+        b.CreateCall(rtTrapChar, {wide, cstring(what), fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+        b.CreateUnreachable();
+        b.SetInsertPoint(okBB);
+        return b.CreateTrunc(wide, b.getInt8Ty(), "char");
     }
 
     llvm::Value* checkedArith(llvm::Intrinsic::ID id, llvm::Value* l, llvm::Value* r, const char* sym,
@@ -414,7 +462,9 @@ struct Codegen::Impl {
         auto* arrayTy = llvm::ArrayType::get(stringTy, parts.size());
         llvm::AllocaInst* array = entryAlloca(arrayTy, "parts");
         for (size_t i = 0; i < parts.size(); ++i) {
-            llvm::Value* v = codeRunsLater[i] ? gen(*parts[i]) : stringForRead(*parts[i]);
+            llvm::Value* v = parts[i]->type->is(K::Char) ? charString(gen(*parts[i]))  // `s + c`
+                             : codeRunsLater[i]          ? gen(*parts[i])
+                                                         : stringForRead(*parts[i]);
             b.CreateStore(v, b.CreateConstInBoundsGEP2_32(arrayTy, array, 0, (unsigned)i));
         }
         llvm::AllocaInst* out = entryAlloca(stringTy, "joined");
@@ -431,6 +481,19 @@ struct Codegen::Impl {
             releaseValue(old, Type::stringTy());
             return nullptr;
         }
+        if (call.strMethod == StrMethod::PushBack) {  // `s += c`
+            llvm::Value* c = gen(*call.args[0]);
+            b.CreateCall(rtStrAppend, {addressOf(recv, false, true), charBytes(c), b.getInt64(1)});
+            return nullptr;
+        }
+        if (call.strMethod == StrMethod::PopBack) {
+            // The string keeps its bytes and sees one fewer, so nothing is copied.
+            llvm::Value* slot = addressOf(recv, false, true);
+            llvm::Value* length = b.CreateLoad(b.getInt64Ty(), b.CreateStructGEP(stringTy, slot, 1), "length");
+            trapIf(b.CreateICmpEQ(length, b.getInt64(0)), "pop_back() was called on an empty string", call.loc);
+            b.CreateStore(b.CreateSub(length, b.getInt64(1)), b.CreateStructGEP(stringTy, slot, 1));
+            return nullptr;
+        }
         // The receiver is evaluated before the arguments, as in C++17, and read in
         // place unless an argument runs code that could change it.
         bool argsRunCode = false;
@@ -438,7 +501,8 @@ struct Codegen::Impl {
         llvm::Value* s = argsRunCode ? gen(recv) : stringForRead(recv);
         std::vector<llvm::Value*> args;
         for (auto& a : call.args) {
-            if (!a->type->is(K::String)) args.push_back(genConverted(*a, Type::longTy()));
+            if (a->type->is(K::Char)) args.push_back(charString(gen(*a)));  // `s.find('x')`
+            else if (!a->type->is(K::String)) args.push_back(genConverted(*a, Type::longTy()));
             else args.push_back(argsRunCode ? gen(*a) : stringForRead(*a));
         }
         auto test = [&](llvm::FunctionCallee f, const char* name) {
@@ -467,7 +531,18 @@ struct Codegen::Impl {
             }
             case StrMethod::StartsWith: return test(rtStrStartsWith, "starts");
             case StrMethod::EndsWith: return test(rtStrEndsWith, "ends");
+            case StrMethod::Front:
+            case StrMethod::Back: {
+                bool front = call.strMethod == StrMethod::Front;
+                llvm::Value* length = strLength(s);
+                trapIf(b.CreateICmpEQ(length, b.getInt64(0)),
+                       std::string(front ? "front()" : "back()") + " was called on an empty string", call.loc);
+                llvm::Value* index = front ? b.getInt64(0) : b.CreateSub(length, b.getInt64(1));
+                return b.CreateLoad(b.getInt8Ty(), b.CreateInBoundsGEP(b.getInt8Ty(), strData(s), index), call.name);
+            }
             case StrMethod::Clear:
+            case StrMethod::PushBack:
+            case StrMethod::PopBack:
             case StrMethod::None: break;
         }
         llvm_unreachable("unknown string method");
@@ -784,6 +859,8 @@ struct Codegen::Impl {
         if (from->isNull()) return llvm::Constant::getNullValue(llvmType(to));
         if (to->isOptional()) return wrapOptional(convert(v, from, to->elem), to);
         if (from->is(K::Int) && to->is(K::Long)) return b.CreateSExt(v, b.getInt64Ty());
+        if (from->is(K::Char) && to->isInteger()) return b.CreateZExt(v, llvmType(to));  // its code, 0 to 255
+        if (from->is(K::Char) && to->isFloating()) return b.CreateUIToFP(v, llvmType(to));
         if (from->isNumber() && to->is(K::Bool)) return condValue(v, from);
         if (from->isInteger() && to->isFloating()) return b.CreateSIToFP(v, llvmType(to));
         if (from->is(K::Float) && to->is(K::Double)) return b.CreateFPExt(v, b.getDoubleTy());
@@ -837,7 +914,7 @@ struct Codegen::Impl {
     llvm::Value* genDefault(const Type* t) {
         switch (t->kind) {
             case K::Bool: return b.getInt1(false);
-            case K::Int: case K::Long: return llvm::ConstantInt::get(llvmType(t), 0);
+            case K::Int: case K::Long: case K::Char: return llvm::ConstantInt::get(llvmType(t), 0);
             case K::Float: case K::Double: return llvm::ConstantFP::get(llvmType(t), 0.0);
             case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct: return buildAggregate(*t->decl, {});
@@ -940,7 +1017,8 @@ struct Codegen::Impl {
     static bool mayRunCode(const Expr& e) {
         switch (e.kind) {
             case Expr::Kind::IntLit: case Expr::Kind::BoolLit: case Expr::Kind::StringLit: case Expr::Kind::NullLit:
-            case Expr::Kind::FloatLit: case Expr::Kind::Name: case Expr::Kind::This: case Expr::Kind::OptValue:
+            case Expr::Kind::FloatLit: case Expr::Kind::CharLit: case Expr::Kind::Name: case Expr::Kind::This:
+            case Expr::Kind::OptValue:
                 return false;
             case Expr::Kind::Cast: return mayRunCode(*static_cast<const CastExpr&>(e).operand);
             case Expr::Kind::Member: return mayRunCode(*static_cast<const MemberExpr&>(e).base);
@@ -987,6 +1065,7 @@ struct Codegen::Impl {
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
                 const Type* vt = ix.base->type;
+                if (vt->is(K::String)) return charAddress(ix, hold, write);
                 llvm::Value* slot = nullptr;
                 llvm::Value* buf;
                 llvm::Value* index;
@@ -1016,6 +1095,34 @@ struct Codegen::Impl {
         }
     }
 
+    // The address of `s[i]`, a byte of a string, found as for an element of a vector.
+    // To change it, the string first gets bytes of its own (see cplus_str_mutable).
+    llvm::Value* charAddress(const IndexExpr& ix, bool hold, bool write) {
+        llvm::Value* slot = nullptr;
+        llvm::Value* s;
+        llvm::Value* index;
+        if (isPlace(*ix.base)) {
+            slot = addressOf(*ix.base, hold || mayRunCode(*ix.index), write);
+            index = genIndex(*ix.index);
+            s = b.CreateLoad(stringTy, slot, "str");
+        } else {
+            s = gen(*ix.base);  // a temporary, kept until the statement ends
+            index = genIndex(*ix.index);
+        }
+        checkIndex(index, strLength(s), ix.loc, true);
+        llvm::Value* data = strData(s);
+        if (write) {
+            if (!slot) llvm_unreachable("Sema allowed changing a char of a temporary string");
+            data = b.CreateCall(rtStrMutable, {slot}, "data");
+        }
+        if (hold) {
+            llvm::Value* held = slot ? b.CreateLoad(stringTy, slot, "str") : s;
+            retainValue(held, Type::stringTy());
+            temps.push_back({held, Type::stringTy(), false});
+        }
+        return b.CreateInBoundsGEP(b.getInt8Ty(), data, index, "char.addr");
+    }
+
     // Lowers `e`. `owned` is set when the result is a new value the caller must
     // release; otherwise a value holding class references is borrowed from a place.
     llvm::Value* genRaw(const Expr& e, bool& owned) {
@@ -1025,6 +1132,7 @@ struct Codegen::Impl {
             case Expr::Kind::FloatLit:
                 return llvm::ConstantFP::get(llvmType(e.type), static_cast<const FloatLitExpr&>(e).value);
             case Expr::Kind::Cast: return genCast(static_cast<const CastExpr&>(e));
+            case Expr::Kind::CharLit: return b.getInt8(static_cast<const CharLitExpr&>(e).value);
             case Expr::Kind::BoolLit: return b.getInt1(static_cast<const BoolLitExpr&>(e).value);
             case Expr::Kind::StringLit: return stringValue(static_cast<const StringLitExpr&>(e).value);
             case Expr::Kind::NullLit: return llvm::ConstantPointerNull::get(b.getPtrTy());
@@ -1049,7 +1157,7 @@ struct Codegen::Impl {
             case Expr::Kind::Unary: {
                 auto& u = static_cast<const UnaryExpr&>(e);
                 if (u.op == UnOp::Not) return b.CreateNot(genCond(*u.operand));
-                llvm::Value* v = gen(*u.operand);
+                llvm::Value* v = genConverted(*u.operand, e.type);  // a char becomes an int first
                 switch (u.op) {
                     case UnOp::Plus: return v;
                     case UnOp::Not:
@@ -1091,10 +1199,22 @@ struct Codegen::Impl {
                 // As in C++17, the right side is evaluated before the left.
                 if (a.op && ty->is(K::String)) {
                     // `s += x` appends in place when nothing else holds the string's buffer.
-                    llvm::Value* rhs = gen(*a.value);
+                    llvm::Value* rhs = textValue(gen(*a.value), a.value->type);
                     llvm::Value* slot = addressOf(*a.target, false, true);
                     b.CreateCall(rtStrAppend, {slot, strData(rhs), strLength(rhs)});
                     return b.CreateLoad(stringTy, slot, "str");
+                }
+                if (a.op && ty->is(K::Char)) {  // `c += n` or `c -= n`, which must stay a char
+                    llvm::Value* rhs = genConverted(*a.value, Type::longTy());
+                    llvm::Value* slot = addressOf(*a.target, false, true);
+                    llvm::Value* old = b.CreateZExt(b.CreateLoad(b.getInt8Ty(), slot), b.getInt64Ty());
+                    const char* sym = *a.op == BinOp::Add ? "+=" : "-=";
+                    llvm::Value* wide = checkedArith(*a.op == BinOp::Add ? llvm::Intrinsic::sadd_with_overflow
+                                                                         : llvm::Intrinsic::ssub_with_overflow,
+                                                     old, rhs, sym, Type::longTy(), a.loc);
+                    llvm::Value* v = checkedChar(wide, std::string("the result of '") + sym + "' is", a.loc);
+                    b.CreateStore(v, slot);
+                    return v;
                 }
                 if (a.op) {
                     bool shift = *a.op == BinOp::Shl || *a.op == BinOp::Shr;
@@ -1144,6 +1264,14 @@ struct Codegen::Impl {
                 llvm::Value* slot = addressOf(*i.target, false, true);
                 llvm::Type* t = llvmType(e.type);
                 llvm::Value* old = b.CreateLoad(t, slot);
+                if (e.type->is(K::Char)) {  // stays from 0 to 255
+                    llvm::Value* wide = b.CreateZExt(old, b.getInt64Ty());
+                    wide = i.increment ? b.CreateAdd(wide, b.getInt64(1)) : b.CreateSub(wide, b.getInt64(1));
+                    llvm::Value* updated =
+                        checkedChar(wide, std::string("the result of '") + (i.increment ? "++" : "--") + "' is", e.loc);
+                    b.CreateStore(updated, slot);
+                    return i.prefix ? updated : old;
+                }
                 llvm::Value* updated =
                     e.type->isFloating()
                         ? floatArith(i.increment ? BinOp::Add : BinOp::Sub, old, llvm::ConstantFP::get(t, 1.0))
@@ -1163,7 +1291,7 @@ struct Codegen::Impl {
     // class references by identity.
     llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
         switch (t->kind) {
-            case K::Bool: case K::Int: case K::Long: case K::Class: return b.CreateICmpEQ(l, r);
+            case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: return b.CreateICmpEQ(l, r);
             case K::Float: case K::Double: return b.CreateFCmpOEQ(l, r);
             case K::String: {
                 llvm::Value* eq = b.CreateCall(rtStrEq, {b.CreateExtractValue(l, 0), b.CreateExtractValue(l, 1),
@@ -1221,6 +1349,10 @@ struct Codegen::Impl {
             case K::Float: b.CreateCall(rtPrintF32, {out, v}); break;
             case K::Double: b.CreateCall(rtPrintF64, {out, v}); break;
             case K::Bool: b.CreateCall(rtPrintBool, {out, b.CreateZExt(v, b.getInt32Ty())}); break;
+            case K::Char:  // the byte itself, as std::format prints a char; in quotes inside a struct or vector
+                if (nested) b.CreateCall(rtPrintCharQuoted, {out, b.CreateZExt(v, b.getInt32Ty())});
+                else b.CreateCall(rtPrintStr, {out, charBytes(v), b.getInt64(1)});
+                break;
             case K::String: b.CreateCall(nested ? rtPrintQuoted : rtPrintStr, {out, strData(v), strLength(v)}); break;
             case K::Struct:
             case K::Class: b.CreateCall(types.at(t->decl).print, {v, out}); break;
@@ -1280,6 +1412,27 @@ struct Codegen::Impl {
         if (from == to) return v;
         llvm::Type* target = llvmType(to);
         Loc loc = c.loc;
+        if (from->is(K::Char)) {  // its code, from 0 to 255
+            if (to->is(K::Bool)) return b.CreateICmpNE(v, b.getInt8(0));
+            return to->isFloating() ? b.CreateUIToFP(v, target) : b.CreateZExt(v, target);
+        }
+        if (to->is(K::Char)) {  // `char(65)` is 'A'; a value outside 0 to 255 stops the program
+            if (from->is(K::Bool)) return b.CreateZExt(v, target);
+            if (from->isFloating()) {
+                llvm::Value* x = convert(v, from, Type::doubleTy());
+                llvm::Value* fits = b.CreateAnd(b.CreateFCmpOGT(x, llvm::ConstantFP::get(b.getDoubleTy(), -1.0)),
+                                                b.CreateFCmpOLT(x, llvm::ConstantFP::get(b.getDoubleTy(), 256.0)));
+                auto* trapBB = llvm::BasicBlock::Create(ctx, "cast.trap", fn);
+                auto* okBB = llvm::BasicBlock::Create(ctx, "cast.ok", fn);
+                b.CreateCondBr(fits, okBB, trapBB, llvm::MDBuilder(ctx).createBranchWeights(1u << 20, 1));
+                b.SetInsertPoint(trapBB);
+                b.CreateCall(rtTrapFloatCast, {x, cstring("char"), fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+                b.CreateUnreachable();
+                b.SetInsertPoint(okBB);
+                return b.CreateFPToUI(v, target);
+            }
+            return checkedChar(b.CreateSExt(v, b.getInt64Ty()), "char(x) was given", loc);
+        }
         if (to->is(K::Bool)) return condValue(v, from);
         if (from->is(K::Bool)) return to->isFloating() ? b.CreateUIToFP(v, target) : b.CreateZExt(v, target);
         if (from->isInteger() && to->isInteger()) {
@@ -1315,6 +1468,31 @@ struct Codegen::Impl {
         return b.CreateFPToSI(v, target);
     }
 
+    // isdigit(c), toupper(c), ...: ASCII only, as C's are in the default "C" locale.
+    llvm::Value* genCharFn(const CallExpr& call) {
+        llvm::Value* c = gen(*call.args[0]);
+        auto in = [&](char lo, char hi) {  // lo <= c <= hi, as one unsigned compare
+            return b.CreateICmpULE(b.CreateSub(c, b.getInt8((uint8_t)lo)), b.getInt8((uint8_t)(hi - lo)));
+        };
+        auto upper = [&] { return in('A', 'Z'); };
+        auto lower = [&] { return in('a', 'z'); };
+        auto digit = [&] { return in('0', '9'); };
+        auto alnum = [&] { return b.CreateOr(b.CreateOr(upper(), lower()), digit()); };
+        switch (call.charFn) {
+            case CharFn::IsAlpha: return b.CreateOr(upper(), lower());
+            case CharFn::IsDigit: return digit();
+            case CharFn::IsAlnum: return alnum();
+            case CharFn::IsSpace: return b.CreateOr(b.CreateICmpEQ(c, b.getInt8(' ')), in('\t', '\r'));
+            case CharFn::IsUpper: return upper();
+            case CharFn::IsLower: return lower();
+            case CharFn::IsPunct: return b.CreateAnd(in('!', '~'), b.CreateNot(alnum()));
+            case CharFn::IsXDigit: return b.CreateOr(digit(), b.CreateOr(in('a', 'f'), in('A', 'F')));
+            case CharFn::ToUpper: return b.CreateSelect(lower(), b.CreateSub(c, b.getInt8(32)), c);
+            case CharFn::ToLower: return b.CreateSelect(upper(), b.CreateAdd(c, b.getInt8(32)), c);
+        }
+        llvm_unreachable("unknown char function");
+    }
+
     // The math functions. Most become LLVM intrinsics, which compile to an instruction
     // where the processor has one; the rest call the C library's math functions.
     llvm::Value* genMath(const CallExpr& call) {
@@ -1331,13 +1509,15 @@ struct Codegen::Impl {
         std::vector<llvm::Value*> args;
         for (auto& a : call.args) args.push_back(genConverted(*a, t));
         llvm::Value* x = args[0];
-        if (t->isInteger()) {  // abs, min and max
+        if (t->isInteger() || t->is(K::Char)) {  // abs, min and max; chars compare by their codes
             if (f == MathFn::Abs) {
                 llvm::Value* negated = checkedArith(llvm::Intrinsic::ssub_with_overflow,
                                                     llvm::ConstantInt::get(x->getType(), 0), x, "abs", t, call.loc);
                 return b.CreateSelect(b.CreateICmpSLT(x, llvm::ConstantInt::get(x->getType(), 0)), negated, x);
             }
-            llvm::Value* less = b.CreateICmpSLT(f == MathFn::Min ? args[1] : args[0], f == MathFn::Min ? args[0] : args[1]);
+            llvm::Value* a0 = f == MathFn::Min ? args[1] : args[0];
+            llvm::Value* a1 = f == MathFn::Min ? args[0] : args[1];
+            llvm::Value* less = t->is(K::Char) ? b.CreateICmpULT(a0, a1) : b.CreateICmpSLT(a0, a1);
             return b.CreateSelect(less, args[1], args[0]);
         }
         auto unary = [&](llvm::Intrinsic::ID id) { return b.CreateUnaryIntrinsic(id, x); };
@@ -1386,6 +1566,15 @@ struct Codegen::Impl {
     llvm::Value* genCall(const CallExpr& call) {
         if (call.vectorType) return genVectorConstruction(call);
         if (call.builtin == Builtin::Math) return genMath(call);
+        if (call.builtin == Builtin::CharFn) return genCharFn(call);
+        if (call.builtin == Builtin::StringFill) {  // `string(count, c)`, or `string()`
+            if (call.args.empty()) return llvm::Constant::getNullValue(stringTy);
+            llvm::Value* count = genConverted(*call.args[0], Type::longTy());
+            llvm::Value* c = b.CreateZExt(gen(*call.args[1]), b.getInt32Ty());
+            llvm::AllocaInst* out = entryAlloca(stringTy, "filled");
+            b.CreateCall(rtStrRepeat, {out, count, c, fileName, b.getInt32(call.loc.line), b.getInt32(call.loc.col)});
+            return b.CreateLoad(stringTy, out, "filled");
+        }
         if (call.builtin != Builtin::None) return genFormatted(call);
         if (call.constructs) {  // `Point(1, 2)`
             const StructDecl& sd = *call.constructs;
@@ -1713,12 +1902,13 @@ struct Codegen::Impl {
     void genForEach(const ForEachStmt& st) {
         const Type* vt = st.rangeVar->type;
         const VarDecl& var = *st.var;
-        scopes.emplace_back();  // holds the vector
+        bool str = vt->is(K::String);  // a string goes over its bytes
+        scopes.emplace_back();  // holds the vector or string
         llvm::Value* range = genOwned(*st.range, vt);
         flushTemps();
         b.CreateStore(range, allocaFor(*st.rangeVar));
         scopes.back().push_back(st.rangeVar.get());
-        llvm::Value* size = vecSize(range);
+        llvm::Value* size = str ? strLength(range) : vecSize(range);
         llvm::AllocaInst* counter = entryAlloca(b.getInt64Ty(), "index");
         b.CreateStore(b.getInt64(0), counter);
         auto* condBB = llvm::BasicBlock::Create(ctx, "foreach.cond", fn);
@@ -1733,8 +1923,9 @@ struct Codegen::Impl {
         b.SetInsertPoint(bodyBB);
         loops.push_back({endBB, stepBB, scopes.size()});
         scopes.emplace_back();  // the loop variable: a new one for each element
-        llvm::Value* elem = b.CreateLoad(vecInfo(vt).elemTy, elementAt(range, i, vt), "elem");
-        llvm::Value* value = convert(elem, vt->elem, var.type);
+        llvm::Value* elem = str ? b.CreateLoad(b.getInt8Ty(), b.CreateInBoundsGEP(b.getInt8Ty(), strData(range), i), "c")
+                                : b.CreateLoad(vecInfo(vt).elemTy, elementAt(range, i, vt), "elem");
+        llvm::Value* value = convert(elem, str ? Type::charTy() : vt->elem, var.type);
         retainValue(value, var.type);
         b.CreateStore(value, allocaFor(var));
         if (isManaged(var.type)) scopes.back().push_back(&var);
@@ -1775,8 +1966,17 @@ struct Codegen::Impl {
         funcs[&f] = func;
     }
 
-    // A C function, under its own name. Text crosses as a `const char*`, and a bool as
-    // a C `bool`, which is zero-extended to a byte.
+    // Whether C's `char` is signed on the target: it is on x86 and on Apple and Windows
+    // ARM, and unsigned on other ARM, PowerPC, RISC-V and s390x systems.
+    bool cCharIsSigned() {
+        llvm::Triple t(mod->getTargetTriple());
+        if (t.isOSDarwin() || t.isOSWindows()) return true;
+        return !(t.isARM() || t.isAArch64() || t.isPPC() || t.isRISCV() || t.isSystemZ());
+    }
+
+    // A C function, under its own name. Text crosses as a `const char*`, a bool as a C
+    // `bool`, which is zero-extended to a byte, and a char as a C `char`, extended as the
+    // platform's C compiler does. The char's bits are the same either way.
     void declareCFunction(const FuncDecl& f) {
         auto cType = [&](const Type* t) -> llvm::Type* {
             return t->is(K::String) || t->isOptional() ? b.getPtrTy() : llvmType(t);
@@ -1785,9 +1985,15 @@ struct Codegen::Impl {
         for (auto& p : f.params) params.push_back(cType(p->type));
         auto* type = llvm::FunctionType::get(cType(f.retType), params, false);
         auto* func = llvm::Function::Create(type, llvm::Function::ExternalLinkage, f.name, mod.get());
+        auto extension = [&](const Type* t) {
+            if (t->is(K::Bool)) return llvm::Attribute::ZExt;
+            if (t->is(K::Char)) return cCharIsSigned() ? llvm::Attribute::SExt : llvm::Attribute::ZExt;
+            return llvm::Attribute::None;
+        };
         for (size_t i = 0; i < f.params.size(); ++i)
-            if (f.params[i]->type->is(K::Bool)) func->addParamAttr((unsigned)i, llvm::Attribute::ZExt);
-        if (f.retType->is(K::Bool)) func->addRetAttr(llvm::Attribute::ZExt);
+            if (auto ext = extension(f.params[i]->type); ext != llvm::Attribute::None)
+                func->addParamAttr((unsigned)i, ext);
+        if (auto ext = extension(f.retType); ext != llvm::Attribute::None) func->addRetAttr(ext);
         funcs[&f] = func;
     }
 

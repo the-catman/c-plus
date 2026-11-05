@@ -1,0 +1,12 @@
+// Writing a char is checked as reading one is.
+int main() {
+    string s = "abc";
+    s[0] = 'x';
+    println("{}", s);
+    int i = -1;
+    s[i] = 'y';
+    return 0;
+}
+// expect: xbc
+// trap: index -1 is out of range for a string of size 3
+// trap: trap_string_index_write.cplus:7:6

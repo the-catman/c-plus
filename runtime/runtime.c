@@ -21,6 +21,21 @@ _Noreturn void cplus_trap_index(int64_t index, int64_t size, const char* file, i
     cplus_trap(message, file, line, column);
 }
 
+// Called when an index is outside a string.
+_Noreturn void cplus_trap_string_index(int64_t index, int64_t size, const char* file, int32_t line, int32_t column) {
+    char message[128];
+    snprintf(message, sizeof message, "index %" PRId64 " is out of range for a string of size %" PRId64, index, size);
+    cplus_trap(message, file, line, column);
+}
+
+// Called when a value meant for a char is not from 0 to 255. `what` says where it came
+// from, such as "char(x) was given".
+_Noreturn void cplus_trap_char(int64_t value, const char* what, const char* file, int32_t line, int32_t column) {
+    char message[160];
+    snprintf(message, sizeof message, "%s %" PRId64 ", which does not fit in a char (from 0 to 255)", what, value);
+    cplus_trap(message, file, line, column);
+}
+
 // ---- Heap objects -----------------------------------------------------------
 //
 // Class objects and vector buffers start with a 64-bit reference count. Generated code
@@ -227,6 +242,36 @@ void cplus_str_substr(cplus_string* out, const cplus_string* s, int64_t pos, int
     cplus_retain(owner);
 }
 
+// `s[i] = c` changes a byte of the string at `s`. Strings share their bytes, so the
+// string first gets a buffer that it alone holds: its own when nothing else holds it,
+// and otherwise a copy. Returns where its bytes are now.
+char* cplus_str_mutable(cplus_string* s) {
+    cplus_str_buf* old = s->owner;
+    if (old && __atomic_load_n(&old->count, __ATOMIC_ACQUIRE) == 1) return (char*)s->data;
+    cplus_str_buf* b = str_buf_new(s->length);
+    if (s->length > 0) memcpy(buf_bytes(b), s->data, (size_t)s->length);
+    *s = (cplus_string){buf_bytes(b), s->length, b};
+    cplus_str_release(old);
+    return buf_bytes(b);
+}
+
+// `string(count, c)`: `count` copies of the byte `c`, as in C++. A negative count stops
+// the program.
+void cplus_str_repeat(cplus_string* out, int64_t count, int32_t c, const char* file, int32_t line, int32_t column) {
+    if (count < 0) {
+        char message[128];
+        snprintf(message, sizeof message, "string(count, c) was given the negative count %" PRId64, count);
+        cplus_trap(message, file, line, column);
+    }
+    if (count == 0) {
+        *out = (cplus_string){NULL, 0, NULL};
+        return;
+    }
+    cplus_str_buf* b = str_buf_new(count);
+    memset(buf_bytes(b), c, (size_t)count);
+    *out = (cplus_string){buf_bytes(b), count, b};
+}
+
 // The position of the first `needle` in `s` at or after `from`, or -1 (string::npos).
 int64_t cplus_str_find(const char* s, int64_t length, const char* needle, int64_t needle_length, int64_t from) {
     if (from > length) return -1;
@@ -330,6 +375,27 @@ void cplus_print_quoted(cplus_string* out, const char* data, int64_t length) {
     }
     if (plain < length) out_write(out, data + plain, length - plain);  // an empty string may have no data
     out_write(out, "\"", 1);
+}
+
+// Prints a char in single quotes, escaped as it would be written in source: 'a', '\n',
+// '\''. Used for chars inside printed structs and vectors. A byte that is not ASCII
+// is written as \xHH, since alone it is not UTF-8 text.
+void cplus_print_char_quoted(cplus_string* out, int32_t value) {
+    unsigned char c = (unsigned char)value;
+    char text[16];
+    int n;
+    switch (c) {
+        case '\'': n = snprintf(text, sizeof text, "'\\''"); break;
+        case '\\': n = snprintf(text, sizeof text, "'\\\\'"); break;
+        case '\n': n = snprintf(text, sizeof text, "'\\n'"); break;
+        case '\t': n = snprintf(text, sizeof text, "'\\t'"); break;
+        case '\r': n = snprintf(text, sizeof text, "'\\r'"); break;
+        case '\0': n = snprintf(text, sizeof text, "'\\0'"); break;
+        default:
+            if (c < 0x20 || c >= 0x7f) n = snprintf(text, sizeof text, "'\\x%02x'", c);
+            else n = snprintf(text, sizeof text, "'%c'", c);
+    }
+    out_write(out, text, n);
 }
 
 void cplus_print_i32(cplus_string* out, int32_t value) {

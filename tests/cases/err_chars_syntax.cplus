@@ -1,0 +1,27 @@
+// Mistakes in writing character literals.
+int main() {
+    char a = 'ab';
+    char b = '';
+    char c = 'é';
+    char d = L'x';
+    string e = u8"text";
+    char f = '\q';
+    char g = '\x';
+    char h = int();
+    char i = char();
+    char j = 'x;
+    return 0;
+}
+// error: a character literal holds one character, but this has 2
+// error: write text in double quotes: "ab"
+// error: a character literal cannot be empty
+// error: write '\0' for the zero byte, or "" for an empty string
+// error: 'é' takes 2 bytes in UTF-8, but a char holds one byte
+// error: write it as a string, "é", which holds UTF-8 text of any length
+// error: C+ has no L'...' character literals
+// error: C+ has no u8"..." string literals
+// error: strings hold UTF-8 text already; leave out the u8
+// error: unknown escape sequence '\q'
+// error: \x must be followed by hex digits
+// error: write `char(x)` to convert x. For a zero, write `'\0'`
+// error: this character literal is never closed
