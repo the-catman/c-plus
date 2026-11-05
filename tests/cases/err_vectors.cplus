@@ -1,0 +1,100 @@
+class User {
+public:
+    string name;
+    User(string n) : name(n) {}
+};
+
+struct Range {
+    int low;
+    int high;
+    Range(int a, int b) : low(a), high(b) {}
+};
+
+struct Point {
+    int x;
+    void move() { x++; }
+};
+
+struct Bag {
+    vector<int> items;
+    int peek() const {
+        items.push_back(1);
+        items[0] = 2;
+        return 0;
+    }
+};
+
+vector<int> make() { return {}; }
+
+int main() {
+    vector<int> v = {1, "a"};
+    vector<string> names = {"a"};
+    v.push_back("x");
+    println("{}", v[true]);
+    println("{}", v[-1]);
+    int n = 5;
+    println("{}", n[0]);
+    v.add(1);
+    v.length();
+    println("{}", v.size);
+    if (v) println("yes");
+    println("{}", v < v);
+    println("{}", v == names);
+    const vector<int> c = {1};
+    c.push_back(2);
+    c[0] = 5;
+    make().push_back(1);
+    for (int x : n) println("{}", x);
+    for (int s : names) println("{}", s);
+    auto users = vector<User>(3);
+    auto ranges = vector<Range>(2);
+    auto many = vector<int>(1, 2, 3);
+    vector<int> d = {.x = 1};
+    auto loose = {1, 2};
+    int size = v.size();
+    v.front() = 3;
+    v.push_back();
+    v.emplace_back(1);
+    v.insert(1);
+    const Bag bag = {};
+    bag.items.push_back(1);
+    const vector<Point> ps = {{1}};
+    ps[0].move();
+    string s = "ab";
+    println("{}", s[0]);
+    return 0;
+}
+// error: expected 'int' as an element of 'vector<int>', but this is 'string'
+// error: expected 'int' for push_back() on 'vector<int>', but this is 'string'
+// error: a vector index must be an int or long, but this is 'bool'
+// error: a vector index cannot be negative
+// error: the last one is `v[v.size() - 1]` or `v.back()`
+// error: '[ ]' picks an element of a vector, but this is 'int'
+// error: 'vector<int>' has no method named 'add'
+// error: did you mean 'size'?
+// error: 'size' is a method; call it with `size()`
+// error: to check whether it has elements, write `!v.empty()`
+// error: 'vector<int>' values can only be compared with == and !=
+// error: both sides of '==' must have the same type, but they are 'vector<int>' and 'vector<string>'
+// error: 'c' is const and cannot be changed
+// error: 'c' is const, so its elements cannot be assigned to
+// error: push_back() changes the vector, so it must be called on a variable or a field
+// error: a range-based for loop goes over a vector, but this is 'int'
+// error: the elements of 'vector<string>' are 'string', which cannot be stored in 'int' 's'
+// error: vector<User>(n) cannot make its elements on its own, because a 'User' reference cannot be empty
+// error: because the constructor of 'Range' needs arguments
+// error: vector<int>(...) takes a size and an optional value, but 3 values were given
+// error: a vector's { } list holds its elements, not named fields
+// error: name the type, e.g. `Point{1, 2}` or `vector<int>{1, 2}`
+// error: expected 'int' to initialize 'size', but this is 'long'
+// error: front() and back() return a copy of the element
+// error: push_back() takes one argument but 0 were given
+// error: write `push_back(value)`
+// error: this compiler does not support insert() on vectors yet
+// error: 'bag' is const, so its fields cannot be changed
+// error: cannot call 'move' on const 'ps', because it may change fields
+// error: '[ ]' picks an element of a vector, but this is 'string'
+// error: 'items' cannot be changed inside const method 'peek'
+// error: the elements of 'items' cannot be assigned to inside const method 'peek'
+// error: spec: docs/SPEC.md#vectors
+// error: spec: docs/SPEC.md#range-based-for-loops

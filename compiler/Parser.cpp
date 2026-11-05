@@ -148,7 +148,9 @@ void Parser::parseTopLevel(Program& prog) {
 
 bool Parser::isTypeStart(size_t ahead) const {
     switch (peek(ahead).kind) {
-        case Tok::Ident:  // a struct name followed by a variable name: `Point p`
+        case Tok::Ident:  // a struct name followed by a variable name: `Point p`, or `vector<...>`
+            if (peek(ahead + 1).kind == Tok::Less)
+                return peek(ahead).text == "vector" || peek(ahead).text == "array" || peek(ahead).text == "hashmap";
             return isTypeName(peek(ahead)) && peek(ahead + 1).kind == Tok::Ident;
         case Tok::KwInt: case Tok::KwLong: case Tok::KwBool: case Tok::KwString:
         case Tok::KwVoid: case Tok::KwAuto: case Tok::KwConst:
@@ -163,11 +165,14 @@ void Parser::checkUnknownType() {
     if (!(check(Tok::Ident) && peek(1).kind == Tok::Ident)) return;
     const Token& t = peek();
     std::string help;
+    if (t.text == "vector")
+        fail(t.loc, "vector needs an element type", "write `vector<int> " + peek(1).text + ";`", spec::Vectors);
     if (t.text == "size_t" || t.text == "int32_t" || t.text == "int64_t" || t.text == "uint32_t" ||
         t.text == "uint64_t" || t.text == "unsigned")
         help = "use int (32-bit) or long (64-bit); both are signed and the same size on every platform";
     else
-        help = "the types available today are int, long, bool, string, void and structs you define";
+        help = "the types available today are int, long, bool, string, void, vector<T>, and structs and classes you "
+               "define";
     fail(t.loc, "unknown type '" + t.text + "'", help, spec::IntegerTypes);
 }
 
@@ -189,9 +194,44 @@ const Type* Parser::parseType(Loc& loc) {
         case Tok::KwChar: notYet(t.loc, "char types", "use string for text");
         case Tok::Ident:
             if (isTypeName(t)) return &prog_->findStruct(t.text)->type;
+            if (t.text == "vector" && check(Tok::Less)) {
+                Loc start = t.loc;
+                advance();
+                if (check(Tok::Greater) || check(Tok::Shr))
+                    fail(peek().loc, "vector needs an element type", "write e.g. `vector<int>`", spec::Vectors);
+                Loc elemLoc;
+                const Type* elem = parseType(elemLoc);
+                if (elem->is(Type::Kind::Void) || elem->is(Type::Kind::Auto))
+                    fail(elemLoc, std::string("a vector cannot hold '") + elem->name + "' elements",
+                         "write the element type, e.g. `vector<int>`", spec::Vectors);
+                if (check(Tok::Comma))
+                    fail(peek().loc, "vector takes one type: the type of its elements", "write e.g. `vector<int>`",
+                         spec::Vectors);
+                expectCloseAngle("to close vector<...>");
+                loc = start;
+                loc.len = prev().loc.col + prev().loc.len - start.col;
+                return Type::vectorOf(elem);
+            }
+            if ((t.text == "array" || t.text == "hashmap") && check(Tok::Less))
+                notYet(t.loc, t.text == "array" ? "fixed-size arrays (array<T, N>)" : "hash maps (hashmap<K, V>)",
+                       "use vector<T> for now");
             fail(t.loc, "unknown type '" + t.text + "'", "", spec::IntegerTypes);
         default: fail(t.loc, "expected a type, found " + describeToken(t), "", spec::IntegerTypes);
     }
+}
+
+// Expects the '>' that closes `vector<...>`. In `vector<vector<int>>` the lexer sees
+// '>>', so the first '>' of it is taken and the token left as the second one.
+void Parser::expectCloseAngle(const std::string& context) {
+    if (check(Tok::Shr)) {
+        Token& t = toks_[pos_];
+        t.kind = Tok::Greater;
+        t.text = ">";
+        t.loc.col += 1;
+        t.loc.len = 1;
+        return;
+    }
+    expect(Tok::Greater, context);
 }
 
 void Parser::parseParams(FuncDecl& fn) {
@@ -210,7 +250,8 @@ void Parser::parseParams(FuncDecl& fn) {
             if (ty->is(Type::Kind::Auto)) notYet(typeLoc, "'auto' parameters", "write the parameter type");
             if (check(Tok::Amp) || check(Tok::Star))
                 notYet(peek().loc, std::string(check(Tok::Amp) ? "reference" : "pointer") + " parameters",
-                       "pass the value itself: structs are copied and class objects are shared automatically");
+                       "pass the value itself: structs are copied, class objects are shared, and a vector is only "
+                       "copied if one of the copies changes");
             const Token& pname = expect(Tok::Ident, "for the parameter name");
             auto param = std::make_unique<VarDecl>(pname.loc, pname.text, ty, typeLoc);
             param->isParam = true;
@@ -446,6 +487,10 @@ StmtPtr Parser::parseDeclaration() {
     bool isConst = match(Tok::KwConst);
     Loc typeLoc;
     const Type* ty = parseType(typeLoc);
+    return parseDeclarators(isConst, ty, typeLoc);
+}
+
+StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
     if (ty->is(Type::Kind::Void))
         fail(typeLoc, "variables cannot have type void", "pick a type such as int, or use auto", spec::Variables);
     std::vector<std::unique_ptr<VarDecl>> decls;
@@ -459,11 +504,17 @@ StmtPtr Parser::parseDeclaration() {
         if (match(Tok::Assign)) {
             var->init = parseAssign();
         } else if (check(Tok::LBrace) || check(Tok::LParen)) {
-            notYet(peek().loc, "brace and constructor initializers",
-                   "write `" + std::string(ty->name) + " " + name.text + " = value;`");
+            std::string help = "write `" + std::string(ty->name) + " " + name.text + " = value;`";
+            if (ty->isVector())
+                help = "write `" + std::string(ty->name) + " " + name.text + " = {1, 2, 3};` or `auto " + name.text +
+                       " = " + ty->name + "(count, value);`";
+            notYet(peek().loc, "brace and constructor initializers", help);
         }
-        if (check(Tok::LBracket)) notYet(peek().loc, "arrays");
-        if (check(Tok::Colon)) notYet(peek().loc, "range-based for loops", "they arrive together with arrays");
+        if (check(Tok::LBracket))
+            notYet(peek().loc, "C-style arrays", "use a vector: `vector<" + std::string(ty->name) + "> " + name.text + ";`");
+        if (check(Tok::Colon))
+            fail(peek().loc, "a range-based for loop is written inside 'for ( )'",
+                 "write `for (" + std::string(ty->name) + " " + name.text + " : items) { ... }`", spec::RangeFor);
         decls.push_back(std::move(var));
     } while (match(Tok::Comma));
     if (decls.size() == 1) return std::move(decls[0]);
@@ -538,7 +589,35 @@ StmtPtr Parser::parseFor() {
     if (match(Tok::Semi)) {
         // no init
     } else if (isTypeStart()) {
-        loop->init = parseDeclaration();
+        bool isConst = match(Tok::KwConst);
+        Loc typeLoc;
+        const Type* ty = parseType(typeLoc);
+        // `for (auto x : items)` loops over the elements of a vector.
+        bool ref = check(Tok::Amp) || check(Tok::AmpAmp);
+        if ((ref && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Colon) ||
+            (check(Tok::Ident) && peek(1).kind == Tok::Colon)) {
+            if (ref) {
+                std::string range = peek(3).kind == Tok::Ident ? peek(3).text : "items";
+                std::string help = std::string("drop the '&': `for (") + (isConst ? "const " : "") + ty->name + " " +
+                                   peek(1).text + " : " + range + ")` copies each element, which is cheap";
+                if (!isConst)
+                    help += ". To change the elements, loop over the indexes: `for (long i = 0; i < " + range +
+                            ".size(); i++) " + range + "[i] = ...;`";
+                notYet(peek().loc, "references in range-based for loops", help);
+            }
+            if (ty->is(Type::Kind::Void))
+                fail(typeLoc, "a loop variable cannot have type void", "write `auto` or the element type",
+                     spec::RangeFor);
+            const Token& name = advance();
+            auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
+            var->isConst = isConst;
+            advance();  // ':'
+            ExprPtr range = parseExpr();
+            expect(Tok::RParen, "to close the for header");
+            StmtPtr body = parseStmt();
+            return std::make_unique<ForEachStmt>(loop->loc, std::move(var), std::move(range), std::move(body));
+        }
+        loop->init = parseDeclarators(isConst, ty, typeLoc);
         expect(Tok::Semi, "after the loop's first clause");
     } else {
         ExprPtr e = parseExpr();
@@ -713,7 +792,14 @@ ExprPtr Parser::parsePostfix(ExprPtr e) {
             notYet(t.loc, "pointers and '->'",
                    "fields and methods are accessed with '.': write `" + base + "." + member + "`");
         } else if (t.kind == Tok::LBracket) {
-            notYet(t.loc, "arrays and indexing");
+            advance();
+            if (check(Tok::RBracket)) fail(peek().loc, "expected an index inside [ ]", "write e.g. `items[0]`", spec::Vectors);
+            ExprPtr index = parseExpr();
+            if (check(Tok::Comma))
+                fail(peek().loc, "an element is picked with one index",
+                     "for a vector of vectors, write `grid[i][j]`", spec::Vectors);
+            expect(Tok::RBracket, "to close the index");
+            e = std::make_unique<IndexExpr>(t.loc, std::move(e), std::move(index));
         } else if (t.kind == Tok::QuestionDot) {
             notYet(t.loc, "optionals");
         } else {
@@ -773,6 +859,26 @@ ExprPtr Parser::parsePrimary() {
                 notYet(t.loc, "module members like '" + t.text + "::" + peek(1).text + "'");
             }
             if (isTypeName(t) && match(Tok::LBrace)) return parseInitList(t.loc, &prog_->findStruct(t.text)->type);
+            if (t.text == "vector" && check(Tok::Less)) {
+                --pos_;  // back to `vector`, to read the whole type
+                Loc loc;
+                const Type* ty = parseType(loc);
+                if (match(Tok::LBrace)) return parseInitList(loc, ty);
+                if (!match(Tok::LParen))
+                    fail(peek().loc, "expected '{' or '(' after '" + std::string(ty->name) + "'",
+                         "write `" + std::string(ty->name) + "{1, 2, 3}` to list the elements, or `" + ty->name +
+                             "(count, value)`",
+                         spec::Vectors);
+                std::vector<ExprPtr> args;
+                if (!check(Tok::RParen)) {
+                    do args.push_back(parseExpr());
+                    while (match(Tok::Comma));
+                }
+                expect(Tok::RParen, "to close the argument list of '" + std::string(ty->name) + "'");
+                auto call = std::make_unique<CallExpr>(loc, ty->name, std::move(args));
+                call->vectorType = ty;
+                return call;
+            }
             if (match(Tok::LParen)) {
                 std::vector<ExprPtr> args;
                 if (!check(Tok::RParen)) {
@@ -782,8 +888,11 @@ ExprPtr Parser::parsePrimary() {
                 expect(Tok::RParen, "to close the argument list of '" + t.text + "'");
                 return std::make_unique<CallExpr>(t.loc, t.text, std::move(args));
             }
-            if (check(Tok::Less) && (t.text == "vector" || t.text == "array" || t.text == "hashmap"))
-                notYet(t.loc, "containers like " + t.text + "<T>");
+            if (check(Tok::Less) && (t.text == "array" || t.text == "hashmap")) {
+                --pos_;
+                Loc loc;
+                parseType(loc);  // reports that the container is not supported yet
+            }
             return std::make_unique<NameExpr>(t.loc, t.text);
         }
         default:

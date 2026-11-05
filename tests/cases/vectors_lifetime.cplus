@@ -1,0 +1,117 @@
+// A vector holds a reference to each object in it. An object is destroyed when its
+// last reference goes away, whether that was in a vector or not.
+class Tracker {
+public:
+    string name;
+    Tracker(string n) : name(n) { println("+{}", name); }
+    ~Tracker() { println("-{}", name); }
+};
+
+class Team {
+public:
+    string name;
+    vector<Tracker> members;
+    Team(string n) : name(n) {}
+    ~Team() { println("-team {} with {}", name, members.size()); }
+};
+
+struct Slot {
+    Tracker t;
+};
+
+vector<Tracker> makeTwo() { return {Tracker("m1"), Tracker("m2")}; }
+
+int count(vector<Tracker> v) { return 0; }
+
+int main() {
+    {
+        vector<Tracker> v;
+        v.push_back(Tracker("a"));
+        v.push_back(Tracker("b"));
+        println("size {}", v.size());
+    }
+    // expect: +a
+    // expect: +b
+    // expect: size 2
+    // expect: -a
+    // expect: -b
+
+    vector<Tracker> v = {Tracker("c"), Tracker("d"), Tracker("e")};
+    // expect: +c
+    // expect: +d
+    // expect: +e
+    v.pop_back();
+    // expect: -e
+    v[0] = Tracker("f");
+    // expect: +f
+    // expect: -c
+    println("{}", v);
+    // expect: [Tracker {name: "f"}, Tracker {name: "d"}]
+
+    // A copy shares the objects; changing the copy keeps the original's objects.
+    vector<Tracker> w = v;
+    w.clear();
+    println("cleared copy");
+    // expect: cleared copy
+    Tracker kept = v[1];
+    v.clear();
+    // expect: -f
+    println("kept {}", kept.name);
+    // expect: kept d
+
+    // Objects shared by several vectors stay until the last one lets go.
+    Tracker g = Tracker("g");
+    // expect: +g
+    vector<Tracker> x = {g, g};
+    vector<Tracker> y = x;
+    y[0] = kept;
+    x = {};
+    println("{} {}", y[0].name, y[1].name);
+    // expect: d g
+
+    // Temporary vectors are released when the statement ends.
+    println("{}", makeTwo()[1].name);
+    // expect: +m1
+    // expect: +m2
+    // expect: m2
+    // expect: -m1
+    // expect: -m2
+    count(makeTwo());
+    // expect: +m1
+    // expect: +m2
+    // expect: -m1
+    // expect: -m2
+
+    // Vectors in class objects and structs.
+    Team team = Team("red");
+    team.members.push_back(Tracker("h"));
+    team.members.push_back(g);
+    // expect: +h
+    team = Team("blue");
+    // expect: -team red with 2
+    // expect: -h
+    vector<Slot> slots = {{Tracker("i")}};
+    // expect: +i
+    slots.push_back(slots[0]);
+    slots[0] = {Tracker("j")};
+    // expect: +j
+    println("{}", slots);
+    // expect: [{t: Tracker {name: "j"}}, {t: Tracker {name: "i"}}]
+
+    // The loop variable holds its own reference to each element.
+    for (Tracker t : makeTwo()) println("loop {}", t.name);
+    // expect: +m1
+    // expect: +m2
+    // expect: loop m1
+    // expect: loop m2
+    // expect: -m1
+    // expect: -m2
+    println("end");
+    // expect: end
+    return 0;
+    // expect: -j
+    // expect: -i
+    // expect: -team blue with 0
+    // expect: -g
+    // expect: -d
+}

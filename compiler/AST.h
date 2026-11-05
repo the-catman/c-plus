@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,12 +16,14 @@ namespace cplus {
 struct StructDecl;
 
 struct Type {
-    enum class Kind { Error, Void, Bool, Int, Long, String, Auto, Struct, Class };
+    enum class Kind { Error, Void, Bool, Int, Long, String, Auto, Struct, Class, Vector };
     Kind kind;
     const char* name;
     const StructDecl* decl = nullptr;  // for Kind::Struct and Kind::Class
+    const Type* elem = nullptr;        // for Kind::Vector
 
     bool is(Kind k) const { return kind == k; }
+    bool isVector() const { return kind == Kind::Vector; }
     bool isError() const { return kind == Kind::Error; }
     bool isInteger() const { return kind == Kind::Int || kind == Kind::Long; }
     bool isStruct() const { return kind == Kind::Struct; }  // a value type
@@ -41,6 +44,17 @@ struct Type {
     static const Type* longTy() { return get(Kind::Long); }
     static const Type* stringTy() { return get(Kind::String); }
     static const Type* autoTy() { return get(Kind::Auto); }
+
+    // `vector<elem>`. There is one Type per element type, so types compare by address.
+    static const Type* vectorOf(const Type* elem) {
+        static std::map<const Type*, std::pair<std::string, Type>> made;
+        auto [it, inserted] = made.try_emplace(elem);
+        if (inserted) {
+            it->second.first = "vector<" + std::string(elem->name) + ">";
+            it->second.second = Type{Kind::Vector, it->second.first.c_str(), nullptr, elem};
+        }
+        return &it->second.second;
+    }
 };
 
 struct VarDecl;
@@ -50,7 +64,7 @@ struct FuncDecl;
 
 struct Expr {
     enum class Kind { IntLit, BoolLit, StringLit, Name, This, Unary, Binary, Assign, Ternary, IncDec, Call, MethodCall,
-                      Member, InitList };
+                      Member, Index, InitList };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -138,17 +152,22 @@ struct CallExpr : Expr {
     FuncDecl* method = nullptr;              // set by Sema for `name(...)` meaning `this.name(...)`
     const StructDecl* constructs = nullptr;  // set by Sema for `TypeName(...)`
     Builtin builtin = Builtin::None;       // set by Sema for built-ins
+    const Type* vectorType = nullptr;      // `vector<int>(n)` or `vector<int>(n, value)`
     std::vector<std::string> formatPieces;  // print/println: literal text around each {} (args.size() pieces)
     CallExpr(Loc l, std::string c, std::vector<ExprPtr> a)
         : Expr(Kind::Call, l), callee(std::move(c)), args(std::move(a)) {}
 };
+
+// The methods every vector has.
+enum class VecMethod { None, Size, Empty, PushBack, PopBack, Front, Back, Clear };
 
 // `receiver.name(args)`
 struct MethodCallExpr : Expr {
     ExprPtr receiver;
     std::string name;
     std::vector<ExprPtr> args;
-    FuncDecl* method = nullptr;  // set by Sema
+    FuncDecl* method = nullptr;               // set by Sema for a struct or class method
+    VecMethod vecMethod = VecMethod::None;    // set by Sema for a vector method
     MethodCallExpr(Loc nameLoc, ExprPtr r, std::string n, std::vector<ExprPtr> a)
         : Expr(Kind::MethodCall, nameLoc), receiver(std::move(r)), name(std::move(n)), args(std::move(a)) {}
 };
@@ -161,6 +180,12 @@ struct MemberExpr : Expr {
     MemberExpr(Loc fieldLoc, ExprPtr b, std::string f) : Expr(Kind::Member, fieldLoc), base(std::move(b)), field(std::move(f)) {}
 };
 
+// `base[index]`, an element of a vector.
+struct IndexExpr : Expr {
+    ExprPtr base, index;
+    IndexExpr(Loc bracketLoc, ExprPtr b, ExprPtr i) : Expr(Kind::Index, bracketLoc), base(std::move(b)), index(std::move(i)) {}
+};
+
 // `{1, 2}`, `{.x = 1, .y = 2}`, or `Point{1, 2}`. Without a type name, the list takes its
 // type from where it is used, e.g. the declared type of the variable it initializes.
 struct InitListExpr : Expr {
@@ -170,7 +195,7 @@ struct InitListExpr : Expr {
         ExprPtr value;
         int fieldIndex = -1;  // set by Sema
     };
-    const Type* explicitType = nullptr;  // `Point{...}`
+    const Type* explicitType = nullptr;  // `Point{...}` or `vector<int>{...}`
     std::vector<Element> elements;
     explicit InitListExpr(Loc l) : Expr(Kind::InitList, l) {}
 };
@@ -178,7 +203,7 @@ struct InitListExpr : Expr {
 // ---- Statements ------------------------------------------------------------
 
 struct Stmt {
-    enum class Kind { VarDecl, DeclGroup, Expr, Block, If, While, DoWhile, For, Return, Break, Continue, Error };
+    enum class Kind { VarDecl, DeclGroup, Expr, Block, If, While, DoWhile, For, ForEach, Return, Break, Continue, Error };
     const Kind kind;
     Loc loc;
     Stmt(Kind k, Loc l) : kind(k), loc(l) {}
@@ -245,6 +270,16 @@ struct ForStmt : Stmt {
     std::vector<ExprPtr> steps;  // `i++, j--` runs each in order
     StmtPtr body;
     ForStmt(Loc l) : Stmt(Kind::For, l) {}
+};
+
+// `for (auto x : items) body`
+struct ForEachStmt : Stmt {
+    std::unique_ptr<VarDecl> var;  // the loop variable, a new one for each element
+    ExprPtr range;
+    StmtPtr body;
+    std::unique_ptr<VarDecl> rangeVar;  // holds the vector while the loop runs; set by Sema
+    ForEachStmt(Loc l, std::unique_ptr<VarDecl> v, ExprPtr r, StmtPtr b)
+        : Stmt(Kind::ForEach, l), var(std::move(v)), range(std::move(r)), body(std::move(b)) {}
 };
 
 struct ReturnStmt : Stmt {

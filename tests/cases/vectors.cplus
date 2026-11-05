@@ -1,0 +1,123 @@
+// Vectors: building, reading, changing, printing and comparing them.
+struct Point {
+    int x;
+    int y;
+    void move(int d) { x += d; y += d; }
+    int sum() const { return x + y; }
+};
+
+struct Counter {
+    int hits = 1;
+};
+
+struct Pair {
+    int a;
+    int b;
+    Pair() : a(7), b(8) {}
+};
+
+long total(vector<int> v) {
+    long sum = 0;
+    for (int x : v) sum += x;
+    return sum;
+}
+
+vector<int> squares(int n) {
+    vector<int> out;
+    for (int i = 1; i <= n; i++) out.push_back(i * i);
+    return out;
+}
+
+int main() {
+    vector<int> v = {3, 1, 4};
+    v.push_back(1);
+    v.push_back(5);
+    println("{} size={} total={}", v, v.size(), total(v));
+    // expect: [3, 1, 4, 1, 5] size=5 total=14
+    println("{} {} {} {}", v[0], v[4], v.front(), v.back());
+    // expect: 3 5 3 5
+    long last = v.size() - 1;
+    println("{}", v[last]);
+    // expect: 5
+
+    // Changing elements in place.
+    v[0] = 30;
+    v[1] += 10;
+    v[2]++;
+    --v[3];
+    println("{}", v);
+    // expect: [30, 11, 5, 0, 5]
+
+    // An empty vector, and the ways to build one.
+    vector<int> none;
+    println("{} {} {} {}", none, none.size(), none.empty(), vector<int>{}.empty());
+    // expect: [] 0 true true
+    auto zeros = vector<long>(3);
+    auto sevens = vector<int>(2, 7);
+    auto listed = vector<int>{1, 2};
+    vector<bool> flags = vector<bool>(2);
+    vector<string> blanks = vector<string>(2);
+    println("{} {} {} {} {} {}", zeros, sevens, listed, flags, blanks, vector<int>());
+    // expect: [0, 0, 0] [7, 7] [1, 2] [false, false] ["", ""] []
+    println("{} {}", vector<Counter>(2), vector<Pair>(1));
+    // expect: [{hits: 1}, {hits: 1}] [{a: 7, b: 8}]
+    println("{}", squares(5));
+    // expect: [1, 4, 9, 16, 25]
+
+    // pop_back and clear.
+    v.pop_back();
+    println("{} {}", v, v.size());
+    // expect: [30, 11, 5, 0] 4
+    v.clear();
+    println("{} {}", v, v.empty());
+    // expect: [] true
+    v.push_back(9);
+    println("{}", v);
+    // expect: [9]
+
+    // Strings print in quotes inside a vector.
+    vector<string> names = {"Ada", "Linus"};
+    names.push_back("Grace");
+    println("{} {} {}", names, names.front(), names[1]);
+    // expect: ["Ada", "Linus", "Grace"] Ada Linus
+
+    // Structs as elements.
+    vector<Point> ps;
+    ps.push_back({1, 2});
+    ps.push_back(Point{3, 4});
+    ps[1].x += 10;
+    ps[0].move(100);
+    println("{} {} {}", ps, ps[1].sum(), ps.back().y);
+    // expect: [{x: 101, y: 102}, {x: 13, y: 4}] 17 4
+
+    // Vectors of vectors.
+    vector<vector<int>> grid = {{1, 2}, {3}};
+    grid[1].push_back(4);
+    grid[0][1] = 20;
+    grid.push_back({});
+    grid[2].push_back(5);
+    println("{} {} {}", grid, grid[1][1], grid.size());
+    // expect: [[1, 20], [3, 4], [5]] 4 3
+    auto table = vector<vector<int>>(2, vector<int>(3, 0));
+    table[1][2] = 6;
+    println("{}", table);
+    // expect: [[0, 0, 0], [0, 0, 6]]
+
+    // == compares sizes and elements.
+    vector<int> a = {1, 2, 3};
+    vector<int> b = {1, 2, 3};
+    vector<int> c = {1, 2};
+    println("{} {} {} {}", a == b, a != b, a == c, none == vector<int>{});
+    // expect: true false false true
+    println("{} {}", names == vector<string>{"Ada", "Linus", "Grace"}, ps[1] == Point{13, 4});
+    // expect: true true
+    println("{}", grid == vector<vector<int>>{{1, 20}, {3, 4}, {5}});
+    // expect: true
+
+    // An element can be read through an int or a long index, from any vector.
+    int i = 1;
+    long j = 2;
+    println("{} {} {}", a[i], a[j], squares(4)[3]);
+    // expect: 2 3 16
+    return 0;
+}

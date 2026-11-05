@@ -49,6 +49,7 @@ private:
     void checkStmt(Stmt& s, Flow& flow);
     void checkVarDecl(VarDecl& v, Flow& flow);
     void checkLoopBody(Stmt& body, Flow& flow);
+    void checkForEach(ForEachStmt& st, Flow& flow);
     const Type* checkExpr(Expr& e, Flow& flow);
     // Checks `e` where a value of type `expected` is needed. A `{ }` list takes that type.
     void checkValue(Expr& e, Flow& flow, const Type* expected, const std::string& context);
@@ -56,6 +57,8 @@ private:
     void checkLooseValue(Expr& e, Flow& flow);  // checks an expression whose target type is unknown
     const Type* checkCall(CallExpr& call, Flow& flow);
     const Type* checkMethodCall(MethodCallExpr& call, Flow& flow);
+    const Type* checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type* vecType);
+    const Type* checkVectorConstruction(CallExpr& call, Flow& flow);
     // Checks arguments against parameters; `what` names the callee in messages.
     void checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow, Loc loc, const std::string& what);
     // One value given when building a struct or class: `Type(args)` or a `{ }` list.
@@ -76,6 +79,10 @@ private:
     // `var` and `path` name the place; otherwise var is null (e.g. `makePoint().x`).
     const Type* resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::string& path);
     bool checkAssignable(Expr& target, Flow& flow, const char* action, const VarDecl*& var, std::string& path);
+    // Reports an error when the resolved place `target` cannot be changed: it is const,
+    // a field of `this` in a const method, or part of a temporary value.
+    bool checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path);
+    const VarDecl* rootVariable(const Expr& root);
     void reportUnknownName(const NameExpr& n);
 
     VarDecl* lookup(const std::string& name);

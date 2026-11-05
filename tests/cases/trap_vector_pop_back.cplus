@@ -1,0 +1,7 @@
+int main() {
+    vector<int> v = {1};
+    v.pop_back();
+    v.pop_back();
+    return 0;
+}
+// trap: pop_back() was called on an empty vector

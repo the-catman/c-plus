@@ -1,0 +1,37 @@
+int main() {
+    vector v;
+    vector<> e;
+    vector<int, int> pair;
+    vector<void> nothing;
+    vector<int> items = {1, 2};
+    for (auto& x : items) println("{}", x);
+    for (const auto& x : items) println("{}", x);
+    vector<int> sized(5);
+    int arr[5];
+    println("{}", items[]);
+    println("{}", items[1, 2]);
+    hashmap<string, int> ages;
+    auto w = vector<int>;
+    int x : items;
+    return 0;
+}
+// error: vector needs an element type
+// error: write `vector<int> v;`
+// error: write e.g. `vector<int>`
+// error: vector takes one type: the type of its elements
+// error: a vector cannot hold 'void' elements
+// error: this compiler does not support references in range-based for loops yet
+// error: drop the '&': `for (auto x : items)` copies each element, which is cheap
+// error: drop the '&': `for (const auto x : items)`
+// error: To change the elements, loop over the indexes: `for (long i = 0; i < items.size(); i++) items[i] = ...;`
+// error: this compiler does not support brace and constructor initializers yet
+// error: write `vector<int> sized = {1, 2, 3};` or `auto sized = vector<int>(count, value);`
+// error: this compiler does not support C-style arrays yet
+// error: use a vector: `vector<int> arr;`
+// error: expected an index inside [ ]
+// error: an element is picked with one index
+// error: this compiler does not support hash maps (hashmap<K, V>) yet
+// error: expected '{' or '(' after 'vector<int>'
+// error: a range-based for loop is written inside 'for ( )'
+// error: spec: docs/SPEC.md#vectors
+// error: spec: docs/SPEC.md#range-based-for-loops

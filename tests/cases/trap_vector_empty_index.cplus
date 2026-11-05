@@ -1,0 +1,6 @@
+int main() {
+    vector<vector<int>> grid;
+    grid[0].push_back(1);
+    return 0;
+}
+// trap: index 0 is out of range for a vector of size 0

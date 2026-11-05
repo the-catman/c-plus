@@ -208,6 +208,18 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
 - Source files use `.cplus`.
 - LLVM is pinned to version 18.
 
+### 2.17 Vectors — DECIDED
+- `vector<T>` is a value type, copied on assignment like `std::vector`. Copies share one
+  buffer of elements until one of them changes (copy-on-write), so passing and returning
+  vectors is cheap without references.
+- C++ names: `push_back`, `pop_back`, `size`, `empty`, `front`, `back`, `clear`, `v[i]`.
+  `vector<int> v;` is an empty vector, as in C++.
+- `size()` returns `long`, since there are no unsigned types.
+- An index out of range, and `pop_back`, `front` or `back` on an empty vector, stop the
+  program with the file and line.
+- A range-based `for` loops over the vector as it was when the loop started, so changing
+  the vector in the body is safe. `for (auto& x : v)` waits for references.
+
 ---
 
 ## 3. Compiler architecture
@@ -235,12 +247,12 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phase 0 has a first draft (`docs/SPEC.md`, `docs/CHEATSHEET.md`). Phase 1 is in
-progress. The compiler builds programs with integers, bools, string literals, structs, and
-reference-counted classes with methods, constructors and destructors, using functions,
-control flow, definite assignment (down to struct fields), overflow traps, and `println`,
-all through LLVM. Destructors and a leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes,
-ahead of Phase 2. Next in Phase 1: `vector`, string operations, optionals, and `extern` C
-calls.
+progress. The compiler builds programs with integers, bools, string literals, structs,
+reference-counted classes with methods, constructors and destructors, and vectors, using
+functions, control flow including range-based `for`, definite assignment (down to struct
+fields), overflow and bounds traps, and `println`, all through LLVM. Destructors and a leak
+check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. Next in Phase 1:
+string operations, optionals, and `extern` C calls.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -296,6 +308,9 @@ will confidently write C++ wherever the two differ.
 - Remaining syntax: interfaces, casts, `unique<T>` and `local<T>` construction, `async`
   functions, lambdas, enums, `switch`. Settled in Phase 0 as each feature is reached.
 - Function overloading is planned, as in C++, after the v1 core.
+- References (`T&`): whether C+ gets them, and in what form. They decide how
+  `for (auto& x : v)` and `const T&` parameters work; today both are errors that point to a
+  copy, which is cheap for vectors.
 - Event loop and threads: one loop per thread versus a work-stealing scheduler. Decided
   in Phase 5 with real workloads.
 - Package manager, after v1.

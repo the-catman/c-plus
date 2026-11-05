@@ -1,0 +1,6 @@
+int main() {
+    vector<int> v;
+    println("{}", v.back());
+    return 0;
+}
+// trap: back() was called on an empty vector

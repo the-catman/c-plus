@@ -101,6 +101,12 @@ static const Type* typeAtPath(const VarDecl* v, const std::string& path) {
     return t;
 }
 
+// Expressions that name storage: a variable, `this`, a field, or an element.
+static bool isPlaceKind(const Expr& e) {
+    return e.kind == Expr::Kind::Name || e.kind == Expr::Kind::Member || e.kind == Expr::Kind::This ||
+           e.kind == Expr::Kind::Index;
+}
+
 // ---- Definite assignment ---------------------------------------------------
 
 bool Sema::isAssigned(const Flow& flow, const VarDecl* var, const Type* type, const std::string& path) const {
@@ -142,11 +148,11 @@ void Sema::markAssigned(Flow& flow, const VarDecl* var, const std::string& path)
     if (flow.reachable) flow.assigned.insert({var, path});
 }
 
-// A declaration without an initializer still gives strings their empty value and
-// fields their defaults, as in C++. Numbers and bools stay unassigned.
+// A declaration without an initializer still gives strings and vectors their empty
+// value and fields their defaults, as in C++. Numbers and bools stay unassigned.
 void Sema::markDefaults(Flow& flow, const VarDecl* var, const Type* type, const std::string& path) {
     if (tooDeep(path)) return;
-    if (type->is(K::String)) {
+    if (type->is(K::String) || type->isVector()) {
         markAssigned(flow, var, path);
     } else if (type->isStruct()) {
         for (auto& f : type->decl->fields) {
@@ -507,8 +513,13 @@ static bool usableAsCondition(const Type* t) { return t->isError() || t->is(K::B
 void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
     const Type* t = checkExpr(e, flow);
     if (usableAsCondition(t)) return;
-    diags_.error(e.loc, std::string("the ") + what + " must be a bool or a number, but this is " + q(t),
-                 t->is(K::Void) ? "this expression produces no value" : "", spec::Conditions);
+    std::string help;
+    if (t->is(K::Void)) help = "this expression produces no value";
+    else if (t->isVector())
+        help = "to check whether it has elements, write `!" +
+               (e.kind == Expr::Kind::Name ? static_cast<NameExpr&>(e).name : std::string("items")) + ".empty()`";
+    diags_.error(e.loc, std::string("the ") + what + " must be a bool or a number, but this is " + q(t), help,
+                 spec::Conditions);
 }
 
 void Sema::checkShiftAmount(const Type* lhsType, const Expr* lhs, const Expr& amount) {
@@ -611,6 +622,7 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
             flow = after;
             return;
         }
+        case Stmt::Kind::ForEach: checkForEach(static_cast<ForEachStmt&>(s), flow); return;
         case Stmt::Kind::Return: {
             auto& st = static_cast<ReturnStmt&>(s);
             const Type* ret = fn_->retType;
@@ -644,6 +656,47 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
             return;
         }
     }
+}
+
+// `for (T x : range)`: the body runs once for each element, possibly never.
+void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
+    const Type* rangeType = checkExpr(*st.range, flow);
+    const Type* elem = Type::error();
+    if (rangeType->isVector()) {
+        elem = rangeType->elem;
+    } else if (!rangeType->isError()) {
+        diags_.error(st.range->loc, "a range-based for loop goes over a vector, but this is " + q(rangeType),
+                     rangeType->is(K::String) ? "looping over the characters of a string is planned"
+                                              : "write the vector to loop over after the ':'",
+                     spec::RangeFor);
+        rangeType = Type::error();
+    }
+    st.rangeVar = std::make_unique<VarDecl>(st.range->loc, "range", rangeType, st.range->loc);
+    st.rangeVar->type = rangeType;
+
+    VarDecl& v = *st.var;
+    if (v.declType->is(K::Auto)) {
+        v.type = elem;
+    } else {
+        v.type = v.declType;
+        if (!canConvert(elem, v.type))
+            diags_.error(v.typeLoc, "the elements of " + q(rangeType) + " are " + q(elem) + ", which cannot be stored in " +
+                                        q(v.type) + " " + q(v.name),
+                         "write `for (auto " + v.name + " : ...)` or `for (" + std::string(elem->name) + " " + v.name +
+                             " : ...)`",
+                         spec::RangeFor);
+    }
+    scopes_.emplace_back();
+    loops_.emplace_back();
+    Flow body = flow;
+    declare(v);
+    markAssigned(body, &v, "");
+    checkLoopBody(*st.body, body);
+    Flow after = flow;
+    for (auto& b : loops_.back().breaks) after = merge(after, b);
+    loops_.pop_back();
+    scopes_.pop_back();
+    flow = after;
 }
 
 // ---- Expressions -----------------------------------------------------------
@@ -686,9 +739,22 @@ void Sema::checkLooseValue(Expr& e, Flow& flow) {
 
 void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
     list.type = type;
+    if (type->isVector()) {  // the elements, in order
+        for (auto& el : list.elements) {
+            if (!el.designator.empty()) {
+                diags_.error(el.loc, "a vector's { } list holds its elements, not named fields",
+                             "write the values alone, e.g. `{1, 2, 3}`", spec::Vectors);
+                checkLooseValue(*el.value, flow);
+                continue;
+            }
+            checkValue(*el.value, flow, type->elem, "as an element of " + q(type));
+        }
+        return;
+    }
     if (type->isError() || !type->hasFields()) {
         if (!type->isError())
-            diags_.error(list.loc, "a { } list builds a struct or class object, but " + q(type) + " is expected here",
+            diags_.error(list.loc, "a { } list builds a struct, a class object or a vector, but " + q(type) +
+                                       " is expected here",
                          "write the value without braces", spec::Structs);
         list.type = Type::error();
         for (auto& el : list.elements) checkLooseValue(*el.value, flow);
@@ -813,11 +879,34 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         var = thisVar();
         return e.type = &owner()->type;
     }
+    if (e.kind == Expr::Kind::Index) {
+        // An element of a vector always holds a value, so it is not tracked.
+        auto& ix = static_cast<IndexExpr&>(e);
+        const Type* baseType = isPlaceKind(*ix.base) ? resolvePlace(*ix.base, flow, var, path) : checkExpr(*ix.base, flow);
+        if (var && !baseType->isError()) requireAssigned(flow, var, path, baseType, ix.base->loc);
+        var = nullptr;
+        path.clear();
+        const Type* indexType = checkExpr(*ix.index, flow);
+        e.type = Type::error();
+        if (baseType->isError()) return e.type;
+        if (!baseType->isVector()) {
+            diags_.error(e.loc, "'[ ]' picks an element of a vector, but this is " + q(baseType),
+                         baseType->is(K::String) ? "string operations are planned" : "", spec::Vectors);
+            return e.type;
+        }
+        if (!indexType->isError() && !indexType->isInteger())
+            diags_.error(ix.index->loc, "a vector index must be an int or long, but this is " + q(indexType), "",
+                         spec::Vectors);
+        else if (ix.index->kind == Expr::Kind::IntLit && static_cast<IntLitExpr&>(*ix.index).value < 0)
+            diags_.error(ix.index->loc, "a vector index cannot be negative",
+                         "elements are numbered from 0; the last one is `v[v.size() - 1]` or `v.back()`",
+                         spec::Vectors);
+        return e.type = baseType->elem;
+    }
     if (e.kind != Expr::Kind::Member) return checkExpr(e, flow);
 
     auto& m = static_cast<MemberExpr&>(e);
-    bool baseIsPlace = m.base->kind == Expr::Kind::Name || m.base->kind == Expr::Kind::Member ||
-                       m.base->kind == Expr::Kind::This;
+    bool baseIsPlace = isPlaceKind(*m.base);
     const Type* baseType = baseIsPlace ? resolvePlace(*m.base, flow, var, path)
                                        : checkExpr(*m.base, flow);  // e.g. makePoint().x
     e.type = Type::error();
@@ -832,8 +921,13 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         path.clear();
     }
     if (!baseType->hasFields()) {
-        diags_.error(e.loc, q(baseType) + " has no fields, so '." + m.field + "' cannot be used",
-                     baseType->is(K::String) ? "string operations are planned" : "", spec::Structs);
+        std::string help = baseType->is(K::String) ? "string operations are planned" : "";
+        if (baseType->isVector())
+            help = m.field == "size" || m.field == "empty" || m.field == "front" || m.field == "back"
+                       ? q(m.field) + " is a method; call it with `" + m.field + "()`"
+                       : "vectors have methods like size(), push_back(x) and back(), and elements are read with `v[i]`";
+        diags_.error(e.loc, q(baseType) + " has no fields, so '." + m.field + "' cannot be used", help,
+                     baseType->isVector() ? spec::Vectors : spec::Structs);
         var = nullptr;
         return e.type;
     }
@@ -853,57 +947,114 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     return e.type = sd.fields[m.fieldIndex].type;
 }
 
-// Whether a place lies inside a class object reached through a reference other than
-// `this`, e.g. `u.name` or `u.pos.x` for a class variable `u`.
-static bool insideObject(const Expr& e) {
-    if (e.kind != Expr::Kind::Member) return false;
-    const Expr& base = *static_cast<const MemberExpr&>(e).base;
-    if (base.type && base.type->isClass() && base.kind != Expr::Kind::This) return true;
-    return insideObject(base);
+// Where the value at a place is stored: in a variable (or `this`), inside a class
+// object reached through a reference, or in a temporary such as a function's result.
+enum class Storage { Variable, Object, Temporary };
+
+// Follows fields and elements from the place `e` back to what holds them. For a
+// variable, `root` is set to the Name or This expression it starts from.
+static Storage storageOf(const Expr& e, const Expr*& root) {
+    switch (e.kind) {
+        case Expr::Kind::Name:
+        case Expr::Kind::This: root = &e; return Storage::Variable;
+        case Expr::Kind::Member: {
+            const Expr& base = *static_cast<const MemberExpr&>(e).base;
+            if (base.type && base.type->isClass() && base.kind != Expr::Kind::This) return Storage::Object;
+            return storageOf(base, root);
+        }
+        case Expr::Kind::Index: return storageOf(*static_cast<const IndexExpr&>(e).base, root);
+        default: return Storage::Temporary;
+    }
+}
+
+static bool containsIndex(const Expr& e) {
+    if (e.kind == Expr::Kind::Index) return true;
+    return e.kind == Expr::Kind::Member && containsIndex(*static_cast<const MemberExpr&>(e).base);
+}
+
+// The vector whose elements a place lies in, written as in the source: `grid` for `grid[i][j].x`.
+static std::string outerVectorName(const Expr& e) {
+    switch (e.kind) {
+        case Expr::Kind::Name: return static_cast<const NameExpr&>(e).name;
+        case Expr::Kind::This: return "this";
+        case Expr::Kind::Member: {
+            auto& m = static_cast<const MemberExpr&>(e);
+            if (m.base->kind == Expr::Kind::This) return m.field;
+            std::string base = outerVectorName(*m.base);
+            return containsIndex(*m.base) ? base : base + "." + m.field;
+        }
+        case Expr::Kind::Index: return outerVectorName(*static_cast<const IndexExpr&>(e).base);
+        default: return "";
+    }
+}
+
+const VarDecl* Sema::rootVariable(const Expr& root) {
+    if (root.kind == Expr::Kind::This) return thisVar();
+    auto& n = static_cast<const NameExpr&>(root);
+    return n.implicitField >= 0 ? thisVar() : n.decl;
+}
+
+bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path) {
+    const Expr* root = nullptr;
+    switch (storageOf(target, root)) {
+        // A field of a class object can always be changed: the object lives on its
+        // own, not inside a temporary. `const` on a variable only stops the variable
+        // itself from being reassigned, as with `const` in JavaScript.
+        case Storage::Object: return true;
+        case Storage::Temporary:
+            diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action,
+                         "this value is a temporary copy, so changing it would have no effect", spec::Variables);
+            return false;
+        case Storage::Variable: break;
+    }
+    const VarDecl* rootVar = rootVariable(*root);
+    if (!rootVar) return false;  // an unknown name, already reported
+    bool element = containsIndex(target);
+    if (rootVar == thisVar() && fn_->isConst) {
+        std::string what = element ? "the elements of " + q(outerVectorName(target)) : q(var ? path : rootVar->name);
+        diags_.error(target.loc, what + " cannot be " + action + " inside const method " + q(fn_->name),
+                     "remove `const` after the parameter list of " + q(fn_->name) + " if it needs to change fields",
+                     spec::Methods);
+        return false;
+    }
+    if (rootVar->isConst) {
+        std::string what = element ? "its elements" : "its fields";
+        if (!element && path.empty())
+            diags_.error(target.loc, q(rootVar->name) + " is const and cannot be " + action,
+                         "remove `const` from its declaration if it needs to change", spec::Variables);
+        else
+            diags_.error(target.loc, q(rootVar->name) + " is const, so " + what + " cannot be " + action,
+                         "remove `const` from its declaration if it needs to change", spec::Variables);
+        diags_.note(rootVar->loc, q(rootVar->name) + " is declared here");
+        return false;
+    }
+    return true;
 }
 
 // Checks that `target` can be changed. `var` and `path` are set to the variable and
 // field path to track for definite assignment; `var` stays null for a place inside a
-// class object, whose fields always have values.
+// class object or a vector, which always holds a value.
 bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const VarDecl*& var, std::string& path) {
     var = nullptr;
-    if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member) {
+    if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index) {
         checkExpr(target, flow);
-        diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action,
-                     target.kind == Expr::Kind::This ? "'this' always refers to the current object" : "",
+        std::string help = target.kind == Expr::Kind::This ? "'this' always refers to the current object" : "";
+        if (target.kind == Expr::Kind::MethodCall && target.type && !target.type->isError() &&
+            static_cast<MethodCallExpr&>(target).vecMethod != VecMethod::None)
+            help = "front() and back() return a copy of the element; to change it, write `v[0] = ...` or "
+                   "`v[v.size() - 1] = ...`";
+        diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action, help,
                      spec::Variables);
         return false;
     }
     const Type* t = resolvePlace(target, flow, var, path);
     if (t->isError()) return false;
-    // A field of a class object can always be changed: the object lives on its own,
-    // not inside a temporary. `const` on a variable only stops the variable itself
-    // from being reassigned, as with `const` in JavaScript.
-    if (insideObject(target)) {
+    if (!checkChangeable(target, action, var, path)) {
         var = nullptr;
-        return true;
-    }
-    if (var && var == thisVar() && fn_->isConst) {
-        diags_.error(target.loc, q(path) + " cannot be " + action + " inside const method " + q(fn_->name),
-                     "remove `const` after the parameter list of " + q(fn_->name) + " if it needs to change fields",
-                     spec::Methods);
         return false;
     }
-    if (!var) {
-        diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action,
-                     "this value is a temporary copy, so changing it would have no effect", spec::Variables);
-        return false;
-    }
-    if (var->isConst) {
-        if (path.empty())
-            diags_.error(target.loc, q(var->name) + " is const and cannot be " + action,
-                         "remove `const` from its declaration if it needs to change", spec::Variables);
-        else
-            diags_.error(target.loc, q(var->name) + " is const, so its fields cannot be " + action,
-                         "remove `const` from its declaration if it needs to change", spec::Variables);
-        diags_.note(var->loc, q(var->name) + " is declared here");
-        return false;
-    }
+    const Expr* root = nullptr;
+    if (storageOf(target, root) == Storage::Object) var = nullptr;
     return true;
 }
 
@@ -919,7 +1070,8 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
         case Expr::Kind::StringLit: result = Type::stringTy(); break;
         case Expr::Kind::Name:
         case Expr::Kind::This:
-        case Expr::Kind::Member: {
+        case Expr::Kind::Member:
+        case Expr::Kind::Index: {
             const VarDecl* var;
             std::string path;
             result = resolvePlace(e, flow, var, path);
@@ -933,8 +1085,8 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 checkInitList(list, flow, list.explicitType);
                 result = list.type;
             } else {
-                diags_.error(e.loc, "this { } list needs a type here", "name the struct, e.g. `Point{1, 2}`",
-                             spec::Structs);
+                diags_.error(e.loc, "this { } list needs a type here",
+                             "name the type, e.g. `Point{1, 2}` or `vector<int>{1, 2}`", spec::Structs);
                 for (auto& el : list.elements) checkLooseValue(*el.value, flow);
             }
             break;
@@ -996,7 +1148,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 if (bad->is(K::String) && b.op == BinOp::Add) help = "joining strings is not supported yet; print the parts with println(\"{}{}\", a, b)";
                 else if (equality) help = "both sides of '" + std::string(sym) + "' must have the same type, but they are " + q(l) + " and " + q(r);
                 else if (comparison && bad->is(K::String)) help = "strings can be compared with == and != for now; ordering them is planned";
-                else if (comparison && bad->hasFields()) help = q(bad) + " values can only be compared with == and !=";
+                else if (comparison && (bad->hasFields() || bad->isVector())) help = q(bad) + " values can only be compared with == and !=";
                 else if (bad->is(K::Bool) && (b.op == BinOp::BitAnd || b.op == BinOp::BitOr)) help = std::string("use '") + (b.op == BinOp::BitAnd ? "&&" : "||") + "' for logic";
                 diags_.error(side->loc, std::string("'") + sym + "' cannot be used with " + q(bad), help, spec::Operators);
                 if (comparison) result = Type::boolTy();
@@ -1093,6 +1245,7 @@ void Sema::checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow,
 }
 
 const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
+    if (call.vectorType) return checkVectorConstruction(call, flow);
     if (call.callee == "println" || call.callee == "print") return checkPrint(call, flow);
     Loc nameLoc = call.loc;
     nameLoc.len = (uint32_t)call.callee.size();
@@ -1141,13 +1294,14 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     const VarDecl* var = nullptr;
     std::string path;
     Expr& recv = *call.receiver;
-    bool isPlace = recv.kind == Expr::Kind::Name || recv.kind == Expr::Kind::Member || recv.kind == Expr::Kind::This;
+    bool isPlace = isPlaceKind(recv);
     const Type* t = isPlace ? resolvePlace(recv, flow, var, path) : checkExpr(recv, flow);
     if (var && !t->isError()) requireAssigned(flow, var, path, t, recv.loc);
     if (t->isError()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         return Type::error();
     }
+    if (t->isVector()) return checkVectorMethod(call, flow, t);
     if (!t->hasFields()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         diags_.error(call.loc, q(t) + " has no methods, so '." + call.name + "()' cannot be used",
@@ -1172,17 +1326,135 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     call.method = m;
     if (!canAccess(sd, m->access)) reportAccess(sd, m->name, true, call.loc);
     if (!m->isConst) {
-        // A method that may change fields changes the struct value it is called on.
-        bool changesThis = var && var == thisVar() && (t->isStruct() || path.empty());
-        if (changesThis && fn_->isConst)
+        // A method that may change fields changes the struct value it is called on,
+        // wherever that value is stored.
+        const VarDecl* holder = nullptr;
+        const Expr* root = nullptr;
+        if (t->isStruct() && isPlace && storageOf(recv, root) == Storage::Variable) holder = rootVariable(*root);
+        else if (var && var == thisVar() && path.empty()) holder = var;  // `this` of a class
+        if (holder && holder == thisVar() && fn_->isConst)
             diags_.error(call.loc, "const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
                          "mark " + q(m->name) + " as `const` if it does not change any field", spec::Methods);
-        else if (t->isStruct() && var && var->isConst)
-            diags_.error(call.loc, "cannot call " + q(m->name) + " on const " + q(var->name) + ", because it may change fields",
+        else if (t->isStruct() && holder && holder->isConst)
+            diags_.error(call.loc, "cannot call " + q(m->name) + " on const " + q(holder->name) + ", because it may change fields",
                          "mark " + q(m->name) + " as `const` if it does not change any field", spec::Methods);
     }
     checkArgs(call.args, *m, flow, call.loc, q(m->name));
     return m->retType;
+}
+
+namespace {
+struct VectorMethodInfo {
+    const char* name;
+    VecMethod method;
+    bool takesElement;  // push_back(x); the others take no arguments
+    bool changes;       // changes the vector
+};
+const VectorMethodInfo kVectorMethods[] = {
+    {"size", VecMethod::Size, false, false},       {"empty", VecMethod::Empty, false, false},
+    {"push_back", VecMethod::PushBack, true, true}, {"pop_back", VecMethod::PopBack, false, true},
+    {"front", VecMethod::Front, false, false},     {"back", VecMethod::Back, false, false},
+    {"clear", VecMethod::Clear, false, true},
+};
+}  // namespace
+
+const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type* vecType) {
+    const VectorMethodInfo* info = nullptr;
+    for (auto& m : kVectorMethods)
+        if (call.name == m.name) info = &m;
+    if (!info) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        std::string help;
+        if (call.name == "emplace_back") help = "write `push_back(value)`";
+        else if (call.name == "at") help = "write `v[i]`; indexing is always checked in C+";
+        else if (call.name == "length" || call.name == "count") help = "did you mean 'size'?";
+        else if (call.name == "insert" || call.name == "erase" || call.name == "resize" || call.name == "reserve" ||
+                 call.name == "begin" || call.name == "end") {
+            diags_.error(call.loc, "this compiler does not support " + call.name + "() on vectors yet",
+                         "the vector methods today are size, empty, push_back, pop_back, front, back and clear",
+                         spec::Status);
+            return Type::error();
+        } else {
+            std::vector<std::string> names;
+            for (auto& m : kVectorMethods) names.push_back(m.name);
+            std::string guess = closest(call.name, names);
+            help = guess.empty() ? "the vector methods are size, empty, push_back, pop_back, front, back and clear"
+                                 : "did you mean " + q(guess) + "?";
+        }
+        diags_.error(call.loc, q(vecType) + " has no method named " + q(call.name), help, spec::Vectors);
+        return Type::error();
+    }
+    call.vecMethod = info->method;
+    if (info->changes) {
+        const Expr& recv = *call.receiver;
+        if (!isPlaceKind(recv)) {
+            diags_.error(recv.loc, std::string(info->name) + "() changes the vector, so it must be called on a variable "
+                                                             "or a field",
+                         "this vector is a temporary copy, so changing it would have no effect", spec::Vectors);
+        } else {
+            const VarDecl* var = nullptr;
+            std::string path;
+            const Expr* root = nullptr;
+            if (storageOf(recv, root) == Storage::Variable && root && !containsIndex(recv)) {
+                var = rootVariable(*root);
+                if (recv.kind == Expr::Kind::Member || (recv.kind == Expr::Kind::Name &&
+                                                        static_cast<const NameExpr&>(recv).implicitField >= 0))
+                    path = outerVectorName(recv);
+            }
+            checkChangeable(recv, "changed", var, path);
+        }
+    }
+    size_t want = info->takesElement ? 1 : 0;
+    if (call.args.size() != want) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, std::string(info->name) + "() takes " + (want ? "one argument" : "no arguments") + " but " +
+                                   std::to_string(call.args.size()) + (call.args.size() == 1 ? " was" : " were") +
+                                   " given",
+                     want ? "write `" + std::string(info->name) + "(value)`" : "write `" + std::string(info->name) + "()`",
+                     spec::Vectors);
+    } else if (want) {
+        checkValue(*call.args[0], flow, vecType->elem, std::string("for ") + info->name + "() on " + q(vecType));
+    }
+    switch (info->method) {
+        case VecMethod::Size: return Type::longTy();
+        case VecMethod::Empty: return Type::boolTy();
+        case VecMethod::Front:
+        case VecMethod::Back: return vecType->elem;
+        default: return Type::voidTy();
+    }
+}
+
+// Whether a value of type `t` can be made without being given one: what `vector<T>(n)`
+// fills its elements with.
+static bool hasDefault(const Type* t) {
+    if (t->isStruct()) return !needsValue(t) && (!t->decl->constructor || t->decl->constructor->params.empty());
+    return !t->isClass();
+}
+
+// `vector<T>()`, `vector<T>(n)` or `vector<T>(n, value)`.
+const Type* Sema::checkVectorConstruction(CallExpr& call, Flow& flow) {
+    const Type* vt = call.vectorType;
+    std::string name = vt->name;
+    if (call.args.size() > 2) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, name + "(...) takes a size and an optional value, but " + std::to_string(call.args.size()) +
+                                   " values were given",
+                     "to list the elements, use braces: `" + name + "{1, 2, 3}`", spec::Vectors);
+        return vt;
+    }
+    if (!call.args.empty()) checkValue(*call.args[0], flow, Type::longTy(), "as the size of " + q(vt));
+    if (call.args.size() == 2) {
+        checkValue(*call.args[1], flow, vt->elem, "as the element value of " + q(vt));
+    } else if (call.args.size() == 1 && !hasDefault(vt->elem)) {
+        const Type* elem = vt->elem;
+        std::string why = elem->isClass() ? "a " + q(elem) + " reference cannot be empty"
+                          : needsValue(elem) ? q(elem) + " holds a class reference that cannot be empty"
+                                             : "the constructor of " + q(elem) + " needs arguments";
+        diags_.error(call.loc, name + "(n) cannot make its elements on its own, because " + why,
+                     "give the value to fill it with, as in `" + name + "(n, value)`, or start empty and use push_back",
+                     spec::Vectors);
+    }
+    return vt;
 }
 
 const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {

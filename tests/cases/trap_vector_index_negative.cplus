@@ -1,0 +1,7 @@
+int main() {
+    vector<string> names = {"a", "b"};
+    int i = -1;
+    names[i] = "c";
+    return 0;
+}
+// trap: index -1 is out of range for a vector of size 2

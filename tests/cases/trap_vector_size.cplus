@@ -1,0 +1,6 @@
+int main() {
+    int n = 2 - 5;
+    auto v = vector<int>(n, 0);
+    return 0;
+}
+// trap: a vector cannot have a negative size

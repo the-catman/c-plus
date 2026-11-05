@@ -20,17 +20,19 @@ long square(long n) { return n * n; }
 
 | Area | C+ |
 |------|----|
-| Types | `int` (32-bit), `long` (64-bit), `bool`, `string`, `void`, `auto`, structs, classes |
+| Types | `int` (32-bit), `long` (64-bit), `bool`, `string`, `void`, `auto`, structs, classes, `vector<T>` |
 | Structs | `struct P { int x; int y = 0; };` is a **value** that is copied. Build with `{1, 2}`, `{.y = 2}`, `P{1, 2}`, `P(1, 2)`, `{}` |
 | Fields | `p.x`, `p.x += 1`. `Point p;` can be filled field by field before use |
 | Classes | `class U {...}; U u = U("a");` is a **reference-counted object**: `U v = u;` shares it. No `new`; freed when the last reference goes away |
 | Methods | written inside the type: `int area() const { return w * h; }`. Use fields by name or as `this.w` |
 | Constructors | `U(string n) : name(n) {}`, one per type. `~U() {}` destructors for classes only |
 | Access | `public:` / `private:`; class members are private by default, struct members public |
-| Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}` |
-| Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue`, `?:` |
+| Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
+| Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
+| Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]` |
+| Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)`, `break`, `continue`, `?:` |
 | Operators | all C++ integer operators, `&&` `\|\|` `!`, compound assignment, `++`/`--` |
-| Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), objects by identity |
+| Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors element by element, objects by identity |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
 | Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long) |
 | Conditions | `bool` or a number, as in C++: `if (n)`, `while (n--)`, `!n` |
@@ -41,6 +43,7 @@ long square(long n) { return n * n; }
 |-----------|----|
 | `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;` |
 | `std::cout << x`, `printf` | `println("{}", x)` |
+| `std::vector<int>` | `vector<int>`, with no `std::` |
 | `std::`, `using namespace std` | no `std::`; built-ins have no prefix |
 | prototypes / headers | none. Define each function once, in any order |
 | `int x;` then read `x` | compile error until `x` is assigned on every path |
@@ -62,6 +65,14 @@ long square(long n) { return n * n; }
 | `bool operator==(...) = default` | not needed: every struct already has `==` |
 | several constructors | one per type for now; leave it out and use field defaults instead |
 | `auto p = {1, 2};` | `auto p = Point{1, 2};`, since a bare `{ }` needs a known type |
+| `int n = v.size();` | error: `size()` is a `long`, since there are no unsigned types. Write `long n` or `auto n`; `i < v.size()` with an `int i` is fine |
+| `v[i]` past the end is UB | every index is checked and a bad one **stops the program** with file:line; so do `pop_back()`, `front()`, `back()` on an empty vector |
+| `v.push_back(...)` inside `for (x : v)` is UB | safe: the loop goes over `v` as it was when the loop started |
+| `for (auto& x : v)`, `const vector<int>& v` | no references yet: `for (auto x : v)` and `vector<int> v` copy cheaply. Change elements with `v[i] = ...` |
+| `vector<int> v(5);`, `vector<int> v{1, 2};` | `auto v = vector<int>(5);`, `vector<int> v = {1, 2};` |
+| `v.emplace_back(x)`, `v.at(i)` | `v.push_back(x)`, `v[i]` (always checked) |
+| `int a[5];` | `vector<int> a = vector<int>(5);`; `array<T, N>` is planned |
+| `if (v)`, `if (!v)` | `if (!v.empty())`, `if (v.empty())`; a vector itself is not a condition |
 | overloaded functions | planned; one function per name for now |
 
 ## Planned. The compiler rejects these today with "does not support ... yet"
@@ -75,7 +86,8 @@ long square(long n) { return n * n; }
 | Generics | `template<typename T>`, `template<Comparable T>`; no specialization or SFINAE |
 | Modules | `import net.server;`, `http::get(url)` |
 | Memory | `weak`, `unique<T>`, `local<T>`; raw `T*`, `new`/`delete` warn |
-| Containers | `vector<T>`, `array<T, N>`, `hashmap<K, V>`, bounds-checked |
+| Containers | `array<T, N>`, `hashmap<K, V>`; `insert`, `erase` and iterators on vectors |
+| References | `T&` parameters, `for (auto& x : v)` |
 | Concurrency | `spawn f()` → `Task<T>`; later `async`/`await` |
 
 ## Tools

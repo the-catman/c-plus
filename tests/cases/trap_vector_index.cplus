@@ -1,0 +1,9 @@
+int main() {
+    vector<int> v = {1, 2, 3};
+    println("{}", v[2]);
+    println("{}", v[3]);
+    return 0;
+}
+// expect: 3
+// trap: index 3 is out of range for a vector of size 3
+// trap: trap_vector_index.cplus:4:20

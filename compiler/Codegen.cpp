@@ -20,6 +20,7 @@
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/TargetParser/Host.h>
 
+#include <functional>
 #include <unordered_map>
 
 namespace cplus {
@@ -37,6 +38,7 @@ struct Codegen::Impl {
     llvm::StructType* stringTy = nullptr;  // { ptr data, i64 length }
     llvm::FunctionCallee rtPrintStr, rtPrintQuoted, rtPrintI32, rtPrintI64, rtPrintBool, rtPrintNewline, rtTrap;
     llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq;
+    llvm::FunctionCallee rtTrapIndex, rtVecNew, rtVecRelease, rtVecReserve;
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
 
@@ -51,6 +53,21 @@ struct Codegen::Impl {
         int managed = -1;                   // structs: whether they hold class references (-1: not computed)
     };
     std::unordered_map<const StructDecl*, TypeInfo> types;
+
+    // A vector is a pointer to a buffer laid out as the runtime's cplus_vec: a header of
+    // count, size and capacity, then the elements. Null is an empty vector.
+    static constexpr uint64_t kVecSizeOffset = 8, kVecCapacityOffset = 16, kVecHeaderSize = 24;
+    struct VecInfo {  // generated for each vector type, when first needed
+        llvm::Type* elemTy = nullptr;
+        uint64_t elemSize = 0;
+        llvm::Function* print = nullptr;
+        llvm::Function* equals = nullptr;
+        llvm::Constant* retainElem = nullptr;   // void(ptr element), or null when elements hold no references
+        llvm::Constant* releaseElem = nullptr;
+    };
+    std::unordered_map<const Type*, VecInfo> vecs;
+    llvm::Function* vecSizeFn = nullptr;
+    llvm::Function* vecReserveFn = nullptr;
 
     std::unordered_map<const FuncDecl*, llvm::Function*> funcs;
     std::unordered_map<const VarDecl*, llvm::AllocaInst*> locals;
@@ -126,6 +143,15 @@ struct Codegen::Impl {
         rtPrintEnter = decl("cplus_print_enter", i32, {ptrTy});
         rtPrintLeave = decl("cplus_print_leave", voidTy, {});
         rtStrEq = decl("cplus_str_eq", i32, {ptrTy, i64, ptrTy, i64});
+        rtTrapIndex = decl("cplus_trap_index", voidTy, {i64, i64, ptrTy, i32, i32});
+        if (auto* f = llvm::dyn_cast<llvm::Function>(rtTrapIndex.getCallee())) {
+            f->addFnAttr(llvm::Attribute::NoReturn);
+            f->addFnAttr(llvm::Attribute::Cold);
+            f->addFnAttr(llvm::Attribute::NoUnwind);
+        }
+        rtVecNew = decl("cplus_vec_new", ptrTy, {i64, i64});
+        rtVecRelease = decl("cplus_vec_release", voidTy, {ptrTy, i64, ptrTy});
+        rtVecReserve = decl("cplus_vec_reserve", ptrTy, {ptrTy, i64, i64, ptrTy, ptrTy});
     }
 
     llvm::Type* llvmType(const Type* t) {
@@ -136,7 +162,7 @@ struct Codegen::Impl {
             case K::Long: return b.getInt64Ty();
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
-            case K::Class: return b.getPtrTy();
+            case K::Class: case K::Vector: return b.getPtrTy();
             default: llvm_unreachable("unresolved type reached codegen");
         }
     }
@@ -144,7 +170,7 @@ struct Codegen::Impl {
     // Whether values of this type hold class references, which are retained when the
     // value is copied and released when it goes away.
     bool isManaged(const Type* t) {
-        if (t->isClass()) return true;
+        if (t->isClass() || t->isVector()) return true;
         if (!t->isStruct()) return false;
         TypeInfo& info = types.at(t->decl);
         if (info.managed < 0) {
@@ -179,6 +205,19 @@ struct Codegen::Impl {
         b.CreateCondBr(cond, trapBB, okBB, llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
         b.SetInsertPoint(trapBB);
         auto* call = b.CreateCall(rtTrap, {cstring(message), fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+        call->setDoesNotReturn();
+        b.CreateUnreachable();
+        b.SetInsertPoint(okBB);
+    }
+
+    // Stops the program unless 0 <= index < size; `index` and `size` are i64.
+    void checkIndex(llvm::Value* index, llvm::Value* size, Loc loc) {
+        auto* trapBB = llvm::BasicBlock::Create(ctx, "bad.index", fn);
+        auto* okBB = llvm::BasicBlock::Create(ctx, "ok", fn);
+        // An unsigned compare also catches negative indexes.
+        b.CreateCondBr(b.CreateICmpUGE(index, size), trapBB, okBB, llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
+        b.SetInsertPoint(trapBB);
+        auto* call = b.CreateCall(rtTrapIndex, {index, size, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
         call->setDoesNotReturn();
         b.CreateUnreachable();
         b.SetInsertPoint(okBB);
@@ -244,12 +283,299 @@ struct Codegen::Impl {
     // ---- Reference counting ------------------------------------------------
 
     void retainValue(llvm::Value* v, const Type* t) {
-        if (t->isClass()) b.CreateCall(rtRetain, {v});
+        if (t->isClass() || t->isVector()) b.CreateCall(rtRetain, {v});
         else if (isManaged(t)) b.CreateCall(types.at(t->decl).retain, {v});
     }
 
     void releaseValue(llvm::Value* v, const Type* t) {
-        if (isManaged(t)) b.CreateCall(types.at(t->decl).release, {v});
+        if (t->isVector()) {
+            VecInfo& info = vecInfo(t);
+            b.CreateCall(rtVecRelease, {v, b.getInt64(info.elemSize), info.releaseElem});
+        } else if (isManaged(t)) {
+            b.CreateCall(types.at(t->decl).release, {v});
+        }
+    }
+
+    // ---- Vectors -----------------------------------------------------------
+
+    // Helpers are generated when first needed, which can be in the middle of another
+    // function; this puts the builder back where it was.
+    struct SavedPoint {
+        Impl& g;
+        llvm::IRBuilderBase::InsertPoint ip;
+        llvm::Function* fn;
+        explicit SavedPoint(Impl& impl) : g(impl), ip(impl.b.saveIP()), fn(impl.fn) {}
+        ~SavedPoint() {
+            g.b.restoreIP(ip);
+            g.fn = fn;
+        }
+    };
+
+    llvm::Function* internalFunction(const std::string& name, llvm::Type* ret, std::vector<llvm::Type*> params) {
+        return llvm::Function::Create(llvm::FunctionType::get(ret, params, false), llvm::Function::InternalLinkage, name,
+                                      mod.get());
+    }
+
+    llvm::Value* byteOffset(llvm::Value* buf, uint64_t offset, const char* name) {
+        return b.CreateConstInBoundsGEP1_64(b.getInt8Ty(), buf, offset, name);
+    }
+
+    // The number of elements; 0 for an empty vector, whose pointer is null.
+    llvm::Value* vecSize(llvm::Value* buf) {
+        if (!vecSizeFn) {
+            SavedPoint saved(*this);
+            vecSizeFn = internalFunction("cplus.vector#size", b.getInt64Ty(), {b.getPtrTy()});
+            startHelper(vecSizeFn);
+            llvm::Value* v = vecSizeFn->getArg(0);
+            auto* emptyBB = llvm::BasicBlock::Create(ctx, "empty", fn);
+            auto* loadBB = llvm::BasicBlock::Create(ctx, "load", fn);
+            b.CreateCondBr(b.CreateIsNull(v), emptyBB, loadBB);
+            b.SetInsertPoint(emptyBB);
+            b.CreateRet(b.getInt64(0));
+            b.SetInsertPoint(loadBB);
+            b.CreateRet(b.CreateLoad(b.getInt64Ty(), byteOffset(v, kVecSizeOffset, "size.addr"), "size"));
+        }
+        return b.CreateCall(vecSizeFn, {buf}, "size");
+    }
+
+    llvm::Value* sizeAddress(llvm::Value* buf) { return byteOffset(buf, kVecSizeOffset, "size.addr"); }
+
+    llvm::Value* elementAt(llvm::Value* buf, llvm::Value* index, const Type* vecType) {
+        return b.CreateInBoundsGEP(vecInfo(vecType).elemTy, byteOffset(buf, kVecHeaderSize, "elems"), index, "elem.addr");
+    }
+
+    // Makes the vector stored at `slot` one that only this place holds, with room for
+    // `minCapacity` elements, and returns its buffer. A buffer shared with other copies
+    // is copied first (copy-on-write).
+    llvm::Value* reserve(llvm::Value* slot, llvm::Value* buf, const Type* vecType, llvm::Value* minCapacity) {
+        if (!vecReserveFn) {
+            SavedPoint saved(*this);
+            auto* ptrTy = b.getPtrTy();
+            auto* i64 = b.getInt64Ty();
+            vecReserveFn = internalFunction("cplus.vector#reserve", ptrTy, {ptrTy, i64, i64, ptrTy, ptrTy});
+            startHelper(vecReserveFn);
+            llvm::Value* v = vecReserveFn->getArg(0);
+            auto* checkBB = llvm::BasicBlock::Create(ctx, "check", fn);
+            auto* fastBB = llvm::BasicBlock::Create(ctx, "fast", fn);
+            auto* slowBB = llvm::BasicBlock::Create(ctx, "slow", fn);
+            b.CreateCondBr(b.CreateIsNull(v), slowBB, checkBB);
+            b.SetInsertPoint(checkBB);
+            llvm::LoadInst* count = b.CreateLoad(i64, v, "count");
+            count->setAtomic(llvm::AtomicOrdering::Acquire);
+            count->setAlignment(llvm::Align(8));
+            llvm::Value* capacity = b.CreateLoad(i64, byteOffset(v, kVecCapacityOffset, "capacity.addr"), "capacity");
+            llvm::Value* fits = b.CreateAnd(b.CreateICmpEQ(count, b.getInt64(1)),
+                                            b.CreateICmpSGE(capacity, vecReserveFn->getArg(2)));
+            b.CreateCondBr(fits, fastBB, slowBB);
+            b.SetInsertPoint(fastBB);
+            b.CreateRet(v);
+            b.SetInsertPoint(slowBB);
+            std::vector<llvm::Value*> args;
+            for (auto& a : vecReserveFn->args()) args.push_back(&a);
+            b.CreateRet(b.CreateCall(rtVecReserve, args));
+        }
+        VecInfo& info = vecInfo(vecType);
+        llvm::Value* own =
+            b.CreateCall(vecReserveFn, {buf, b.getInt64(info.elemSize), minCapacity, info.retainElem, info.releaseElem}, "vec");
+        b.CreateStore(own, slot);
+        return own;
+    }
+
+    // Emits `for (i = 0; i < count; i++) body(i)`, with `count` an i64.
+    void countedLoop(llvm::Value* count, const std::function<void(llvm::Value*)>& body) {
+        llvm::AllocaInst* counter = entryAlloca(b.getInt64Ty(), "i");
+        b.CreateStore(b.getInt64(0), counter);
+        auto* condBB = llvm::BasicBlock::Create(ctx, "loop.cond", fn);
+        auto* bodyBB = llvm::BasicBlock::Create(ctx, "loop.body", fn);
+        auto* endBB = llvm::BasicBlock::Create(ctx, "loop.end", fn);
+        b.CreateBr(condBB);
+        b.SetInsertPoint(condBB);
+        llvm::Value* i = b.CreateLoad(b.getInt64Ty(), counter, "i");
+        b.CreateCondBr(b.CreateICmpSLT(i, count), bodyBB, endBB);
+        b.SetInsertPoint(bodyBB);
+        body(i);
+        b.CreateStore(b.CreateAdd(i, b.getInt64(1)), counter);
+        b.CreateBr(condBB);
+        b.SetInsertPoint(endBB);
+    }
+
+    VecInfo& vecInfo(const Type* vt) {
+        auto [it, inserted] = vecs.try_emplace(vt);
+        VecInfo& info = it->second;
+        if (!inserted) return info;
+        const Type* elem = vt->elem;
+        auto* ptrTy = b.getPtrTy();
+        info.elemTy = llvmType(elem);
+        info.elemSize = mod->getDataLayout().getTypeAllocSize(info.elemTy);
+        std::string prefix = std::string("cplus.") + vt->name + "#";
+        // Everything is declared before any body is generated, so element types that
+        // lead back to this vector find its helpers.
+        info.print = internalFunction(prefix + "print", b.getVoidTy(), {ptrTy});
+        info.equals = internalFunction(prefix + "equals", b.getInt1Ty(), {ptrTy, ptrTy});
+        llvm::Function* retainElem = nullptr;
+        llvm::Function* releaseElem = nullptr;
+        if (isManaged(elem)) {
+            info.retainElem = retainElem = internalFunction(prefix + "retain_elem", b.getVoidTy(), {ptrTy});
+            info.releaseElem = releaseElem = internalFunction(prefix + "release_elem", b.getVoidTy(), {ptrTy});
+        } else {
+            info.retainElem = info.releaseElem = llvm::ConstantPointerNull::get(ptrTy);
+        }
+        SavedPoint saved(*this);
+
+        // Printing: `[1, 2, 3]`, with strings in quotes.
+        startHelper(info.print);
+        llvm::Value* v = info.print->getArg(0);
+        printText("[");
+        countedLoop(vecSize(v), [&](llvm::Value* i) {
+            auto* sepBB = llvm::BasicBlock::Create(ctx, "sep", fn);
+            auto* elemBB = llvm::BasicBlock::Create(ctx, "elem", fn);
+            b.CreateCondBr(b.CreateICmpNE(i, b.getInt64(0)), sepBB, elemBB);
+            b.SetInsertPoint(sepBB);
+            printText(", ");
+            b.CreateBr(elemBB);
+            b.SetInsertPoint(elemBB);
+            printValue(b.CreateLoad(info.elemTy, elementAt(v, i, vt)), elem, true);
+        });
+        printText("]");
+        b.CreateRetVoid();
+
+        // Equality: the same size, and each pair of elements equal.
+        startHelper(info.equals);
+        llvm::Value* l = info.equals->getArg(0);
+        llvm::Value* r = info.equals->getArg(1);
+        auto* sameBB = llvm::BasicBlock::Create(ctx, "same", fn);
+        auto* differBB = llvm::BasicBlock::Create(ctx, "differ", fn);
+        auto* sizesBB = llvm::BasicBlock::Create(ctx, "sizes", fn);
+        auto* elemsBB = llvm::BasicBlock::Create(ctx, "elements", fn);
+        b.CreateCondBr(b.CreateICmpEQ(l, r), sameBB, sizesBB);  // one buffer, or both empty
+        b.SetInsertPoint(sizesBB);
+        llvm::Value* size = vecSize(l);
+        b.CreateCondBr(b.CreateICmpEQ(size, vecSize(r)), elemsBB, differBB);
+        b.SetInsertPoint(elemsBB);
+        countedLoop(size, [&](llvm::Value* i) {
+            llvm::Value* x = b.CreateLoad(info.elemTy, elementAt(l, i, vt));
+            llvm::Value* y = b.CreateLoad(info.elemTy, elementAt(r, i, vt));
+            auto* nextBB = llvm::BasicBlock::Create(ctx, "next", fn);
+            b.CreateCondBr(genEquals(x, y, elem), nextBB, differBB);
+            b.SetInsertPoint(nextBB);
+        });
+        b.CreateBr(sameBB);
+        b.SetInsertPoint(sameBB);
+        b.CreateRet(b.getInt1(true));
+        b.SetInsertPoint(differBB);
+        b.CreateRet(b.getInt1(false));
+
+        // Retaining and releasing one element, for the runtime to call.
+        for (auto [f, retain] : {std::pair{retainElem, true}, std::pair{releaseElem, false}}) {
+            if (!f) continue;
+            startHelper(f);
+            llvm::Value* x = b.CreateLoad(info.elemTy, f->getArg(0));
+            retain ? retainValue(x, elem) : releaseValue(x, elem);
+            b.CreateRetVoid();
+        }
+        return info;
+    }
+
+    // `v[i]` takes an int or a long.
+    llvm::Value* genIndex(const Expr& index) {
+        llvm::Value* v = gen(index);
+        return index.type->is(K::Int) ? b.CreateSExt(v, b.getInt64Ty()) : v;
+    }
+
+    // The buffer of a vector that is only read right away.
+    llvm::Value* vectorForRead(const Expr& e) {
+        return isPlace(e) ? b.CreateLoad(b.getPtrTy(), addressOf(e), "vec") : gen(e);
+    }
+
+    // `{1, 2, 3}` for a vector: the elements are evaluated in order.
+    llvm::Value* genVectorList(const InitListExpr& list, const Type* vt) {
+        if (list.elements.empty()) return llvm::ConstantPointerNull::get(b.getPtrTy());
+        VecInfo& info = vecInfo(vt);
+        llvm::Value* buf = b.CreateCall(rtVecNew, {b.getInt64(info.elemSize), b.getInt64(list.elements.size())}, "vec");
+        for (size_t i = 0; i < list.elements.size(); ++i)
+            b.CreateStore(genOwned(*list.elements[i].value, vt->elem), elementAt(buf, b.getInt64(i), vt));
+        return buf;
+    }
+
+    // `vector<T>()`, `vector<T>(n)` or `vector<T>(n, value)`.
+    llvm::Value* genVectorConstruction(const CallExpr& call) {
+        const Type* vt = call.vectorType;
+        const Type* elem = vt->elem;
+        if (call.args.empty()) return llvm::ConstantPointerNull::get(b.getPtrTy());
+        VecInfo& info = vecInfo(vt);
+        llvm::Value* count = genConverted(*call.args[0], Type::longTy());
+        llvm::Value* value = call.args.size() == 2 ? genOwned(*call.args[1], elem) : nullptr;
+        trapIf(b.CreateICmpSLT(count, b.getInt64(0)), "a vector cannot have a negative size", call.loc);
+        llvm::Value* buf = b.CreateCall(rtVecNew, {b.getInt64(info.elemSize), count}, "vec");
+        // New elements are zero bytes, which is already the default of every type but a struct.
+        if (value || elem->isStruct()) {
+            countedLoop(count, [&](llvm::Value* i) {
+                size_t mark = temps.size();
+                llvm::Value* x = value;
+                if (value) retainValue(value, elem);  // each element holds its own reference
+                else if (elem->decl->constructor) x = construct(*elem->decl, {});
+                else x = genDefault(elem);
+                flushTemps(mark);
+                b.CreateStore(x, elementAt(buf, i, vt));
+            });
+            if (value) releaseValue(value, elem);
+        }
+        return buf;
+    }
+
+    llvm::Value* genVectorMethod(const MethodCallExpr& call) {
+        const Expr& recv = *call.receiver;
+        const Type* vt = recv.type;
+        VecInfo& info = vecInfo(vt);
+        switch (call.vecMethod) {
+            case VecMethod::Size: return vecSize(vectorForRead(recv));
+            case VecMethod::Empty: return b.CreateICmpEQ(vecSize(vectorForRead(recv)), b.getInt64(0), "empty");
+            case VecMethod::Front:
+            case VecMethod::Back: {
+                bool front = call.vecMethod == VecMethod::Front;
+                llvm::Value* buf = vectorForRead(recv);
+                llvm::Value* size = vecSize(buf);
+                trapIf(b.CreateICmpEQ(size, b.getInt64(0)),
+                       std::string(front ? "front()" : "back()") + " was called on an empty vector", call.loc);
+                llvm::Value* index = front ? b.getInt64(0) : b.CreateSub(size, b.getInt64(1));
+                llvm::Value* v = b.CreateLoad(info.elemTy, elementAt(buf, index, vt), call.name);
+                retainValue(v, vt->elem);  // a method call's result is owned
+                return v;
+            }
+            case VecMethod::PushBack: {
+                // The value is evaluated before the vector is found, so code it runs
+                // cannot move the vector away from under the store.
+                llvm::Value* value = genOwned(*call.args[0], vt->elem);
+                llvm::Value* slot = addressOf(recv, false, true);
+                llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "vec");
+                llvm::Value* size = vecSize(buf);
+                buf = reserve(slot, buf, vt, b.CreateAdd(size, b.getInt64(1)));
+                b.CreateStore(value, elementAt(buf, size, vt));
+                b.CreateStore(b.CreateAdd(size, b.getInt64(1)), sizeAddress(buf));
+                return nullptr;
+            }
+            case VecMethod::PopBack: {
+                llvm::Value* slot = addressOf(recv, false, true);
+                llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "vec");
+                llvm::Value* size = vecSize(buf);
+                trapIf(b.CreateICmpEQ(size, b.getInt64(0)), "pop_back() was called on an empty vector", call.loc);
+                buf = reserve(slot, buf, vt, b.getInt64(0));
+                llvm::Value* last = b.CreateSub(size, b.getInt64(1));
+                b.CreateStore(last, sizeAddress(buf));
+                // Released after the vector is updated, in case a destructor looks at it.
+                if (isManaged(vt->elem)) releaseValue(b.CreateLoad(info.elemTy, elementAt(buf, last, vt)), vt->elem);
+                return nullptr;
+            }
+            case VecMethod::Clear: {
+                llvm::Value* slot = addressOf(recv, false, true);
+                llvm::Value* old = b.CreateLoad(b.getPtrTy(), slot, "old");
+                b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), slot);
+                releaseValue(old, vt);
+                return nullptr;
+            }
+            case VecMethod::None: break;
+        }
+        llvm_unreachable("unknown vector method");
     }
 
     // Releases the temporaries made since `mark`, newest first.
@@ -327,7 +653,7 @@ struct Codegen::Impl {
             case K::String:
                 return llvm::ConstantStruct::get(stringTy, {llvm::ConstantPointerNull::get(b.getPtrTy()), b.getInt64(0)});
             case K::Struct: return buildAggregate(*t->decl, {});
-            case K::Class: return llvm::ConstantPointerNull::get(b.getPtrTy());
+            case K::Class: case K::Vector: return llvm::ConstantPointerNull::get(b.getPtrTy());
             default: llvm_unreachable("no default value for this type");
         }
     }
@@ -379,7 +705,9 @@ struct Codegen::Impl {
     }
 
     llvm::Value* genInitList(const InitListExpr& list, const Type* to) {
-        const StructDecl& sd = *(list.explicitType ? list.explicitType : to)->decl;
+        const Type* type = list.explicitType ? list.explicitType : to;
+        if (type->isVector()) return genVectorList(list, type);
+        const StructDecl& sd = *type->decl;
         if (sd.constructor) {  // the values are the constructor's arguments
             std::vector<const Expr*> args;
             for (auto& el : list.elements) args.push_back(el.value.get());
@@ -399,7 +727,8 @@ struct Codegen::Impl {
     }
 
     // Whether `e` is storage that can be read in place or assigned: a variable, a field
-    // of one, `this` in a struct method, or any field of a class object.
+    // of one, `this` in a struct method, any field of a class object, or an element of
+    // a vector stored in one of those.
     static bool isPlace(const Expr& e) {
         switch (e.kind) {
             case Expr::Kind::Name: return true;
@@ -408,15 +737,42 @@ struct Codegen::Impl {
                 auto& m = static_cast<const MemberExpr&>(e);
                 return m.base->type->isClass() || isPlace(*m.base);
             }
+            case Expr::Kind::Index: return isPlace(*static_cast<const IndexExpr&>(e).base);
             default: return false;
+        }
+    }
+
+    // Whether evaluating `e` may run code that changes or frees other values: a call,
+    // or an assignment, which releases the value it replaces.
+    static bool mayRunCode(const Expr& e) {
+        switch (e.kind) {
+            case Expr::Kind::IntLit: case Expr::Kind::BoolLit: case Expr::Kind::StringLit:
+            case Expr::Kind::Name: case Expr::Kind::This: return false;
+            case Expr::Kind::Member: return mayRunCode(*static_cast<const MemberExpr&>(e).base);
+            case Expr::Kind::Index: {
+                auto& ix = static_cast<const IndexExpr&>(e);
+                return mayRunCode(*ix.base) || mayRunCode(*ix.index);
+            }
+            case Expr::Kind::Unary: return mayRunCode(*static_cast<const UnaryExpr&>(e).operand);
+            case Expr::Kind::Binary: {
+                auto& bin = static_cast<const BinaryExpr&>(e);
+                return mayRunCode(*bin.lhs) || mayRunCode(*bin.rhs);
+            }
+            case Expr::Kind::Ternary: {
+                auto& t = static_cast<const TernaryExpr&>(e);
+                return mayRunCode(*t.cond) || mayRunCode(*t.thenExpr) || mayRunCode(*t.elseExpr);
+            }
+            case Expr::Kind::IncDec: return mayRunCode(*static_cast<const IncDecExpr&>(e).target);
+            default: return true;
         }
     }
 
     // The address of a place. The object a field lies in is normally only kept alive
     // by its owner, which is fine while the address is used right away. With `hold`,
     // the object is retained until the statement ends, for an address that is used
-    // while other code runs (the receiver of a struct method).
-    llvm::Value* addressOf(const Expr& e, bool hold = false) {
+    // while other code runs (the receiver of a struct method). With `write`, the place
+    // is about to change, so each vector it lies in first gets a buffer of its own.
+    llvm::Value* addressOf(const Expr& e, bool hold = false, bool write = false) {
         switch (e.kind) {
             case Expr::Kind::Name: {
                 auto& n = static_cast<const NameExpr&>(e);
@@ -428,10 +784,38 @@ struct Codegen::Impl {
                 auto& m = static_cast<const MemberExpr&>(e);
                 const Type* baseType = m.base->type;
                 llvm::Value* object;
-                if (!baseType->isClass()) object = addressOf(*m.base, hold);
+                if (!baseType->isClass()) object = addressOf(*m.base, hold, write);
                 else if (hold || !isPlace(*m.base)) object = gen(*m.base);
                 else object = b.CreateLoad(b.getPtrTy(), addressOf(*m.base), "obj");
                 return fieldAddress(baseType, object, m.fieldIndex, m.field);
+            }
+            case Expr::Kind::Index: {
+                auto& ix = static_cast<const IndexExpr&>(e);
+                const Type* vt = ix.base->type;
+                llvm::Value* slot = nullptr;
+                llvm::Value* buf;
+                llvm::Value* index;
+                if (isPlace(*ix.base)) {
+                    // The index is computed before the vector is read, so code it runs
+                    // cannot leave `buf` stale. Meanwhile the vector's place is kept
+                    // alive if that code could free it.
+                    slot = addressOf(*ix.base, hold || mayRunCode(*ix.index), write);
+                    index = genIndex(*ix.index);
+                    buf = b.CreateLoad(b.getPtrTy(), slot, "vec");
+                } else {
+                    buf = gen(*ix.base);  // a temporary, kept until the statement ends
+                    index = genIndex(*ix.index);
+                }
+                checkIndex(index, vecSize(buf), ix.loc);
+                if (write) {
+                    if (!slot) llvm_unreachable("Sema allowed changing an element of a temporary vector");
+                    buf = reserve(slot, buf, vt, b.getInt64(0));
+                }
+                if (hold) {
+                    b.CreateCall(rtRetain, {buf});
+                    temps.push_back({buf, vt, false});
+                }
+                return elementAt(buf, index, vt);
             }
             default: llvm_unreachable("not a place");
         }
@@ -456,6 +840,7 @@ struct Codegen::Impl {
                 // A field of a struct value that is not stored anywhere, e.g. makePoint().x
                 return b.CreateExtractValue(gen(*m.base), {(unsigned)m.fieldIndex}, m.field);
             }
+            case Expr::Kind::Index: return b.CreateLoad(llvmType(e.type), addressOf(e), "elem");
             case Expr::Kind::InitList:
                 owned = true;
                 return genInitList(static_cast<const InitListExpr&>(e), e.type);
@@ -493,13 +878,13 @@ struct Codegen::Impl {
                 if (a.op) {
                     bool shift = *a.op == BinOp::Shl || *a.op == BinOp::Shr;
                     llvm::Value* rhs = shift ? gen(*a.value) : genConverted(*a.value, ty);
-                    llvm::Value* slot = addressOf(*a.target);
+                    llvm::Value* slot = addressOf(*a.target, false, true);
                     llvm::Value* v = arith(*a.op, b.CreateLoad(llvmType(ty), slot), rhs, ty, a.loc);
                     b.CreateStore(v, slot);
                     return v;
                 }
                 llvm::Value* v = genOwned(*a.value, ty);
-                llvm::Value* slot = addressOf(*a.target);
+                llvm::Value* slot = addressOf(*a.target, false, true);
                 llvm::Value* old = isManaged(ty) ? b.CreateLoad(llvmType(ty), slot, "old") : nullptr;
                 b.CreateStore(v, slot);
                 if (old) releaseValue(old, ty);  // after the store, in case a destructor looks at the place
@@ -535,7 +920,7 @@ struct Codegen::Impl {
             }
             case Expr::Kind::IncDec: {
                 auto& i = static_cast<const IncDecExpr&>(e);
-                llvm::Value* slot = addressOf(*i.target);
+                llvm::Value* slot = addressOf(*i.target, false, true);
                 llvm::Type* t = llvmType(e.type);
                 llvm::Value* old = b.CreateLoad(t, slot);
                 llvm::Value* updated =
@@ -561,6 +946,7 @@ struct Codegen::Impl {
                 return b.CreateICmpNE(eq, b.getInt32(0));
             }
             case K::Struct: return b.CreateCall(types.at(t->decl).equals, {l, r});
+            case K::Vector: return b.CreateCall(vecInfo(t).equals, {l, r});
             default: llvm_unreachable("Sema allowed == on a type Codegen cannot compare");
         }
     }
@@ -602,11 +988,13 @@ struct Codegen::Impl {
                 break;
             case K::Struct:
             case K::Class: b.CreateCall(types.at(t->decl).print, {v}); break;
+            case K::Vector: b.CreateCall(vecInfo(t).print, {v}); break;
             default: llvm_unreachable("unprintable type reached codegen");
         }
     }
 
     llvm::Value* genCall(const CallExpr& call) {
+        if (call.vectorType) return genVectorConstruction(call);
         if (call.builtin != Builtin::None) {
             // Arguments are evaluated left to right before anything is printed.
             std::vector<llvm::Value*> values;
@@ -640,11 +1028,13 @@ struct Codegen::Impl {
 
     llvm::Value* genMethodCall(const MethodCallExpr& call) {
         const Expr& recv = *call.receiver;
+        if (recv.type->isVector()) return genVectorMethod(call);
         llvm::Value* self;
         if (recv.type->isClass()) {
             self = gen(recv);
         } else if (isPlace(recv)) {
-            self = addressOf(recv, /*hold=*/true);  // a struct method may change the struct in place
+            // A struct method may change the struct in place.
+            self = addressOf(recv, /*hold=*/true, /*write=*/!call.method->isConst);
         } else {
             // A struct value that is not stored anywhere, e.g. makePoint().move(1): the
             // method works on a temporary, which is released when the statement ends.
@@ -693,8 +1083,9 @@ struct Codegen::Impl {
             case Stmt::Kind::VarDecl: {
                 auto& v = static_cast<const VarDecl&>(s);
                 llvm::Value* init = v.init ? genOwned(*v.init, v.type)
-                                    : v.type->is(K::String) || v.type->hasFields() ? genDefault(v.type)
-                                                                                   : nullptr;
+                                    : v.type->is(K::String) || v.type->hasFields() || v.type->isVector()
+                                        ? genDefault(v.type)
+                                        : nullptr;
                 flushTemps();
                 llvm::AllocaInst* slot = allocaFor(v);
                 if (init) b.CreateStore(init, slot);
@@ -788,6 +1179,7 @@ struct Codegen::Impl {
                 popScope();
                 return;
             }
+            case Stmt::Kind::ForEach: genForEach(static_cast<const ForEachStmt&>(s)); return;
             case Stmt::Kind::Return: {
                 auto& st = static_cast<const ReturnStmt&>(s);
                 llvm::Value* v = st.value ? genOwned(*st.value, fnDecl->retType) : nullptr;
@@ -810,6 +1202,49 @@ struct Codegen::Impl {
                 return;
             case Stmt::Kind::Error: llvm_unreachable("a program with parse errors reached codegen");
         }
+    }
+
+    // The loop goes over the vector as it was when the loop started: it holds its own
+    // reference, so a change made in the body copies the vector instead of moving the
+    // elements under the loop.
+    void genForEach(const ForEachStmt& st) {
+        const Type* vt = st.rangeVar->type;
+        const VarDecl& var = *st.var;
+        scopes.emplace_back();  // holds the vector
+        llvm::Value* range = genOwned(*st.range, vt);
+        flushTemps();
+        b.CreateStore(range, allocaFor(*st.rangeVar));
+        scopes.back().push_back(st.rangeVar.get());
+        llvm::Value* size = vecSize(range);
+        llvm::AllocaInst* counter = entryAlloca(b.getInt64Ty(), "index");
+        b.CreateStore(b.getInt64(0), counter);
+        auto* condBB = llvm::BasicBlock::Create(ctx, "foreach.cond", fn);
+        auto* bodyBB = llvm::BasicBlock::Create(ctx, "foreach.body", fn);
+        auto* stepBB = llvm::BasicBlock::Create(ctx, "foreach.step", fn);
+        auto* endBB = llvm::BasicBlock::Create(ctx, "foreach.end", fn);
+        b.CreateBr(condBB);
+        b.SetInsertPoint(condBB);
+        llvm::Value* i = b.CreateLoad(b.getInt64Ty(), counter, "index");
+        b.CreateCondBr(b.CreateICmpSLT(i, size), bodyBB, endBB);
+
+        b.SetInsertPoint(bodyBB);
+        loops.push_back({endBB, stepBB, scopes.size()});
+        scopes.emplace_back();  // the loop variable: a new one for each element
+        llvm::Value* elem = b.CreateLoad(vecInfo(vt).elemTy, elementAt(range, i, vt), "elem");
+        llvm::Value* value = convert(elem, vt->elem, var.type);
+        retainValue(value, var.type);
+        b.CreateStore(value, allocaFor(var));
+        if (isManaged(var.type)) scopes.back().push_back(&var);
+        genScoped(*st.body);
+        popScope();
+        loops.pop_back();
+        b.CreateBr(stepBB);
+
+        b.SetInsertPoint(stepBB);
+        b.CreateStore(b.CreateAdd(i, b.getInt64(1)), counter);
+        b.CreateBr(condBB);
+        b.SetInsertPoint(endBB);
+        popScope();
     }
 
     // ---- Functions ---------------------------------------------------------

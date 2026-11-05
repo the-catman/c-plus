@@ -133,7 +133,8 @@ a.x += 10;                      // fields are read and written with '.'
 Point f = a;                    // a copy: changing f leaves a alone
 ```
 
-- A missing field gets the default written in the struct, or else `0`, `false` or `""`.
+- A missing field gets the default written in the struct, or else `0`, `false`, `""` or an
+  empty vector.
   A nested struct field gets its own defaults. A default is evaluated each time a value is
   built, and it cannot read other fields; use a constructor for that.
 - A `{ }` list without a type name takes its type from where it is used: the type of the
@@ -141,7 +142,8 @@ Point f = a;                    // a copy: changing f leaves a alone
   it is passed to. `auto p = {1, 2};` is an error; write `auto p = Point{1, 2};`.
 - One list cannot mix values by position with values by name.
 - A struct can be used before its definition. There are no forward declarations.
-- A struct can contain other structs, but not itself.
+- A struct can contain other structs, but not itself, except through a vector:
+  `struct Tree { int value; vector<Tree> kids; };` works.
 - A struct can have methods and a constructor; see [Methods](#methods). Its members are
   public unless marked `private:`, as in C++.
 - A struct that holds a class reference copies the reference, not the object, so both
@@ -251,7 +253,7 @@ public:
 ```
 
 - Before the body runs, every field gets its value from the initializer list, else its
-  default, else zero (`0`, `false`, `""`). Fields are initialized in the order they are
+  default, else zero (`0`, `false`, `""`, an empty vector). Fields are initialized in the order they are
   declared, whatever the order of the list, as in C++.
 - A class-typed field without a default must be set by the end of the constructor, in the
   initializer list or in the body. `this` cannot be used until every such field is set.
@@ -265,6 +267,72 @@ A **destructor** is written `~Name() { ... }` and exists only for classes. It ru
 the object's last reference goes away. Then the object's fields are released, last
 declared first. A destructor must not store `this` anywhere that outlives it; doing so
 stops the program with an error.
+
+### Vectors
+
+`vector<T>` is a growable array of `T`s with the C++ method names. Like a struct, a vector
+is a **value**: assigning or passing one copies it, and the copy is independent, as with
+`std::vector`.
+
+```cpp
+vector<int> v = {3, 1, 4};          // `vector<int> v;` is an empty one
+v.push_back(1);
+v[0] = 30;                          // elements are numbered from 0
+println("{} {}", v, v.size());      // [30, 1, 4, 1] 4
+for (int x : v) total += x;         // see Range-based for loops
+
+auto grid = vector<vector<int>>(3, vector<int>(3, 0));
+grid[1][2] = 5;                     // `>>` closes two vectors, as in C++11
+```
+
+Building a vector:
+- `vector<int> v;` is empty, as in C++. A vector field with no default starts empty too.
+- `{1, 2, 3}` lists the elements and takes its type from where it is used, like a struct's
+  `{ }` list. `vector<int>{1, 2, 3}` names the type; `vector<int>{}` and `vector<int>()`
+  are empty.
+- `vector<int>(n)` holds `n` default values: `0`, `false`, `""`, empty vectors, or structs
+  built from their field defaults (or by their constructor, if it takes no arguments). A
+  class reference cannot be empty, so `vector<User>(n)` is an error.
+- `vector<int>(n, value)` holds `n` copies of `value`. For a class, all `n` refer to the one
+  object.
+
+| Method | What it does |
+|--------|--------------|
+| `v.size()` | the number of elements, as a `long` |
+| `v.empty()` | whether there are no elements |
+| `v.push_back(x)` | adds `x` at the end |
+| `v.pop_back()` | removes the last element |
+| `v.front()`, `v.back()` | a copy of the first or the last element |
+| `v.clear()` | removes every element |
+
+- `size()` returns a `long`, because C+ has no unsigned types. `i < v.size()` works with an
+  `int i`, since `int` widens to `long`, but `int n = v.size();` is an error; write
+  `long n` or `auto n`.
+- `v[i]` takes an `int` or a `long`. An element can be read, assigned (`v[i] = x`,
+  `v[i] += 1`, `v[i]++`) and used in place: `points[i].x = 1`, `grid[i].push_back(x)`,
+  `points[i].move(1)`.
+- **Every index is checked.** An index below 0 or at least `size()`, and `pop_back()`,
+  `front()` or `back()` on an empty vector, stop the program with an error naming the file
+  and line. C++ leaves all of these undefined. A negative literal index such as `v[-1]` is
+  a compile error.
+- `front()` and `back()` return a copy. To change the last element, write
+  `v[v.size() - 1] = x`.
+- `==` and `!=` compare the sizes and then each pair of elements, in order. Ordering with
+  `<` is planned.
+- A vector prints as `[1, 2, 3]`, with strings in quotes: `["Ada", "Linus"]`.
+- A `const` vector cannot change at all, like a `const` struct: neither its elements nor
+  its size.
+- `push_back`, `pop_back` and `clear` cannot be called on a temporary, such as
+  `makeList().push_back(1)`, because the change would be lost.
+- A vector is not a [condition](#conditions); write `!v.empty()`.
+- Not yet: `insert`, `erase`, `resize`, `reserve`, iterators (`begin()`, `end()`), the
+  fixed-size `array<T, N>`, and `hashmap<K, V>`.
+
+**Copies are cheap.** The copies of a vector share one buffer of elements until one of them
+changes; that copy first gets a buffer of its own (copy-on-write). Passing or returning a
+vector therefore costs about as much as passing a class reference, so there is no need for
+`const vector<int>&` parameters, which C+ does not support. See
+[Memory model](#memory-model).
 
 ---
 
@@ -309,9 +377,10 @@ The rules:
 - A struct can be filled in field by field: after `Point p; p.x = 1; p.y = 2;` all of `p`
   has a value. A field can be read once it has a value, and the whole struct once every
   field has one.
-- A declaration without a value gives strings `""` and struct fields their defaults, as in
-  C++. Numbers, bools and class references get no value, so reading one before assigning
-  it is an error.
+- A declaration without a value gives strings `""`, vectors no elements, and struct fields
+  their defaults, as in C++. Numbers, bools and class references get no value, so reading
+  one before assigning it is an error.
+- An element of a vector always has a value.
 - In a constructor, the class-typed fields of `this` are tracked the same way: each must
   be set before the constructor ends.
 - In `a && b` and `a || b`, assignments inside `b` do not count, since `b` may not run.
@@ -368,7 +437,7 @@ are always generated, never hand-written.
 
 `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue` and `return` work exactly as
 in C++. The step of a `for` loop may list several expressions: `for (...; ...; i++, j--)`.
-`switch` and range-based `for` are planned.
+`switch` is planned.
 
 #### Conditions
 
@@ -381,7 +450,27 @@ while (n) n--;
 if (!found) ...
 ```
 
-Strings and `void` values are not conditions.
+Strings, vectors and `void` values are not conditions. For a vector, write `!v.empty()`.
+
+#### Range-based for loops
+
+`for (T x : v)` runs the body once for each element of the vector `v`, in order, as in
+C++. The variable can be `auto`, `const`, or of a type the elements convert to, as in
+`for (long x : ints)`.
+
+```cpp
+for (auto name : names) println("hi {}", name);
+for (const Point p : points) total += p.x;
+```
+
+- `x` is a copy of the element, so assigning to `x` does not change the vector. To change
+  the elements, loop over the indexes: `for (long i = 0; i < v.size(); i++) v[i] *= 2;`.
+- `for (auto& x : v)` and `for (const auto& x : v)` are not supported yet, because C+ has
+  no references. Write `for (const auto x : v)`; copying an element is cheap.
+- The loop goes over the vector as it was when the loop started. Changing the vector in
+  the body, even with `push_back` or `clear`, does not affect the loop; in C++ it is
+  undefined behavior.
+- Only vectors can be looped over for now.
 
 ---
 
@@ -393,7 +482,7 @@ Precedence and associativity match C++. From tightest to loosest:
 
 | Operators | Notes |
 |-----------|-------|
-| `x++` `x--` `f(...)` | postfix |
+| `x++` `x--` `f(...)` `v[i]` `a.b` | postfix |
 | `++x` `--x` `-x` `+x` `!x` `~x` | prefix |
 | `*` `/` `%` | |
 | `+` `-` | |
@@ -410,7 +499,8 @@ Precedence and associativity match C++. From tightest to loosest:
 
 Arithmetic, bitwise and ordering operators take `int` and `long`. `==` and `!=` take any
 two values of the same type: numbers, `bool`s, strings by contents, structs field by field,
-and class references by identity. Operands are evaluated left to right.
+vectors element by element, and class references by identity. Operands are evaluated left
+to right; in `v[i]`, `v` is evaluated before `i`, as in C++17.
 
 Operator overloading is planned with C++ syntax, `Point operator+(Point other) const`,
 after function overloading. `&&`, `||` and the comma operator will not be overloadable.
@@ -452,8 +542,9 @@ println("{{literal braces}}");
 - The first argument must be a string literal. Each `{}` is replaced by the next argument.
 - The compiler checks that the number of `{}` matches the number of arguments.
 - `{{` and `}}` print literal braces. Format options such as `{:x}` are planned.
-- `int`, `long`, `bool`, `string`, structs and class objects can be printed. A struct
-  prints its fields by name, with strings inside it in quotes: `{name: "Ada", born: 1815}`.
+- `int`, `long`, `bool`, `string`, structs, class objects and vectors can be printed. A
+  struct prints its fields by name, with strings inside it in quotes:
+  `{name: "Ada", born: 1815}`. A vector prints its elements: `[1, 2, 3]`, `["a", "b"]`.
   A class object prints its type name first: `User {name: "Ada", born: 1815}`. All fields
   print, private ones included. An object met again while it is being printed prints as
   `User {...}`, so an object that refers back to itself does not print forever.
@@ -493,9 +584,15 @@ shared between threads. Counting is automatic:
   Today a cycle cannot be built, because a class reference cannot be empty. `weak`
   references, which break cycles, are planned together with [Optionals](#optionals).
 
+A vector is a value, but its elements live in a reference-counted buffer that copies of
+the vector share. Changing a vector whose buffer is shared first copies the buffer, so the
+change is seen only through that vector (copy-on-write). The buffer is freed, and the
+objects in it released, when the last vector using it goes away. An element is released
+when it is removed: by `pop_back`, by `clear`, or by being overwritten.
+
 Set the environment variable `CPLUS_CHECK_LEAKS=1` when running a program to have it
-report, at exit, any class objects that were never freed. The test suite runs every
-program this way.
+report, at exit, any class objects or vector buffers that were never freed. The test suite
+runs every program this way.
 
 Planned: `unique<T>` for a single owner with no count, and `local<T>` for non-atomic
 sharing that cannot cross threads. Raw pointers, `new`, `delete`, `malloc` and pointer
@@ -543,13 +640,16 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Definite assignment of individual struct fields | implemented |
 | Classes: reference counting, constructors, destructors, printing | implemented |
 | Methods, `const` methods, `this`, `public:` / `private:` | implemented |
-| `==` and `!=` on strings, structs and class references | implemented |
+| `==` and `!=` on strings, structs, vectors and class references | implemented |
+| Vectors: `vector<T>`, checked `v[i]`, `push_back` and the other basic methods, copy-on-write | implemented |
+| Range-based `for` over vectors | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
 | Casts, unsigned types, floating point, `char` | planned |
 | Function overloading | planned |
 | Strings: joining, ordering, slicing | planned |
-| Arrays, `vector`, `hashmap` | planned |
+| `array<T, N>`, `hashmap<K, V>`; vector `insert`, `erase`, iterators | planned |
+| References (`T&`), including `for (auto& x : v)` | planned |
 | Inheritance, `virtual`, `protected:` | planned |
 | Operator overloading | planned |
 | Destructors for structs, static members | planned |

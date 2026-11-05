@@ -1,0 +1,37 @@
+// Vectors are values: copying one gives an independent list, and copies are cheap
+// because they share their elements until one of them changes.
+
+struct Student {
+    string name;
+    vector<int> scores;
+
+    long average() const {
+        if (scores.empty()) return 0;
+        long total = 0;
+        for (int s : scores) total += s;
+        return total / scores.size();
+    }
+};
+
+vector<Student> passing(vector<Student> students, long cutoff) {
+    vector<Student> out;
+    for (auto s : students)
+        if (s.average() >= cutoff) out.push_back(s);
+    return out;
+}
+
+int main() {
+    vector<Student> students = {
+        {"Ada", {90, 85, 99}},
+        {"Linus", {70, 65}},
+        {"Grace", {}},
+    };
+    students[2].scores.push_back(88);   // change one element in place
+    students.push_back({"Ken", {50}});
+
+    for (const auto s : students) println("{}: {}", s.name, s.average());
+
+    vector<Student> good = passing(students, 80);
+    println("{} of {} passed: {}", good.size(), students.size(), good);
+    return 0;
+}

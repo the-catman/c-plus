@@ -39,10 +39,12 @@ private:
     bool isTypeName(const Token& t) const { return t.kind == Tok::Ident && typeNames_.count(t.text); }
     bool isTypeStart(size_t ahead = 0) const;
     const Type* parseType(Loc& loc);
+    void expectCloseAngle(const std::string& context);
     std::unique_ptr<FuncDecl> parseFunction(const Type* retType, Loc retLoc);
     std::unique_ptr<BlockStmt> parseBlock();
     StmtPtr parseStmt();
     StmtPtr parseDeclaration();  // one or more variables, without the trailing ';'
+    StmtPtr parseDeclarators(bool isConst, const Type* ty, Loc typeLoc);  // the part after the type
     StmtPtr parseFor();
     void checkUnknownType();
 
