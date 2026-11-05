@@ -219,7 +219,8 @@ name[0] = 'E';                              // "Eda"; other copies keep "Ada"
   and `back()` stop the program; in C++ they are undefined.
 - `clear()` empties the string.
 - `string(count, c)` is `count` copies of the char `c`, as in C++: `string(3, '-')` is
-  `"---"`. `string()` is empty, and `string(s)` is a copy of the string `s`.
+  `"---"`. `string()` is empty, and `string(s)` is a copy of the string `s`. `string(p)`
+  copies the text a C `char*` points to (see [Pointers](#pointers)).
 - `to_string(x)` turns a number into text: `to_string(42)` is `"42"` and `to_string(2.5)`
   is `"2.5"`. `format("...", values...)`,
   C++20's `std::format`, builds a string with the rules of [Printing](#printing):
@@ -243,11 +244,14 @@ These are the only implicit conversions:
 - **a number to `bool`**: zero is `false`, anything else is `true`, as in C++.
 - **a value to an optional**: a `T`, or `null`, converts to `T?`. The value converts as it
   would to `T`, so an `int` also converts to `long?` (see [Optionals](#optionals)).
+- **pointers**: `null` to any pointer, `T*` to `const T*`, and any pointer to `void*`
+  (see [Pointers](#pointers)).
 
 Everything else is an error, including `long` to `int`, a floating-point value to an
 integer, any other `double` to `float`, a number to `char`, `char` to `string` or `bool`,
-`bool` to a number, `T?` to `T`, and one optional type to another. A [cast](#casts)
-converts between numbers, `char` and `bool` explicitly.
+`bool` to a number, `T?` to `T`, one optional type to another, a pointer to `bool`, a
+number to a pointer, and one pointer type to another. A [cast](#casts) converts between
+numbers, `char` and `bool`, and between pointer types, explicitly.
 
 ```cpp
 long big = 5;       // ok: int widens to long
@@ -286,8 +290,13 @@ double share = double(n) / total;   // without the cast, n / total divides integ
 - A cast cannot make a string: write `to_string(x)` or `format("{}", x)`, or
   `string(1, c)` for a char. `string(s)` of a string is allowed, and is a copy. Reading a number
   from a string is planned.
-- `reinterpret_cast` and `const_cast` do not exist, since C+ has no raw pointers yet and
-  `const` cannot be cast away. `dynamic_cast` would need inheritance, which is planned.
+- A cast also converts one pointer type to another, as in C:
+  `static_cast<int*>(memory)` or `(int*)memory`, and `bool(p)` is true when `p` is not
+  null. It cannot remove `const` from what a pointer points to, and a number and a
+  pointer do not convert into each other (see [Pointers](#pointers)).
+- `reinterpret_cast` does not exist, since the casts above already convert pointers, and
+  neither does `const_cast`, since `const` cannot be cast away. `dynamic_cast` would need
+  inheritance, which is planned.
 
 ### Optionals
 
@@ -426,8 +435,9 @@ println("{}", a);              // User {name: "Alice", age: 31}
   with a `{ }` list, `User{"Alice", 30}`. There is no `new`.
 - A class without a constructor is built from its fields, like a struct:
   `Counter{.count = 1}`. With a constructor, the values are its arguments, in order.
-- Fields and methods are reached with `.`, also through `this`: `this.age`. The `->`
-  operator is only for raw pointers.
+- Fields and methods are reached with `.`, also through `this`: `this.age`. A class
+  variable is not a pointer, so `u->age` is an error; `->` is only for
+  [pointers](#pointers).
 - **A class reference is never empty.** `User u;` declares a variable that must be
   assigned before it is read (see [Definite assignment](#definite-assignment)). For the
   same reason, a class-typed field must get a value whenever an object is built: from the
@@ -472,8 +482,8 @@ println("{}", r.area());    // 24
 ```
 
 - Inside a method, fields and other methods can be used by name (`w`, `area()`) or
-  through `this` (`this.w`, `this.area()`). `this` refers to the current object, and
-  `this->w` is an error.
+  through `this` (`this.w`, `this.area()`). `this` refers to the current object, not to
+  a pointer to it, so `this->w` and `&this` are errors.
 - A `const` method cannot assign fields or call methods that are not `const`. A method
   that is not `const` cannot be called on a `const` struct variable.
 - A struct method works on the struct in place: `r.scale(2)` changes `r`. Called on a
@@ -576,6 +586,91 @@ changes; that copy first gets a buffer of its own (copy-on-write). Passing or re
 vector therefore costs about as much as passing a class reference, so there is no need for
 `const vector<int>&` parameters, which C+ does not support. See
 [Memory model](#memory-model).
+
+### Pointers
+
+Pointers work as in C++: `&x` is the address of `x`, `*p` is what `p` points to, and
+`p->x` is a field of what `p` points to. They are for the code that needs an address: a
+function that changes its caller's variable, structures linked by hand, and memory shared
+with C functions. Strings, vectors and class references manage their memory themselves,
+and most code needs nothing else.
+
+```cpp
+void bump(int* n) { *n += 1; }
+
+int n = 41;
+int* p = &n;
+bump(p);                        // n is 42
+*p = 7;                         // n is 7
+Point pt;
+Point* pp = &pt;
+pp->x = 10;                     // the same as (*pp).x = 10
+int* none = null;
+if (p) println("{}", *p);       // a pointer is true when it is not null
+```
+
+- **Types.** `T*` points to a `T`, and `T**` to a `T*`. `const T*` can only read what it
+  points to, and `T* const` is a pointer that cannot be pointed anywhere else, as in C++.
+  `void*` points to memory of no known type. A pointer can already be null, so `int*?`
+  is an error. `auto p = &x;` makes `p` a pointer; `auto*` is an error.
+- **`&x`** is the address of a variable, of a field (`&pt.x`, `&pp->y`), or of what a
+  pointer points to (`&p[2]`). What it points to must already have a value, since C+
+  cannot tell whether the code that gets the pointer writes to it before reading. `&` of
+  something `const` is a `const T*`. A temporary, `this`, and a value reached through `?.`
+  have no address. Pointers into vectors and strings, such as `&v[0]`, are not supported
+  yet.
+- **`*p`, `p->x` and `p->m()`** reach what `p` points to. Fields and methods are reached
+  with `->`, not `.`: `pp.x` is an error. A `const T*` can only call `const` methods.
+- **Following a null pointer stops the program** with file:line, whether by `*`, `->` or
+  `[ ]`. C++ leaves it undefined.
+- **Indexing and arithmetic.** `p[i]` is `*(p + i)`, with an `int` or `long` index. It is
+  not checked, since a pointer does not know how much memory follows it. `p + n`,
+  `p - n`, `p += n`, `p -= n`, `++` and `--` move by whole elements, and `p - q` is the
+  number of elements between two pointers to the same type, as a `long`. None of these
+  work on a `void*`.
+- **Comparisons.** `==` and `!=` compare a pointer with another pointer or with `null`,
+  and `<`, `<=`, `>`, `>=` order two pointers by address. `0` is a number, not a null
+  pointer: write `null`.
+- **Conversions.** `null` converts to any pointer, `T*` to `const T*`, and any pointer to
+  `void*`, or a `const T*` to `const void*`. Other pointer types need a cast,
+  `static_cast<int*>(v)` or `(int*)v` (see [Casts](#casts)). A pointer is a
+  [condition](#conditions), as in C++, but does not convert to a `bool` variable by
+  itself: write `p != null` or `bool(p)`. Numbers and pointers do not convert into each
+  other, even with a cast.
+- **Text.** `string(p)` copies the text that a `char*` or `const char*` points to, up to
+  its zero byte, as C stores it. A null pointer stops the program.
+- **Printing.** A pointer prints its address in hex, such as `0x7ffd5e8c`, and null
+  prints `0x0`. Printing a `char*` is an error: C++ prints the text it points to, but C+
+  cannot tell where that text ends. Write `string(p)` for the text, or `(void*)p` for the
+  address.
+- **A struct can point to its own type**, as a list or tree written by hand does:
+  `Node* next = null;`.
+- **A pointer to a class variable** points to the variable, which holds a reference.
+  `p->name` reaches the object's field, and `*p = User("Grace")` makes the variable refer
+  to another object.
+- **A pointer is not checked for lifetime.** It does not keep alive what it points to, so
+  following a pointer to a local variable whose function has returned, or to memory that
+  has been freed, is undefined, as in C++. A pointer to a class variable does not count
+  as a reference to the object.
+- **Memory from `malloc` holds no values yet.** Numbers, chars, bools and pointers can
+  be stored into it. A string, vector, class reference or optional, or a struct holding
+  one, cannot: assigning releases the old value first, and there is none, so this is
+  undefined, as it is in C++ without placement `new`.
+- Planned: `new` and `delete`, which will warn and name the safer alternative, and
+  pointers into vectors and strings. Memory can come from C's `malloc` and `free` until
+  then (see [C functions](#c-functions)). References (`T&`) are planned too; meanwhile a
+  pointer parameter lets a function change the caller's variable.
+
+### Pointer declarations
+
+In C++, `int* a, b;` makes `a` a pointer but `b` a plain `int`, a well-known trap. In C+,
+a declaration that mixes pointers and non-pointers is an error. Declare them separately:
+
+```cpp
+int* a, b;          // error
+int* a, * b;        // ok: both are pointers
+int* a; int b;      // ok
+```
 
 ---
 
@@ -687,6 +782,9 @@ int main() {
 | `void` result | `void` |
 | `const char*` parameter | `string`, or `string?` when NULL may be passed |
 | `char*` or `const char*` result | `string?`, which is null when the result is NULL, or `string` when it never is |
+| `char*` that the function writes to, or that must be freed | `char*` |
+| `int*`, `double*`, `void*` and other pointers | the same pointer type |
+| `FILE*`, `sqlite3*` and other types used only through pointers | the same, after [`extern "C" struct FILE;`](#c-types-known-by-name) |
 
 - Parameter names are optional, as in C: `int abs(int);`. `int rand();` and
   `int rand(void);` both take no arguments.
@@ -696,10 +794,15 @@ int main() {
   would only see the text before it. A null `string?` is passed as NULL.
 - **Strings coming back.** Text a C function returns is copied into a new string. C+
   never frees memory that a C function returns. That is right for functions such as
-  `getenv`, which return text they keep, but memory from functions such as `strdup`, which
-  the caller must free, leaks. Those need raw pointers, which are planned. A result
-  declared `string` that turns out to be NULL stops the program with file:line; declare
-  `string?` for a function that can return NULL.
+  `getenv`, which return text they keep. For a function such as `strdup`, whose result
+  the caller must free, declare the result `char*`, copy the text out with `string(p)`,
+  and pass the pointer to `free`. A result declared `string` that turns out to be NULL
+  stops the program with file:line; declare `string?` for a function that can return
+  NULL.
+- **Pointers** pass to and from C unchanged (see [Pointers](#pointers)). An out
+  parameter takes the address of a variable, `frexp(x, &exponent)`, and memory from
+  `malloc` is cast to the type it holds: `(int*)malloc(n * sizeof(int))`. A C array
+  parameter, `int values[]`, is written as the pointer C passes: `int* values`.
 - **Unsigned types** are declared with the C+ type of the same size. The same bits are
   passed, so a value above the largest `int` or `long` comes out negative. C's `long` is
   64 bits on Linux and macOS, like C+'s.
@@ -710,9 +813,31 @@ int main() {
 - C's output functions, such as `puts`, share their buffer with `print` and `println`, so
   output comes out in the order it was written.
 - A C function cannot be named `main`, or start with `cplus_`, which the C+ runtime uses.
-- Not supported yet: pointers, including handles such as `sqlite3*`; structs;
-  `long double`; functions with a variable number of arguments, such as `printf`;
-  callbacks; C variables such as `errno`; and reading declarations from C headers.
+- Not supported yet: passing structs by value; `long double`; functions with a variable
+  number of arguments, such as `printf`; callbacks; C variables such as `errno`; and
+  reading declarations from C headers.
+
+#### C types known by name
+
+Many C libraries hand out pointers to a type whose fields are private, such as `FILE` or
+`sqlite3`. C+ declares such a type by name only, inside `extern "C"`, and can then hold and
+pass pointers to it:
+
+```cpp
+extern "C" {
+    struct FILE;
+    FILE* fopen(string path, string mode);
+    int fclose(FILE* f);
+}
+extern "C" struct sqlite3;      // one type on its own
+```
+
+- The type is written without the word `struct` afterward: `FILE*`, not `struct FILE*`,
+  as in C++.
+- Only a pointer to it can be used: a `FILE` variable, field or parameter, `*f`, `f[i]`,
+  `f + 1` and `sizeof(FILE)` are errors, since C+ never sees what is inside.
+- C's `typedef struct x x;` is not needed and is an error; neither is `class X;`. A C
+  struct whose fields C+ reads is not supported yet.
 
 ### Modules
 
@@ -745,14 +870,16 @@ in C++. The step of a `for` loop may list several expressions: `for (...; ...; i
 #### Conditions
 
 The condition of `if`, `while`, `do`-`while`, `for` and `?:`, and the operands of `!`, `&&`
-and `||`, may be a `bool`, a number or an optional. As in C++, a number is true when it
-is not zero (a floating-point NaN is true), and an optional is true when it holds a value. A `bool?` is not a condition
-(see [Optionals](#optionals)).
+and `||`, may be a `bool`, a number, a pointer or an optional. As in C++, a number is
+true when it is not zero (a floating-point NaN is true), a pointer when it is not null,
+and an optional when it holds a value. A `bool?` is not a condition (see
+[Optionals](#optionals)).
 
 ```cpp
 if (count) ...          // same as if (count != 0)
 while (n) n--;
 if (!found) ...         // found is null
+if (node) ...           // same as if (node != null), for a pointer
 if (auto u = found) ... // runs with the User inside found
 ```
 
@@ -790,8 +917,8 @@ Precedence and associativity match C++. From tightest to loosest:
 
 | Operators | Notes |
 |-----------|-------|
-| `x++` `x--` `f(...)` `v[i]` `a.b` `a?.b` | postfix; `?.` skips the rest of the chain when `a` is null |
-| `++x` `--x` `-x` `+x` `!x` `~x` | prefix |
+| `x++` `x--` `f(...)` `v[i]` `a.b` `a->b` `a?.b` | postfix; `?.` skips the rest of the chain when `a` is null |
+| `++x` `--x` `-x` `+x` `!x` `~x` `*p` `&x` `sizeof` | prefix; a cast binds here too |
 | `*` `/` `%` | |
 | `+` `-` | |
 | `<<` `>>` | result has the type of the left side |
@@ -811,10 +938,11 @@ Arithmetic and ordering operators take any numbers, converting mixed operands as
 >>` take only integers. A `char` is an integer here, and is promoted to `int` first, as in
 C++: `c - '0'`, `c & 0x20` and `-c` are `int`s (see [char](#char)). `+` also joins two
 strings, or a string and a char, and the ordering operators also compare two strings (see
-[string](#string)).
+[string](#string)). `+` and `-` also move a pointer, `-` measures the distance between two,
+and the ordering operators compare them by address (see [Pointers](#pointers)).
 `==` and `!=` take any two values of the same type: numbers, `bool`s, `char`s, strings by
-contents, structs field by field, vectors element by element, and class references by
-identity. They also compare an optional with a value or `null` (see
+contents, structs field by field, vectors element by element, class references by
+identity, and pointers by address. They also compare an optional with a value or `null` (see
 [Optionals](#optionals)). Operands are evaluated left
 to right; in `v[i]`, `v` is evaluated before `i`, as in C++17.
 
@@ -842,6 +970,22 @@ When the shift amount is a literal, an out-of-range shift is a compile error ins
 C and C++ leave all of these undefined. Explicit wrapping operators for hashing and
 cryptography, and a flag to turn checks off in hot code, are planned. Floating-point
 arithmetic is not checked; see [Floating-point types](#floating-point-types).
+
+### sizeof
+
+`sizeof(T)` is the size of the type `T` in bytes, and `sizeof x` the size of the type of
+`x`, as a `long`. As in C++, the operand is not evaluated. It is mostly for memory from C:
+
+```cpp
+int* squares = (int*)malloc(5 * sizeof(int));
+```
+
+- `sizeof(char)` is 1, `sizeof(int)` and `sizeof(float)` are 4, and `sizeof(long)`,
+  `sizeof(double)` and a pointer are 8 on 64-bit systems. A struct includes padding, as in
+  C: a struct with an `int` field and then a `long` field is 16.
+- For a string, a vector or a class, `sizeof` gives the size of the variable, not of the
+  text, the elements or the object it refers to.
+- `sizeof(void)` and the size of a C type known only by name are errors.
 
 ### Math functions
 
@@ -970,22 +1114,13 @@ Set the environment variable `CPLUS_CHECK_LEAKS=1` when running a program to hav
 report, at exit, any class objects, vector buffers or string buffers that were never freed. The test suite
 runs every program this way.
 
+Raw [pointers](#pointers) are not counted: a pointer does not keep alive what it points
+to.
+
 Planned: `unique<T>` for a single owner with no count, and `local<T>` for non-atomic
-sharing that cannot cross threads. Raw pointers, `new`, `delete`, `malloc` and pointer
-arithmetic will be available everywhere, and manual `new` and `delete` will produce a
-warning that names the safer alternative. Debug builds will run with AddressSanitizer and
+sharing that cannot cross threads. `new` and `delete` will be available everywhere, and
+will produce a warning that names the safer alternative. Debug builds will run with AddressSanitizer and
 UBSan.
-
-### Pointer declarations
-
-In C++, `int* a, b;` makes `a` a pointer but `b` a plain `int`, a well-known trap. In C+,
-a declaration that mixes pointers and non-pointers is an error. Declare them separately:
-
-```cpp
-int* a, b;          // error
-int* a, * b;        // ok: both are pointers
-int* a; int b;      // ok
-```
 
 ## Generics
 
@@ -1027,6 +1162,8 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Math functions from `<cmath>`, `abs`, `min`, `max` | implemented |
 | `char`: `'a'`, checked `s[i]`, `for (char c : s)`, `push_back`, `pop_back`, `front`, `back`, `string(n, c)`, `<cctype>` functions | implemented |
 | `extern "C"` functions taking and returning numbers, `char`, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
+| Pointers: `T*`, `&x`, `*p`, `p->x`, `p[i]`, arithmetic, `const T*`, `void*`, null checks, `sizeof` | implemented |
+| Pointers in `extern "C"`, and C types known by name, such as `FILE*` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Imports and multi-file programs | planned |
 | Unsigned types | planned |
@@ -1041,7 +1178,8 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `weak` references | planned |
 | Errors (`throws`, `try`, `catch`) | planned |
 | Generics | planned |
-| C pointers, structs, callbacks and variables in `extern "C"`; reading C headers | planned |
+| `new` and `delete`; pointers into vectors and strings | planned |
+| C structs, callbacks and variables in `extern "C"`; reading C headers | planned |
 | Reflection, JSON, HTTP | planned |
 | Threads, async | planned |
 

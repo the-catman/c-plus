@@ -408,6 +408,13 @@ void cplus_print_i64(cplus_string* out, int64_t value) {
     out_write(out, text, snprintf(text, sizeof text, "%" PRId64, value));
 }
 
+// A pointer prints as its address in hexadecimal, as std::format prints a void*: 0x0 for
+// a null pointer.
+void cplus_print_ptr(cplus_string* out, const void* p) {
+    char text[24];
+    out_write(out, text, snprintf(text, sizeof text, "0x%" PRIxPTR, (uintptr_t)p));
+}
+
 // ---- Floating-point numbers ------------------------------------------------
 //
 // `{}` prints a float or a double as C++'s std::format does: the fewest digits that read

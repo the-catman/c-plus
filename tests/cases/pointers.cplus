@@ -1,0 +1,162 @@
+// Raw pointers, as in C++: `&x` is the address of x, `*p` what p points to, and `p->x`
+// a field of what p points to. A pointer may be null; following a null one stops the
+// program, which the trap tests check.
+struct Point {
+    int x = 0;
+    int y = 0;
+    void move(int dx) { x += dx; }
+    int sum() const { return x + y; }
+};
+
+struct Node {
+    int value;
+    Node* next = null;  // a struct can point to its own type
+};
+
+class Account {
+public:
+    string owner;
+    long balance = 0;
+    Account(string o) : owner(o) {}
+};
+
+void bump(int* n) { *n += 1; }
+
+void swap(int* a, int* b) {
+    int t = *a;
+    *a = *b;
+    *b = t;
+}
+
+// An out parameter, as in C: the function stores its second result through a pointer.
+int divide(int a, int b, int* remainder) {
+    *remainder = a % b;
+    return a / b;
+}
+
+int length(Node* head) {
+    int n = 0;
+    for (Node* cur = head; cur; cur = cur->next) n++;
+    return n;
+}
+
+int main() {
+    int n = 41;
+    int* p = &n;
+    bump(p);
+    println("{} {}", n, *p);
+    // expect: 42 42
+    *p = 7;
+    (*p)++;
+    *p *= 2;
+    println("{}", n);
+    // expect: 16
+
+    int a = 1, b = 2;
+    swap(&a, &b);
+    int rest = 0;
+    int q = divide(17, 5, &rest);
+    println("{} {} {} {}", a, b, q, rest);
+    // expect: 2 1 3 2
+
+    // Fields and methods through a pointer.
+    Point pt = {1, 2};
+    Point* pp = &pt;
+    pp->x = 10;
+    pp->move(5);
+    (*pp).y += 1;
+    println("{} {} {}", pt, pp->sum(), (*pp).y);
+    // expect: {x: 15, y: 3} 18 3
+    int* px = &pt.x;
+    *px = 0;
+    int* py = &pp->y;
+    *py = 9;
+    println("{}", pt);
+    // expect: {x: 0, y: 9}
+
+    // A list linked by pointers.
+    Node third = {3};
+    Node second = {2, &third};
+    Node first = {1, &second};
+    for (Node* cur = &first; cur != null; cur = cur->next) print("{} ", cur->value);
+    println("({} nodes)", length(&first));
+    // expect: 1 2 3 (3 nodes)
+    second.next = null;
+    println("{} {}", length(&first), length(null));
+    // expect: 2 0
+
+    // A pointer to a pointer.
+    int* other = &a;
+    int** pp2 = &other;
+    **pp2 = 100;
+    *pp2 = &b;
+    **pp2 = 200;
+    println("{} {}", a, b);
+    // expect: 100 200
+
+    // Null, and pointers as conditions.
+    int* none = null;
+    println("{} {} {} {}", none == null, !none, none, p != null);
+    // expect: true true 0x0 true
+    if (p) println("p is set");
+    // expect: p is set
+    if (none || p == &n) println("p points to n");
+    // expect: p points to n
+    int* chosen = n > 5 ? p : null;
+    println("{} {}", *chosen, bool(none));
+    // expect: 16 false
+
+    // const: `const int*` only reads what it points to; `int* const` cannot be moved.
+    const int* ro = &n;
+    println("{}", *ro + 1);
+    // expect: 17
+    const int limit = 3;
+    const int* pl = &limit;
+    int* const fixed = &a;
+    *fixed = 5;
+    println("{} {}", *pl, a);
+    // expect: 3 5
+    const Point* cpt = &pt;
+    println("{} {}", cpt->sum(), cpt->x);
+    // expect: 9 0
+
+    // Pointers to strings, vectors and class references point to the variable.
+    string s = "ab";
+    string* ps = &s;
+    *ps += "c";
+    ps->push_back('d');
+    println("{} {} {}", s, ps->size(), (*ps)[1]);
+    // expect: abcd 4 b
+    vector<int> v = {1, 2};
+    vector<int>* pv = &v;
+    pv->push_back(3);
+    (*pv)[0] = 9;
+    println("{} {}", v, pv->size());
+    // expect: [9, 2, 3] 3
+    Account acct = Account("Ada");
+    Account* pa = &acct;
+    pa->balance += 10;
+    long* pb = &acct.balance;
+    *pb *= 3;
+    println("{} {}", acct.balance, pa->owner);
+    // expect: 30 Ada
+    *pa = Account("Grace");
+    println("{} {}", acct.owner, acct.balance);
+    // expect: Grace 0
+
+    // Pointers in a vector, compared by address.
+    vector<int*> ptrs = {&a, &b, null};
+    println("{} {} {}", *ptrs[0], ptrs[1] == &b, ptrs[2] == null);
+    // expect: 5 true true
+
+    // A void* holds any pointer; a cast takes it back.
+    void* any = p;
+    int* back = static_cast<int*>(any);
+    char* bytes = (char*)any;
+    println("{} {}", *back, any == p);
+    // expect: 16 true
+
+    println("{} {} {} {} {} {}", sizeof(int), sizeof(long), sizeof(char), sizeof(double), sizeof(Point), sizeof n);
+    // expect: 4 8 1 8 8 4
+    return 0;
+}

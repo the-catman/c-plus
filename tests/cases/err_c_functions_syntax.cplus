@@ -2,9 +2,9 @@ extern int f(int x);
 extern "C++" int g();
 extern "C" size_t length(string s);
 extern "C" long strlen(const char* s);
-extern "C" char* strdup(string s);
+extern "C" const char* getenv(string name);
 extern "C" int printf(string format, ...);
-extern "C" void* malloc(long size);
+extern "C" void* malloc(long size);  // fine: a pointer
 extern "C" int errno;
 extern "C" int square(int n) { return n * n; }
 extern "C" unsigned sleep(unsigned seconds);
@@ -26,18 +26,16 @@ int main() {
 // error: it is 64 bits, like 'size_t'
 // error: C+ passes text to C as `string`, not as `const char*`
 // error: write `string`. C+ passes a copy of the text that ends in a zero byte, as C expects
-// error: C+ passes text to C as `string`, not as `char*`
 // error: write `string?`, which is null when the C function returns NULL
 // error: this compiler does not support C functions with variable arguments, such as printf, yet
 // error: print with `println("{}", x)`
-// error: this compiler does not support pointer types in C declarations yet
 // error: this compiler does not support C variables, such as errno, yet
 // error: a function declared extern "C" is defined in C, so it has no body here
 // error: 'unsigned' is a C type; write `int` here
 // error: extern "C" blocks cannot be nested
 // error: 'static' does not belong in an extern "C" declaration
-// error: arrive with raw pointers, which are planned
-// error: this compiler does not support C array parameters yet
+// error: a C array parameter is written as a pointer
+// error: write `int* values`: C passes an array as a pointer to its first element
 // error: 'uint64_t' is a C type; write `long` here
 // error: C functions are declared outside of functions
 // error: spec: docs/SPEC.md#c-functions

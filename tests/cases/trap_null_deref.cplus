@@ -1,0 +1,12 @@
+// Following a null pointer stops the program, instead of crashing without a location.
+int main() {
+    int n = 5;
+    int* p = &n;
+    println("{}", *p);
+    p = null;
+    println("{}", *p);
+    return 0;
+}
+// expect: 5
+// trap: null pointer: '*' was used on a pointer that is null
+// trap: trap_null_deref.cplus:7:19

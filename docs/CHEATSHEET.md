@@ -20,9 +20,9 @@ long square(long n) { return n * n; }
 
 | Area | C+ |
 |------|----|
-| Types | `int` (32-bit), `long` (64-bit), `double` (64-bit), `float` (32-bit), `bool`, `char` (one byte, 0 to 255), `string`, `void`, `auto`, structs, classes, `vector<T>`, `T?` |
+| Types | `int` (32-bit), `long` (64-bit), `double` (64-bit), `float` (32-bit), `bool`, `char` (one byte, 0 to 255), `string`, `void`, `auto`, structs, classes, `vector<T>`, `T?`, `T*` |
 | Floating point | `1.5`, `.5`, `1e9`, `2.5f`, as in C++. `7 / 2` is 3, `7 / 2.0` is 3.5. IEEE: `1 / 0.0` is `inf`, no traps. `float f = 0.5;` works for a written number |
-| Casts | `int(x)`, `static_cast<int>(x)`, `(int)x` between numbers, `char` and `bool`. A fraction is dropped toward zero; a value that does not fit **stops the program** |
+| Casts | `int(x)`, `static_cast<int>(x)`, `(int)x` between numbers, `char` and `bool`. A fraction is dropped toward zero; a value that does not fit **stops the program**. `(int*)p`, `static_cast<int*>(p)` between pointer types |
 | Math | `sqrt`, `pow`, `sin`, `floor`, `round`, `fmod`, `isnan`, `abs`, `min`, `max` and the rest of `<cmath>`, with no `std::` |
 | Characters | `char c = 'a';`, escapes as in strings. `c + 1` and `c - '0'` are `int`s, as in C++; `char(n)` is checked. `c++`, `c += 2` stay chars. `isdigit`, `isalpha`, `isspace`, `toupper`, `tolower` and the rest of `<cctype>` (ASCII, return `bool` or `char`) |
 | Structs | `struct P { int x; int y = 0; };` is a **value** that is copied. Build with `{1, 2}`, `{.y = 2}`, `P{1, 2}`, `P(1, 2)`, `{}` |
@@ -38,20 +38,24 @@ long square(long n) { return n * n; }
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them |
 | Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(x)` for any number |
 | Optionals | `User? u = find(name);` holds a `User` or `null`; `int? n;` starts out null. `u?.name` is null when `u` is, `u?.name ?? "nobody"` gives a fallback, `if (auto x = u)` runs with the `User` inside. `has_value()`, `value()`, `value_or(x)`, `u == null` |
-| C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`. Strings are converted at each call. Link other libraries with `-lname` |
+| Pointers | `int* p = &x;`, `*p = 5`, `p->x`, `p[i]` (unchecked), `p + n`, `p - q`, `p++`, `const int*`, `int* const`, `void*`, `int**`, `null`, `if (p)`. Following a null pointer **stops the program**. `sizeof(T)`, `sizeof x` (a `long`). `string(p)` copies a `char*`'s text. A pointer prints as `0x...` |
+| C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`, `void* malloc(long n);`, `double frexp(double x, int* e);`. Strings are converted at each call. Link other libraries with `-lname` |
+| C types by name | `extern "C" struct FILE;`, then `FILE* f = fopen(...)`. Only pointers to it can be used |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)`, `break`, `continue`, `?:` |
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
 | Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long), `1.5`, `1e-9`, `2.5f` (float), `'a'`, `'\n'` (char) |
-| Conditions | `bool`, a number or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (opt)` (holds a value). Not a `char`: write `c != '\0'` |
+| Conditions | `bool`, a number, a pointer or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (p)` (not null), `if (opt)` (holds a value). Not a `char`: write `c != '\0'` |
 
 ## Different from C++. Do not write the C++ version
 
 | C++ habit | C+ |
 |-----------|----|
 | `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;`; C functions are declared with `extern "C"` |
-| `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `int` |
+| `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `int`. `char*` is a raw pointer, for buffers and text to free |
+| `struct FILE* f`, `typedef struct x x;` | `extern "C" struct FILE;` once, then `FILE* f`; no `typedef` |
+| `void f(int v[])` in `extern "C"` | `void f(int* v)` |
 | `extern "C" int printf(const char*, ...);` | variable arguments are not supported; use `println` |
 | `std::cout << x`, `printf` | `println("{}", x)` |
 | `std::vector<int>`, `std::string`, `std::to_string` | `vector<int>`, `string`, `to_string`, with no `std::` |
@@ -60,7 +64,13 @@ long square(long n) { return n * n; }
 | `int x;` then read `x` | compile error until `x` is assigned on every path |
 | `int i = someLong;`, `int i = 2.5;` | error: a conversion that can lose information needs a cast: `int(x)`, which stops the program if `x` does not fit |
 | `float f = someDouble;` | error: write `float(x)`. Only a double written as a number, `float f = 0.5;`, converts by itself |
-| `reinterpret_cast`, `const_cast`, `dynamic_cast` | do not exist. `static_cast`, `int(x)` and `(int)x` convert numbers |
+| `reinterpret_cast`, `const_cast`, `dynamic_cast` | do not exist. `static_cast`, `int(x)` and `(int)x` convert numbers; `static_cast<int*>(p)` and `(int*)p` convert pointers. `const` cannot be cast away |
+| `(long)p`, `(int*)0x1000`, `int* p = 0;` | error: numbers and pointers never convert. A pointer to nothing is `null` |
+| `bool ok = p;` | error: write `p != null` or `bool(p)`. `if (p)` is fine |
+| `int* a, b;` | error, since `b` would be a plain `int`. Write `int* a, * b;` or two declarations |
+| `int*? p` | error: a pointer can already be null; write `int*` |
+| `println("{}", charPtr)` | error: write `string(p)` for the text or `(void*)p` for the address |
+| `&v[0]`, `s.data()` | pointers into vectors and strings are planned |
 | `std::sqrt(x)`, `#include <cmath>`, `M_PI` | `sqrt(x)`, with nothing to include. `acos(-1)` is π for now |
 | `x % 2.5` on a double | error: write `fmod(x, 2.5)` |
 | `printf("%.2f", x)`, `std::setprecision(2)` | `println("{:.2f}", x)` |
@@ -73,16 +83,16 @@ long square(long n) { return n * n; }
 | `int f() { if (c) return 1; }` | error: every path must return |
 | signed overflow is UB | overflow, `/0`, bad shifts **stop the program** with file:line |
 | `int x{5}`, `int x(5)` | `int x = 5;` for now |
-| `new User("a")`, `delete u` | `User("a")`; the object is freed automatically |
-| `this->x`, `u->name` | `this.x`, `u.name`; `->` is only for raw pointers |
+| `new User("a")`, `delete u` | `User("a")`; the object is freed automatically. `new`/`delete` are planned; use C's `malloc`/`free` for raw memory |
+| `this->x`, `u->name` | `this.x`, `u.name`; `->` is only for pointers, `T*` |
 | `int Rect::area() { ... }` outside the type | write the method body inside the type |
 | `User u;` then use `u` | error until assigned: a class reference is never empty. `User? u;` starts out null |
-| `nullptr`, `NULL`, `std::optional<T>`, `std::nullopt` | `null` and `T?`; only an optional can be null |
+| `nullptr`, `NULL`, `std::optional<T>`, `std::nullopt` | `null` and `T?`; only an optional or a pointer can be null |
 | `*opt`, `opt->name` | `opt.value()`, `opt?.name`, or unwrap with `if (auto u = opt)` |
 | `int x = opt;`, `opt + 1` | error: unwrap first, e.g. `(opt ?? 0) + 1` |
 | `if (flag)` on a `bool?` | error: write `flag == true` or `flag != null` |
 | `opt?.age = 3` | error: `?.` only reads. Write `if (auto u = opt) u.age = 3;` |
-| `struct Node { Node* next; }` | `class Node { Node? next; };`. A struct cannot hold itself, not even as an optional |
+| `struct Node { Node next; }`, `Node? next` in a struct | a struct cannot hold itself, not even as an optional. Use `class Node { Node? next; };`, or a pointer, `Node* next = null;` |
 | `const User u` freezes the object | `const` only stops `u` from referring to another object |
 | `u1 == u2` compares two objects' fields | it is true only for the same object, like `===` in JS. Compare fields instead |
 | `bool operator==(...) = default` | not needed: every struct already has `==` |
@@ -92,6 +102,7 @@ long square(long n) { return n * n; }
 | `v[i]` past the end is UB | every index is checked and a bad one **stops the program** with file:line; so do `pop_back()`, `front()`, `back()` on an empty vector |
 | `v.push_back(...)` inside `for (x : v)` is UB | safe: the loop goes over `v` as it was when the loop started |
 | `for (auto& x : v)`, `const vector<int>& v` | no references yet: `for (auto x : v)` and `vector<int> v` copy cheaply. Change elements with `v[i] = ...` |
+| `void f(int& n)` | no references yet: `void f(int* n)`, called as `f(&x)` |
 | `vector<int> v(5);`, `vector<int> v{1, 2};` | `auto v = vector<int>(5);`, `vector<int> v = {1, 2};` |
 | `v.emplace_back(x)`, `v.at(i)` | `v.push_back(x)`, `v[i]` (always checked) |
 | `int a[5];` | `vector<int> a = vector<int>(5);`; `array<T, N>` is planned |
@@ -117,7 +128,7 @@ long square(long n) { return n * n; }
 | Errors | `int f() throws`, `throw Error("..")`, `try f()`, `try { } catch (Error e) { }` |
 | Generics | `template<typename T>`, `template<Comparable T>`; no specialization or SFINAE |
 | Modules | `import net.server;`, `http::get(url)` |
-| Memory | `weak` to break reference cycles, `unique<T>`, `local<T>`; raw `T*`, `new`/`delete` warn |
+| Memory | `weak` to break reference cycles, `unique<T>`, `local<T>`; `new`/`delete`, which warn; pointers into vectors and strings |
 | Containers | `array<T, N>`, `hashmap<K, V>`; `insert`, `erase` and iterators on vectors |
 | References | `T&` parameters, `for (auto& x : v)` |
 | Format options | width and alignment, `{:x}`, `{:>8}` |

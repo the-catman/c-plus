@@ -16,6 +16,13 @@ using K = Type::Kind;
 static bool canConvert(const Type* from, const Type* to) {
     if (from->isError() || to->isError()) return true;
     if (from == to) return true;
+    if (to->isPointer()) {
+        // `null`; a `T*` to a `const T*`, which only reads; any pointer to a `void*`, as in
+        // C++, keeping const.
+        if (from->isNull()) return true;
+        if (!from->isPointer() || (from->constElem && !to->constElem)) return false;
+        return from->elem == to->elem || to->elem->is(K::Void);
+    }
     if (to->isOptional()) {
         // `null`, or a value that the optional then holds. Two optional types do not
         // convert into each other.
@@ -28,6 +35,21 @@ static bool canConvert(const Type* from, const Type* to) {
     if (from->is(K::Char) && to->isNumber()) return true;      // its code, from 0 to 255, as in C++
     return from->isNumber() && to->is(K::Bool);                // as in C++: zero is false, anything else true
 }
+
+// The pointer type that pointers `a` and `b` (or null) both convert to, for comparing
+// them or choosing between them; null if there is none.
+static const Type* commonPointer(const Type* a, const Type* b) {
+    if (a->isPointer() && b->isNull()) return a;
+    if (b->isPointer() && a->isNull()) return b;
+    if (!a->isPointer() || !b->isPointer()) return nullptr;
+    if (canConvert(a, b)) return b;
+    if (canConvert(b, a)) return a;
+    return nullptr;
+}
+
+// Whether `*p`, `p[i]` and pointer arithmetic can use what `p` points to: not `void`,
+// and not a C type known only by name, since neither has a known size.
+static bool pointsToKnownType(const Type* p) { return !p->elem->is(K::Void) && !p->elem->isOpaque(); }
 
 // As in C++, arithmetic on a char works on its code, as an int.
 static const Type* promoted(const Type* t) { return t->is(K::Char) ? Type::intTy() : t; }
@@ -71,8 +93,16 @@ static std::string spelled(const Expr& e, const std::string& fallback = "opt") {
     if (e.kind == Expr::Kind::This) return "this";
     if (e.kind == Expr::Kind::Member) {
         auto& m = static_cast<const MemberExpr&>(e);
+        if (m.base->kind == Expr::Kind::Unary && static_cast<const UnaryExpr&>(*m.base).isArrow()) {
+            std::string base = spelled(*static_cast<const UnaryExpr&>(*m.base).operand, "");
+            if (!base.empty()) return base + "->" + m.field;
+        }
         std::string base = spelled(*m.base, "");
         if (!base.empty()) return base + "." + m.field;
+    }
+    if (isDeref(e)) {
+        std::string base = spelled(*static_cast<const UnaryExpr&>(e).operand, "");
+        if (!base.empty()) return "*" + base;
     }
     return fallback;
 }
@@ -139,6 +169,7 @@ static std::string zeroOf(const Type* t) {
     if (t->is(K::String)) return "\"\"";
     if (t->isStruct()) return "{}";
     if (t->isClass()) return std::string(t->name) + "(...)";
+    if (t->isPointer()) return "null";
     return "0";
 }
 
@@ -207,10 +238,11 @@ static const Type* typeAtPath(const VarDecl* v, const std::string& path) {
     return t;
 }
 
-// Expressions that name storage: a variable, `this`, a field, or an element.
+// Expressions that name storage: a variable, `this`, a field, an element, or what a
+// pointer points to.
 static bool isPlaceKind(const Expr& e) {
     return e.kind == Expr::Kind::Name || e.kind == Expr::Kind::Member || e.kind == Expr::Kind::This ||
-           e.kind == Expr::Kind::Index;
+           e.kind == Expr::Kind::Index || isDeref(e);
 }
 
 // ---- Definite assignment ---------------------------------------------------
@@ -534,6 +566,7 @@ void Sema::checkStructs(Program& program) {
         for (auto& f : sd->fields) {
             if (f.type->is(K::Void) || f.type->is(K::Auto))
                 diags_.error(f.typeLoc, "a field cannot have type " + q(f.type), "", spec::Structs);
+            checkStorable(f.type, f.typeLoc);
             if (!f.defaultValue) continue;
             scopes_.emplace_back();
             Flow flow;
@@ -549,7 +582,8 @@ void Sema::checkStructs(Program& program) {
 // copy that ends in a zero byte, and a returned `const char*` becomes a string.
 void Sema::checkExternFunction(FuncDecl& fn) {
     auto check = [&](const Type* t, Loc loc, bool isReturn) {
-        if (t->isNumber() || t->is(K::Char) || t->is(K::Bool) || t->is(K::String) || t->isError()) return;
+        if (!checkStorable(t, loc)) return;
+        if (t->isNumber() || t->is(K::Char) || t->is(K::Bool) || t->is(K::String) || t->isPointer() || t->isError()) return;
         if (t->isOptional() && t->elem->is(K::String)) return;
         if (isReturn && t->is(K::Void)) return;
         if (t->is(K::Void)) {
@@ -558,22 +592,24 @@ void Sema::checkExternFunction(FuncDecl& fn) {
                          spec::CFunctions);
             return;
         }
-        std::string message = isReturn ? "a C function can return void, a number, char, bool, string or string?, "
-                                         "but this is " + q(t)
-                                       : "a C function can take a number, char, bool, string or string?, but "
-                                         "this parameter is " + q(t);
+        std::string message = isReturn ? "a C function can return void, a number, char, bool, a pointer, string or "
+                                         "string?, but this is " + q(t)
+                                       : "a C function can take a number, char, bool, a pointer, string or string?, "
+                                         "but this parameter is " + q(t);
         std::string help;
         if (t->isStruct())
             message = "this compiler does not support passing structs to or from C functions yet",
-            help = "pass the fields as separate arguments, if the C library allows it";
+            help = "pass a pointer to the struct, `" + std::string(t->name) + "*`, if the C function takes one, or the "
+                   "fields as separate arguments";
         else if (t->isClass())
             help = "C cannot hold a C+ object; pass the fields it needs as separate arguments";
         else if (t->isVector())
             message = "this compiler does not support passing vectors to or from C functions yet",
-            help = "C arrays arrive with raw pointers; until then, pass the elements one at a time";
+            help = "C takes an array as a pointer to its first element. Pass the elements one at a time, or memory from "
+                   "C's malloc that holds them";
         else if (t->isOptional())
-            help = "only text can be null in C (a NULL `const char*`). " +
-                   std::string(isReturn ? "Declare the result as" : "Pass") + " a plain " + q(t->elem) + " instead";
+            help = "in C, only text and pointers can be null. " + std::string(isReturn ? "Declare the result as" : "Pass") +
+                   " a plain " + q(t->elem) + " instead";
         diags_.error(loc, message, help, spec::CFunctions);
     };
     check(fn.retType, fn.retTypeLoc, true);
@@ -596,7 +632,9 @@ void Sema::checkFunction(FuncDecl& fn) {
     }
     // Parameters and the body's top level share one scope, as in C++.
     scopes_.emplace_back();
+    checkStorable(fn.retType, fn.retTypeLoc);
     for (auto& p : fn.params) {
+        checkStorable(p->declType, p->typeLoc);
         if (p->declType->is(K::Void))
             diags_.error(p->typeLoc, "parameters cannot have type void", "", spec::Functions);
         p->type = p->declType;
@@ -642,6 +680,7 @@ void Sema::checkFunction(FuncDecl& fn) {
 // ---- Statements ------------------------------------------------------------
 
 void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
+    checkStorable(v.declType, v.typeLoc);
     if (v.init) {
         if (v.declType->is(K::Auto)) {
             const Type* t = checkExpr(*v.init, flow);
@@ -674,7 +713,8 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
 // As in C++, a number used as a condition is true when it is not zero, and an optional
 // when it holds a value. A `bool?` would be ambiguous, so it is not a condition.
 static bool usableAsCondition(const Type* t) {
-    return t->isError() || t->is(K::Bool) || t->isNumber() || (t->isOptional() && !t->elem->is(K::Bool));
+    return t->isError() || t->is(K::Bool) || t->isNumber() || t->isPointer() ||
+           (t->isOptional() && !t->elem->is(K::Bool));
 }
 
 // Help for a bool? used as a condition.
@@ -695,7 +735,7 @@ void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
                (e.kind == Expr::Kind::Name ? static_cast<NameExpr&>(e).name
                                            : std::string(t->isVector() ? "items" : "text")) +
                ".empty()`";
-    diags_.error(e.loc, std::string("the ") + what + " must be a bool, a number or an optional, but this is " + q(t),
+    diags_.error(e.loc, std::string("the ") + what + " must be a bool, a number, a pointer or an optional, but this is " + q(t),
                  help, spec::Conditions);
 }
 
@@ -897,6 +937,35 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
 
 // ---- Expressions -----------------------------------------------------------
 
+// Help for a value of type `from` where a `to` is expected, when one of them is a pointer.
+static std::string pointerHelp(const Expr& e, const Type* from, const Type* to) {
+    std::string n = spelled(e, "x");
+    if (to->isPointer()) {
+        if (from->isPointer()) {
+            if (from->constElem && !to->constElem && from->elem == to->elem)
+                return "a " + q(from) + " only reads what it points to, so it does not convert to " + q(to) +
+                       ". Declare the target as `" + from->name + "` too";
+            if (from->elem->is(K::Void))
+                return "a void* becomes another pointer only with a cast: `static_cast<" + std::string(to->name) + ">(" + n +
+                       ")`";
+            return "pointers to different types do not convert into each other. If the memory really holds " +
+                   q(to->elem) + " values, cast it: `(" + to->name + ")" + n + "`";
+        }
+        if (e.kind == Expr::Kind::IntLit && static_cast<const IntLitExpr&>(e).value == 0) return "a pointer to nothing is `null`";
+        if (from == to->elem && isPlaceKind(e)) return "write `&" + n + "` for the address of " + q(n);
+        if (from->is(K::String) && to->elem->is(K::Char))
+            return "a string is not a pointer to its bytes. Declare a C function's text parameter as `string`, and C+ "
+                   "passes a copy that ends in a zero byte";
+        return "";
+    }
+    if (to->is(K::Bool)) return "compare it with null: `" + n + " != null`";
+    if (to->is(K::String) && from->elem->is(K::Char))
+        return "write `string(" + n + ")` to copy the text it points to, up to its zero byte";
+    if (canConvert(from->elem, to)) return "write `*" + n + "` for the value it points to";
+    if (to->isInteger()) return "a pointer does not convert to a number";
+    return "";
+}
+
 void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& context) {
     const Type* from = e.type;
     if (canConvert(from, to)) return;
@@ -908,7 +977,9 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         return;
     }
     std::string help;
-    if (from->is(K::Long) && to->is(K::Int)) {
+    if (from->isPointer() || to->isPointer()) {
+        help = pointerHelp(e, from, to);
+    } else if (from->is(K::Long) && to->is(K::Int)) {
         help = e.kind == Expr::Kind::IntLit ? "this number is larger than an int can hold; use long instead"
                                             : "a long may not fit in an int. Use long here, or write `int(x)`, which "
                                               "stops the program if the value does not fit";
@@ -944,7 +1015,7 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         help = "an optional only converts to an optional of the same type. Unwrap it first: `if (auto v = " +
                spelled(e) + ") ...` gives the " + std::string(from->elem->name) + " inside";
     } else if (from->isNull()) {
-        help = "only an optional can be null; make the type `" + std::string(to->name) + "?`";
+        help = "only an optional or a pointer can be null; make the type `" + std::string(to->name) + "?`";
     }
     diags_.error(e.loc, "expected " + q(to) + " " + context + ", but this is " + q(from), help,
                  spec::ImplicitConversions);
@@ -1112,6 +1183,21 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         var = thisVar();
         return e.type = &owner()->type;
     }
+    if (isDeref(e)) {  // `*p`, or the `p->` of `p->x`: what the pointer points to
+        auto& u = static_cast<UnaryExpr&>(e);
+        const Type* pt = checkExpr(*u.operand, flow);
+        e.type = Type::error();
+        if (pt->isError()) return e.type;
+        if (!pt->isPointer()) {
+            reportNotPointer(u, pt);
+            return e.type;
+        }
+        if (!pointsToKnownType(pt)) {
+            reportUnknownPointee(u.loc, pt, u.isArrow() ? "->" : "*");
+            return e.type;
+        }
+        return e.type = pt->elem;
+    }
     if (e.kind == Expr::Kind::Index) {
         // An element of a vector always holds a value, so it is not tracked.
         auto& ix = static_cast<IndexExpr&>(e);
@@ -1122,6 +1208,19 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         const Type* indexType = checkExpr(*ix.index, flow);
         e.type = Type::error();
         if (baseType->isError()) return e.type;
+        if (baseType->isPointer()) {  // `p[i]` is `*(p + i)`, with no bounds to check
+            if (!pointsToKnownType(baseType)) {
+                reportUnknownPointee(e.loc, baseType, "[ ]");
+                return e.type;
+            }
+            if (!indexType->isError() && !indexType->isInteger())
+                diags_.error(ix.index->loc, "an index into a pointer must be an int or long, but this is " + q(indexType),
+                             indexType->is(K::Char)       ? "convert the char to its code first: `int(c)`"
+                             : indexType->isFloating() ? "convert it first: `int(x)`"
+                                                       : "",
+                             spec::Pointers);
+            return e.type = baseType->elem;
+        }
         if (baseType->isOptional()) {
             std::string n = spelled(*ix.base, "items");
             diags_.error(e.loc, q(baseType) + " may be null, so it cannot be indexed directly",
@@ -1175,6 +1274,13 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         var = nullptr;
         return e.type;
     }
+    if (baseType->isPointer()) {
+        std::string n = spelled(*m.base, "p");
+        diags_.error(e.loc, q(n) + " is a pointer, so its fields are reached with '->'",
+                     "write `" + n + "->" + m.field + "`", spec::Pointers);
+        var = nullptr;
+        return e.type;
+    }
     if (!baseType->hasFields()) {
         std::string help;
         bool str = baseType->is(K::String);
@@ -1206,11 +1312,13 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
 }
 
 // Where the value at a place is stored: in a variable (or `this`), inside a class
-// object reached through a reference, or in a temporary such as a function's result.
-enum class Storage { Variable, Object, Temporary };
+// object reached through a reference, in memory a pointer points to, or in a temporary
+// such as a function's result.
+enum class Storage { Variable, Object, Pointer, Temporary };
 
 // Follows fields and elements from the place `e` back to what holds them. For a
-// variable, `root` is set to the Name or This expression it starts from.
+// variable, `root` is set to the Name or This expression it starts from; for memory
+// reached through a pointer, to the `*p` or `p[i]` that follows it.
 static Storage storageOf(const Expr& e, const Expr*& root) {
     switch (e.kind) {
         case Expr::Kind::Name:
@@ -1220,9 +1328,49 @@ static Storage storageOf(const Expr& e, const Expr*& root) {
             if (base.type && base.type->isClass() && base.kind != Expr::Kind::This) return Storage::Object;
             return storageOf(base, root);
         }
-        case Expr::Kind::Index: return storageOf(*static_cast<const IndexExpr&>(e).base, root);
+        case Expr::Kind::Index: {
+            const Expr& base = *static_cast<const IndexExpr&>(e).base;
+            if (base.type && base.type->isPointer()) {
+                root = &e;
+                return Storage::Pointer;
+            }
+            return storageOf(base, root);
+        }
+        case Expr::Kind::Unary:
+            if (!isDeref(e)) return Storage::Temporary;
+            root = &e;
+            return Storage::Pointer;
         default: return Storage::Temporary;
     }
+}
+
+// The pointer that the `*p` or `p[i]` found by storageOf follows.
+static const Expr& followedPointer(const Expr& root) {
+    if (root.kind == Expr::Kind::Index) return *static_cast<const IndexExpr&>(root).base;
+    return *static_cast<const UnaryExpr&>(root).operand;
+}
+
+// Whether a place lies in the elements of a vector or the bytes of a string, which move
+// when the vector grows or the string is copied before a change.
+static bool insideContainer(const Expr& e) {
+    switch (e.kind) {
+        case Expr::Kind::Member: {
+            const Expr& base = *static_cast<const MemberExpr&>(e).base;
+            return !(base.type && base.type->isClass()) && insideContainer(base);
+        }
+        case Expr::Kind::Index:
+            return !static_cast<const IndexExpr&>(e).base->type->isPointer();
+        default: return false;
+    }
+}
+
+// Whether a place lies in a class object that only a temporary refers to, as in
+// `makeUser().name`. The object is freed when the statement ends.
+static bool inTemporaryObject(const Expr& e) {
+    if (e.kind != Expr::Kind::Member) return false;
+    const Expr& base = *static_cast<const MemberExpr&>(e).base;
+    if (base.type && base.type->isClass() && base.kind != Expr::Kind::This) return !isPlaceKind(base);
+    return inTemporaryObject(base);
 }
 
 static bool containsIndex(const Expr& e) {
@@ -1263,6 +1411,17 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
             diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action,
                          "this value is a temporary copy, so changing it would have no effect", spec::Variables);
             return false;
+        case Storage::Pointer: {
+            const Expr& ptr = followedPointer(*root);
+            if (!ptr.type->constElem) return true;
+            diags_.error(target.loc,
+                         q(spelled(ptr, "the pointer")) + " is a " + q(ptr.type) + ", so what it points to cannot be " +
+                             action,
+                         "a pointer to const only reads. Declare it as `" + std::string(ptr.type->elem->name) +
+                             "*` if it needs to change what it points to",
+                         spec::Pointers);
+            return false;
+        }
         case Storage::Variable: break;
     }
     const VarDecl* rootVar = rootVariable(*root);
@@ -1293,6 +1452,172 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
     return true;
 }
 
+bool Sema::isReadOnlyPlace(const Expr& target) {
+    const Expr* root = nullptr;
+    switch (storageOf(target, root)) {
+        case Storage::Object:
+        case Storage::Temporary: return false;
+        case Storage::Pointer: return followedPointer(*root).type->constElem;
+        case Storage::Variable: break;
+    }
+    const VarDecl* rootVar = rootVariable(*root);
+    if (!rootVar) return false;
+    if (rootVar == thisVar() && fn_->isConst) return true;
+    return rootVar->isConst;
+}
+
+void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
+    std::string n = spelled(*u.operand, "value");
+    std::string help;
+    if (u.isArrow()) {
+        if (t->isOptional())
+            help = "write `" + n + "?." + u.arrowMember + "`, which is null when " + n + " is, or unwrap it first: `if (auto v = " +
+                   n + ") ... v." + u.arrowMember + "`";
+        else if (t->hasFields())
+            help = std::string(t->isClass() ? "a class reference is used directly, so " : "") +
+                   "fields and methods are reached with '.': write `" + n + "." + u.arrowMember + "`";
+        diags_.error(u.loc, "'->' follows a pointer, but " + q(n) + " is " + q(t), help, spec::Pointers);
+        return;
+    }
+    if (t->isOptional())
+        help = "the value inside an optional is `" + n + ".value()`, `" + n + " ?? fallback`, or `v` in `if (auto v = " + n +
+               ")`";
+    else if (t->isClass())
+        help = "a class reference is used directly: write `" + n + "` without '*'";
+    diags_.error(u.loc, "'*' follows a pointer, but this is " + q(t), help, spec::Pointers);
+}
+
+void Sema::reportUnknownPointee(Loc loc, const Type* ptr, const std::string& op) {
+    if (ptr->elem->isOpaque())
+        diags_.error(loc, "'" + op + "' cannot be used on a " + q(ptr) + ", because " + q(ptr->elem) +
+                              " is a C type known only by name",
+                     "pass the pointer to the C functions that take it; C+ never sees what is inside", spec::CTypes);
+    else
+        diags_.error(loc, "'" + op + "' cannot be used on a " + q(ptr) + ", which points to memory of no known type",
+                     "convert it first to a pointer to what is stored there, e.g. `static_cast<int*>(p)`", spec::Pointers);
+}
+
+bool Sema::checkStorable(const Type* t, Loc loc) {
+    const Type* inner = t;
+    while (inner->isVector() || inner->isOptional()) inner = inner->elem;
+    if (!inner->isOpaque()) return true;
+    diags_.error(loc, q(inner) + " is a C type known only by name, so C+ can only hold a pointer to it",
+                 "write `" + std::string(inner->name) + "*`", spec::CTypes);
+    return false;
+}
+
+// `&x`: the address of a variable, a field, or what a pointer points to.
+const Type* Sema::checkAddressOf(UnaryExpr& u, Flow& flow) {
+    Expr& target = *u.operand;
+    if (target.kind == Expr::Kind::This) {
+        checkExpr(target, flow);
+        diags_.error(u.loc, "the address of 'this' cannot be taken",
+                     "'this' is the object a method works on, not a variable", spec::Pointers);
+        return Type::error();
+    }
+    if (!isPlaceKind(target)) {
+        const Type* t = checkExpr(target, flow);
+        if (t->isError()) return t;
+        diags_.error(u.loc, "'&' takes the address of a variable, a field, or what a pointer points to, but this is a "
+                            "temporary value",
+                     target.kind == Expr::Kind::OptChain ? "'?.' gives a copy of the value"
+                                                         : "store it in a variable first, and take the address of that",
+                     spec::Pointers);
+        return Type::error();
+    }
+    const VarDecl* var = nullptr;
+    std::string path;
+    const Type* t = resolvePlace(target, flow, var, path);
+    if (t->isError()) return t;
+    if (var && flow.reachable && !isAssigned(flow, var, t, path)) {
+        std::string name = placeName(var, path);
+        diags_.error(target.loc, "'&" + name + "' points to " + q(name) + ", which has no value yet",
+                     (path.empty() ? "give it a value first, e.g. `" + std::string(t->name) + " " + name + " = " + zeroOf(t) +
+                                         ";`"
+                                   : "assign it first") +
+                         ". C+ cannot tell whether code that gets the pointer writes through it before reading",
+                     spec::Pointers);
+        markAssigned(flow, var, path);
+    }
+    if (throughOptionalChain(target)) {
+        diags_.error(u.loc, "'&' cannot take the address of a value reached through '?.'",
+                     "'?.' works on a copy of the value; unwrap the optional into a variable first", spec::Pointers);
+        return Type::error();
+    }
+    if (insideContainer(target)) {
+        diags_.error(u.loc, "this compiler does not support pointers into vectors and strings yet",
+                     "their elements move when a vector grows or a shared string is changed. Copy the element into a "
+                     "variable and take the address of that",
+                     spec::Status);
+        return Type::error();
+    }
+    const Expr* root = nullptr;
+    if (storageOf(target, root) == Storage::Temporary || inTemporaryObject(target)) {
+        diags_.error(u.loc, "'&' takes the address of a variable, a field, or what a pointer points to, but this is "
+                            "part of a temporary value",
+                     "it goes away when the statement ends. Store it in a variable first, and take the address of that",
+                     spec::Pointers);
+        return Type::error();
+    }
+    return Type::pointerTo(t, isReadOnlyPlace(target));
+}
+
+// `p + n`, `p - q`, `p == q`, `p < q` and the like, where one side is a pointer.
+const Type* Sema::checkPointerBinary(BinaryExpr& b, const Type* l, const Type* r) {
+    std::string sym = binOpSpelling(b.op);
+    bool comparison = b.op >= BinOp::Eq && b.op <= BinOp::Ge;
+    bool equality = b.op == BinOp::Eq || b.op == BinOp::Ne;
+    bool leftPtr = l->isPointer();
+    const Type* ptr = leftPtr ? l : r;
+    const Type* other = leftPtr ? r : l;
+    const Expr& ptrSide = leftPtr ? *b.lhs : *b.rhs;
+    const Expr& otherSide = leftPtr ? *b.rhs : *b.lhs;
+    if (comparison) {
+        if (const Type* common = commonPointer(l, r)) {
+            if (!equality && other->isNull())
+                diags_.error(otherSide.loc, "null can only be compared with == and !=", "", spec::Pointers);
+            b.operandType = common;
+            return Type::boolTy();
+        }
+        std::string help;
+        if (otherSide.kind == Expr::Kind::IntLit && static_cast<const IntLitExpr&>(otherSide).value == 0)
+            help = "a pointer to nothing is `null`: write `" + spelled(ptrSide, "p") + " " + sym + " null`";
+        else if (other->isPointer())
+            help = "pointers to different types cannot be compared; convert one first, e.g. `(void*)" +
+                   spelled(otherSide, "q") + "`";
+        else
+            help = "a pointer is compared with another pointer to the same type, or with null";
+        diags_.error(otherSide.loc, "'" + sym + "' compares " + q(ptr) + " with a pointer or null, but this is " + q(other),
+                     help, spec::Pointers);
+        return Type::boolTy();
+    }
+    if (b.op == BinOp::Sub && l->isPointer() && r->isPointer()) {
+        // How many elements apart two pointers into the same memory are.
+        if (l->elem != r->elem)
+            diags_.error(b.loc, "'-' between two pointers needs them to point to the same type, but they are " + q(l) +
+                                    " and " + q(r),
+                         "", spec::Pointers);
+        else if (!pointsToKnownType(l))
+            reportUnknownPointee(b.loc, l, "-");
+        b.operandType = l;
+        return Type::longTy();
+    }
+    bool integer = other->isInteger() || other->is(K::Char);
+    if ((b.op == BinOp::Add && integer) || (b.op == BinOp::Sub && leftPtr && integer)) {  // p + n, n + p, p - n
+        if (!pointsToKnownType(ptr)) reportUnknownPointee(b.loc, ptr, sym);
+        b.operandType = ptr;
+        return ptr;
+    }
+    std::string help = "pointers work with `p + n`, `p - n`, `p - q` and comparisons. The value a pointer points to is `*" +
+                       spelled(ptrSide, "p") + "`";
+    if ((b.op == BinOp::Add || b.op == BinOp::Sub) && !other->isPointer())
+        diags_.error(otherSide.loc, "'" + sym + "' moves a pointer by an int or a long, but this is " + q(other), help,
+                     spec::Pointers);
+    else
+        diags_.error(b.loc, "'" + sym + "' cannot be used with " + q(ptr), help, spec::Pointers);
+    return Type::error();
+}
+
 // Checks that `target` can be changed. `var` and `path` are set to the variable and
 // field path to track for definite assignment; `var` stays null for a place inside a
 // class object or a vector, which always holds a value.
@@ -1304,7 +1629,8 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
                      spec::Optionals);
         return false;
     }
-    if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index) {
+    if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index &&
+        !isDeref(target)) {
         checkExpr(target, flow);
         std::string help = target.kind == Expr::Kind::This ? "'this' always refers to the current object" : "";
         if (target.kind == Expr::Kind::MethodCall && target.type && !target.type->isError() &&
@@ -1376,11 +1702,21 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
         }
         case Expr::Kind::Unary: {
             auto& u = static_cast<UnaryExpr&>(e);
+            if (u.op == UnOp::Deref) {
+                const VarDecl* var;
+                std::string path;
+                result = resolvePlace(e, flow, var, path);
+                break;
+            }
+            if (u.op == UnOp::AddrOf) {
+                result = checkAddressOf(u, flow);
+                break;
+            }
             const Type* t = checkExpr(*u.operand, flow);
             if (t->isError()) break;
             if (u.op == UnOp::Not) {
                 if (!usableAsCondition(t))
-                    diags_.error(u.operand->loc, "'!' needs a bool, a number or an optional, but this is " + q(t),
+                    diags_.error(u.operand->loc, "'!' needs a bool, a number, a pointer or an optional, but this is " + q(t),
                                  t->isOptional()  ? boolOptionalHelp(spelled(*u.operand, "b"))
                                  : t->is(K::Char) ? "compare the char instead, e.g. `c == '\\0'`"
                                                   : "",
@@ -1410,7 +1746,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 const Type* r = checkExpr(*b.rhs, rhsFlow);
                 for (auto [side, t] : {std::pair{b.lhs.get(), l}, std::pair{b.rhs.get(), r}})
                     if (!usableAsCondition(t))
-                        diags_.error(side->loc, std::string("both sides of '") + sym + "' must be a bool, a number or an optional, but this is " + q(t),
+                        diags_.error(side->loc, std::string("both sides of '") + sym + "' must be a bool, a number, a pointer or an optional, but this is " + q(t),
                                      "", spec::Conditions);
                 b.operandType = Type::boolTy();
                 result = Type::boolTy();
@@ -1428,6 +1764,10 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (equality && l == r && !l->isNumber()) {
                 b.operandType = l;
                 result = Type::boolTy();
+                break;
+            }
+            if (l->isPointer() || r->isPointer()) {
+                result = checkPointerBinary(b, l, r);
                 break;
             }
             // `opt == null` checks for a value; `opt == x` is true when it holds x, as with
@@ -1522,6 +1862,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             const Type* t = a.target->type ? a.target->type : Type::error();
             std::string name = var                                 ? q(placeName(var, path))
                                : a.target->kind == Expr::Kind::Member ? "field " + q(static_cast<MemberExpr&>(*a.target).field)
+                               : isDeref(*a.target)                   ? q(spelled(*a.target, "*p"))
                                                                       : "this";
             if (a.op) {
                 if (ok && var) requireAssigned(flow, var, path, t, a.target->loc);  // `x += v` reads x first
@@ -1542,6 +1883,16 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                     else if (!vt->isError() && !vt->isInteger() && !vt->is(K::Char))
                         diags_.error(a.value->loc, opName + " on a char needs an int or a long, but this is " + q(vt),
                                      vt->isFloating() ? "convert it first: `int(x)`" : "", spec::Char);
+                } else if (t->isPointer()) {
+                    // `p += n` and `p -= n` move the pointer by n elements.
+                    if (*a.op != BinOp::Add && *a.op != BinOp::Sub)
+                        diags_.error(a.target->loc, opName + " cannot be used with a pointer",
+                                     "a pointer moves with `p += n` and `p -= n`", spec::Pointers);
+                    else if (!pointsToKnownType(t))
+                        reportUnknownPointee(a.loc, t, opName);
+                    else if (!vt->isError() && !vt->isInteger() && !vt->is(K::Char))
+                        diags_.error(a.value->loc, opName + " on a pointer needs an int or a long, but this is " + q(vt), "",
+                                     spec::Pointers);
                 } else if (t->is(K::String))
                     diags_.error(a.target->loc, opName + " cannot be used with 'string'",
                                  "the only compound assignment on strings is +=, which appends", spec::Strings);
@@ -1579,6 +1930,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (x->isError() || y->isError()) break;
             if (x == y) result = x;
             else if (x->isArithmetic() && y->isArithmetic()) result = commonNumber(x, y);
+            else if (const Type* ptr = commonPointer(x, y)) result = ptr;  // `c ? p : null` is a pointer
             else if (const Type* opt = optionalOfBranches(x, y)) result = opt;
             else
                 diags_.error(t.loc, "the two branches of ?: have different types, " + q(x) + " and " + q(y),
@@ -1594,14 +1946,34 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             const Type* t = i.target->type ? i.target->type : Type::error();
             if (ok) {
                 if (var) requireAssigned(flow, var, path, t, i.target->loc);
-                if (!t->isNumber() && !t->is(K::Char))
-                    diags_.error(i.target->loc, std::string("'") + sym + "' needs a number or a char, but this is " + q(t),
-                                 "", spec::Operators);
+                if (t->isPointer()) {
+                    if (!pointsToKnownType(t)) reportUnknownPointee(i.loc, t, sym);
+                } else if (!t->isNumber() && !t->is(K::Char)) {
+                    diags_.error(i.target->loc,
+                                 std::string("'") + sym + "' needs a number, a char or a pointer, but this is " + q(t), "",
+                                 spec::Operators);
+                }
             }
             result = t;
             break;
         }
         case Expr::Kind::Call: result = checkCall(static_cast<CallExpr&>(e), flow); break;
+        case Expr::Kind::Sizeof: {
+            auto& z = static_cast<SizeofExpr&>(e);
+            if (z.operand) {
+                Flow unevaluated = flow;  // `sizeof x` does not read x
+                unevaluated.reachable = false;
+                z.target = checkExpr(*z.operand, unevaluated);
+            }
+            const Type* t = z.target;
+            result = Type::longTy();
+            if (t->isError()) break;
+            if (t->is(K::Void) || t->isNull() || t->isOpaque() || t->is(K::Auto))
+                diags_.error(e.loc, "sizeof needs a type with a size, but this is " + q(t),
+                             t->isOpaque() ? q(t) + " is a C type known only by name, so only C knows its size" : "",
+                             t->isOpaque() ? spec::CTypes : spec::Sizeof);
+            break;
+        }
     }
     e.type = result;
     return result;
@@ -1854,6 +2226,13 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         return Type::error();
     }
     if (t->isOptional()) return checkOptionalMethod(call, flow, t);
+    if (t->isPointer()) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        std::string n = spelled(recv, "p");
+        diags_.error(call.loc, q(n) + " is a pointer, so the methods of what it points to are called with '->'",
+                     "write `" + n + "->" + call.name + "(...)`", spec::Pointers);
+        return Type::error();
+    }
     if (t->isVector()) return checkVectorMethod(call, flow, t);
     if (t->is(K::String)) return checkStringMethod(call, flow);
     if (!t->hasFields()) {
@@ -1888,9 +2267,16 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         // wherever that value is stored.
         const VarDecl* holder = nullptr;
         const Expr* root = nullptr;
-        if (t->isStruct() && isPlace && storageOf(recv, root) == Storage::Variable) holder = rootVariable(*root);
+        Storage storage = isPlace ? storageOf(recv, root) : Storage::Temporary;
+        if (t->isStruct() && storage == Storage::Variable) holder = rootVariable(*root);
         else if (var && var == thisVar() && path.empty()) holder = var;  // `this` of a class
-        if (holder && holder == thisVar() && fn_->isConst)
+        if (t->isStruct() && storage == Storage::Pointer && followedPointer(*root).type->constElem)
+            diags_.error(call.loc, "cannot call " + q(m->name) + " through a " + q(followedPointer(*root).type) +
+                                       ", because it may change fields",
+                         "mark " + q(m->name) + " as `const` if it does not change any field, or use a pointer that is "
+                         "not const",
+                         spec::Pointers);
+        else if (holder && holder == thisVar() && fn_->isConst)
             diags_.error(call.loc, "const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
                          "mark " + q(m->name) + " as `const` if it does not change any field", spec::Methods);
         else if (t->isStruct() && holder && holder->isConst)
@@ -2110,6 +2496,14 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
         if (t->is(K::Void))
             diags_.error(call.args[i]->loc, "this expression produces no value, so it cannot be printed", "",
                          spec::Printing);
+        else if (t->isPointer() && t->elem->is(K::Char) && !spec.type && spec.precision < 0) {
+            std::string n = spelled(*call.args[i], "p");
+            diags_.error(call.args[i]->loc,
+                         "C++ prints a " + q(t) + " as the text it points to, but C+ cannot tell where that text ends",
+                         "write `string(" + n + ")` to print the text, which must end with a zero byte, or `(void*)" + n +
+                             "` to print the address",
+                         spec::Printing);
+        }
         else if ((spec.type || spec.precision >= 0) && !t->isFloating() && !t->isError())
             diags_.error(call.args[i]->loc, specTexts[i - 1] + " formats a float or a double, but this is " + q(t),
                          t->isInteger() ? "write {} for an integer, or convert it first: `double(n)`"
@@ -2149,10 +2543,19 @@ const Type* Sema::checkToString(CallExpr& call, Flow& flow) {
 const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     const Type* from = checkExpr(*c.operand, flow);
     const Type* to = c.target;
+    checkStorable(to, c.loc);
+    if (to->isPointer() || (from->isPointer() && !to->is(K::Bool) && !to->is(K::String)))
+        return checkPointerCast(c, from, to);
     std::string cast = std::string(to->name) + "(x)";
     bool castable = to->isNumber() || to->is(K::Char) || to->is(K::Bool);
     if (from->isError()) return castable ? to : Type::error();
     if (to->is(K::String) && from->is(K::String)) return to;  // `string("text")`, as in C++: a copy
+    if (to->is(K::String) && from->isPointer()) {  // `string(p)` copies the text a `char*` points to
+        if (!from->elem->is(K::Char))
+            diags_.error(c.operand->loc, "string(p) copies the text a char* points to, but this is " + q(from), "",
+                         spec::Pointers);
+        return to;
+    }
     if (to->is(K::String)) {
         diags_.error(c.loc, "a cast cannot turn a value into a string",
                      from->isNumber()   ? "write `to_string(x)`, or `format(\"{}\", x)`"
@@ -2171,7 +2574,7 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
                      spec::Casts);
         return to;
     }
-    if (from->isNumber() || from->is(K::Char) || from->is(K::Bool)) return to;
+    if (from->isNumber() || from->is(K::Char) || from->is(K::Bool) || from->isPointer()) return to;
     if (from->is(K::String) && to->is(K::Char))
         diags_.error(c.loc, "a cast cannot turn a string into a char",
                      "`s[i]` is the char at position i of a string, and 'a' in single quotes is a char", spec::Casts);
@@ -2188,6 +2591,33 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
                      from->isOptional() ? unwrapHelp(spelled(*c.operand))
                                         : "only a number, a char or a bool can be cast; convert one of its fields "
                                           "or elements instead, e.g. `" + std::string(to->name) + "(v[0])`",
+                     spec::Casts);
+    return to;
+}
+
+// A cast to a pointer type, or from a pointer to anything but bool and string.
+const Type* Sema::checkPointerCast(CastExpr& c, const Type* from, const Type* to) {
+    if (from->isError()) return to;
+    if (!to->isPointer()) {
+        diags_.error(c.loc, "a cast cannot turn a pointer into " + q(to),
+                     "for a bool, compare it with null: `p != null`. The distance between two pointers into the same "
+                     "memory is `p - q`",
+                     spec::Casts);
+        return to;
+    }
+    if (from->isNull()) return to;
+    if (!from->isPointer()) {
+        diags_.error(c.operand->loc, "a cast to " + q(to) + " converts another pointer, but this is " + q(from),
+                     from->isInteger()       ? "C+ does not turn numbers into pointers; a pointer to nothing is `null`"
+                     : isPlaceKind(*c.operand) ? "write `&" + spelled(*c.operand, "x") + "` for its address"
+                                               : "",
+                     spec::Casts);
+        return to;
+    }
+    if (from->constElem && !to->constElem)
+        diags_.error(c.loc, "a cast cannot remove the const of " + q(from),
+                     "C+ has no const_cast. Cast to `const " + std::string(to->elem->name) + "*` instead, and keep a "
+                     "pointer that is not const for the code that changes the memory",
                      spec::Casts);
     return to;
 }
@@ -2344,6 +2774,11 @@ const Type* Sema::checkOptChain(OptChainExpr& c, Flow& flow) {
     const Type* inner = base;
     if (base->isOptional()) {
         inner = base->elem;
+    } else if (base->isPointer()) {
+        diags_.error(c.loc, "'?.' reads from an optional, but this is " + q(base),
+                     "a pointer is followed with '->' once it is known not to be null: `if (p != null) ... p->x`",
+                     spec::Pointers);
+        inner = Type::error();
     } else if (!base->isError()) {
         diags_.error(c.loc, "'?.' reads from an optional, but this is " + q(base) + ", which is never null",
                      "write '.' instead of '?.'", spec::Optionals);
@@ -2363,6 +2798,11 @@ const Type* Sema::checkCoalesce(CoalesceExpr& c, Flow& flow) {
     if (l->isError() || !l->isOptional()) {
         checkLooseValue(*c.rhs, rhsFlow);
         if (l->isError()) return Type::error();
+        if (l->isPointer()) {
+            diags_.error(c.loc, "'\?\?' gives a fallback for an optional, but the left side is " + q(l),
+                         "for a pointer, write `p != null ? p : other`", spec::Pointers);
+            return l;
+        }
         diags_.error(c.loc, "'\?\?' gives a fallback for an optional, but the left side is " + q(l) + ", which is never null",
                      "remove `?? ...`: the left side always has a value", spec::Optionals);
         return l;

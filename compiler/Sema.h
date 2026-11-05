@@ -63,6 +63,16 @@ private:
     const Type* checkStringMethod(MethodCallExpr& call, Flow& flow);
     const Type* checkToString(CallExpr& call, Flow& flow);
     const Type* checkCast(CastExpr& c, Flow& flow);
+    const Type* checkPointerCast(CastExpr& c, const Type* from, const Type* to);
+    const Type* checkAddressOf(UnaryExpr& u, Flow& flow);
+    const Type* checkPointerBinary(BinaryExpr& b, const Type* l, const Type* r);
+    void reportNotPointer(const UnaryExpr& u, const Type* t);
+    // `op` cannot be used on `ptr` because what it points to has no known size.
+    void reportUnknownPointee(Loc loc, const Type* ptr, const std::string& op);
+    // Whether a place can only be read: `&x` of it is a pointer to const.
+    bool isReadOnlyPlace(const Expr& target);
+    // Reports a C type known only by name used as a value, not through a pointer.
+    bool checkStorable(const Type* t, Loc loc);
     const Type* checkMath(CallExpr& call, Flow& flow);
     const Type* checkCharFn(CallExpr& call, Flow& flow);
     const Type* checkStringFill(CallExpr& call, Flow& flow);

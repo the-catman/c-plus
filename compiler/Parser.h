@@ -39,6 +39,8 @@ private:
     void parseTopLevel(Program& prog);
     void parseRecord();  // struct or class
     void parseExtern(Program& prog);
+    void parseExternItem(Program& prog);  // a C function, or `struct sqlite3;`
+    void parseOpaqueStruct();
     std::unique_ptr<FuncDecl> parseExternFunction();
     const Type* parseCType(Loc& loc, bool isReturn);
     void parseMember(StructDecl& sd, Access& access);
@@ -46,7 +48,13 @@ private:
     void parseMemberInits(FuncDecl& ctor);
     bool isTypeName(const Token& t) const { return t.kind == Tok::Ident && typeNames_.count(t.text); }
     bool isTypeStart(size_t ahead = 0) const;
-    const Type* parseType(Loc& loc);
+    bool isTypeAt(size_t ahead) const;  // whether a type, rather than an expression, starts there
+    // A type, including pointers: `const char*`, `int**`. `isConst` receives a `const`
+    // that makes the variable itself const; without it, such a `const` is an error.
+    const Type* parseType(Loc& loc, bool* isConst = nullptr);
+    // After the first variable of `int* a, * b;`, the stars of the next one, which must
+    // repeat the first one's.
+    void parseLaterStars(const Type* ty, const std::string& firstName, const char* what);
     void expectCloseAngle(const std::string& context);
     std::unique_ptr<FuncDecl> parseFunction(const Type* retType, Loc retLoc);
     std::unique_ptr<BlockStmt> parseBlock();
@@ -55,6 +63,7 @@ private:
     StmtPtr parseDeclarators(bool isConst, const Type* ty, Loc typeLoc);  // the part after the type
     StmtPtr parseFor();
     void checkUnknownType();
+    void checkUnknownPointerType();  // `FILE* f = ...` where FILE is not declared
     bool isOptionalDeclRest(size_t i) const;
 
     ExprPtr parseExpr();

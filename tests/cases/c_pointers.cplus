@@ -1,0 +1,73 @@
+// Pointers to and from C functions: memory from malloc, pointer arithmetic over it,
+// out parameters, text in a char*, and FILE, a C type known only by name.
+extern "C" {
+    struct FILE;
+    FILE* tmpfile();
+    int fputs(string text, FILE* f);
+    void rewind(FILE* f);
+    char* fgets(char* buffer, int size, FILE* f);
+    int fclose(FILE* f);
+
+    void* malloc(long size);
+    void free(void* p);
+    void* memset(void* p, int value, long count);
+    char* strdup(string text);
+    long strlen(char* text);
+    double frexp(double x, int* exponent);
+}
+
+long sum(const int* values, long count) {
+    long total = 0;
+    for (const int* p = values; p < values + count; p++) total += *p;
+    return total;
+}
+
+int main() {
+    // An array of ints from malloc, filled through `p[i]` and read by pointer arithmetic.
+    int* squares = (int*)malloc(5 * sizeof(int));
+    for (int i = 0; i < 5; i++) squares[i] = i * i;
+    int* end = squares + 5;
+    println("{} {} {}", sum(squares, 5), end - squares, *(end - 1));
+    // expect: 30 5 16
+    int* walk = squares;
+    walk += 3;
+    walk--;
+    println("{} {} {}", *walk, walk - squares, walk[1]);
+    // expect: 4 2 9
+    memset(squares, 0, 5 * sizeof(int));
+    println("{}", sum(squares, 5));
+    // expect: 0
+    free(squares);
+
+    // Out parameter: frexp splits 12 into 0.75 * 2^4.
+    int exponent = 0;
+    double fraction = frexp(12, &exponent);
+    println("{} {}", fraction, exponent);
+    // expect: 0.75 4
+
+    // Text that C allocated: copy it into a string with string(p), then free it.
+    char* copy = strdup("hello");
+    copy[0] = 'j';
+    *(copy + 4) = 'y';
+    string text = string(copy);
+    println("{} {} {}", text, strlen(copy), copy[1]);
+    // expect: jelly 5 e
+    free(copy);
+
+    // FILE is declared by name only; C+ passes the pointer around.
+    FILE* f = tmpfile();
+    if (f == null) return 1;
+    fputs("first line\nsecond line\n", f);
+    rewind(f);
+    char* line = (char*)malloc(64);
+    int count = 0;
+    while (fgets(line, 64, f) != null) {
+        string s = string(line);
+        print("{}: {}", ++count, s);
+    }
+    // expect: 1: first line
+    // expect: 2: second line
+    free(line);
+    fclose(f);
+    return 0;
+}

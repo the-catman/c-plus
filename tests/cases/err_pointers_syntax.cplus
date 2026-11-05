@@ -1,0 +1,35 @@
+// Declarations of pointers, and references, which C+ does not have yet.
+void f(int& r) {}
+
+int main() {
+    int x = 1;
+    int* a, b;
+    int c, *d;
+    int*? maybe;
+    auto* ap = &x;
+    int& r = x;
+    vector<const int> v;
+    FILE* f = null;
+    auto rc = reinterpret_cast<char*>(&x);
+    int* const fixed = &x;
+    fixed = null;
+    return 0;
+}
+// error: this compiler does not support reference parameters yet
+// error: To let the function change the caller's variable, pass a pointer: `int* count`, called as `f(&n)`
+// error: in C++, this makes 'b' a plain int, not a pointer like 'a'
+// error: Write `int* a, * b;` if both are pointers, or declare 'b' on its own
+// error: in C++, this makes 'd' a pointer but 'c' a plain int
+// error: Declare them separately: `int c;` and `int* d;`
+// error: spec: docs/SPEC.md#pointer-declarations
+// error: a pointer cannot be optional
+// error: a pointer can already be null: write `int*` and compare it with null
+// error: 'auto' finds out by itself that a value is a pointer
+// error: this compiler does not support references yet
+// error: To refer to another variable, use a pointer: `int* p = &x;`
+// error: 'const' cannot be used here
+// error: unknown type 'FILE'
+// error: if 'FILE' is a C type used through pointers, declare it first, at the top level: `extern "C" struct FILE;`
+// error: C+ has no reinterpret_cast
+// error: a cast between pointer types is written `static_cast<char*>(p)` or `(char*)p`
+// error: 'fixed' is const and cannot be assigned to

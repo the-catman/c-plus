@@ -33,13 +33,13 @@ int main() {
     return 0;
 }
 // error: this compiler does not support passing structs to or from C functions yet
-// error: pass the fields as separate arguments, if the C library allows it
-// error: a C function can take a number, char, bool, string or string?, but this parameter is 'User'
+// error: pass a pointer to the struct, `Point*`, if the C function takes one, or the fields as separate arguments
+// error: a C function can take a number, char, bool, a pointer, string or string?, but this parameter is 'User'
 // error: C cannot hold a C+ object; pass the fields it needs as separate arguments
 // error: this compiler does not support passing vectors to or from C functions yet
-// error: a C function can take a number, char, bool, string or string?, but this parameter is 'int?'
-// error: only text can be null in C (a NULL `const char*`). Pass a plain 'int' instead
-// error: a C function can return void, a number, char, bool, string or string?, but this is 'int?'
+// error: a C function can take a number, char, bool, a pointer, string or string?, but this parameter is 'int?'
+// error: in C, only text and pointers can be null. Pass a plain 'int' instead
+// error: a C function can return void, a number, char, bool, a pointer, string or string?, but this is 'int?'
 // error: Declare the result as a plain 'int' instead
 // error: parameters cannot have type void
 // error: 'main' is where a C+ program starts, so it cannot be a C function

@@ -6,6 +6,6 @@ int main() {
     bool b = !s;
     return 0;
 }
-// error: the if condition must be a bool, a number or an optional, but this is 'string'
-// error: the while condition must be a bool, a number or an optional, but this is 'void'
-// error: '!' needs a bool, a number or an optional, but this is 'string'
+// error: the if condition must be a bool, a number, a pointer or an optional, but this is 'string'
+// error: the while condition must be a bool, a number, a pointer or an optional, but this is 'void'
+// error: '!' needs a bool, a number, a pointer or an optional, but this is 'string'

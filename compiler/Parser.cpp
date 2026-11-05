@@ -134,9 +134,10 @@ void Parser::parseTopLevel(Program& prog) {
         fail(t.loc, "expected a function or an import, found " + describeToken(t),
              "top-level code looks like `int main() { ... }` or `import http;`", spec::Functions);
     }
-    if (check(Tok::KwConst)) notYet(t.loc, "global constants");
     Loc retLoc;
-    const Type* ret = parseType(retLoc);
+    bool isConst = false;
+    const Type* ret = parseType(retLoc, &isConst);
+    if (isConst) notYet(t.loc, "global constants");
     if (ret->is(Type::Kind::Auto)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `int`");
     if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && isTypeName(peek()))
         fail(peek().loc, "methods are defined inside their " + std::string(prog_->findStruct(peek().text)->keyword()),
@@ -163,18 +164,57 @@ void Parser::parseExtern(Program& prog) {
                                 : "write `extern \"C\"`",
              spec::CFunctions);
     if (!match(Tok::LBrace)) {
-        prog.funcs.push_back(parseExternFunction());
+        parseExternItem(prog);
         return;
     }
     while (!check(Tok::RBrace) && !check(Tok::Eof)) {
         try {
-            prog.funcs.push_back(parseExternFunction());
+            parseExternItem(prog);
         } catch (ParseError&) {
             syncStatement();
         }
     }
     expect(Tok::RBrace, "to close the extern \"C\" block");
     match(Tok::Semi);
+}
+
+void Parser::parseExternItem(Program& prog) {
+    if (check(Tok::KwStruct) || check(Tok::KwClass) || (check(Tok::Ident) && peek().text == "typedef"))
+        return parseOpaqueStruct();
+    prog.funcs.push_back(parseExternFunction());
+}
+
+// `struct sqlite3;` inside extern "C": a C type whose fields C+ never sees. C+ code can
+// hold pointers to it, `sqlite3*`, and pass them to C functions.
+void Parser::parseOpaqueStruct() {
+    const Token& kw = advance();
+    if (kw.kind == Tok::Ident)
+        fail(kw.loc, "C+ has no typedef",
+             "to use a C type through pointers, declare it by name, e.g. `struct sqlite3;`. C+ code then writes "
+             "`sqlite3*`, without 'struct'",
+             spec::CTypes);
+    if (kw.kind == Tok::KwClass)
+        fail(kw.loc, "C has no classes", "declare a C type with `struct`, e.g. `struct sqlite3;`", spec::CTypes);
+    const Token& name = expect(Tok::Ident, "for the name of the C struct");
+    if (check(Tok::LBrace))
+        notYet(peek().loc, "C structs with fields",
+               "declare it without fields, `struct " + name.text + ";`, to pass pointers to it to C functions");
+    if (!check(Tok::Semi))
+        fail(kw.loc, "C+ writes a C type without the word 'struct'",
+             "declare the type once inside extern \"C\", `struct " + name.text + ";`, and then write `" + name.text +
+                 "*`",
+             spec::CTypes);
+    advance();
+    StructDecl* sd = prog_->findStruct(name.text);  // created by the scan in parseProgram
+    if (sd->defined || sd->opaque || sd->isClass) {
+        diags_.error(name.loc, "the name '" + name.text + "' is already used by another struct or class",
+                     "rename one of them", spec::Structs);
+        if (sd->defined || sd->opaque) diags_.note(sd->nameLoc, "the first one is here");
+        return;
+    }
+    sd->opaque = true;
+    sd->nameLoc = name.loc;
+    sd->type.kind = Type::Kind::Opaque;
 }
 
 // `int abs(int n);` inside `extern "C"`. Parameter names are optional, as in C.
@@ -214,7 +254,10 @@ std::unique_ptr<FuncDecl> Parser::parseExternFunction() {
                 nameLoc = t.loc;
             }
             if (check(Tok::LBracket))
-                notYet(peek().loc, "C array parameters", "arrays reach C through raw pointers, which are planned");
+                fail(peek().loc, "a C array parameter is written as a pointer",
+                     "write `" + std::string(ty->name) + "* " + (pname.empty() ? "values" : pname) +
+                         "`: C passes an array as a pointer to its first element",
+                     spec::CFunctions);
             if (check(Tok::Assign)) notYet(peek().loc, "default argument values");
             auto param = std::make_unique<VarDecl>(nameLoc, pname, ty, typeLoc);
             param->isParam = true;
@@ -237,12 +280,13 @@ const Type* Parser::parseCType(Loc& loc, bool isReturn) {
     bool isConst = check(Tok::KwConst);
     const Token& base = isConst ? peek(1) : t;
     std::string spelled = (isConst ? "const " : "") + base.text;
-    if (base.kind == Tok::KwChar && peek(isConst ? 2 : 1).kind == Tok::Star)
+    if (isConst && base.kind == Tok::KwChar && peek(2).kind == Tok::Star && peek(3).kind != Tok::Star)
         fail(t.loc, "C+ passes text to C as `string`, not as `" + spelled + "*`",
              isReturn ? "write `string?`, which is null when the C function returns NULL, or `string` if it never "
                         "does. The text is copied into a C+ string"
                       : "write `string`. C+ passes a copy of the text that ends in a zero byte, as C expects; write "
-                        "`string?` if the function also accepts NULL",
+                        "`string?` if the function also accepts NULL. To pass a pointer to bytes already in memory, such "
+                        "as a buffer the function fills, write `char*`",
              spec::CFunctions);
     if (base.kind == Tok::Ident) {
         const std::string& n = base.text;
@@ -265,15 +309,20 @@ const Type* Parser::parseCType(Loc& loc, bool isReturn) {
             fail(t.loc, "'" + n + "' is a C type; write `" + use + "` here", why, spec::CFunctions);
         }
     }
-    if (base.kind == Tok::KwStruct)
-        notYet(t.loc, "passing C structs", "pass their fields as separate arguments, if the C library allows it");
-    if (isConst) advance();
-    const Type* ty = parseType(loc);
+    if (base.kind == Tok::KwStruct) {
+        const Token& name = peek(isConst ? 2 : 1);
+        if (name.kind == Tok::Ident && peek(isConst ? 3 : 2).kind == Tok::Star)
+            fail(base.loc, "C+ writes a C type without the word 'struct'",
+                 "declare the type once inside extern \"C\", `struct " + name.text + ";`, and then write `" +
+                     name.text + "*`",
+                 spec::CTypes);
+        notYet(t.loc, "passing C structs by value",
+               "pass a pointer to the struct, if the C library takes one, or its fields as separate arguments");
+    }
+    bool varConst = false;  // `const int n` in C means nothing to the caller
+    const Type* ty = parseType(loc, &varConst);
     if (ty->is(Type::Kind::Auto)) fail(loc, "a C function needs written types, not 'auto'", "", spec::CFunctions);
-    if (check(Tok::Star))
-        notYet(peek().loc, "pointer types in C declarations",
-               "pointers, including handles such as `sqlite3*`, arrive with raw pointers, which are planned");
-    if (check(Tok::Amp)) fail(peek().loc, "C has no references", "pass the value itself", spec::CFunctions);
+    if (check(Tok::Amp)) fail(peek().loc, "C has no references", "pass a pointer instead, e.g. `int* out`", spec::CFunctions);
     return ty;
 }
 
@@ -304,6 +353,9 @@ bool Parser::isTypeStart(size_t ahead) const {
                 return peek(ahead).text == "vector" || peek(ahead).text == "array" || peek(ahead).text == "hashmap";
             if (!isTypeName(peek(ahead))) return false;
             if (peek(ahead + 1).kind == Tok::Question || peek(ahead + 1).kind == Tok::QuestionQuestion) ++ahead;
+            while (peek(ahead + 1).kind == Tok::Star || (peek(ahead + 1).kind == Tok::KwConst &&
+                                                          peek(ahead).kind == Tok::Star))
+                ++ahead;  // `Point* p`, `Node** head`, `Point* const p`
             return peek(ahead + 1).kind == Tok::Ident;
         case Tok::KwString: return peek(ahead + 1).kind != Tok::ColonColon;  // not `string::npos`
         case Tok::KwInt: case Tok::KwLong: case Tok::KwBool:
@@ -312,6 +364,37 @@ bool Parser::isTypeStart(size_t ahead) const {
             return true;
         default: return false;
     }
+}
+
+bool Parser::isTypeAt(size_t ahead) const {
+    const Token& t = peek(ahead);
+    switch (t.kind) {
+        case Tok::KwInt: case Tok::KwLong: case Tok::KwBool: case Tok::KwString: case Tok::KwVoid:
+        case Tok::KwDouble: case Tok::KwFloat: case Tok::KwChar: case Tok::KwConst:
+            return true;
+        case Tok::Ident: return isTypeName(t) || (t.text == "vector" && peek(ahead + 1).kind == Tok::Less);
+        default: return false;
+    }
+}
+
+// `FILE* f = fopen(...)` where FILE was never declared: a name, stars, another name, and
+// then what ends a declaration. As an expression it would be a useless multiplication.
+void Parser::checkUnknownPointerType() {
+    if (!check(Tok::Ident) || isTypeName(peek()) || peek(1).kind != Tok::Star) return;
+    size_t i = 1;
+    while (peek(i).kind == Tok::Star) ++i;
+    if (peek(i).kind != Tok::Ident) return;
+    Tok after = peek(i + 1).kind;
+    if (after != Tok::Assign && after != Tok::Semi && after != Tok::Comma && after != Tok::RParen) return;
+    const Token& t = peek();
+    if (t.text == "size_t" || t.text == "int32_t" || t.text == "int64_t" || t.text == "uint32_t" ||
+        t.text == "uint64_t" || t.text == "unsigned")
+        fail(t.loc, "unknown type '" + t.text + "'",
+             "use int (32-bit) or long (64-bit): `long* " + peek(i).text + "`", spec::IntegerTypes);
+    fail(t.loc, "unknown type '" + t.text + "'",
+         "if '" + t.text + "' is a C type used through pointers, declare it first, at the top level: `extern \"C\" "
+         "struct " + t.text + ";`",
+         spec::CTypes);
 }
 
 // Reports `Foo x` where Foo is not a known type (two identifiers in a row).
@@ -333,6 +416,7 @@ bool Parser::isOptionalDeclRest(size_t i) const {
 }
 
 void Parser::checkUnknownType() {
+    checkUnknownPointerType();
     bool optional = check(Tok::Ident) && peek(1).kind == Tok::Question && peek(2).kind == Tok::Ident &&
                     isOptionalDeclRest(3);
     if (!(check(Tok::Ident) && (peek(1).kind == Tok::Ident || optional))) return;
@@ -349,26 +433,67 @@ void Parser::checkUnknownType() {
     fail(t.loc, "unknown type '" + t.text + "'", help, spec::IntegerTypes);
 }
 
-// A type, with an optional `?` after it: `User?` is a User or null.
-const Type* Parser::parseType(Loc& loc) {
+// A type, with an optional `?` after it (`User?` is a User or null) and stars for a
+// pointer: `int*`, `const char*`, `Node**`. As in C++, a leading `const` before a pointer
+// type makes what it points to const, and a `const` after the last star makes the
+// variable itself const.
+const Type* Parser::parseType(Loc& loc, bool* isConst) {
+    Loc start = peek().loc;
+    Loc constLoc = start;
+    bool leadingConst = match(Tok::KwConst);
     const Type* t = parseBaseType(loc);
     if (check(Tok::QuestionQuestion))
         fail(peek().loc, "an optional cannot hold another optional",
              "write one '?': `" + std::string(t->name) + "?` already means " + t->name + " or null", spec::Optionals);
-    if (!check(Tok::Question)) return t;
-    Loc q = advance().loc;
-    if (t->is(Type::Kind::Void) || t->is(Type::Kind::Auto))
-        fail(loc, std::string("'") + t->name + "' cannot be optional",
-             t->is(Type::Kind::Auto) ? "write the type, e.g. `User? u = find(name);`, or `auto u = find(name);` when "
-                                       "find returns an optional"
-                                     : "a function that may return nothing returns an optional of a real type, "
-                                       "e.g. `User?`",
-             spec::Optionals);
-    if (check(Tok::Question))
-        fail(peek().loc, "an optional cannot hold another optional",
-             "write one '?': `" + std::string(t->name) + "?` already means " + t->name + " or null", spec::Optionals);
-    loc.len = q.col + 1 - loc.col;
-    return Type::optionalOf(t);
+    if (check(Tok::Question)) {
+        Loc q = advance().loc;
+        if (t->is(Type::Kind::Void) || t->is(Type::Kind::Auto))
+            fail(loc, std::string("'") + t->name + "' cannot be optional",
+                 t->is(Type::Kind::Auto) ? "write the type, e.g. `User? u = find(name);`, or `auto u = find(name);` "
+                                           "when find returns an optional"
+                                         : "a function that may return nothing returns an optional of a real type, "
+                                           "e.g. `User?`",
+                 spec::Optionals);
+        if (check(Tok::Question))
+            fail(peek().loc, "an optional cannot hold another optional",
+                 "write one '?': `" + std::string(t->name) + "?` already means " + t->name + " or null", spec::Optionals);
+        loc.len = q.col + 1 - loc.col;
+        t = Type::optionalOf(t);
+    }
+    bool varConst = leadingConst;
+    if (check(Tok::Star)) {
+        if (t->is(Type::Kind::Auto))
+            fail(peek().loc, "'auto' finds out by itself that a value is a pointer",
+                 "write `auto p = &x;` without the '*'", spec::Variables);
+        bool pointeeConst = leadingConst;  // `const char*`
+        varConst = false;
+        while (match(Tok::Star)) {
+            t = Type::pointerTo(t, pointeeConst);
+            pointeeConst = false;
+            if (check(Tok::KwConst)) {
+                constLoc = advance().loc;
+                if (check(Tok::Star)) pointeeConst = true;  // `int* const*`
+                else varConst = true;                       // `int* const p`
+            }
+        }
+        if (check(Tok::Question) || check(Tok::QuestionQuestion))
+            fail(peek().loc, "a pointer cannot be optional",
+                 "a pointer can already be null: write `" + std::string(t->name) + "` and compare it with null",
+                 spec::Pointers);
+    }
+    if (leadingConst || t->isPointer()) {  // the location covers the whole type
+        loc = start;
+        if (prev().loc.line == start.line) loc.len = prev().loc.col + prev().loc.len - start.col;
+    }
+    if (varConst) {
+        if (!isConst)
+            fail(constLoc, "'const' cannot be used here",
+                 "const belongs to a variable, as in `const int n = 5;`, or to what a pointer points to, as in "
+                 "`const char*`",
+                 spec::Variables);
+        *isConst = true;
+    }
+    return t;
 }
 
 const Type* Parser::parseBaseType(Loc& loc) {
@@ -437,19 +562,20 @@ void Parser::parseParams(FuncDecl& fn) {
     if (check(Tok::KwVoid) && peek(1).kind == Tok::RParen) advance();  // C-style f(void)
     if (!check(Tok::RParen)) {
         do {
-            if (check(Tok::KwConst)) advance();  // const parameters are accepted; they are copies anyway
             if (!isTypeStart()) {
                 checkUnknownType();
                 fail(peek().loc, "expected a parameter type, found " + describeToken(peek()),
                      "parameters look like `int count`", spec::Functions);
             }
             Loc typeLoc;
-            const Type* ty = parseType(typeLoc);
+            bool isConst = false;  // const parameters are accepted; they are copies anyway
+            const Type* ty = parseType(typeLoc, &isConst);
             if (ty->is(Type::Kind::Auto)) notYet(typeLoc, "'auto' parameters", "write the parameter type");
-            if (check(Tok::Amp) || check(Tok::Star))
-                notYet(peek().loc, std::string(check(Tok::Amp) ? "reference" : "pointer") + " parameters",
+            if (check(Tok::Amp) || check(Tok::AmpAmp))
+                notYet(peek().loc, "reference parameters",
                        "pass the value itself: structs are copied, class objects are shared, and a vector is only "
-                       "copied if one of the copies changes");
+                       "copied if one of the copies changes. To let the function change the caller's variable, "
+                       "pass a pointer: `int* count`, called as `f(&n)`");
             const Token& pname = expect(Tok::Ident, "for the parameter name");
             auto param = std::make_unique<VarDecl>(pname.loc, pname.text, ty, typeLoc);
             param->isParam = true;
@@ -484,15 +610,16 @@ void Parser::parseRecord() {
     const Token& name = expect(Tok::Ident, std::string("for the ") + kw + " name");
     if (check(Tok::Semi))
         fail(peek().loc, "C+ has no forward declarations",
-             std::string("remove this line; a ") + kw + " can be used before or after its definition",
+             std::string("remove this line; a ") + kw + " can be used before or after its definition. A C type used "
+             "only through pointers is declared with `extern \"C\" struct " + name.text + ";`",
              spec::Structs);
     if (check(Tok::Colon)) notYet(peek().loc, "inheritance");
     StructDecl* sd = prog_->findStruct(name.text);  // created by the scan in parseProgram
     std::unique_ptr<StructDecl> duplicate;
-    if (sd->defined || sd->isClass != isClass) {
+    if (sd->defined || sd->opaque || sd->isClass != isClass) {
         diags_.error(name.loc, "the name '" + name.text + "' is already used by another struct or class",
                      "rename one of them", spec::Structs);
-        if (sd->defined) diags_.note(sd->nameLoc, "the first definition is here");
+        if (sd->defined || sd->opaque) diags_.note(sd->nameLoc, "the first definition is here");
         duplicate = std::make_unique<StructDecl>(name.text, isClass);  // parse into a scratch copy to keep going
         sd = duplicate.get();
     }
@@ -547,7 +674,6 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         case Tok::KwVirtual: notYet(t.loc, "virtual functions", "they arrive together with inheritance");
         case Tok::KwOperator: notYet(t.loc, "operator overloading");
         case Tok::KwTemplate: notYet(t.loc, "templates (generics)");
-        case Tok::KwConst: notYet(t.loc, "const fields");
         default: break;
     }
 
@@ -611,7 +737,9 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
              "fields look like `int x = 0;` and methods like `int area() { ... }`", spec::Structs);
     }
     Loc typeLoc;
-    const Type* ty = parseType(typeLoc);
+    bool isConst = false;
+    const Type* ty = parseType(typeLoc, &isConst);
+    if (isConst) notYet(t.loc, "const fields");
     if (ty->is(Type::Kind::Auto))
         fail(typeLoc, "fields and methods need a written type", "auto is only for local variables", spec::Structs);
     if (check(Tok::KwOperator)) notYet(peek().loc, "operator overloading");
@@ -640,10 +768,12 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
 
     if (ty->is(Type::Kind::Void))
         fail(typeLoc, "a field cannot have type void", "", spec::Structs);
+    std::string firstName;
     do {
-        if (check(Tok::Star) || check(Tok::Amp))
-            notYet(peek().loc, std::string(check(Tok::Star) ? "pointer" : "reference") + " types");
+        if (!firstName.empty()) parseLaterStars(ty, firstName, "field");
+        if (check(Tok::Amp)) notYet(peek().loc, "reference types", "a field holds a value, or a pointer: `int* p;`");
         const Token& name = expect(Tok::Ident, "for the field name");
+        if (firstName.empty()) firstName = name.text;
         FieldDecl field{name.text, name.loc, ty, typeLoc, nullptr, access};
         if (match(Tok::Assign)) field.defaultValue = parseAssign();
         else if (check(Tok::LBrace))
@@ -682,10 +812,45 @@ std::unique_ptr<BlockStmt> Parser::parseBlock() {
 }
 
 StmtPtr Parser::parseDeclaration() {
-    bool isConst = match(Tok::KwConst);
+    bool isConst = false;
     Loc typeLoc;
-    const Type* ty = parseType(typeLoc);
+    const Type* ty = parseType(typeLoc, &isConst);
     return parseDeclarators(isConst, ty, typeLoc);
+}
+
+void Parser::parseLaterStars(const Type* ty, const std::string& firstName, const char* what) {
+    size_t want = 0;
+    const Type* base = ty;
+    for (; base->isPointer(); base = base->elem) ++want;
+    Loc starLoc = peek().loc;
+    size_t got = 0;
+    while (match(Tok::Star)) {
+        ++got;
+        if (check(Tok::KwConst))
+            fail(peek().loc, std::string("a const pointer ") + what + " is declared on its own",
+                 "declare it separately, e.g. `" + std::string(ty->name) + " const " +
+                     (check(Tok::Ident) ? peek().text : std::string("p")) + " = ...;`",
+                 spec::PointerDeclarations);
+    }
+    if (got == want) return;
+    std::string name = check(Tok::Ident) ? peek().text : "b";
+    if (got == 0)
+        fail(peek().loc, "in C++, this makes '" + name + "' a plain " + base->name + ", not a pointer like '" +
+                             firstName + "'",
+             "C+ does not mix pointers and other " + std::string(what) + "s in one declaration. Write `" +
+                 std::string(ty->name) + " " + firstName + ", " + std::string(want, '*') + " " + name +
+                 ";` if both are pointers, or declare '" + name + "' on its own",
+             spec::PointerDeclarations);
+    if (want == 0)
+        fail(starLoc, "in C++, this makes '" + name + "' a pointer but '" + firstName + "' a plain " + base->name,
+             "C+ does not mix pointers and other " + std::string(what) + "s in one declaration. Declare them "
+             "separately: `" + std::string(ty->name) + " " + firstName + ";` and `" + std::string(ty->name) +
+                 std::string(got, '*') + " " + name + ";`",
+             spec::PointerDeclarations);
+    fail(starLoc, "'" + name + "' and '" + firstName + "' would have different types, which one declaration cannot mix",
+         "declare them separately, e.g. `" + std::string(ty->name) + " " + firstName + ";` and `" +
+             std::string(ty->name) + std::string(got > want ? got - want : 0, '*') + " " + name + ";`",
+         spec::PointerDeclarations);
 }
 
 StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
@@ -693,8 +858,10 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
         fail(typeLoc, "variables cannot have type void", "pick a type such as int, or use auto", spec::Variables);
     std::vector<std::unique_ptr<VarDecl>> decls;
     do {
-        if (check(Tok::Star) || check(Tok::Amp))
-            notYet(peek().loc, std::string(check(Tok::Star) ? "pointer" : "reference") + " types");
+        if (!decls.empty()) parseLaterStars(ty, decls[0]->name, "variable");
+        if (check(Tok::Amp) || check(Tok::AmpAmp))
+            notYet(peek().loc, "references",
+                   "a variable holds its own value. To refer to another variable, use a pointer: `int* p = &x;`");
         const Token& name =
             expect(Tok::Ident, decls.empty() ? "for the variable name" : "for the next variable name after ','");
         auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
@@ -794,9 +961,9 @@ StmtPtr Parser::parseStmt() {
 
 // `auto u = find(name)` as the condition of an if or while, as in C++17.
 CondDecl Parser::parseCondDecl(const char* stmt) {
-    bool isConst = match(Tok::KwConst);
+    bool isConst = false;
     Loc typeLoc;
-    const Type* ty = parseType(typeLoc);
+    const Type* ty = parseType(typeLoc, &isConst);
     const Token& name = expect(Tok::Ident, std::string("for the name of the variable declared in the ") + stmt +
                                                " condition");
     if (!check(Tok::Assign))
@@ -815,9 +982,9 @@ StmtPtr Parser::parseFor() {
     if (match(Tok::Semi)) {
         // no init
     } else if (isTypeStart()) {
-        bool isConst = match(Tok::KwConst);
+        bool isConst = false;
         Loc typeLoc;
-        const Type* ty = parseType(typeLoc);
+        const Type* ty = parseType(typeLoc, &isConst);
         // `for (auto x : items)` loops over the elements of a vector.
         bool ref = check(Tok::Amp) || check(Tok::AmpAmp);
         if ((ref && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Colon) ||
@@ -981,7 +1148,8 @@ ExprPtr Parser::parseUnary() {
             advance();
             return std::make_unique<IncDecExpr>(t.loc, t.kind == Tok::PlusPlus, true, parseUnary());
         }
-        case Tok::Star: case Tok::Amp: notYet(t.loc, "pointers");
+        case Tok::Star: advance(); return std::make_unique<UnaryExpr>(t.loc, UnOp::Deref, parseUnary());
+        case Tok::Amp: advance(); return std::make_unique<UnaryExpr>(t.loc, UnOp::AddrOf, parseUnary());
         case Tok::KwNew:
             if (isTypeName(peek(1))) {
                 if (prog_->findStruct(peek(1).text)->isClass)
@@ -993,7 +1161,19 @@ ExprPtr Parser::parseUnary() {
                      spec::Structs);
             }
             notYet(t.loc, "manual memory with 'new'");
-        case Tok::KwSizeof: notYet(t.loc, "sizeof expressions");
+        case Tok::KwSizeof: {
+            advance();
+            if (check(Tok::LParen) && isTypeAt(1)) {  // `sizeof(int)`
+                advance();
+                Loc typeLoc;
+                const Type* ty = parseType(typeLoc);
+                expect(Tok::RParen, "to close sizeof(...)");
+                Loc loc = t.loc;
+                if (prev().loc.line == loc.line) loc.len = prev().loc.col + 1 - loc.col;
+                return std::make_unique<SizeofExpr>(loc, ty, nullptr);
+            }
+            return std::make_unique<SizeofExpr>(t.loc, nullptr, parseUnary());  // `sizeof x` or `sizeof(x)`
+        }
         case Tok::KwAwait: notYet(t.loc, "async and await");
         case Tok::KwSpawn: notYet(t.loc, "threads (spawn)");
         default: return parsePostfix(parsePrimary());
@@ -1054,10 +1234,11 @@ ExprPtr Parser::parsePostfix(ExprPtr e) {
                 fail(t.loc, "'this' is a reference in C+, not a pointer",
                      "write `this." + (peek(1).kind == Tok::Ident ? peek(1).text : std::string("field")) + "`",
                      spec::Classes);
-            std::string member = peek(1).kind == Tok::Ident ? peek(1).text : "name";
-            std::string base = e->kind == Expr::Kind::Name ? static_cast<NameExpr&>(*e).name : "value";
-            notYet(t.loc, "pointers and '->'",
-                   "fields and methods are accessed with '.': write `" + base + "." + member + "`");
+            // `p->x` is `(*p).x`. Sema reports `->` on anything but a pointer.
+            Loc arrowLoc = advance().loc;
+            auto deref = std::make_unique<UnaryExpr>(arrowLoc, UnOp::Deref, std::move(e));
+            deref->arrowMember = check(Tok::Ident) ? peek().text : "name";
+            e = parseMemberAccess(std::move(deref), "->");
         } else if (t.kind == Tok::LBracket) {
             advance();
             if (check(Tok::RBracket)) fail(peek().loc, "expected an index inside [ ]", "write e.g. `items[0]`", spec::Vectors);
@@ -1156,6 +1337,20 @@ ExprPtr Parser::parsePrimary() {
         case Tok::KwNull: return std::make_unique<NullLitExpr>(t.loc);
         case Tok::KwThis: return std::make_unique<ThisExpr>(t.loc);
         case Tok::LParen: {
+            // `(char*)p` or `(const Node*)p`: a type with stars, then ')'.
+            size_t i = peek().kind == Tok::KwConst ? 1 : 0;
+            bool baseType = isCastType(peek(i).kind) || peek(i).kind == Tok::KwVoid || isTypeName(peek(i));
+            if (baseType && peek(i + 1).kind == Tok::Star) {
+                for (i += 1; peek(i).kind == Tok::Star || peek(i).kind == Tok::KwConst; ++i) {}
+                if (peek(i).kind == Tok::RParen) {
+                    Loc typeLoc;
+                    const Type* ty = parseType(typeLoc);
+                    expect(Tok::RParen, "to close the cast");
+                    Loc loc = t.loc;
+                    if (prev().loc.line == loc.line) loc.len = prev().loc.col + 1 - t.loc.col;
+                    return std::make_unique<CastExpr>(loc, ty, parseUnary());
+                }
+            }
             if (isCastType(peek().kind) && peek(1).kind == Tok::RParen) {  // `(int)x`, as in C
                 Loc loc;
                 const Type* ty = parseBaseType(loc);
@@ -1186,8 +1381,9 @@ ExprPtr Parser::parsePrimary() {
                 fail(t.loc, "C+ has no " + t.text,
                      t.text == "dynamic_cast" ? "inheritance is planned; until then every object has exactly one type"
                      : t.text == "const_cast" ? "a const variable cannot be changed; copy it into a variable that is not const"
-                                              : "reinterpreting memory needs raw pointers, which are planned. To "
-                                                "convert a number, write `int(x)` or `static_cast<int>(x)`",
+                                              : "a cast between pointer types is written `static_cast<char*>(p)` or "
+                                                "`(char*)p`. To convert a number, write `int(x)` or "
+                                                "`static_cast<int>(x)`",
                      spec::Casts);
             if (check(Tok::ColonColon)) {
                 if (t.text == "std") failStd(t.loc, peek(1));

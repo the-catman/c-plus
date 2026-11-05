@@ -1,0 +1,123 @@
+// Mistakes with pointers, and the C++ habits that do not carry over.
+struct Point {
+    int x = 0;
+    void move(int dx) { x += dx; }
+    Point* self() { return &this; }
+};
+class User {
+public:
+    string name = "a";
+};
+Point makePoint() { return {}; }
+
+int main() {
+    int n = 1;
+    int* p = &n;
+    char* cp = null;
+    void* v = p;
+    User u = User();
+    Point pt;
+    Point* pp = &pt;
+    const Point* cpp = &pt;
+    vector<int> vec = {1};
+    string s = "abc";
+
+    println("{}", *n);
+    println("{}", u->name);
+    println("{}", pp.x);
+    pp.move(1);
+    println("{}", *v);
+    int* zero = 0;
+    if (p == 0) println("zero");
+    char* c2 = p;
+    int* w = v;
+    const int* ro = &n;
+    int* rw = ro;
+    *ro = 5;
+    const int k = 5;
+    int* pk = &k;
+    int m;
+    int* pm = &m;
+    int* unset;
+    int* copy = unset;
+    int* t1 = &5;
+    int* t2 = &vec[0];
+    char* t3 = &s[0];
+    int* t4 = &makePoint().x;
+    auto t5 = p * 2;
+    auto t6 = p + 1.5;
+    auto t7 = p - cp;
+    bool b1 = p < null;
+    p *= 2;
+    bool flag = p;
+    long addr = (long)p;
+    int* fromInt = (int*)n;
+    char* m2 = (char*)ro;
+    println("{}", cp);
+    string t8 = cp;
+    string t9 = string(p);
+    int z = p;
+    int* pz = n;
+    auto t10 = p ?? p;
+    auto t11 = pp?.x;
+    cpp->move(1);
+    auto t12 = sizeof(void);
+    v++;
+    auto t13 = p[1.5];
+    auto t14 = -p;
+    return 0;
+}
+// error: '*' follows a pointer, but this is 'int'
+// error: '->' follows a pointer, but 'u' is 'User'
+// error: a class reference is used directly, so fields and methods are reached with '.': write `u.name`
+// error: 'pp' is a pointer, so its fields are reached with '->'
+// error: write `pp->x`
+// error: 'pp' is a pointer, so the methods of what it points to are called with '->'
+// error: write `pp->move(...)`
+// error: '*' cannot be used on a 'void*', which points to memory of no known type
+// error: convert it first to a pointer to what is stored there, e.g. `static_cast<int*>(p)`
+// error: expected 'int*' to initialize 'zero', but this is 'int'
+// error: a pointer to nothing is `null`
+// error: '==' compares 'int*' with a pointer or null, but this is 'int'
+// error: a pointer to nothing is `null`: write `p == null`
+// error: expected 'char*' to initialize 'c2', but this is 'int*'
+// error: pointers to different types do not convert into each other. If the memory really holds 'char' values, cast it: `(char*)p`
+// error: a void* becomes another pointer only with a cast: `static_cast<int*>(v)`
+// error: a 'const int*' only reads what it points to, so it does not convert to 'int*'. Declare the target as `const int*` too
+// error: 'ro' is a 'const int*', so what it points to cannot be assigned to
+// error: expected 'int*' to initialize 'pk', but this is 'const int*'
+// error: '&m' points to 'm', which has no value yet
+// error: give it a value first, e.g. `int m = 0;`. C+ cannot tell whether code that gets the pointer writes through it before reading
+// error: 'unset' is used before it is given a value
+// error: e.g. `int* unset = null;`
+// error: '&' takes the address of a variable, a field, or what a pointer points to, but this is a temporary value
+// error: this compiler does not support pointers into vectors and strings yet
+// error: but this is part of a temporary value
+// error: '*' cannot be used with 'int*'
+// error: The value a pointer points to is `*p`
+// error: '+' moves a pointer by an int or a long, but this is 'double'
+// error: '-' between two pointers needs them to point to the same type, but they are 'int*' and 'char*'
+// error: null can only be compared with == and !=
+// error: '*=' cannot be used with a pointer
+// error: expected 'bool' to initialize 'flag', but this is 'int*'
+// error: compare it with null: `p != null`
+// error: a cast cannot turn a pointer into 'long'
+// error: a cast to 'int*' converts another pointer, but this is 'int'
+// error: C+ does not turn numbers into pointers
+// error: a cast cannot remove the const of 'const int*'
+// error: C++ prints a 'char*' as the text it points to, but C+ cannot tell where that text ends
+// error: write `string(cp)` to print the text, which must end with a zero byte, or `(void*)cp` to print the address
+// error: write `string(cp)` to copy the text it points to, up to its zero byte
+// error: string(p) copies the text a char* points to, but this is 'int*'
+// error: expected 'int' to initialize 'z', but this is 'int*'
+// error: write `*p` for the value it points to
+// error: write `&n` for the address of 'n'
+// error: for a pointer, write `p != null ? p : other`
+// error: a pointer is followed with '->' once it is known not to be null
+// error: cannot call 'move' through a 'const Point*', because it may change fields
+// error: sizeof needs a type with a size, but this is 'void'
+// error: '++' cannot be used on a 'void*'
+// error: an index into a pointer must be an int or long, but this is 'double'
+// error: '-' needs a number, but this is 'int*'
+// error: the address of 'this' cannot be taken
+// error: spec: docs/SPEC.md#pointers

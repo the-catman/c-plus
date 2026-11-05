@@ -47,7 +47,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtStrRelease, rtStrCompare, rtStrConcat, rtStrAppend, rtStrSubstr, rtStrFind;
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
-    llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat;
+    llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
     llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
@@ -184,6 +184,7 @@ struct Codegen::Impl {
                 f->addFnAttr(llvm::Attribute::NoUnwind);
             }
         rtPrintCharQuoted = decl("cplus_print_char_quoted", voidTy, {ptrTy, i32});
+        rtPrintPtr = decl("cplus_print_ptr", voidTy, {ptrTy, ptrTy});
         rtStrMutable = decl("cplus_str_mutable", ptrTy, {ptrTy});
         rtStrRepeat = decl("cplus_str_repeat", voidTy, {ptrTy, i64, i32, ptrTy, i32, i32});
         rtVecNew = decl("cplus_vec_new", ptrTy, {i64, i64});
@@ -202,7 +203,7 @@ struct Codegen::Impl {
             case K::Char: return b.getInt8Ty();
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
-            case K::Class: case K::Vector: case K::Null: return b.getPtrTy();
+            case K::Class: case K::Vector: case K::Null: case K::Pointer: return b.getPtrTy();
             // An optional class reference is a pointer that may be null. Any other
             // optional is { i1 has, T value }, and its value is all zero bytes when it
             // has none, so retaining or releasing it is harmless either way.
@@ -296,6 +297,12 @@ struct Codegen::Impl {
         call->setDoesNotReturn();
         b.CreateUnreachable();
         b.SetInsertPoint(okBB);
+    }
+
+    // Stops the program when the pointer `p` is null. `op` is how the pointer is followed:
+    // `*`, `->` or `[ ]`.
+    void checkNotNull(llvm::Value* p, const std::string& op, Loc loc) {
+        trapIf(b.CreateIsNull(p), "null pointer: '" + op + "' was used on a pointer that is null", loc);
     }
 
     // The char a computed code stands for. `wide` is an i64; a value that is not from 0
@@ -865,6 +872,7 @@ struct Codegen::Impl {
         if (from->isInteger() && to->isFloating()) return b.CreateSIToFP(v, llvmType(to));
         if (from->is(K::Float) && to->is(K::Double)) return b.CreateFPExt(v, b.getDoubleTy());
         if (from->is(K::Double) && to->is(K::Float)) return b.CreateFPTrunc(v, b.getFloatTy());  // a constant
+        if (from->isPointer() && to->isPointer()) return v;  // to `const T*` or `void*`: the same address
         llvm_unreachable("Sema allowed a conversion Codegen does not know");
     }
 
@@ -918,7 +926,7 @@ struct Codegen::Impl {
             case K::Float: case K::Double: return llvm::ConstantFP::get(llvmType(t), 0.0);
             case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct: return buildAggregate(*t->decl, {});
-            case K::Class: case K::Vector: return llvm::ConstantPointerNull::get(b.getPtrTy());
+            case K::Class: case K::Vector: case K::Pointer: return llvm::ConstantPointerNull::get(b.getPtrTy());
             case K::Optional: return llvm::Constant::getNullValue(llvmType(t));  // null
             default: llvm_unreachable("no default value for this type");
         }
@@ -993,6 +1001,7 @@ struct Codegen::Impl {
         if (t->isInteger()) return b.CreateICmpNE(v, llvm::ConstantInt::get(v->getType(), 0));
         if (t->isFloating()) return b.CreateFCmpUNE(v, llvm::ConstantFP::get(v->getType(), 0.0));  // NaN is true
         if (t->isOptional()) return hasValue(v, t);
+        if (t->isPointer()) return b.CreateIsNotNull(v);
         return v;
     }
 
@@ -1007,7 +1016,11 @@ struct Codegen::Impl {
                 auto& m = static_cast<const MemberExpr&>(e);
                 return m.base->type->isClass() || isPlace(*m.base);
             }
-            case Expr::Kind::Index: return isPlace(*static_cast<const IndexExpr&>(e).base);
+            case Expr::Kind::Index: {
+                auto& ix = static_cast<const IndexExpr&>(e);
+                return ix.base->type->isPointer() || isPlace(*ix.base);  // `p[i]` is memory, wherever p came from
+            }
+            case Expr::Kind::Unary: return isDeref(e);
             default: return false;
         }
     }
@@ -1018,7 +1031,7 @@ struct Codegen::Impl {
         switch (e.kind) {
             case Expr::Kind::IntLit: case Expr::Kind::BoolLit: case Expr::Kind::StringLit: case Expr::Kind::NullLit:
             case Expr::Kind::FloatLit: case Expr::Kind::CharLit: case Expr::Kind::Name: case Expr::Kind::This:
-            case Expr::Kind::OptValue:
+            case Expr::Kind::OptValue: case Expr::Kind::Sizeof:
                 return false;
             case Expr::Kind::Cast: return mayRunCode(*static_cast<const CastExpr&>(e).operand);
             case Expr::Kind::Member: return mayRunCode(*static_cast<const MemberExpr&>(e).base);
@@ -1062,10 +1075,22 @@ struct Codegen::Impl {
                 else object = b.CreateLoad(b.getPtrTy(), addressOf(*m.base), "obj");
                 return fieldAddress(baseType, object, m.fieldIndex, m.field);
             }
+            case Expr::Kind::Unary: {  // `*p`
+                auto& u = static_cast<const UnaryExpr&>(e);
+                llvm::Value* p = gen(*u.operand);
+                checkNotNull(p, u.isArrow() ? "->" : "*", u.loc);
+                return p;
+            }
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
                 const Type* vt = ix.base->type;
                 if (vt->is(K::String)) return charAddress(ix, hold, write);
+                if (vt->isPointer()) {  // `p[i]`: not bounds-checked, as in C++
+                    llvm::Value* p = gen(*ix.base);
+                    llvm::Value* index = genIndex(*ix.index);
+                    checkNotNull(p, "[ ]", ix.loc);
+                    return b.CreateGEP(llvmType(vt->elem), p, index, "elem.addr");
+                }
                 llvm::Value* slot = nullptr;
                 llvm::Value* buf;
                 llvm::Value* index;
@@ -1154,12 +1179,20 @@ struct Codegen::Impl {
             case Expr::Kind::InitList:
                 owned = true;
                 return genInitList(static_cast<const InitListExpr&>(e), e.type);
+            case Expr::Kind::Sizeof: {
+                const Type* t = static_cast<const SizeofExpr&>(e).target;
+                return b.getInt64(mod->getDataLayout().getTypeAllocSize(llvmType(t)));
+            }
             case Expr::Kind::Unary: {
                 auto& u = static_cast<const UnaryExpr&>(e);
+                if (u.op == UnOp::Deref) return b.CreateLoad(llvmType(e.type), addressOf(e), "deref");
+                if (u.op == UnOp::AddrOf) return addressOf(*u.operand);
                 if (u.op == UnOp::Not) return b.CreateNot(genCond(*u.operand));
                 llvm::Value* v = genConverted(*u.operand, e.type);  // a char becomes an int first
                 switch (u.op) {
                     case UnOp::Plus: return v;
+                    case UnOp::Deref:
+                    case UnOp::AddrOf:
                     case UnOp::Not:
                     case UnOp::BitNot: return b.CreateNot(v);
                     case UnOp::Neg:
@@ -1172,6 +1205,7 @@ struct Codegen::Impl {
             case Expr::Kind::Binary: {
                 auto& bin = static_cast<const BinaryExpr&>(e);
                 if (bin.op == BinOp::LogAnd || bin.op == BinOp::LogOr) return genLogical(bin);
+                if (bin.operandType->isPointer()) return genPointerBinary(bin);
                 bool equality = bin.op == BinOp::Eq || bin.op == BinOp::Ne;
                 if (bin.operandType->is(K::String) && bin.op == BinOp::Add) {
                     owned = true;
@@ -1213,6 +1247,14 @@ struct Codegen::Impl {
                                                                          : llvm::Intrinsic::ssub_with_overflow,
                                                      old, rhs, sym, Type::longTy(), a.loc);
                     llvm::Value* v = checkedChar(wide, std::string("the result of '") + sym + "' is", a.loc);
+                    b.CreateStore(v, slot);
+                    return v;
+                }
+                if (a.op && ty->isPointer()) {  // `p += n` or `p -= n`
+                    llvm::Value* n = genConverted(*a.value, Type::longTy());
+                    if (*a.op == BinOp::Sub) n = b.CreateNeg(n);
+                    llvm::Value* slot = addressOf(*a.target, false, true);
+                    llvm::Value* v = b.CreateGEP(llvmType(ty->elem), b.CreateLoad(b.getPtrTy(), slot), n, "ptr");
                     b.CreateStore(v, slot);
                     return v;
                 }
@@ -1264,6 +1306,12 @@ struct Codegen::Impl {
                 llvm::Value* slot = addressOf(*i.target, false, true);
                 llvm::Type* t = llvmType(e.type);
                 llvm::Value* old = b.CreateLoad(t, slot);
+                if (e.type->isPointer()) {  // moves to the next or previous element
+                    llvm::Value* updated =
+                        b.CreateGEP(llvmType(e.type->elem), old, b.getInt64(i.increment ? 1 : -1), "ptr");
+                    b.CreateStore(updated, slot);
+                    return i.prefix ? updated : old;
+                }
                 if (e.type->is(K::Char)) {  // stays from 0 to 255
                     llvm::Value* wide = b.CreateZExt(old, b.getInt64Ty());
                     wide = i.increment ? b.CreateAdd(wide, b.getInt64(1)) : b.CreateSub(wide, b.getInt64(1));
@@ -1287,11 +1335,41 @@ struct Codegen::Impl {
         llvm_unreachable("unknown expression kind");
     }
 
+    // `p == q`, `p < q`, `p + n`, `n + p`, `p - n` and `p - q`. Pointers compare as
+    // addresses, and arithmetic moves by whole elements, as in C++.
+    llvm::Value* genPointerBinary(const BinaryExpr& bin) {
+        const Type* pt = bin.operandType;
+        if (bin.op >= BinOp::Eq && bin.op <= BinOp::Ge) {
+            llvm::Value* l = genConverted(*bin.lhs, pt);
+            llvm::Value* r = genConverted(*bin.rhs, pt);
+            switch (bin.op) {
+                case BinOp::Eq: return b.CreateICmpEQ(l, r);
+                case BinOp::Ne: return b.CreateICmpNE(l, r);
+                case BinOp::Lt: return b.CreateICmpULT(l, r);
+                case BinOp::Le: return b.CreateICmpULE(l, r);
+                case BinOp::Gt: return b.CreateICmpUGT(l, r);
+                default: return b.CreateICmpUGE(l, r);
+            }
+        }
+        llvm::Type* elem = llvmType(pt->elem);
+        bool leftPtr = bin.lhs->type->isPointer();
+        if (leftPtr && bin.rhs->type->isPointer()) {  // `p - q`: how many elements apart
+            llvm::Value* l = gen(*bin.lhs);
+            return b.CreatePtrDiff(elem, l, gen(*bin.rhs), "distance");
+        }
+        llvm::Value* l = leftPtr ? gen(*bin.lhs) : genConverted(*bin.lhs, Type::longTy());
+        llvm::Value* r = leftPtr ? genConverted(*bin.rhs, Type::longTy()) : gen(*bin.rhs);
+        llvm::Value* n = leftPtr ? r : l;
+        if (bin.op == BinOp::Sub) n = b.CreateNeg(n);
+        return b.CreateGEP(elem, leftPtr ? l : r, n, "ptr");
+    }
+
     // Whether two values are equal: strings by contents, structs field by field, and
     // class references by identity.
     llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
         switch (t->kind) {
-            case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: return b.CreateICmpEQ(l, r);
+            case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer:
+                return b.CreateICmpEQ(l, r);
             case K::Float: case K::Double: return b.CreateFCmpOEQ(l, r);
             case K::String: {
                 llvm::Value* eq = b.CreateCall(rtStrEq, {b.CreateExtractValue(l, 0), b.CreateExtractValue(l, 1),
@@ -1358,6 +1436,7 @@ struct Codegen::Impl {
             case K::Class: b.CreateCall(types.at(t->decl).print, {v, out}); break;
             case K::Vector: b.CreateCall(vecInfo(t).print, {v, out}); break;
             case K::Null: printText(out, "null"); break;
+            case K::Pointer: b.CreateCall(rtPrintPtr, {out, v}); break;  // the address, as std::format prints a void*
             case K::Optional: {
                 auto* someBB = llvm::BasicBlock::Create(ctx, "print.value", fn);
                 auto* noneBB = llvm::BasicBlock::Create(ctx, "print.null", fn);
@@ -1410,8 +1489,20 @@ struct Codegen::Impl {
         const Type* to = c.target;
         llvm::Value* v = gen(*c.operand);
         if (from == to) return v;
-        llvm::Type* target = llvmType(to);
         Loc loc = c.loc;
+        if (to->isPointer()) return v;  // from another pointer, or null: the same address
+        if (from->isPointer()) {
+            if (to->is(K::Bool)) return b.CreateIsNotNull(v);
+            // `string(p)`: a copy of the text p points to, up to its zero byte. It is a new
+            // value, released when the statement ends unless it is stored.
+            trapIf(b.CreateIsNull(v), "null pointer: string(p) was given a pointer that is null", loc);
+            llvm::AllocaInst* slot = entryAlloca(stringTy, "text");
+            b.CreateCall(rtStrFromC, {slot, v});
+            llvm::Value* text = b.CreateLoad(stringTy, slot, "text");
+            temps.push_back({text, Type::stringTy(), false});
+            return text;
+        }
+        llvm::Type* target = llvmType(to);
         if (from->is(K::Char)) {  // its code, from 0 to 255
             if (to->is(K::Bool)) return b.CreateICmpNE(v, b.getInt8(0));
             return to->isFloating() ? b.CreateUIToFP(v, target) : b.CreateZExt(v, target);
@@ -2257,13 +2348,17 @@ struct Codegen::Impl {
         stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy()}, "cplus.string");
         // Named types are created first and given bodies after, so they can refer to
         // each other in any order.
+        // A C type known only by name has no layout; C+ only points to it.
+        std::vector<const StructDecl*> structs;
         for (auto& sd : program.structs)
-            types[sd.get()].layout = llvm::StructType::create(ctx, (sd->isClass ? "cplus.class." : "cplus.struct.") + sd->name);
-        for (auto& sd : program.structs) {
+            if (!sd->opaque) structs.push_back(sd.get());
+        for (const StructDecl* sd : structs)
+            types[sd].layout = llvm::StructType::create(ctx, (sd->isClass ? "cplus.class." : "cplus.struct.") + sd->name);
+        for (const StructDecl* sd : structs) {
             std::vector<llvm::Type*> fields;
             if (sd->isClass) fields.push_back(b.getInt64Ty());  // the reference count
             for (auto& f : sd->fields) fields.push_back(llvmType(f.type));
-            types[sd.get()].layout->setBody(fields);
+            types[sd].layout->setBody(fields);
         }
         declareRuntime();
         fileName = cstring(file.path);
@@ -2273,13 +2368,13 @@ struct Codegen::Impl {
             declareFunction(*f);
             if (f->name == "main") userMain = f.get();
         }
-        for (auto& sd : program.structs) {
+        for (const StructDecl* sd : structs) {
             for (auto& m : sd->methods) declareFunction(*m);
             declareHelpers(*sd);
         }
-        for (auto& sd : program.structs) defineHelpers(*sd);
+        for (const StructDecl* sd : structs) defineHelpers(*sd);
         for (auto& f : program.funcs) defineFunction(*f);
-        for (auto& sd : program.structs)
+        for (const StructDecl* sd : structs)
             for (auto& m : sd->methods) defineFunction(*m);
         if (userMain) defineEntryPoint(*userMain);
 

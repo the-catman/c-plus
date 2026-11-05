@@ -66,8 +66,14 @@ C++20, built with clang. Self-hosting in C+ is a later milestone, not a requirem
   libc is always linked.
 - `double` and `float` are passed as they are, since C has the same types. A `char` is
   passed as C's `char`, the same byte whether the platform's `char` is signed or not.
-- Pointers (and opaque handles), C structs, variadic functions and callbacks
-  follow with the features they need.
+- Pointers pass unchanged (see §2.21). `char*` is a raw byte pointer, for buffers a
+  function fills and text the caller must free; `const char*` stays `string`. A C array
+  parameter is written as the pointer C passes, `int* values`.
+- A C type used only through pointers, such as `FILE` or `sqlite3`, is declared by name:
+  `extern "C" struct FILE;`, then written `FILE*`. Nothing but a pointer to it can be
+  used. Decided 2026-11-05.
+- C structs by value, variadic functions and callbacks follow with the features they
+  need.
 
 ### 2.5 C++ interop — DECIDED
 None. C++ libraries are consumed through hand-written `extern "C"` shims. No tooling
@@ -293,10 +299,11 @@ Decided 2026-11-05.
 - Floating-point arithmetic is not checked: division by zero gives an infinity, and NaN
   is a value. `%` and the bit operators stay integer-only; `fmod` gives the remainder.
 - Casts use C++'s spellings, `int(x)`, `static_cast<int>(x)` and `(int)x`, all with the
-  same meaning, between the number types and `bool`. A value that does not fit the new
-  type, including NaN and the infinities converted to an integer, stops the program, as
-  integer overflow does. `reinterpret_cast` and `const_cast` do not exist; `dynamic_cast`
-  would come with inheritance. A cast never makes or reads a string.
+  same meaning, between the number types and `bool`, and between pointer types (§2.21). A
+  value that does not fit the new type, including NaN and the infinities converted to an
+  integer, stops the program, as integer overflow does. `reinterpret_cast` and
+  `const_cast` do not exist; `dynamic_cast` would come with inheritance. A cast never
+  makes or reads a string, except `string(p)` from a `char*`.
 - `{}` prints the shortest digits that read back exactly, as C++'s `std::format` does,
   except that NaN always prints as `nan`, so output does not change with optimization.
   `{:.2f}`, `{:e}`, `{:g}` and `{:.3}` follow `std::format`. `to_string(x)` matches `{}`,
@@ -322,6 +329,31 @@ Decided 2026-11-05.
 - The `<cctype>` functions are built in, ASCII only, and take a `char`. The tests return
   `bool` and `toupper`/`tolower` a `char`, not C's `int`, since there is no `EOF` to
   return. As with `<cmath>`, a function of the program with the same name replaces them.
+
+### 2.21 Raw pointers — DECIDED
+Decided 2026-11-05.
+- C++'s pointers and syntax: `T*`, `T**`, `void*`, `const T*`, `T* const`, `&x`, `*p`,
+  `p->x`, `p[i]`, `p + n`, `p - q` (a `long`), `++`/`--`, and ordering by address. `null`
+  is the null pointer; `0` and `nullptr` are not. A pointer cannot be optional, since it
+  can already be null.
+- Following a null pointer with `*`, `->` or `[ ]` stops the program with file:line.
+  `p[i]` and arithmetic are not bounds-checked, and lifetimes are not tracked: a dangling
+  pointer is undefined, as in C++, and is left to ASan in debug builds.
+- `&x` needs a place that already has a value, since definite assignment cannot follow
+  writes through pointers. `&` of a const place gives `const T*`. No address of `this`,
+  temporaries, or values reached through `?.`.
+- Pointers into vectors and strings are left for later: a `push_back` moves the elements,
+  so they need a rule first.
+- A pointer is a condition, but converts to `bool` only with `bool(p)`. Implicitly, only
+  `null` → `T*`, `T*` → `const T*`, and `T*` → `void*`. Casts between any pointer types
+  are allowed except removing `const`; numbers and pointers never convert.
+- A pointer prints as hex. Printing a `char*` is an error, since its end is not known;
+  `string(p)` copies the text up to the zero byte.
+- Pointers are not counted. A pointer to a class variable points to the variable, not
+  the object.
+- `int* a, b;` is an error (the C++ trap); `sizeof` is C++'s and gives a `long`.
+- Next: `new` and `delete` with the warning from §2.7; how it is silenced per file is
+  still open (§6).
 
 ---
 
@@ -358,8 +390,9 @@ destructors, vectors, and optionals (`T?`, `null`, `?.`, `??`), using
 functions, control flow including range-based `for`, definite assignment (down to struct
 fields), overflow and bounds traps, and `println`, all through LLVM. Destructors and a
 leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. C functions
-can be called through `extern "C"` declarations with number, `char`, `bool` and `string`
-values. Next in Phase 1: raw pointers, which the rest of C interop needs.
+can be called through `extern "C"` declarations with number, `char`, `bool`, `string`
+and pointer values. Raw pointers work, with pointer arithmetic, `sizeof`, null traps and
+C types known by name such as `FILE*`. Next in Phase 1: `new` and `delete`.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -418,6 +451,8 @@ will confidently write C++ wherever the two differ.
 - References (`T&`): whether C+ gets them, and in what form. They decide how
   `for (auto& x : v)` and `const T&` parameters work; today both are errors that point to a
   copy, which is cheap for vectors.
+- How the warning for `new` and `delete` is silenced for one file (§2.7): a comment, an
+  attribute, or a compiler option.
 - Event loop and threads: one loop per thread versus a work-stealing scheduler. Decided
   in Phase 5 with real workloads.
 - Package manager, after v1.

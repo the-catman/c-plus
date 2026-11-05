@@ -16,16 +16,21 @@ namespace cplus {
 struct StructDecl;
 
 struct Type {
-    enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, Struct, Class, Vector, Optional, Null };
+    enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, Struct, Class, Vector, Optional, Null,
+                      Pointer, Opaque };
     Kind kind;
     const char* name;
-    const StructDecl* decl = nullptr;  // for Kind::Struct and Kind::Class
-    const Type* elem = nullptr;        // for Kind::Vector, and the value type of Kind::Optional
+    const StructDecl* decl = nullptr;  // for Kind::Struct, Kind::Class and Kind::Opaque
+    const Type* elem = nullptr;        // for Kind::Vector, the value type of Kind::Optional, what a Kind::Pointer points to
+    bool constElem = false;            // for Kind::Pointer: `const int*`, which only reads what it points to
 
     bool is(Kind k) const { return kind == k; }
     bool isVector() const { return kind == Kind::Vector; }
     bool isOptional() const { return kind == Kind::Optional; }
-    bool isNull() const { return kind == Kind::Null; }  // the type of `null`, which converts to any optional
+    bool isNull() const { return kind == Kind::Null; }  // the type of `null`, which converts to any optional or pointer
+    bool isPointer() const { return kind == Kind::Pointer; }
+    // A C type known only by name, `extern "C" struct sqlite3;`, which C+ only points to.
+    bool isOpaque() const { return kind == Kind::Opaque; }
     bool isError() const { return kind == Kind::Error; }
     bool isInteger() const { return kind == Kind::Int || kind == Kind::Long; }
     bool isFloating() const { return kind == Kind::Float || kind == Kind::Double; }
@@ -80,6 +85,21 @@ struct Type {
         }
         return &it->second.second;
     }
+
+    // `elem*`, or `const elem*` with `constElem`: a raw pointer, which may be null. One
+    // Type per pointee and constness, like vectorOf.
+    static const Type* pointerTo(const Type* elem, bool constElem = false) {
+        static std::map<std::pair<const Type*, bool>, std::pair<std::string, Type>> made;
+        auto [it, inserted] = made.try_emplace({elem, constElem});
+        if (inserted) {
+            // `const int*`, but `int* const*` for a pointer to a const pointer, as in C++.
+            it->second.first = !constElem          ? std::string(elem->name) + "*"
+                               : elem->isPointer() ? std::string(elem->name) + " const*"
+                                                   : "const " + std::string(elem->name) + "*";
+            it->second.second = Type{Kind::Pointer, it->second.first.c_str(), nullptr, elem, constElem};
+        }
+        return &it->second.second;
+    }
 };
 
 struct VarDecl;
@@ -89,7 +109,7 @@ struct FuncDecl;
 
 struct Expr {
     enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
-                      Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast };
+                      Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -118,7 +138,7 @@ struct CharLitExpr : Expr {
 };
 
 // `int(x)`, `static_cast<int>(x)` or `(int)x`: an explicit conversion between numbers,
-// char and bool.
+// char and bool, or between pointer types.
 struct CastExpr : Expr {
     const Type* target;
     ExprPtr operand;
@@ -150,12 +170,27 @@ struct ThisExpr : Expr {
     explicit ThisExpr(Loc l) : Expr(Kind::This, l) {}
 };
 
-enum class UnOp { Neg, Plus, Not, BitNot };
+// `*p` is Deref and `&x` AddrOf. `p->x` is parsed as `(*p).x`.
+enum class UnOp { Neg, Plus, Not, BitNot, Deref, AddrOf };
 
 struct UnaryExpr : Expr {
     UnOp op;
     ExprPtr operand;
+    std::string arrowMember;  // for a Deref written as `p->name`: the name after the arrow
     UnaryExpr(Loc l, UnOp o, ExprPtr e) : Expr(Kind::Unary, l), op(o), operand(std::move(e)) {}
+    bool isArrow() const { return op == UnOp::Deref && !arrowMember.empty(); }
+};
+
+inline bool isDeref(const Expr& e) {
+    return e.kind == Expr::Kind::Unary && static_cast<const UnaryExpr&>(e).op == UnOp::Deref;
+}
+
+// `sizeof(T)` or `sizeof x`: the bytes a value takes, as a long. The operand is not
+// evaluated.
+struct SizeofExpr : Expr {
+    const Type* target;  // `sizeof(T)`, or null
+    ExprPtr operand;     // `sizeof x`, or null
+    SizeofExpr(Loc l, const Type* t, ExprPtr e) : Expr(Kind::Sizeof, l), target(t), operand(std::move(e)) {}
 };
 
 enum class BinOp { Add, Sub, Mul, Div, Rem, Shl, Shr, BitAnd, BitOr, BitXor, Eq, Ne, Lt, Le, Gt, Ge, LogAnd, LogOr };
@@ -462,6 +497,7 @@ struct StructDecl {
     Loc nameLoc;
     bool isClass;
     bool defined = false;  // false if only referenced, or its definition failed to parse
+    bool opaque = false;   // `extern "C" struct sqlite3;`: a C type known only by name
     std::vector<FieldDecl> fields;
     std::vector<std::unique_ptr<FuncDecl>> methods;
     FuncDecl* constructor = nullptr;

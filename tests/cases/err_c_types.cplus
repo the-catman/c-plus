@@ -1,0 +1,42 @@
+// C types known only by name, `extern "C" struct sqlite3;`, can only be pointed to.
+extern "C" struct sqlite3;
+extern "C" {
+    struct tm* localtime(long* t);
+    typedef struct handle handle;
+    class Thing;
+}
+extern "C" struct sqlite3;
+struct window;
+struct widget { int x = 0; };
+extern "C" struct widget;
+
+struct Holder {
+    sqlite3 db;
+};
+
+void use(sqlite3 db) {}
+
+int main() {
+    sqlite3* db = null;
+    sqlite3 value;
+    vector<sqlite3> all;
+    println("{}", *db);
+    sqlite3* next = db + 1;
+    long size = sizeof(sqlite3);
+    return 0;
+}
+// error: C+ writes a C type without the word 'struct'
+// error: declare the type once inside extern "C", `struct tm;`, and then write `tm*`
+// error: C+ has no typedef
+// error: C has no classes
+// error: the name 'sqlite3' is already used by another struct or class
+// error: C+ has no forward declarations
+// error: A C type used only through pointers is declared with `extern "C" struct window;`
+// error: the name 'widget' is already used by another struct or class
+// error: 'sqlite3' is a C type known only by name, so C+ can only hold a pointer to it
+// error: write `sqlite3*`
+// error: '*' cannot be used on a 'sqlite3*', because 'sqlite3' is a C type known only by name
+// error: pass the pointer to the C functions that take it; C+ never sees what is inside
+// error: '+' cannot be used on a 'sqlite3*', because 'sqlite3' is a C type known only by name
+// error: sizeof needs a type with a size, but this is 'sqlite3'
+// error: spec: docs/SPEC.md#c-types-known-by-name

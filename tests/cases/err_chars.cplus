@@ -40,9 +40,9 @@ int main() {
 // error: a string does not convert to a char; `s[i]` is the char at position i
 // error: write `string(1, c)` for a string holding the char
 // error: a char is not a bool; compare it, e.g. `c != '\0'`
-// error: the if condition must be a bool, a number or an optional, but this is 'char'
+// error: the if condition must be a bool, a number, a pointer or an optional, but this is 'char'
 // error: a char is not a condition; compare it, e.g. `c != '\0'` or `c == 'y'`
-// error: '!' needs a bool, a number or an optional, but this is 'char'
+// error: '!' needs a bool, a number, a pointer or an optional, but this is 'char'
 // error: '*=' cannot be used with 'char'
 // error: a char steps with `c += n` and `c -= n`
 // error: '+=' on a char needs an int or a long, but this is 'double'

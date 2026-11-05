@@ -1,0 +1,9 @@
+// `p[i]` on a null pointer stops the program. Other indexes into a pointer are not
+// checked, as in C++: a pointer does not know how much memory it points to.
+int main() {
+    int* values = null;
+    values[2] = 1;
+    return 0;
+}
+// trap: null pointer: '[ ]' was used on a pointer that is null
+// trap: trap_null_index.cplus:5:11

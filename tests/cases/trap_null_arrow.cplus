@@ -1,0 +1,20 @@
+// `p->x` on a null pointer stops the program.
+struct Node {
+    int value;
+    Node* next = null;
+};
+
+int main() {
+    Node last = {2};
+    Node first = {1, &last};
+    Node* cur = &first;
+    while (true) {
+        println("{}", cur->value);
+        cur = cur->next;
+    }
+    return 0;
+}
+// expect: 1
+// expect: 2
+// trap: null pointer: '->' was used on a pointer that is null
+// trap: trap_null_arrow.cplus:12:26

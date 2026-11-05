@@ -1,0 +1,12 @@
+// string(p) copies the text a char* points to, so it needs a pointer that is not null.
+extern "C" char* getenv(string name);
+
+int main() {
+    char* value = getenv("CPLUS_TEST_VARIABLE_THAT_IS_NOT_SET");
+    println("{}", value == null);
+    string s = string(value);
+    return 0;
+}
+// expect: true
+// trap: null pointer: string(p) was given a pointer that is null
+// trap: trap_null_string.cplus:7:16
