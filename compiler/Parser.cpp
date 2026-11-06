@@ -129,8 +129,34 @@ void Parser::joinModuleNames(const std::set<std::string>& modules) {
     toks_ = std::move(joined);
 }
 
+// `Task<int, throws>` is the generic `__TaskThrows<int>`, as a task that can fail differs in what `wait()` can do. The empty
+// struct of `Task<void>` is named `void`, which is how it shows, and which nothing in a program can spell by accident.
+void Parser::joinThrowingTasks() {
+    for (size_t i = 0; i + 1 < toks_.size(); ++i) {
+        if (toks_[i].kind == Tok::Ident && toks_[i].text == "__Void") toks_[i].text = "void";
+        if (toks_[i].kind != Tok::Ident || toks_[i].text != "Task" || toks_[i + 1].kind != Tok::Less) continue;
+        int depth = 0;
+        for (size_t j = i + 1; j + 1 < toks_.size(); ++j) {
+            Tok k = toks_[j].kind;
+            if (k == Tok::Less) ++depth;
+            else if (k == Tok::Greater) --depth;
+            else if (k == Tok::Shr) depth -= 2;
+            else if (k == Tok::Semi || k == Tok::LBrace || k == Tok::RBrace || k == Tok::Eof) break;
+            if (depth <= 0) break;
+            if (depth == 1 && k == Tok::Comma && toks_[j + 1].kind == Tok::KwThrows) {
+                toks_[i].text = "__TaskThrows";
+                toks_.erase(toks_.begin() + (std::ptrdiff_t)j, toks_.begin() + (std::ptrdiff_t)j + 2);
+                break;
+            }
+        }
+    }
+}
+
 void Parser::addBuiltins() {
     bool usesError = false, definesError = false, usesMap = false, definesMap = false;
+    bool usesSpawn = false, usesTask = false, definesTask = false;
+    bool usesMutex = false, definesMutex = false, usesGuard = false, definesGuard = false;
+    Loc spawnLoc;
     std::set<std::string> modules;
     Loc errorModuleLoc;
     std::string errorModule;  // a module that throws, and has objects in maps
@@ -147,9 +173,19 @@ void Parser::addBuiltins() {
         usesError = usesError || k == Tok::KwTry || k == Tok::KwThrow || k == Tok::KwThrows || k == Tok::KwCatch ||
                     (k == Tok::Ident && toks_[i].text == "Error");
         usesMap = usesMap || (k == Tok::Ident && toks_[i].text == "hashmap");
+        if (k == Tok::KwSpawn && !usesSpawn) {
+            usesSpawn = true;
+            spawnLoc = toks_[i].loc;
+        }
+        usesTask = usesTask || (k == Tok::Ident && toks_[i].text == "Task");
+        usesMutex = usesMutex || (k == Tok::Ident && toks_[i].text == "Mutex");
+        usesGuard = usesGuard || (k == Tok::Ident && toks_[i].text == "LockGuard");
         if ((k == Tok::KwClass || k == Tok::KwStruct || k == Tok::KwInterface) && i + 1 < toks_.size() && toks_[i + 1].kind == Tok::Ident) {
             definesError = definesError || toks_[i + 1].text == "Error";
             definesMap = definesMap || toks_[i + 1].text == "hashmap";
+            definesTask = definesTask || toks_[i + 1].text == "Task";
+            definesMutex = definesMutex || toks_[i + 1].text == "Mutex";
+            definesGuard = definesGuard || toks_[i + 1].text == "LockGuard";
         }
     }
     if (!errorModule.empty()) {
@@ -159,6 +195,13 @@ void Parser::addBuiltins() {
             diags_.error(errorModuleLoc, "'" + errorModule + "' uses the built-in class 'Error', but this program has its own",
                          "rename your class, or derive it from the built-in one by leaving yours out of this name", spec::Errors);
     }
+    prog_->usesThreads = usesSpawn;
+    if (usesSpawn && definesTask)
+        diags_.error(spawnLoc, "`spawn` gives a built-in class 'Task', but this program has its own",
+                     "rename your class", spec::Concurrency);
+    bool builtinTask = (usesSpawn || usesTask) && !definesTask;
+    usesError = usesError || builtinTask;  // what a task that fails holds
+    usesMutex = usesMutex || usesGuard;
     if (usesError && !definesError) {
         static const SourceFile builtin("<built-in>",
                                         "class Error {\n"
@@ -175,6 +218,19 @@ void Parser::addBuiltins() {
     }
     if (modules.count("json") && !definesError) {
         static const SourceFile builtin("<built-in>", kJsonSource);
+        addBuiltinSource(builtin);
+    }
+    if (builtinTask) {
+        static const SourceFile builtin("<built-in>", kTaskSource);
+        addBuiltinSource(builtin);
+        joinThrowingTasks();
+    }
+    if (usesMutex && !definesMutex) {
+        static const SourceFile builtin("<built-in>", kMutexSource);
+        addBuiltinSource(builtin);
+    }
+    if (usesGuard && !definesGuard) {
+        static const SourceFile builtin("<built-in>", kLockGuardSource);
         addBuiltinSource(builtin);
     }
     if (modules.count("http") && !definesError) {
@@ -599,6 +655,7 @@ void Parser::bindTemplate(const TemplateDecl& t, const std::vector<TemplateArg>&
 }
 
 std::string Parser::instanceName(const TemplateDecl& t, const std::vector<TemplateArg>& args) const {
+    if (t.nameLoc.line == 0 && t.name == "__TaskThrows") return "Task<" + std::string(args[0].type->name) + ", throws>";
     std::string name = t.name + "<";
     for (size_t i = 0; i < args.size(); ++i) {
         if (i) name += ", ";
@@ -697,6 +754,8 @@ std::vector<TemplateArg> Parser::parseTemplateArgs(const TemplateDecl& t, Loc na
 
 const Type* Parser::genericRecord(TemplateDecl& t, Loc nameLoc) {
     std::vector<TemplateArg> args = parseTemplateArgs(t, nameLoc, false);
+    if (t.nameLoc.line == 0 && (t.name == "Task" || t.name == "__TaskThrows") && args[0].type->is(Type::Kind::Void))
+        args[0].type = &prog_->findStruct("void")->type;
     if (t.nameLoc.line == 0 && t.name == "hashmap" && args[1].type->is(Type::Kind::Void))
         fail(nameLoc, "a hashmap cannot hold 'void' values", "for a key with nothing to say about it, write `hashmap<string, bool>`", spec::HashMaps);
     if (!dryRun_) return instantiateRecord(t, args, nameLoc);
@@ -704,6 +763,12 @@ const Type* Parser::genericRecord(TemplateDecl& t, Loc nameLoc) {
     patterns_.back().type.name = patterns_.back().name.c_str();
     patterns_.back().type.pattern = &patterns_.back();
     return &patterns_.back().type;
+}
+
+const Type* Parser::taskType(const Type* result, bool canFail, Loc usedAt) {
+    TemplateArg arg;
+    arg.type = result->is(Type::Kind::Void) ? &prog_->findStruct("void")->type : result;
+    return instantiateRecord(*classTemplate(canFail ? "__TaskThrows" : "Task"), {arg}, usedAt);
 }
 
 const Type* Parser::instantiateRecord(TemplateDecl& t, const std::vector<TemplateArg>& args, Loc usedAt) {
@@ -1192,6 +1257,12 @@ void Parser::failStd(Loc loc, const Token& name) {
         fail(loc, "C+ has no std:: namespace", "built-ins need no prefix: write `move(x)`", spec::Unique);
     if (n == "unordered_map" || n == "map")
         fail(loc, "C+ has no std:: namespace", "write `hashmap<K, V>`, used like std::unordered_map", spec::HashMaps);
+    if (n == "thread" || n == "jthread" || n == "async" || n == "future")
+        fail(loc, "C+ has no std:: namespace", "write `auto t = spawn f(x);`, then `t.wait()`, which gives what `f` returned", spec::Concurrency);
+    if (n == "mutex" || n == "lock_guard" || n == "scoped_lock" || n == "unique_lock")
+        fail(loc, "C+ has no std:: namespace", "write `Mutex m = Mutex();`, then `LockGuard g = LockGuard(m);` for the block that needs it", spec::Concurrency);
+    if (n == "atomic")
+        fail(loc, "C+ has no std:: namespace", "this compiler does not support atomic values yet. Use a field of a class, and a `Mutex`", spec::Concurrency);
     if (n == "shared_ptr" || n == "make_shared")
         fail(loc, "C+ has no std:: namespace",
              "a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`", spec::Classes);
@@ -1209,7 +1280,7 @@ bool Parser::isTypeStart(size_t ahead) const {
                            peek(ahead + 2).kind == Tok::Greater ||
                            (peek(ahead + 2).kind == Tok::Ident && peek(ahead + 3).kind == Tok::Comma);
                 // So is `unique`: `unique < n` is a comparison.
-                if (peek(ahead).text == "unique") return isTypeAt(ahead + 2);
+                if (peek(ahead).text == "unique" || peek(ahead).text == "local") return isTypeAt(ahead + 2);
                 return peek(ahead).text == "vector" || peek(ahead).text == "unordered_map" || peek(ahead).text == "map" ||
                        classTemplate(peek(ahead).text);
             }
@@ -1257,7 +1328,7 @@ bool Parser::isTypeAt(size_t ahead) const {
         case Tok::Ident:
             if (isTypeName(t)) return true;
             if (peek(ahead + 1).kind != Tok::Less) return false;
-            return t.text == "vector" || ((t.text == "array" || t.text == "unique") && isTypeAt(ahead + 2)) || classTemplate(t.text);
+            return t.text == "vector" || ((t.text == "array" || t.text == "unique" || t.text == "local") && isTypeAt(ahead + 2)) || classTemplate(t.text);
         default: return false;
     }
 }
@@ -1507,6 +1578,22 @@ const Type* Parser::parseBaseType(Loc& loc) {
                 }
                 loc.len = prev().loc.col + prev().loc.len - t.loc.col;
                 return Type::uniqueOf(target);
+            }
+            if (t.text == "local" && check(Tok::Less)) {
+                advance();
+                Loc inner;
+                const Type* target = parseType(inner);
+                expectCloseAngle("to close local<...>");
+                if (!target->isClass() && !dryRun_) {
+                    std::string name = target->name;
+                    fail(inner, "a local reference refers to a class object, but '" + name + "' is not a class",
+                         target->isOptional() && target->elem->isClass()
+                             ? "for one that can be empty, write `local<" + std::string(target->elem->name) + ">?`"
+                             : "a struct or a number is a value, which has no count to save work on",
+                         spec::Local);
+                }
+                loc.len = prev().loc.col + prev().loc.len - t.loc.col;
+                return Type::localOf(target);
             }
             if (t.text == "vector" && check(Tok::Less)) {
                 Loc start = t.loc;
@@ -2550,7 +2637,12 @@ ExprPtr Parser::parseUnary() {
             return std::make_unique<SizeofExpr>(t.loc, nullptr, parseUnary());  // `sizeof x` or `sizeof(x)`
         }
         case Tok::KwAwait: notYet(t.loc, "async and await");
-        case Tok::KwSpawn: notYet(t.loc, "threads (spawn)");
+        case Tok::KwSpawn: {
+            advance();
+            Loc loc = t.loc;
+            ExprPtr call = parseUnary();
+            return std::make_unique<SpawnExpr>(loc, std::move(call));
+        }
         default: return parsePostfix(parsePrimary());
     }
 }
@@ -2933,8 +3025,8 @@ ExprPtr Parser::parsePrimary() {
             if (isTypeName(t) && match(Tok::LBrace)) return parseInitList(t.loc, &prog_->findStruct(t.text)->type);
             if (t.text == "make_unique" && check(Tok::Less))
                 fail(t.loc, "C+ has no make_unique", "write `unique<Node>(...)`, which builds a new Node", spec::Unique);
-            if (t.text == "unique" && check(Tok::Less) && isTypeAt(1)) {  // `unique<Node>(args)`
-                --pos_;  // back to `unique`, to read the whole type
+            if ((t.text == "unique" || t.text == "local") && check(Tok::Less) && isTypeAt(1)) {  // `unique<Node>(args)`
+                --pos_;  // back to the word, to read the whole type
                 Loc loc;
                 const Type* ty = parseBaseType(loc);
                 if (match(Tok::LBrace)) return parseInitList(loc, ty);

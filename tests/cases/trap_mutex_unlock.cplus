@@ -1,0 +1,9 @@
+// Unlocking what this thread has not locked is a mistake that would otherwise show up somewhere else.
+int main() {
+    Mutex m = Mutex();
+    println("start");
+    m.unlock();
+    return 0;
+}
+// expect: start
+// trap: this thread unlocked a Mutex it has not locked

@@ -1,0 +1,11 @@
+// A check that fails on a thread stops the program, with where it was.
+int at(vector<int> v, int i) { return v[i]; }
+
+int main() {
+    println("before");
+    println("{}", (spawn at({1, 2}, 5)).wait());
+    return 0;
+}
+// expect: before
+// trap: out of range
+// trap: tests/cases/trap_thread_check.cplus:2

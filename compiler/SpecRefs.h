@@ -36,6 +36,7 @@ inline constexpr const char* Inheritance = "inheritance";
 inline constexpr const char* Interfaces = "interfaces";
 inline constexpr const char* Weak = "weak-references";
 inline constexpr const char* Unique = "unique-references";
+inline constexpr const char* Local = "local-references";
 inline constexpr const char* Errors = "errors";
 inline constexpr const char* Constexpr = "constexpr";
 inline constexpr const char* Generics = "generics";
@@ -53,6 +54,7 @@ inline constexpr const char* CStructs = "c-structs";
 inline constexpr const char* NewDelete = "new-and-delete";
 inline constexpr const char* Modules = "modules";
 inline constexpr const char* Http = "http";
+inline constexpr const char* Concurrency = "concurrency";
 inline constexpr const char* Status = "implementation-status";
 
 }  // namespace cplus::spec

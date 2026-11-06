@@ -1,0 +1,7 @@
+int f() throws { return 1; }
+int main() {
+    auto t = spawn f();
+    println("{}", t.wait());
+    return 0;
+}
+// error: 'wait' can fail

@@ -1,0 +1,19 @@
+// Written and read like the object it refers to.
+import json;
+class Node { public: int n = 0; string name; };
+struct Holder { local<Node> node; int extra = 1; };
+int main() throws {
+    local<Node> a = local<Node>();
+    a.n = 5;
+    a.name = "x";
+    println("{}", json::stringify(a));
+    // expect: {"n":5,"name":"x"}
+    Holder h = {a};
+    string text = json::stringify(h);
+    println("{}", text);
+    // expect: {"node":{"n":5,"name":"x"},"extra":1}
+    Holder back = try json::parse<Holder>(text);
+    println("{} {}", back.node.n, back.node.name);
+    // expect: 5 x
+    return 0;
+}

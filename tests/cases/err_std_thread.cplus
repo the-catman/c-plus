@@ -1,0 +1,6 @@
+int main() {
+    std::thread t;
+    return 0;
+}
+// error: C+ has no std:: namespace
+// error: write `auto t = spawn f(x);`, then `t.wait()`, which gives what `f` returned

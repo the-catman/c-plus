@@ -21,6 +21,7 @@ public:
     // Reads a generic again with its parameters standing for `args`, which makes an ordinary
     // function. The same arguments give the same one. Null after reporting an error.
     FuncDecl* instantiateFunction(TemplateDecl& t, const std::vector<TemplateArg>& args, Loc usedAt, int depth);
+    const Type* taskType(const Type* result, bool canFail, Loc usedAt);  // what `spawn` gives for a function with this result
     // The same for a constraint: `concept Addable = requires(T a, T b) { a + b; };`.
     struct ConceptBody {
         std::unique_ptr<FuncDecl> params;
@@ -63,6 +64,7 @@ private:
     const Type* parseBaseType(Loc& loc);
     ExprPtr parseCoalesce();
     void addBuiltins();  // what is written in C+ itself, for a program that uses it. See Builtins.h
+    void joinThrowingTasks();
     void joinModuleNames(const std::set<std::string>& modules);
     void addBuiltinSource(const SourceFile& source);  // `class Error`, for a program that uses errors and has none of its own
     void parseThrowsMark(FuncDecl& fn);

@@ -1,0 +1,70 @@
+// A Mutex keeps threads from using one thing at the same time. It is a reference, so copies are the same Mutex.
+class Account {
+public:
+    long balance = 0;
+    Mutex lock = Mutex();
+    void add(long n) {
+        lock.lock();
+        balance += n;
+        lock.unlock();
+    }
+    void addGuarded(long n) {
+        LockGuard guard = LockGuard(lock);
+        balance += n;
+    }
+    void addOrFail(long n) throws {
+        LockGuard guard = LockGuard(lock);
+        if (n < 0) throw Error("negative");
+        balance += n;
+    }
+};
+
+void addMany(Account a, int times) { for (int i = 0; i < times; i++) a.add(1); }
+void addManyGuarded(Account a, int times) { for (int i = 0; i < times; i++) a.addGuarded(1); }
+
+long total(vector<long> numbers, Mutex m, Account into) {
+    long sum = 0;
+    for (long n : numbers) sum += n;
+    LockGuard guard = LockGuard(m);
+    into.balance += sum;
+    return sum;
+}
+
+int main() {
+    Account a = Account();
+    vector<Task<void>> tasks;
+    for (int i = 0; i < 6; i++) tasks.push_back(spawn addMany(a, 5000));
+    for (int i = 0; i < 6; i++) tasks.push_back(spawn addManyGuarded(a, 5000));
+    for (auto t : tasks) t.wait();
+    println("{}", a.balance);
+    // expect: 60000
+
+    // A guard lets go on the way out of a block, an error included.
+    try {
+        a.addOrFail(-1);
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // expect: negative
+    println("{}", a.lock.try_lock());
+    // expect: true
+    println("{}", a.lock.try_lock());
+    // expect: false
+    a.lock.unlock();
+
+    // Shared by being passed.
+    Mutex m = Mutex();
+    Account b = Account();
+    vector<Task<long>> sums;
+    for (int i = 1; i <= 4; i++) sums.push_back(spawn total({i, i, i}, m, b));
+    long all = 0;
+    for (auto t : sums) all += t.wait();
+    println("{} {}", all, b.balance);
+    // expect: 30 30
+
+    // A value in a struct, and a mutex that is a field, are not in the way of copying.
+    Mutex same = m;
+    println("{}", same == m);
+    // expect: true
+    return 0;
+}

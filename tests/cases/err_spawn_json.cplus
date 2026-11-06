@@ -1,0 +1,8 @@
+import json;
+int f() { return 1; }
+int main() {
+    auto t = spawn f();
+    println("{}", json::stringify(t));
+    return 0;
+}
+// error: no public fields

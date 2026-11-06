@@ -5,6 +5,11 @@
 
 #include "reflect.h"
 
+// A build under AddressSanitizer has that to report crashes. Every other build reports them itself: see on_crash in runtime.c.
+#if !defined(CPLUS_DEBUG_RUNTIME) || defined(CPLUS_RACE_RUNTIME)
+#define CPLUS_OWN_CRASH_HANDLER
+#endif
+
 typedef struct {
     const char* data;
     int64_t length;

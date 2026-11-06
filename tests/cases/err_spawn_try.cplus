@@ -1,0 +1,7 @@
+int f() throws { return 1; }
+int main() throws {
+    auto t = spawn try f();
+    return 0;
+}
+// error: `try` belongs on waiting for the task, not on starting it
+// error: `try t.wait()`

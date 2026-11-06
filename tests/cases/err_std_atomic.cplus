@@ -1,0 +1,5 @@
+int main() {
+    std::atomic<int> n;
+    return 0;
+}
+// error: this compiler does not support atomic values yet. Use a field of a class, and a `Mutex`

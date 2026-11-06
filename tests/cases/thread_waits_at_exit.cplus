@@ -1,0 +1,22 @@
+// The program does not end while a thread is running, whether or not anything still has its task, however main ends.
+extern "C" int usleep(int microseconds);
+
+class Holds {
+public:
+    int n = 1;
+    ~Holds() { println("released"); }
+};
+void slowly(Holds h) {
+    usleep(100000);
+    println("finished {}", h.n);
+}
+
+int main() {
+    spawn slowly(Holds());
+    println("main is done");
+    return 3;
+}
+// expect: main is done
+// expect: finished 1
+// expect: released
+// exit: 3

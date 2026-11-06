@@ -1,0 +1,10 @@
+int f(int n) { return n; }
+int main() {
+    auto a = spawn f("text");
+    auto b = spawn f();
+    auto c = spawn nothing(1);
+    return 0;
+}
+// error: expected 'int' for parameter 'n' of 'f', but this is 'string'
+// error: 'f' takes 1 argument
+// error: there is no function named 'nothing'

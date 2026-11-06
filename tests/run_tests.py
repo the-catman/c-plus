@@ -20,6 +20,13 @@ in its comments. A test can use these, one per line, anywhere in the file:
   // link-c: <file>     a C file under tests/c, built with the C compiler ($CC or cc)
                        and linked into the program
   // args: <arguments>  the command-line arguments the program runs with
+  // race: <text>       the program has a race on purpose: it is only built with --race, and
+                       must stop, with this in its report
+  // no-race: <why>     the program has `spawn`, but is not built with --race
+
+A program with `spawn` is also built with --race, without and with -O, which must find
+nothing wrong, as a wrong answer from a race can take a very long time to show up. This
+is left out, with a note, if the C compiler has no ThreadSanitizer.
 
 A test that has `import http;` gets a local server, tests/http_server.py, whose addresses
 come as environment variables, so no test needs the network. These tests are left out,
@@ -37,8 +44,9 @@ Tests run at the same time, one per processor, and print in order.
 The runner also checks that every spec anchor in compiler/SpecRefs.h is a real
 heading in docs/SPEC.md, so diagnostics never point at a missing section, that every
 program in examples/ compiles without warnings, that very deeply nested code is an
-error instead of a crash, that no way of copying a unique reference compiles, and that a
-crash whose report cannot flush the program's output still says what happened. The check of
+error instead of a crash, that no way of copying a unique reference compiles, that a
+crash whose report cannot flush the program's output still says what happened, and that lines
+printed by threads stay together. The check of
 copies builds each case by itself, since one test file with many errors would pass with one
 of them missing.
 """
@@ -208,6 +216,34 @@ def check_crash_in_output(cplus, workdir):
     return ok
 
 
+def check_print_lines(cplus, workdir):
+    """What one println prints stays together, whichever thread gets there when. The lines can come in any order."""
+    source = workdir / "print_lines.cplus"
+    exe = workdir / "print_lines"
+    source.write_text("""
+void printMany(int who) {
+    for (int i = 0; i < 2000; i++) println("thread {} line {} of {} {}", who, i, 2000, "end");
+}
+int main() {
+    vector<Task<void>> tasks;
+    for (int i = 0; i < 8; i++) tasks.push_back(spawn printMany(i));
+    for (auto t : tasks) t.wait();
+    return 0;
+}
+""")
+    build = subprocess.run([cplus, "build", str(source), "-o", str(exe), "-O"], capture_output=True, text=True)
+    if build.returncode != 0:
+        print("FAIL lines printed by threads did not compile:\n  " + build.stderr[:500])
+        return False
+    run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
+    lines = run.stdout.splitlines()
+    wrong = [line for line in lines if not re.fullmatch(r"thread \d line \d+ of 2000 end", line)]
+    if run.returncode != 0 or len(lines) != 16000 or wrong:
+        print(f"FAIL lines printed by threads: exit code {run.returncode}, {len(lines)} lines, {len(wrong)} broken up, such as {wrong[:2]}")
+        return False
+    return True
+
+
 def build_c_library(source, workdir):
     obj = workdir / (source.stem + ".o")
     cc = os.environ.get("CC", "cc")
@@ -228,6 +264,16 @@ def compiler_has_http(cplus, workdir):
     source.write_text("import http;\nint main() { return 0; }\n")
     run = subprocess.run([cplus, "check", str(source)], capture_output=True, text=True)
     return "built without libcurl" not in run.stderr
+
+
+def compiler_has_race(cplus, workdir):
+    source = workdir / "has_race.cplus"
+    source.write_text("int main() { return 0; }\n")
+    run = subprocess.run([cplus, "build", str(source), "-o", str(workdir / "has_race"), "--race"], capture_output=True, text=True)
+    return run.returncode == 0
+
+
+HAS_RACE = [True]  # filled in by main
 
 
 def start_http_server():
@@ -270,7 +316,16 @@ def run_case(cplus, path, workdir):
         if wrong:
             return "compile errors should not contain: " + "; ".join(wrong) + "\n--- stderr ---\n" + build.stderr
         return None
-    for flags in ([], ["-O"], ["--debug"], ["--debug", "-O"]):
+    races = re.findall(r"//[ \t]*race:[ \t]*(.*?)[ \t]*$", text, re.M)
+    builds = [[], ["-O"], ["--debug"], ["--debug", "-O"]]
+    if races:
+        if not HAS_RACE[0]:
+            return None
+        builds = [["--race"], ["--race", "-O"]]
+        traps = races
+    elif HAS_RACE[0] and re.search(r"^[^/\n]*\bspawn\b", text, re.M) and "// no-race:" not in text:
+        builds += [["--race"], ["--race", "-O"]]
+    for flags in builds:
         problem = run_program(cplus, rel, workdir / path.stem, [*extra, *flags], expect, traps, want_exit, warnings,
                               stderr, args)
         if problem:
@@ -291,14 +346,16 @@ def run_program(cplus, rel, exe, flags, expect, traps, want_exit, warnings, stde
     env = dict(os.environ, CPLUS_CHECK_LEAKS="1", CPLUS_TEST_VARIABLE="1")
     if "--debug" in flags:
         del env["CPLUS_CHECK_LEAKS"]
+    # A build with --race runs many times slower.
+    limit = 60 if "--race" in flags else 10
     try:
-        run = subprocess.run([str(exe), *args], capture_output=True, text=True, timeout=10, env=env)
+        run = subprocess.run([str(exe), *args], capture_output=True, text=True, timeout=limit, env=env)
     except subprocess.TimeoutExpired:
-        return "timed out after 10 seconds"
+        return f"timed out after {limit} seconds"
     if traps:
         if run.returncode == 0:
             return "expected a runtime error, but the program exited normally"
-        # 134 is a runtime error, and 1 an AddressSanitizer report, which only a debug build has.
+        # 134 is a runtime error, and 1 an AddressSanitizer report, which only a debug build has. A --race build's is 134 too.
         if run.returncode != 134 and not ("--debug" in flags and run.returncode == 1):
             return f"a runtime error must exit with 134, but this was {run.returncode}\n--- stderr ---\n{run.stderr}"
         missing = [t for t in traps if t not in run.stderr]
@@ -332,6 +389,9 @@ def main():
     paths = [p for p in sorted(CASES.glob("*.cplus")) if name_filter in p.name]
     server = None
     with tempfile.TemporaryDirectory(prefix="cplus-tests-") as tmp:
+        HAS_RACE[0] = compiler_has_race(cplus, pathlib.Path(tmp))
+        if not HAS_RACE[0]:
+            print("note: leaving out --race, since the C compiler has no ThreadSanitizer")
         if any(imports_http(p) for p in paths):
             if compiler_has_http(cplus, pathlib.Path(tmp)):
                 server = start_http_server()
@@ -342,6 +402,7 @@ def main():
             ok = check_nesting_limit(cplus, pathlib.Path(tmp)) and ok
             ok = check_unique_copies(cplus, pathlib.Path(tmp)) and ok
             ok = check_crash_in_output(cplus, pathlib.Path(tmp)) and ok
+            ok = check_print_lines(cplus, pathlib.Path(tmp)) and ok
 
         def run_in_own_folder(path):
             workdir = pathlib.Path(tmp) / path.stem

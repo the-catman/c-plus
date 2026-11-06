@@ -19,12 +19,12 @@ struct TemplatePattern;
 
 struct Type {
     enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, Struct, Class, Vector, Optional, Null,
-                      Pointer, Opaque, Array, Weak, Unique,
+                      Pointer, Opaque, Array, Weak, Unique, Local,
                       // Only while a generic definition is read, to learn its shape; never in checked code.
                       TypeParam, Dependent };
     Kind kind;
     const char* name;
-    const StructDecl* decl = nullptr;  // for Kind::Struct, Kind::Class, Kind::Unique and Kind::Opaque
+    const StructDecl* decl = nullptr;  // for Kind::Struct, Kind::Class, Kind::Unique, Kind::Local and Kind::Opaque
     const Type* elem = nullptr;        // for Kind::Vector and Kind::Array, the value type of Kind::Optional, what a Kind::Pointer points to, the class of Kind::Weak
     bool constElem = false;            // for Kind::Pointer: `const int*`, which only reads what it points to
     int64_t length = 0;                // for Kind::Array: the N of `array<T, N>`; for Kind::TypeParam: which parameter it is
@@ -38,7 +38,8 @@ struct Type {
     bool isPointer() const { return kind == Kind::Pointer; }
     bool isWeak() const { return kind == Kind::Weak; }  // `weak<Node>`: a reference that does not keep the object alive
     bool isUnique() const { return kind == Kind::Unique; }  // `unique<Node>`: the one owner of an object, which is never copied
-    bool isObjectRef() const { return isClass() || isUnique(); }  // at run time, these are the same pointer
+    bool isLocal() const { return kind == Kind::Local; }  // `local<Node>`: a reference whose count only this thread works on
+    bool isObjectRef() const { return isClass() || isUnique() || isLocal(); }  // at run time, these are the same pointer
     // A C type known only by name, `extern "C" struct sqlite3;`, which C+ only points to.
     bool isOpaque() const { return kind == Kind::Opaque; }
     bool isError() const { return kind == Kind::Error; }
@@ -130,6 +131,17 @@ struct Type {
         return &it->second.second;
     }
 
+    // `local<elem>`, where elem is a class. One Type per class, like vectorOf.
+    static const Type* localOf(const Type* elem) {
+        static std::map<const Type*, std::pair<std::string, Type>> made;
+        auto [it, inserted] = made.try_emplace(elem);
+        if (inserted) {
+            it->second.first = "local<" + std::string(elem->name) + ">";
+            it->second.second = Type{Kind::Local, it->second.first.c_str(), elem->decl, elem};
+        }
+        return &it->second.second;
+    }
+
     // `elem*`, or `const elem*` with `constElem`: a raw pointer, which may be null. One
     // Type per pointee and constness, like vectorOf.
     static const Type* pointerTo(const Type* elem, bool constElem = false) {
@@ -170,7 +182,7 @@ struct TemplatePattern {
 struct Expr {
     enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
                       Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof, New,
-                      Delete, Try, Constraint, Borrow };
+                      Delete, Try, Constraint, Borrow, Spawn };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -261,6 +273,16 @@ struct SizeofExpr : Expr {
     enum class What { Size, Zero, Descriptor };
     What what = What::Size;  // see Builtins.h for `__zero(T)` and `__type_of(T)`
     SizeofExpr(Loc l, const Type* t, ExprPtr e) : Expr(Kind::Sizeof, l), target(t), operand(std::move(e)) {}
+};
+
+// `spawn f(args)` or `spawn x.m(args)`. What it needs is worked out here, and the call runs on a new thread.
+struct SpawnExpr : Expr {
+    ExprPtr call;
+    const FuncDecl* target = nullptr;    // set by Sema: the function or method it runs
+    const StructDecl* task = nullptr;    // set by Sema: its `Task`
+    const FuncDecl* finish = nullptr;    // set by Sema: the method of the task that takes the result
+    const FuncDecl* fail = nullptr;      // set by Sema: the method that takes the error, for a target that can fail
+    SpawnExpr(Loc l, ExprPtr c) : Expr(Kind::Spawn, l), call(std::move(c)) {}
 };
 
 // `try f()`: what can fail inside it passes its error on, to a catch or the caller.
@@ -851,6 +873,26 @@ inline bool holdsUnique(const Type* t) {
     return holdsUnique(t, seen);
 }
 
+// Whether a value of this type holds a local reference, inside whatever it leads to, which is what must not reach another
+// thread. `seen` stops at a type already looked at.
+inline bool holdsLocal(const Type* t, std::vector<const StructDecl*>& seen) {
+    if (t->isLocal()) return true;
+    if (t->isOptional() || t->isVector() || t->isArray() || t->isUnique() || t->isWeak() || t->isPointer()) return holdsLocal(t->elem, seen);
+    if (!t->hasFields()) return false;
+    for (const StructDecl* d : seen)
+        if (d == t->decl) return false;
+    seen.push_back(t->decl);
+    for (const StructDecl* base : t->decl->bases)
+        if (holdsLocal(&base->type, seen)) return true;
+    for (auto& f : t->decl->fields)
+        if (holdsLocal(f.type, seen)) return true;
+    return false;
+}
+inline bool holdsLocal(const Type* t) {
+    std::vector<const StructDecl*> seen;
+    return holdsLocal(t, seen);
+}
+
 // Whether this is the language's `hashmap<K, V>`, and not one that a program wrote. See Builtins.h.
 inline bool isHashmap(const Type* t) {
     return t->isStruct() && t->decl->templateOf && t->decl->templateOf->nameLoc.line == 0 && t->decl->templateOf->name == "hashmap";
@@ -888,6 +930,7 @@ struct Program {
     std::vector<std::unique_ptr<VarDecl>> constants;
     std::vector<std::unique_ptr<TemplateDecl>> templates;
     bool allowNewDelete = false;  // `[[allow(new_delete)]];` at the top of the file
+    bool usesThreads = false;     // it has a `spawn`: printing then has to keep lines together, and main to wait
 
     // Whether this program can ask about types while it runs, which only json and reflect do.
     bool usesDescriptors() const {

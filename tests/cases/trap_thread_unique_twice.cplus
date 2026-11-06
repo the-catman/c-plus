@@ -1,0 +1,14 @@
+// What is taken out of a task by waiting is not there the second time.
+class Node { public: int n = 1; };
+unique<Node> make() { return unique<Node>(); }
+
+int main() {
+    Task<unique<Node>> t = spawn make();
+    unique<Node> first = t.wait();
+    println("{}", first.n);
+    unique<Node> second = t.wait();
+    println("{}", second.n);
+    return 0;
+}
+// expect: 1
+// trap: has been moved away

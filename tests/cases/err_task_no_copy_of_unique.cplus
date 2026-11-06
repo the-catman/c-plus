@@ -1,0 +1,8 @@
+class N { public: int x = 1; };
+int f(unique<N> u) { return u.x; }
+int main() {
+    unique<N> a = unique<N>();
+    auto t = spawn f(a);
+    return 0;
+}
+// error: has one owner

@@ -27,6 +27,9 @@ static bool canConvert(const Type* from, const Type* to) {
     // A unique reference only comes from another, since an object that may be shared has no one owner.
     if (to->isUnique()) return from->isUnique() && canConvert(from->elem, to->elem);
     if (from->isUnique() && to->isClass()) return canConvert(from->elem, to);  // it gives up being unique
+    // A local reference only comes from another, and only gives one, as the count of what it refers to cannot also be used by other threads.
+    if (to->isLocal()) return from->isLocal() && canConvert(from->elem, to->elem);
+    if (from->isLocal() && !to->isOptional()) return false;
     if (to->isWeak()) {
         // `null`, an object that may be null, or a weak reference to a class deriving from it.
         if (from->isNull()) return true;
@@ -195,6 +198,7 @@ static std::string placeName(const VarDecl* v, const std::string& path) {
     return path.empty() ? v->name : v->name + "." + path;
 }
 static std::string zeroOf(const Type* t) {
+    if (t->isUnique() || t->isLocal()) return std::string(t->name) + "(...)";
     if (t->is(K::Bool)) return "false";
     if (t->is(K::Char)) return "'\\0'";
     if (t->is(K::String)) return "\"\"";
@@ -657,7 +661,7 @@ void Sema::checkNewStructs() {
     }
 }
 
-static const char* const kBuiltinConstraints[] = {"Comparable", "Number", "Integer", "Floating", "Hashable", "__Hashable", "__JsonWritable", "__JsonReadable"};
+static const char* const kBuiltinConstraints[] = {"Comparable", "Number", "Integer", "Floating", "Hashable", "__Hashable", "__JsonWritable", "__JsonReadable", "__Copyable"};
 
 // Each generic's name must be free, and each of its constraints must exist.
 void Sema::checkTemplateNames(Program& program) {
@@ -1062,6 +1066,7 @@ static std::string whatCLacks(const Type* t, std::set<const StructDecl*>& seen) 
     if (t->isClass()) return "a class reference";
     if (t->isWeak()) return "a weak reference";
     if (t->isUnique()) return "a unique reference";
+    if (t->isLocal()) return "a local reference";
     if (t->isOptional()) return "an optional";
     if (t->isArray()) return t->length == 0 ? "an array with no elements" : whatCLacks(t->elem, seen);
     if (t->isPointer()) {
@@ -1548,6 +1553,73 @@ void Sema::checkCanFail(const FuncDecl& callee, Loc loc) {
     }
 }
 
+// The call is checked as it is written, as what it needs is worked out here, except that it does not have to say what happens
+// if it fails: that goes in the task, for `wait()` to throw. What its arguments do is another matter, as they run here.
+const Type* Sema::checkSpawn(SpawnExpr& s, Flow& flow) {
+    Expr& call = *s.call;
+    if (call.kind == Expr::Kind::Try) {
+        diags_.error(call.loc, "`try` belongs on waiting for the task, not on starting it",
+                     "write `auto t = spawn f();`, then `try t.wait()`, which is where its error comes out", spec::Concurrency);
+        return Type::error();
+    }
+    if (call.kind != Expr::Kind::Call && call.kind != Expr::Kind::MethodCall) {
+        diags_.error(call.loc, "`spawn` runs a call on a thread, and this is not one",
+                     "write `spawn f(x)` or `spawn object.method(x)`", spec::Concurrency);
+        return Type::error();
+    }
+    const Expr* outer = spawned_;
+    spawned_ = &call;
+    const Type* result = checkExpr(call, flow);
+    spawned_ = outer;
+    if (result->isError()) return result;
+    const FuncDecl* target = nullptr;
+    if (call.kind == Expr::Kind::Call) {
+        auto& c = static_cast<CallExpr&>(call);
+        target = c.target ? c.target : c.method;
+    } else {
+        auto& m = static_cast<MethodCallExpr&>(call);
+        if (!m.lowered) target = m.method;
+    }
+    if (!target || target->isExtern) {
+        diags_.error(call.loc, std::string("`spawn` runs a function or method written in C+, and this is ") + (target ? "a C function" : "built in"),
+                     "write a function that does this, and spawn that", spec::Concurrency);
+        return Type::error();
+    }
+    // Its count is not safe to work on from two threads. This looks at the types that are passed, and so cannot see a reference
+    // that a function keeps somewhere, or that `x.get()` lent: a build with --race catches those.
+    auto refuseLocal = [&](const Type* t, Loc loc, const std::string& what) {
+        if (t->isError() || !holdsLocal(t)) return false;
+        diags_.error(loc, what + " would give another thread a local reference" + (t->isLocal() ? "" : ", which " + q(t) + " holds"),
+                     "use a class reference, whose count works across threads, or give the thread a copy of what it needs from the object", spec::Local);
+        return true;
+    };
+    const auto& args = call.kind == Expr::Kind::Call ? static_cast<CallExpr&>(call).args : static_cast<MethodCallExpr&>(call).args;
+    bool refused = false;
+    for (size_t i = 0; i < args.size(); ++i)
+        refused = refuseLocal(args[i]->type ? args[i]->type : Type::error(), args[i]->loc, "this argument") || refused;
+    if (call.kind == Expr::Kind::MethodCall) {
+        const Expr& recv = *static_cast<MethodCallExpr&>(call).receiver;
+        const Expr* inner = recv.kind == Expr::Kind::Borrow ? static_cast<const BorrowExpr&>(recv).operand.get() : &recv;
+        refused = refuseLocal(inner->type, recv.loc, "calling a method on this") || refused;
+    } else if (static_cast<CallExpr&>(call).method) {
+        refused = refuseLocal(&fn_->owner->type, call.loc, "calling a method on `this`") || refused;
+    }
+    refused = refuseLocal(target->retType, call.loc, "what this call returns") || refused;
+    if (refused) return Type::error();
+    const Type* task = parser_.taskType(target->retType, target->isThrows, call.loc);
+    adoptTypes();
+    s.target = target;
+    s.task = task->decl;
+    auto* decl = const_cast<StructDecl*>(s.task);
+    FuncDecl* finish = decl->ownMethod("__finish");
+    FuncDecl* fail = decl->ownMethod("__fail");
+    requestMethod(finish);
+    if (fail) requestMethod(fail);
+    s.finish = finish;
+    s.fail = fail;
+    return task;
+}
+
 void Sema::checkThrow(ThrowStmt& st, Flow& flow) {
     if (st.value) {
         const Type* t = checkExpr(*st.value, flow);
@@ -1687,6 +1759,7 @@ void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
     if (t->is(K::Void)) help = "this expression produces no value";
     else if (t->isWeak()) help = "write `!" + spelled(e, "w") + ".expired()`, or `if (auto x = " + spelled(e, "w") + ".lock())`, which also keeps the object alive";
     else if (t->isUnique()) help = "a unique reference is never empty. For one that can be, write `" + std::string(t->name) + "?`";
+    else if (t->isLocal()) help = "a local reference is never empty. For one that can be, write `" + std::string(t->name) + "?`";
     else if (t->isOptional()) help = boolOptionalHelp(spelled(e, "b"));
     else if (t->is(K::Char)) help = "a char is not a condition; compare it, e.g. `c != '\\0'` or `c == 'y'`";
     else if (t->isVector() || t->is(K::String))
@@ -2007,6 +2080,14 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
                                : "the object is not a '" + std::string(to->elem->name) + "'";
     } else if (from->isNull() && to->isUnique()) {
         help = "a unique reference is never empty. For one that can be, write `" + std::string(to->name) + "?`";
+    } else if (from->isObjectRef() && to->isLocal()) {
+        help = from->isLocal() ? "the object is not a '" + std::string(to->elem->name) + "'"
+                               : "a '" + std::string(from->name) + "' may be used by other threads, whose count a local reference would upset. Write `" +
+                                     std::string(to->name) + "(...)` to build a new object";
+    } else if (from->isNull() && to->isLocal()) {
+        help = "a local reference is never empty. For one that can be, write `" + std::string(to->name) + "?`";
+    } else if (from->isLocal() && (to->isClass() || to->isWeak())) {
+        help = "write `" + spelled(e, "x") + ".get()`, which lends the object, and takes care that no other thread gets it";
     } else if (from->isUnique() && to->isWeak()) {
         help = "write `" + spelled(e, "u") + ".get()`, which lends the object";
     } else if (from->isWeak()) {
@@ -2134,7 +2215,7 @@ void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
                          "list every element", spec::Arrays);
         return;
     }
-    if (type->isError() || (!type->hasFields() && !type->isUnique())) {
+    if (type->isError() || (!type->hasFields() && !type->isUnique() && !type->isLocal())) {
         if (!type->isError())
             diags_.error(list.loc, "a { } list builds a struct, a class object, a vector or an array, but " + q(type) +
                                        " is expected here",
@@ -2389,7 +2470,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         var = nullptr;
         path.clear();
     }
-    if (baseType->isUnique()) {  // the field of the object it owns
+    if (baseType->isUnique() || baseType->isLocal()) {  // the field of the object it owns or refers to
         if (baseIsPlace && var) requireAssigned(flow, var, path, baseType, m.base->loc);
         bool isVariable = m.base->kind == Expr::Kind::Name && static_cast<NameExpr&>(*m.base).implicitField < 0;
         Loc loc = m.base->loc;
@@ -2672,8 +2753,8 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
         if (t->isOptional())
             help = "write `" + n + "?." + u.arrowMember + "`, which is null when " + n + " is, or unwrap it first: `if (auto v = " +
                    n + ") ... v." + u.arrowMember + "`";
-        else if (t->hasFields() || t->isUnique())
-            help = std::string(t->isClass() ? "a class reference is used directly, so " : t->isUnique() ? "a unique reference is used directly, so " : "") +
+        else if (t->hasFields() || t->isUnique() || t->isLocal())
+            help = std::string(t->isClass() ? "a class reference is used directly, so " : t->isUnique() ? "a unique reference is used directly, so " : t->isLocal() ? "a local reference is used directly, so " : "") +
                    "fields and methods are reached with '.': write `" + n + "." + u.arrowMember + "`";
         diags_.error(u.loc, "'->' follows a pointer, but " + q(n) + " is " + q(t), help, spec::Pointers);
         return;
@@ -2683,8 +2764,8 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
                ")`";
     else if (t->isClass())
         help = "a class reference is used directly: write `" + n + "` without '*'";
-    else if (t->isUnique())
-        help = "a unique reference is used directly: `" + n + ".field`, or `" + n + ".get()` for the object";
+    else if (t->isUnique() || t->isLocal())
+        help = std::string("a ") + (t->isUnique() ? "unique" : "local") + " reference is used directly: `" + n + ".field`, or `" + n + ".get()` for the object";
     diags_.error(u.loc, "'*' follows a pointer, but this is " + q(t), help, spec::Pointers);
 }
 
@@ -3285,6 +3366,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             break;
         }
         case Expr::Kind::Call: result = checkCall(static_cast<CallExpr&>(e), flow); break;
+        case Expr::Kind::Spawn: result = checkSpawn(static_cast<SpawnExpr&>(e), flow); break;
         case Expr::Kind::New: result = checkNew(static_cast<NewExpr&>(e), flow); break;
         case Expr::Kind::Delete: result = checkDelete(static_cast<DeleteExpr&>(e), flow); break;
         case Expr::Kind::Sizeof: {
@@ -3522,7 +3604,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             call.path = std::move(found);
             requestMethod(m);
             if (!canAccess(*m->owner, m->access, o)) reportAccess(*m->owner, m->name, true, m->access, nameLoc);
-            checkCanFail(*m, nameLoc);
+            if (&call != spawned_) checkCanFail(*m, nameLoc);
             requireAssigned(flow, thisVar(), "", &o->type, call.loc);
             if (!m->isConst && fn_->isConst)
                 diags_.error(nameLoc, "const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
@@ -3598,7 +3680,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     }
     FuncDecl* fn = it->second;
     call.target = fn;
-    checkCanFail(*fn, nameLoc);
+    if (&call != spawned_) checkCanFail(*fn, nameLoc);
     checkArgs(call.args, *fn, flow, call.loc, q(fn->name));
     return fn->retType;
 }
@@ -3650,9 +3732,12 @@ struct Deduction {
             case K::Unique:
                 if (a->isUnique()) match(p->elem, a->elem);
                 break;
+            case K::Local:
+                if (a->isLocal()) match(p->elem, a->elem);
+                break;
             case K::Dependent: {
                 if (a->isOptional()) a = a->elem;
-                if (a->isWeak() || a->isUnique()) a = a->elem;
+                if (a->isWeak() || a->isUnique() || a->isLocal()) a = a->elem;
                 if (!a->hasFields()) break;
                 if (const StructDecl* made = findMade(*a->decl, p->pattern->tmpl))
                     for (size_t i = 0; i < p->pattern->args.size(); ++i) {
@@ -3752,7 +3837,7 @@ const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow)
     finishLists(fn);
     if (!fn) return Type::error();
     call.target = fn;
-    checkCanFail(*fn, nameLoc);
+    if (&call != spawned_) checkCanFail(*fn, nameLoc);
     for (size_t i = 0; i < call.args.size(); ++i) {
         Expr& a = *call.args[i];
         if (a.kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(a).explicitType) continue;
@@ -3784,7 +3869,7 @@ bool Sema::checkConstraints(TemplateDecl& t, const std::vector<TemplateArg>& arg
 static std::string jsonProblem(const Program& program, const Type* t, bool reading, const std::string& path, std::vector<const StructDecl*>& seen) {
     std::string where = path.empty() ? q(t) : q(path) + ", a " + q(t) + ",";
     if (t->isNumber() || t->is(K::Bool) || t->is(K::Char) || t->is(K::String) || t->isWeak()) return "";
-    if (t->isOptional() || t->isVector() || t->isArray() || t->isUnique()) return jsonProblem(program, t->elem, reading, path, seen);
+    if (t->isOptional() || t->isVector() || t->isArray() || t->isUnique() || t->isLocal()) return jsonProblem(program, t->elem, reading, path, seen);
     if (isJsonValue(t)) return "";
     if (isHashmap(t)) {
         const Type* key = t->decl->templateArgs[0].type;
@@ -3975,7 +4060,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     }
     if (t->isOptional()) return checkOptionalMethod(call, flow, t);
     if (t->isWeak()) return checkWeakMethod(call, flow, t);
-    if (t->isUnique()) {
+    if (t->isUnique() || t->isLocal()) {
         if (call.name == "get" && call.args.empty()) {  // lends the object, as a counted reference
             call.uniqueGet = true;
             return t->elem;
@@ -4074,7 +4159,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     call.path = toStart;
     call.path.insert(call.path.end(), found.begin() + 1, found.end());
     requestMethod(m);
-    checkCanFail(*m, call.loc);
+    if (&call != spawned_) checkCanFail(*m, call.loc);
     if (!canAccess(*m->owner, m->access, &sd)) reportAccess(*m->owner, m->name, true, m->access, call.loc);
     if (!call.qualifier.empty() && m->isPure)
         diags_.error(call.loc, q(m->owner->name + "::" + m->name) + " has no body, so it cannot be called directly",
@@ -4570,7 +4655,7 @@ const Type* Sema::checkDynamicCast(CastExpr& c, const Type* from, const Type* to
         diags_.error(c.operand->loc, "dynamic_cast needs a class object, but this is " + q(from),
                      from->isWeak() ? "the object may be gone. Write `dynamic_cast<" + std::string(toClass->name) + "?>(" +
                                           spelled(*c.operand, "w") + ".lock())`"
-                     : from->isUnique() ? "write `dynamic_cast<" + std::string(toClass->name) + "?>(" + spelled(*c.operand, "u") + ".get())`"
+                     : from->isUnique() || from->isLocal() ? "write `dynamic_cast<" + std::string(toClass->name) + "?>(" + spelled(*c.operand, "u") + ".get())`"
                                         : "",
                      spec::Inheritance);
         return to;
@@ -4597,6 +4682,11 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     if (c.dynamic) return checkDynamicCast(c, from, to);
     if (from == to) {  // a copy, which is what `T(x)` is when x is a T
         rejectCopy(*c.operand);
+        return to;
+    }
+    if (from->isLocal() || to->isLocal()) {
+        diags_.error(c.loc, "a cast cannot change a reference that only this thread counts, as this one from " + q(from) + " to " + q(to) + " would",
+                     "a local reference converts by itself to one of a base class. `x.get()` lends the object", spec::Local);
         return to;
     }
     if (from->isUnique() || to->isUnique()) {

@@ -1,0 +1,49 @@
+// A value holding a local reference cannot be passed to a thread, however deep it is in what is passed.
+class Node { public: int n = 0; int read() const { return n; } };
+struct Holder { local<Node> node; };
+class Owner {
+public:
+    local<Node> held;
+    Owner(local<Node> h) : held(h) {}
+    int read() const { return 1; }
+    Task<int> start() { return spawn read(); }
+};
+class Deep { public: Owner owner; Deep(Owner o) : owner(o) {} };
+int takesLocal(local<Node> x) { return x.n; }
+int takesHolder(Holder h) { return 1; }
+int takesVector(vector<local<Node>> v) { return 1; }
+int takesOptional(local<Node>? o) { return 1; }
+int takesMap(hashmap<string, local<Node>> m) { return 1; }
+int takesDeep(Deep d) { return 1; }
+local<Node> gives() { return local<Node>(); }
+template<typename T> int takesAny(T x) { return 1; }
+
+int main() {
+    local<Node> a = local<Node>();
+    Holder h = {a};
+    Owner o = Owner(a);
+    vector<local<Node>> v = {a};
+    hashmap<string, local<Node>> m;
+    Deep d = Deep(o);
+    spawn takesLocal(a);
+    spawn takesHolder(h);
+    spawn takesVector(v);
+    spawn takesOptional(a);
+    spawn takesMap(m);
+    spawn takesDeep(d);
+    spawn takesAny(a);
+    spawn a.read();
+    spawn o.read();
+    spawn gives();
+    return 0;
+}
+// error: this argument would give another thread a local reference
+// error: this argument would give another thread a local reference, which 'Holder' holds
+// error: this argument would give another thread a local reference, which 'vector<local<Node>>' holds
+// error: this argument would give another thread a local reference, which 'hashmap<string, local<Node>>' holds
+// error: this argument would give another thread a local reference, which 'Deep' holds
+// error: calling a method on this would give another thread a local reference
+// error: calling a method on this would give another thread a local reference, which 'Owner' holds
+// error: calling a method on `this` would give another thread a local reference, which 'Owner' holds
+// error: what this call returns would give another thread a local reference
+// error: use a class reference, whose count works across threads

@@ -1,0 +1,7 @@
+int main() {
+    int n = 1;
+    auto t = spawn n;
+    return 0;
+}
+// error: `spawn` runs a call on a thread, and this is not one
+// error: write `spawn f(x)` or `spawn object.method(x)`

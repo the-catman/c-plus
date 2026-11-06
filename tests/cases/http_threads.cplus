@@ -1,0 +1,68 @@
+// Requests on threads at once, each thread with connections of its own.
+import http;
+import json;
+
+extern "C" string? getenv(string name);
+
+string base() { return getenv("CPLUS_TEST_HTTP") ?? "missing"; }
+string ws() { return getenv("CPLUS_TEST_WS") ?? "missing"; }
+
+long getMany(string url, int times) throws {
+    long total = 0;
+    for (int i = 0; i < times; i++) total += (try http::get(url)).body.size();
+    return total;
+}
+
+string echoOver(string url, string text) throws {
+    http::WebSocket socket = try http::connect(url);
+    try socket.send(text);
+    string back = "";
+    if (auto m = try socket.receive()) back = m.data;
+    socket.close();
+    return back;
+}
+
+int main() throws {
+    // `http::get` itself, as the plan has it.
+    Task<http::Response, throws> one = spawn http::get(base() + "/hello");
+    println("{}", (try one.wait()).body);
+    // expect: hello
+
+    // Its error comes out of wait().
+    auto gone = spawn http::get("http://127.0.0.1:1/");
+    try {
+        println("{}", (gone.wait()).status);
+    } catch (http::Error e) {
+        println("{}", e.kind);
+    } catch (Error e) {
+        println("some other error");
+    }
+    // expect: connect
+
+    vector<Task<long, throws>> tasks;
+    for (int i = 0; i < 8; i++) tasks.push_back(spawn getMany(base() + "/hello", 20));
+    long total = 0;
+    for (auto t : tasks) total += try t.wait();
+    println("{}", total);
+    // expect: 800
+
+    // A request with a { } list.
+    auto sent = spawn http::send({.method = "POST", .url = base() + "/echo", .body = "from a thread"});
+    json::Value doc = try json::parse<json::Value>((try sent.wait()).body);
+    println("{}", doc.get("body")?.text() ?? "none");
+    // expect: from a thread
+
+    vector<Task<string, throws>> sockets;
+    for (int i = 0; i < 4; i++) sockets.push_back(spawn echoOver(ws() + "/ws/echo", "message " + to_string(i)));
+    for (auto t : sockets) println("{}", try t.wait());
+    // expect: message 0
+    // expect: message 1
+    // expect: message 2
+    // expect: message 3
+
+    // A thread still using libcurl as main ends is seen through, with nothing left to look like a leak.
+    spawn getMany(base() + "/slow?seconds=0.1", 1);
+    println("main is done");
+    // expect: main is done
+    return 0;
+}

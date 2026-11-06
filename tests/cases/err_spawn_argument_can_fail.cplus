@@ -1,0 +1,7 @@
+int f(int n) { return n; }
+int g() throws { return 1; }
+int main() {
+    auto a = spawn f(g());
+    return 0;
+}
+// error: 'g' can fail, so its call must say what happens then

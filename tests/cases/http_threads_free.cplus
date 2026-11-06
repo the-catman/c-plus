@@ -1,0 +1,36 @@
+// What libcurl keeps for a thread goes when the thread does, so that many threads over time do not use up connections.
+import http;
+
+extern "C" {
+    string? getenv(string name);
+    int open(string path, int flags);
+    int close(int fd);
+}
+
+// The lowest number that is free, which rises if something is left open.
+int nextFile() {
+    int fd = open("/dev/null", 0);
+    close(fd);
+    return fd;
+}
+
+int main() throws {
+    string url = (getenv("CPLUS_TEST_HTTP") ?? "missing") + "/hello";
+    int before = nextFile();
+    for (int i = 0; i < 40; i++) {
+        auto t = spawn http::get(url);
+        try t.wait();
+    }
+    // Waiting for a task is not waiting for its thread to end, which may take a moment longer.
+    bool settled = false;
+    for (int tries = 0; tries < 200 && !settled; tries++) {
+        settled = nextFile() - before < 5;
+        if (!settled) (spawn pause()).wait();
+    }
+    println("{}", settled);
+    // expect: true
+    return 0;
+}
+
+extern "C" int usleep(int microseconds);
+void pause() { usleep(10000); }

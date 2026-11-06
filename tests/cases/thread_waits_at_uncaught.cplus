@@ -1,0 +1,14 @@
+// An error that gets out of main still lets a thread finish.
+extern "C" int usleep(int microseconds);
+void slowly() {
+    usleep(100000);
+    println("finished");
+}
+
+int main() throws {
+    spawn slowly();
+    throw Error("main failed");
+}
+// expect: finished
+// exit: 1
+// stderr: uncaught error: Error

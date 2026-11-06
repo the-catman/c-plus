@@ -1,0 +1,11 @@
+// Running out of stack on a thread is reported as it is on the main thread.
+int down(int n) { return down(n + 1) + 1; }
+
+int main() {
+    println("before");
+    println("{}", (spawn down(0)).wait());
+    return 0;
+}
+// expect: before
+// trap: ran out of stack
+// no-race: very deep recursion can overrun what ThreadSanitizer keeps for itself, which then cannot report anything

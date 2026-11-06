@@ -1,0 +1,10 @@
+// With no `spawn`, a program can have a Task, a Mutex and a LockGuard of its own.
+struct Task { string title; bool done = false; };
+class Mutex { public: int id = 1; };
+class LockGuard { public: int id = 2; };
+int main() {
+    Task t = {"write tests"};
+    println("{} {} {} {}", t.title, t.done, Mutex().id, LockGuard().id);
+    return 0;
+}
+// expect: write tests false 1 2

@@ -1,0 +1,24 @@
+// `spawn` looks at the types it passes, so what `x.get()` lends gets past it. A build with --race catches that: the count is
+// worked on from two threads, and only one of them is being careful.
+class Node { public: int n = 0; };
+
+int useIt(Node n) {
+    int total = 0;
+    for (int i = 0; i < 2000; i++) {
+        Node copy = n;
+        total += copy.n;
+    }
+    return total;
+}
+
+int main() {
+    local<Node> a = local<Node>();
+    auto t = spawn useIt(a.get());
+    for (int i = 0; i < 2000; i++) {
+        local<Node> copy = a;
+        a.n = copy.n;
+    }
+    println("{}", t.wait());
+    return 0;
+}
+// race: two threads used the same memory at the same time

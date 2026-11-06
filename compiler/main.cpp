@@ -32,7 +32,9 @@ static const char* kUsage =
     "the libraries of C functions declared with extern \"C\", e.g. -lsqlite3.\n"
     "-Wno-new-delete turns off the warning for new and delete in every file.\n"
     "--debug makes a debug build: slower, but memory errors stop the program with a stack\n"
-    "trace, and leaks are reported at exit. Build and run take it, with or without -O.\n";
+    "trace, and leaks are reported at exit. Build and run take it, with or without -O.\n"
+    "--race makes a build that stops the program, with a report, when two threads use the same\n"
+    "memory at the same time and one of them is changing it. It cannot go with --debug.\n";
 
 struct Options {
     std::string command;
@@ -40,6 +42,7 @@ struct Options {
     std::string output;
     bool optimize = false;
     bool debug = false;
+    bool race = false;
     bool emitLLVM = false;
     bool warnNewDelete = true;  // -Wno-new-delete turns the warning off
     std::vector<std::string> linkArgs;  // -l and -L, passed on to the linker
@@ -114,7 +117,13 @@ static int build(const Options& opts, const std::string& exePath) {
     if (!frontEnd(file, diags, program, opts.warnNewDelete)) return 1;
     if (opts.command == "check") return 0;
 
-    const std::string runtimeLib = opts.debug ? CPLUS_RUNTIME_LIB_DEBUG : CPLUS_RUNTIME_LIB;
+    const std::string runtimeLib = opts.race ? CPLUS_RUNTIME_LIB_RACE : opts.debug ? CPLUS_RUNTIME_LIB_DEBUG : CPLUS_RUNTIME_LIB;
+    if (runtimeLib.empty() && !opts.emitLLVM && opts.race) {
+        std::fprintf(stderr, "error: --race needs ThreadSanitizer, which the C compiler did not have when this "
+                             "compiler was built\n  = help: install the sanitizer libraries for your C compiler, "
+                             "such as `libclang-rt-18-dev` on Debian or Ubuntu, then run cmake and build again\n");
+        return 1;
+    }
     if (runtimeLib.empty() && !opts.emitLLVM) {
         std::fprintf(stderr, "error: --debug needs AddressSanitizer, which the C compiler did not have when this "
                              "compiler was built\n  = help: install the sanitizer libraries for your C compiler, "
@@ -122,7 +131,7 @@ static int build(const Options& opts, const std::string& exePath) {
         return 1;
     }
 
-    Codegen codegen(file, CodegenOptions{opts.optimize, opts.debug});
+    Codegen codegen(file, CodegenOptions{opts.optimize, opts.debug, opts.race});
     std::string error;
     if (!codegen.generate(program, error)) {
         std::fprintf(stderr, "error: %s\n", error.c_str());
@@ -139,12 +148,14 @@ static int build(const Options& opts, const std::string& exePath) {
     }
     std::vector<std::string> link{CPLUS_LINKER, objPath, runtimeLib};
     if (opts.debug) link.push_back("-fsanitize=address");
+    if (opts.race) link.push_back("-fsanitize=thread");
     link.insert(link.end(), opts.linkArgs.begin(), opts.linkArgs.end());
 #ifdef CPLUS_CURL_LINK
     for (auto& import : program.imports)
         if (import.path == "http") link.insert(link.end(), {CPLUS_CURL_LINK, "-lpthread"});
 #endif
     link.push_back("-lm");  // the math functions, part of the C standard library
+    if (program.usesThreads) link.push_back("-lpthread");
     link.insert(link.end(), {"-o", exePath});
     int rc = runProcess(link);
     std::error_code ec;
@@ -192,6 +203,8 @@ static int compilerMain(int argc, char** argv) {
             opts.optimize = true;
         } else if (a == "--debug") {
             opts.debug = true;
+        } else if (a == "--race") {
+            opts.race = true;
         } else if (a == "-g" || a.rfind("-fsanitize", 0) == 0) {
             return usageError("'" + a + "' is not an option of cplus; write --debug, which turns on line numbers and "
                               "the memory checks together");
@@ -216,6 +229,8 @@ static int compilerMain(int argc, char** argv) {
             return usageError("only one source file can be given; multi-file programs are not supported yet");
         }
     }
+    if (opts.debug && opts.race)
+        return usageError("--debug and --race cannot be used together, as each watches the program's memory in its own way; build once with each");
     if (opts.input.empty()) return usageError("no source file given");
     if (fs::path(opts.input).extension() != ".cplus") {
         std::fprintf(stderr, "error: %s is not a C+ source file\n  = help: C+ source files end in .cplus\n",

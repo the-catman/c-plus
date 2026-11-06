@@ -1,0 +1,6 @@
+int main() {
+    std::mutex m;
+    return 0;
+}
+// error: C+ has no std:: namespace
+// error: write `Mutex m = Mutex();`, then `LockGuard g = LockGuard(m);` for the block that needs it

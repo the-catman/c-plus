@@ -73,7 +73,7 @@ const char* ConstValue::typeName() const {
 
 bool isBuiltinConstraintName(const std::string& name) {
     return name == "Comparable" || name == "Number" || name == "Integer" || name == "Floating" || name == "Hashable" ||
-           name == "__Hashable" || name == "__JsonWritable" || name == "__JsonReadable" || name == "same_as" || name == "derived_from";
+           name == "__Hashable" || name == "__JsonWritable" || name == "__JsonReadable" || name == "__Copyable" || name == "same_as" || name == "derived_from";
 }
 
 std::optional<bool> builtinConstraint(const std::string& name, const Type* first, const Type* second) {
@@ -82,6 +82,7 @@ std::optional<bool> builtinConstraint(const std::string& name, const Type* first
     if (name == "Integer") return first->isInteger();
     if (name == "Floating") return first->isFloating();
     if (name == "Hashable" || name == "__Hashable") return isHashable(first);
+    if (name == "__Copyable") return !holdsUnique(first);
     if (name == "same_as") return first == second;
     if (name == "derived_from") return first->isClass() && second->isClass() && first->decl->derivesFrom(second->decl);
     return std::nullopt;

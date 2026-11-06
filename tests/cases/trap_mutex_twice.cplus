@@ -1,0 +1,11 @@
+// A thread that locks a Mutex twice would wait for itself forever, so the program stops instead.
+int main() {
+    Mutex m = Mutex();
+    m.lock();
+    println("locked");
+    m.lock();
+    println("never");
+    return 0;
+}
+// expect: locked
+// trap: this thread locked a Mutex it has already locked

@@ -39,6 +39,9 @@ long square(long n) { return n * n; }
 | Generics | `template<typename T> T largest(T a, T b) { ... }`, called as `largest(1, 2)` or `largest<long>(1, 2)`. `template<typename T> class Stack { ... };`, used as `Stack<int>` with its arguments always written. `template<typename T, int N> struct Buffer { array<T, N> items; };`. `T()` is the default value of T |
 | Constraints | `template<Comparable T>`, `template<Number T>`, `template<Integer T>`, `template<Floating T>`, `template<Hashable T>`, `template<Speaker T>` for an interface or class. Your own: `template<typename T> concept Addable = requires(T a, T b) { a + b; };` |
 | Unique references | `unique<Node> a = unique<Node>("x");` is the one owner, never empty: `a.name`, `a.go()`. `unique<Node> b = move(a);` leaves `a` with no value. `take(move(b))` hands it over, `lend(a.get())` lends it as a `Node`. `unique<Node>?` can be empty. Copying is an error |
+| Local references | `local<Node> a = local<Node>("x");` counts without atomic steps, so only one thread can use it. `local<Node> b = a;` shares it. `a.name`, `a.go()`, `a.get()` lends it as a `Node`. `local<Node>?` can be empty. Cannot go into `spawn` |
+| Threads | `Task<long> t = spawn sum(v);` or `auto t = spawn obj.method(x);`, then `t.wait()`, `t.done()`. `Task<void>` for no result. The function `throws`: `Task<long, throws>`, and `try t.wait()`. Arguments are copied, class references are shared. The program waits for its threads when `main` returns. An error that no `wait()` can see fails the program |
+| Locks | `Mutex m = Mutex();`, `m.lock()`, `m.unlock()`, `m.try_lock()`. `LockGuard g = LockGuard(m);` unlocks at the end of the block. Locking twice on one thread **stops the program**. `cplus run app.cplus --race` finds what is not protected |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
 | Hash maps | `hashmap<string, int> m = {{"a", 1}};` is a **value**, copied like a vector, that keeps the order entries were added in. `m["b"] = 2`, `m["b"]++`, `m[k].push_back(x)`. `m[k]` adds a missing key with a default value, as in C++, or **stops the program** if `V` has none. `m.at(k)` (**stops the program** if missing), `m.get(k)` (a `V?`), `m.contains(k)`, `m.count(k)`, `m.insert({k, v})` (keeps what is there), `m.erase(k)`, `m.size()`, `m.empty()`, `m.clear()`, `m.keys()`, `m.values()`. `for (auto e : m)` with `e.first`, `e.second`. Prints as `{"a": 1}`. A key is a number, `char`, `bool`, string, pointer or class reference, or an optional, vector, array or struct of those |
@@ -102,6 +105,14 @@ long square(long n) { return n * n; }
 | `std::shared_ptr<Node>`, `std::make_shared<Node>()` | `Node n = Node();`: a class variable is already a counted reference |
 | `std::unique_ptr<Node>`, `std::make_unique<Node>(x)`, `std::move(a)` | `unique<Node>`, `unique<Node>(x)`, `move(a)`. Reading `a` after `move(a)` is an error |
 | `u->x`, `*u`, `if (u)`, `u.reset()` on a unique reference | `u.x`, `u.get()`. It is never empty; `unique<Node>?` can be, with `opt = null` |
+| `std::thread t(f, x); t.join();`, `std::async(f, x)`, `pthread_create` | `auto t = spawn f(x);`, then `t.wait()`. A task can be let go of: it keeps running, and the program waits for it at the end |
+| `std::future<int> r = ...; r.get();` | `Task<int> r = spawn f();`, then `r.wait()`, which can be called again |
+| `spawn try f()`, `try spawn f()` | `auto t = spawn f();`, then `try t.wait()` |
+| `spawn println("x")`, `spawn usleep(1)`, `spawn P(1)` | `spawn` takes a C+ function or method. Write a function that does it |
+| `std::mutex m;`, `std::lock_guard<std::mutex> g(m);` | `Mutex m = Mutex();`, `LockGuard g = LockGuard(m);` |
+| `std::atomic<int>` | planned. Use a class field and a `Mutex` |
+| `-fsanitize=thread` | `cplus run app.cplus --race` |
+| `Node n = a;` from a `local<Node>` | `a.get()` lends it. A `local<Node>` only converts to another |
 | `std::weak_ptr<Node>` | `weak<Node>`, with `lock()`, which gives a `Node?`, `expired()` and `reset()` |
 | `w == null`, `if (w)` on a `weak<Node>` | `w.expired()`, `if (auto n = w.lock())`. A weak reference is not a condition |
 | `dynamic_cast<Dog*>(a)`, `static_cast<Dog*>(a)` | a class variable is already a reference: `dynamic_cast<Dog?>(a)` |
@@ -198,7 +209,7 @@ long square(long n) { return n * n; }
 | HTTP | `http::fetch`, with async; a body in pieces instead of all at once; keeping cookies |
 | JSON | other names for fields, marking a field to leave out |
 | Reflection | reading a field through its `reflect::Field`, methods |
-| Memory | `local<T>`; pointers into vectors and strings |
+| Memory | pointers into vectors and strings |
 | Types | enums, `const` fields, types nested in a type or a function, `short` and other small integers |
 | Functions | default arguments, `auto` parameters and return types, lambdas |
 | Statements | `switch` |
@@ -209,7 +220,7 @@ long square(long n) { return n * n; }
 | Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
 | More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare`; parsing numbers from strings |
 | More C | variable arguments, vectors, C variables like `errno`, callbacks |
-| Concurrency | `spawn f()` → `Task<T>`; later `async`/`await` |
+| Concurrency | `async`/`await`, waiting with a time limit, atomic values, condition variables, channels |
 
 ## Tools
 
@@ -220,6 +231,7 @@ cplus build file.cplus -o app [-O] [--emit-llvm]
 cplus build app.cplus -lsqlite3 -L dir   # link C libraries, as with a C compiler; `import http;` needs no -l
 cplus build app.cplus -Wno-new-delete    # no warning for new and delete
 cplus run app.cplus --debug              # slower, but catches memory errors, with a stack trace
+cplus run app.cplus --race               # slower, but stops at memory that threads use without a lock; not with --debug
 ```
 
 Compiler errors say what is wrong, how to fix it, and which spec section explains the rule.

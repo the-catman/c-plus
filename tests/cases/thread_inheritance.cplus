@@ -1,0 +1,87 @@
+// Methods on a thread find what they would find anywhere else: through interfaces, bases and every part of an object.
+interface Speaker { string speak() const; };
+class Named {
+public:
+    string name;
+    Named(string n) : name(n) {}
+    string called() const { return "called " + name; }
+    virtual string title() const { return "named"; }
+};
+class Counted {
+public:
+    int count = 7;
+    int counted() const { return count; }
+    virtual int weight() const { return 1; }
+};
+class Dog : public Named, public Counted, public Speaker {
+public:
+    Dog(string n) : Named(n) {}
+    string speak() const override { return name + " says woof"; }
+    string title() const override { return "dog"; }
+    int weight() const override { return 30; }
+};
+template<typename T> class Stack {
+    vector<T> items;
+public:
+    void push(T x) { items.push_back(x); }
+    long size() const { return items.size(); }
+    T top() const { return items.back(); }
+};
+struct Big {
+    array<int, 100> numbers;
+    int total() const {
+        int sum = 0;
+        for (int n : numbers) sum += n;
+        return sum;
+    }
+    Task<int> startTotal() { return spawn total(); }
+};
+struct Small {
+    string text = "small";
+    string read() const { return text; }
+    Task<string> start() { return spawn read(); }
+};
+
+int main() {
+    Dog d = Dog("Rex");
+    println("{}", (spawn d.speak()).wait());
+    // expect: Rex says woof
+    println("{}", (spawn d.called()).wait());
+    // expect: called Rex
+    println("{}", (spawn d.counted()).wait());
+    // expect: 7
+    println("{}", (spawn d.title()).wait());
+    // expect: dog
+    println("{}", (spawn d.weight()).wait());
+    // expect: 30
+    println("{}", (spawn d.Named::title()).wait());
+    // expect: named
+
+    Speaker s = d;
+    println("{}", (spawn s.speak()).wait());
+    // expect: Rex says woof
+    Counted c = d;
+    println("{} {}", (spawn c.weight()).wait(), (spawn c.counted()).wait());
+    // expect: 30 7
+    Named n = d;
+    println("{}", (spawn n.title()).wait());
+    // expect: dog
+
+    Stack<int> st = Stack<int>();
+    st.push(3);
+    println("{} {}", (spawn st.size()).wait(), (spawn st.top()).wait());
+    // expect: 1 3
+
+    // A struct too large to pass around in registers, and one that holds what is counted.
+    Big big;
+    big.numbers[3] = 4;
+    big.numbers[99] = 5;
+    println("{}", (spawn big.total()).wait());
+    // expect: 9
+    println("{}", big.startTotal().wait());
+    // expect: 9
+    Small small;
+    println("{}", small.start().wait());
+    // expect: small
+    return 0;
+}

@@ -1,0 +1,8 @@
+struct Task { string title; };
+int f() { return 1; }
+int main() {
+    auto a = spawn f();
+    return 0;
+}
+// error: `spawn` gives a built-in class 'Task', but this program has its own
+// error: rename your class

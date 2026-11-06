@@ -1,0 +1,11 @@
+int f() throws { return 1; }
+int g() { return 1; }
+int main() {
+    Task<int> a = spawn f();
+    Task<int, throws> b = spawn g();
+    Task<long> c = spawn g();
+    return 0;
+}
+// error: 'Task<int, throws>'
+// error: 'Task<int>'
+// error: 'Task<long>'

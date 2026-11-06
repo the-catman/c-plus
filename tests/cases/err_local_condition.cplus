@@ -1,0 +1,10 @@
+class Node { public: int n = 0; };
+int main() {
+    local<Node> a = local<Node>();
+    if (a) println("yes");
+    a->n = 1;
+    *a;
+    return 0;
+}
+// error: a local reference is never empty
+// error: a local reference is used directly

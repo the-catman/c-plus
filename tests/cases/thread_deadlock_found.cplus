@@ -1,0 +1,18 @@
+// Two locks taken in opposite orders can leave two threads stuck, even on a run where they do not get stuck.
+int main() {
+    Mutex a = Mutex();
+    Mutex b = Mutex();
+    a.lock();
+    b.lock();
+    b.unlock();
+    a.unlock();
+    b.lock();
+    a.lock();
+    a.unlock();
+    b.unlock();
+    Task<int> t = spawn zero();
+    println("{}", t.wait());
+    return 0;
+}
+int zero() { return 0; }
+// race: threads can get stuck waiting for each other's Mutex

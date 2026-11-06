@@ -1,0 +1,17 @@
+// The same when the task is let go of after the error happened.
+extern "C" int usleep(int microseconds);
+class Sorry : public Error { public: Sorry() : Error("too late") {} };
+int fail() throws { throw Sorry(); }
+
+int main() {
+    {
+        auto t = spawn fail();
+        while (!t.done()) usleep(100);
+        println("done");
+    }
+    println("never");
+    return 0;
+}
+// expect: done
+// exit: 1
+// stderr: uncaught error in a task that nothing waited for: Sorry

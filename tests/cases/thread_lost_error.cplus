@@ -1,0 +1,12 @@
+// An error that nothing waits for cannot go unnoticed. As with one that gets out of main, the program fails.
+int fail() throws { throw Error("no one is waiting"); }
+
+int main() {
+    println("before");
+    spawn fail();
+    return 0;
+}
+// expect: before
+// exit: 1
+// stderr: uncaught error in a task that nothing waited for: Error {message: "no one is waiting"}
+// stderr: keep the task, and catch it

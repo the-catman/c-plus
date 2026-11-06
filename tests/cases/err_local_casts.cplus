@@ -1,0 +1,9 @@
+class Node { public: int n = 0; };
+int main() {
+    local<Node> a = local<Node>();
+    Node b = static_cast<Node>(a);
+    local<Node> c = static_cast<local<Node>>(b);
+    return 0;
+}
+// error: a cast cannot change a reference that only this thread counts
+// error: `x.get()` lends the object

@@ -11,6 +11,7 @@ namespace cplus {
 struct CodegenOptions {
     bool optimize = false;  // run the LLVM -O2 pipeline
     bool debug = false;     // line numbers, AddressSanitizer and the checks only debug builds make
+    bool race = false;      // line numbers and ThreadSanitizer
 };
 
 class Codegen {

@@ -1,0 +1,6 @@
+struct P { int x; };
+int main() {
+    auto a = spawn P(1);
+    return 0;
+}
+// error: `spawn` runs a function or method written in C+, and this is built in

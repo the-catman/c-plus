@@ -1,0 +1,153 @@
+// Everything that can be shared between threads, with no race and nothing left over: counts, buffers, weak references.
+class Node {
+public:
+    int value;
+    Node? next;
+    Node(int v) : value(v) {}
+};
+struct Payload {
+    string name;
+    vector<int> items;
+    Node node;
+};
+
+// Copies of one object, made and let go of in many threads.
+int churnObject(Node n) {
+    int total = 0;
+    for (int i = 0; i < 20000; i++) {
+        Node copy = n;
+        total += copy.value;
+    }
+    return total;
+}
+
+// A string and a vector copied from one buffer, and written to, which gives each thread its own.
+int churnValues(string s, vector<int> v) {
+    int total = 0;
+    for (int i = 0; i < 3000; i++) {
+        string t = s;
+        t += "x";
+        vector<int> w = v;
+        w.push_back(i);
+        w[0] = i;
+        total += int(t.size()) + int(w.size());
+    }
+    return total;
+}
+
+int churnWeak(weak<Node> w) {
+    int seen = 0;
+    for (int i = 0; i < 20000; i++) {
+        if (auto n = w.lock()) seen += n.value > 0 ? 1 : 0;
+    }
+    return seen >= 0 ? 1 : 0;
+}
+
+int readPayload(Payload p) { return int(p.name.size()) + int(p.items.size()) + p.node.value; }
+
+hashmap<string, int> buildMap(hashmap<string, int> m, int who) {
+    for (int i = 0; i < 200; i++) m[to_string(who) + "/" + to_string(i)] = i;
+    return m;
+}
+
+string describe(int n) { return format("{}-{}", n, to_string(n * 2)); }
+
+// Reads what it was given, while another thread does the same, and whichever ends last frees it.
+int readAll(vector<int> v, string s) {
+    int total = int(s.size());
+    for (int i = 0; i < 200; i++)
+        for (int n : v) total += n;
+    return total;
+}
+
+// The last reference goes away in another thread, with the whole chain behind it.
+void letGo(Node n) {}
+
+class Announces {
+public:
+    ~Announces() { println("destroyed"); }
+};
+void endsHere(Announces a) {}
+
+int main() {
+    Node shared = Node(1);
+    vector<Task<int>> tasks;
+    for (int i = 0; i < 8; i++) tasks.push_back(spawn churnObject(shared));
+    int total = 0;
+    for (auto t : tasks) total += t.wait();
+    println("{}", total);
+    // expect: 160000
+
+    string text = "shared text that is long enough to have a buffer of its own";
+    vector<int> numbers = {1, 2, 3};
+    tasks = {};
+    for (int i = 0; i < 8; i++) tasks.push_back(spawn churnValues(text, numbers));
+    total = 0;
+    for (auto t : tasks) total += t.wait();
+    println("{} {} {}", total, text.size(), numbers);
+    // expect: 1536000 59 [1, 2, 3]
+
+    // Weak references are locked while the object goes away.
+    Node short_lived = Node(5);
+    weak<Node> w = short_lived;
+    tasks = {};
+    for (int i = 0; i < 4; i++) tasks.push_back(spawn churnWeak(w));
+    short_lived = Node(6);
+    for (auto t : tasks) println("{}", t.wait());
+    // expect: 1
+    // expect: 1
+    // expect: 1
+    // expect: 1
+    println("{}", w.expired());
+    // expect: true
+
+    // Buffers that this thread lets go of first, so that one of the others frees them.
+    total = 0;
+    for (int round = 0; round < 100; round++) {
+        vector<int> v = {1, 2, 3, 4};
+        string s = "a string long enough for a buffer " + to_string(round);
+        Task<int> first = spawn readAll(v, s);
+        Task<int> second = spawn readAll(v, s);
+        v = {};
+        s = "";
+        total += first.wait() + second.wait();
+    }
+    println("{}", total);
+    // expect: 407180
+
+    Payload p = {"name", {1, 2}, Node(3)};
+    println("{}", (spawn readPayload(p)).wait());
+    // expect: 9
+
+    hashmap<string, int> start = {{"start", 1}};
+    vector<Task<hashmap<string, int>>> maps;
+    for (int i = 0; i < 4; i++) maps.push_back(spawn buildMap(start, i));
+    long sizes = 0;
+    for (auto t : maps) sizes += t.wait().size();
+    println("{} {}", sizes, start.size());
+    // expect: 804 1
+
+    vector<Task<string>> strings;
+    for (int i = 0; i < 4; i++) strings.push_back(spawn describe(i));
+    for (auto t : strings) println("{}", t.wait());
+    // expect: 0-0
+    // expect: 1-2
+    // expect: 2-4
+    // expect: 3-6
+
+    Node chain = Node(0);
+    for (int i = 0; i < 1000; i++) {
+        Node head = Node(i);
+        head.next = chain;
+        chain = head;
+    }
+    Task<void> gone = spawn letGo(move(chain));
+    gone.wait();
+
+    Task<void> ended = spawn endsHere(Announces());
+    ended.wait();
+    // expect: destroyed
+    println("end");
+    // expect: end
+    return 0;
+}

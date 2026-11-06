@@ -1,0 +1,147 @@
+// `local<T>` is a class reference whose count only this thread works on, which is what makes it quicker.
+class Node {
+public:
+    string name;
+    int n = 0;
+    Node(string s) : name(s) {}
+    ~Node() { println("{} gone", name); }
+    string hello() const { return "hello " + name; }
+    virtual string kind() const { return "node"; }
+    void bump() { n++; }
+};
+class Leaf : public Node {
+public:
+    Leaf(string s) : Node(s) {}
+    string kind() const override { return "leaf"; }
+};
+struct Holder {
+    local<Node> node;
+    int extra = 1;
+};
+class Owner {
+public:
+    local<Node> held;
+    Owner(local<Node> h) : held(h) {}
+};
+class Chain {
+public:
+    int value;
+    local<Chain>? next;
+    Chain(int v) : value(v) {}
+};
+
+local<Node> make(string s) { return local<Node>(s); }
+string nameOf(local<Node> n) { return n.name; }
+void bumpIt(local<Node> n) { n.bump(); }
+template<typename T> T same(T x) { return x; }
+string lend(Node n) { return n.name; }
+
+int main() {
+    local<Node> a = local<Node>("a");
+    println("{} {}", a.name, a.hello());
+    // expect: a hello a
+
+    // A copy is the same object, as with any class reference.
+    local<Node> b = a;
+    b.name = "changed";
+    println("{} {}", a.name, a == b);
+    // expect: changed true
+    bumpIt(a);
+    bumpIt(b);
+    println("{}", a.n);
+    // expect: 2
+    println("{}", nameOf(a));
+    // expect: changed
+    a.name = "a";
+
+    // Everything that holds one counts it.
+    {
+        vector<local<Node>> v = {a, a};
+        v.push_back(b);
+        println("{}", v.size());
+        // expect: 3
+        vector<local<Node>> w = v;
+        w.pop_back();
+        println("{} {}", w.size(), v[2].name);
+        // expect: 2 a
+        Holder h = {a, 2};
+        println("{} {}", h.node.name, h.extra);
+        // expect: a 2
+        Holder copy = h;
+        copy.node.name = "through a copy";
+        println("{}", h.node.name);
+        // expect: through a copy
+        Owner o = Owner(a);
+        println("{}", o.held.name);
+        // expect: through a copy
+        hashmap<string, local<Node>> m;
+        m["x"] = a;
+        println("{}", m.at("x").name);
+        // expect: through a copy
+        array<local<Node>, 2> arr = {a, b};
+        println("{}", arr[1].name);
+        // expect: through a copy
+        a.name = "a";
+    }
+
+    // Optionals.
+    local<Node>? maybe = null;
+    println("{}", maybe == null);
+    // expect: true
+    maybe = a;
+    println("{}", maybe?.name ?? "none");
+    // expect: a
+    if (auto n = maybe) println("{}", n.name);
+    // expect: a
+    maybe = null;
+
+    // Virtual methods, and references to base classes.
+    local<Leaf> leaf = local<Leaf>("leaf");
+    println("{}", leaf.kind());
+    // expect: leaf
+    local<Node> asNode = leaf;
+    println("{}", asNode.kind());
+    // expect: leaf
+    println("{}", same(asNode).name);
+    // expect: leaf
+
+    // Lending it as a plain reference, when no other thread gets it.
+    println("{}", lend(a.get()));
+    // expect: a
+    Node plain = a.get();
+    println("{}", plain.name);
+    // expect: a
+
+    // The last one to go frees it, here.
+    {
+        local<Node> only = make("temporary");
+        local<Node> two = only;
+    }
+    // expect: temporary gone
+    {
+        local<Node> replaced = local<Node>("old");
+        replaced = local<Node>("new");
+        // expect: old gone
+    }
+    // expect: new gone
+
+    // A long chain of them is freed without running out of stack.
+    local<Chain> chain = local<Chain>(0);
+    for (int i = 1; i < 200000; i++) {
+        local<Chain> head = local<Chain>(i);
+        head.next = chain;
+        chain = head;
+    }
+    println("{}", chain.value);
+    // expect: 199999
+
+    // Printing shows the object, as it does for any reference.
+    local<Chain> shown = local<Chain>(7);
+    println("{}", shown);
+    // expect: Chain {value: 7, next: null}
+    println("{}", leaf.name);
+    // expect: leaf
+    // expect: leaf gone
+    // expect: a gone
+    return 0;
+}

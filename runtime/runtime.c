@@ -17,6 +17,52 @@
 // AddressSanitizer can catch a later use of it.
 #ifdef CPLUS_DEBUG_RUNTIME
 void __sanitizer_print_stack_trace(void);
+#endif
+
+// A third copy is built with CPLUS_RACE_RUNTIME too, under ThreadSanitizer, for programs built with --race.
+#ifdef CPLUS_RACE_RUNTIME
+// ThreadSanitizer cannot see what a fence does, so it takes this to be a race on what was just freed. The stronger form costs
+// nothing that matters in a build like this.
+#define LAST_RELEASE __ATOMIC_ACQ_REL
+
+int __tsan_get_report_data(void* report, const char** description, int* count, int* stack_count, int* mop_count, int* loc_count,
+                           int* mutex_count, int* thread_count, int* unique_tid_count, void** sleep_trace, unsigned long trace_size);
+
+// Read by ThreadSanitizer as the program starts. A race stops the program, as any other error found while it runs does.
+const char* __tsan_default_options(void) {
+    return "halt_on_error=1:exitcode=134:second_deadlock_stack=1:report_signal_unsafe=0"
+#ifdef CPLUS_SYMBOLIZER
+           ":external_symbolizer_path='" CPLUS_SYMBOLIZER "'"
+#endif
+        ;
+}
+
+// Called by ThreadSanitizer just after its report, so this is what is left on the screen. Says what it means in C+'s terms.
+void __tsan_on_report(void* report) {
+    const char* description = "";
+    int unused = 0;
+    void* no_trace = NULL;
+    __tsan_get_report_data(report, &description, &unused, &unused, &unused, &unused, &unused, &unused, &unused, &no_trace, 0);
+    const char* message = "threads were used in a way that is not safe";
+    const char* help = "the report above shows where";
+    if (strstr(description, "data-race")) {
+        message = "two threads used the same memory at the same time, and at least one of them was changing it";
+        help = "the report above shows both places. Protect them with a Mutex, or give each thread a copy of its own";
+    } else if (strstr(description, "lock-order")) {
+        message = "threads can get stuck waiting for each other's Mutex, as they lock them in different orders";
+        help = "the report above shows where. Lock them in the same order everywhere";
+    } else if (strstr(description, "use-after-free")) {
+        message = "memory was used by one thread after another had freed it";
+        help = "the report above shows both places";
+    }
+    fflush(stdout);
+    fprintf(stderr, "fatal error: %s\n  = help: %s\n", message, help);
+}
+#else
+#define LAST_RELEASE __ATOMIC_RELEASE
+#endif
+
+#if defined(CPLUS_DEBUG_RUNTIME) && !defined(CPLUS_RACE_RUNTIME)
 const char* __asan_get_report_description(void);
 
 // Read by AddressSanitizer as the program starts. Leaks are left to report_leaks below.
@@ -79,7 +125,8 @@ _Noreturn static void stop_program(void) {
     _Exit(134);
 }
 
-#ifndef CPLUS_DEBUG_RUNTIME
+#ifdef CPLUS_OWN_CRASH_HANDLER
+#include <stdbool.h>
 // A plain build has no AddressSanitizer to report a crash, so it says what happened here.
 // Output printed so far would otherwise be lost. The program is out of stack when the
 // address it could not reach is close to its stack pointer.
@@ -88,7 +135,20 @@ _Noreturn static void stop_program(void) {
 // crash too, or abort if the C library notices. The handler then runs again, since it does not block
 // its own signal, and the message still gets out: only the flush uses stdio, and the message
 // goes through write().
-static void write_error(const char* message) {
+//
+// ThreadSanitizer keeps a stack of its own, which very deep recursion can fill before the real one, and then run over what it
+// keeps next to that, without a word. From there on, whatever goes through it can crash: each function it checks and each C
+// function it watches, as nearly all are. A crash inside the handler ends the program at once, since it blocks signals there.
+// So in such a build the handler is not checked, and uses only what ThreadSanitizer has nothing to do with.
+#ifdef CPLUS_RACE_RUNTIME
+#include <sys/syscall.h>
+#define NOT_CHECKED __attribute__((disable_sanitizer_instrumentation))
+void __tsan_func_entry(void* caller);
+#else
+#define NOT_CHECKED
+#endif
+
+NOT_CHECKED static void write_error(const char* message) {
     size_t left = strlen(message);
     while (left) {
         ssize_t wrote = write(STDERR_FILENO, message, left);
@@ -98,16 +158,22 @@ static void write_error(const char* message) {
     }
 }
 
-static const char* const out_of_stack =
+static const char out_of_stack[] =
     "fatal error: the program ran out of stack\n"
     "  = help: if a function calls itself, check that its recursion stops; a very large local array can go "
     "in a vector instead\n";
-static const char* const bad_memory =
+static const char bad_memory[] =
     "fatal error: the program used memory it does not own\n"
     "  = help: a pointer may be wrong; run with --debug to see where\n";
 
-static void on_crash(int signal_number, siginfo_t* info, void* context) {
+NOT_CHECKED static void on_crash(int signal_number, siginfo_t* info, void* context) {
     (void)signal_number;
+    // One thread reports. If another crashes too, it waits for the first to end the program.
+    static _Thread_local char this_thread;
+    static char* crashing = NULL;
+    char* first = NULL;
+    if (!__atomic_compare_exchange_n(&crashing, &first, &this_thread, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) && first != &this_thread)
+        for (;;) pause();
     // Where the handler got to: nowhere yet, flushing, or past that.
     static volatile sig_atomic_t state = 0;
     static const char* volatile message = NULL;
@@ -126,6 +192,16 @@ static void on_crash(int signal_number, siginfo_t* info, void* context) {
 #endif
     const uintptr_t near = 64 * 1024;
     message = stack && address + near >= stack && address <= stack + near ? out_of_stack : bad_memory;
+#if defined(CPLUS_RACE_RUNTIME) && defined(__linux__)
+    bool in_its_stack = false;
+#ifdef __x86_64__
+    in_its_stack = (uintptr_t)((ucontext_t*)context)->uc_mcontext.gregs[REG_RIP] - (uintptr_t)__tsan_func_entry < 128;
+#endif
+    fflush_unlocked(stdout);
+    if (in_its_stack || message == out_of_stack) syscall(SYS_write, STDERR_FILENO, out_of_stack, sizeof out_of_stack - 1);
+    else syscall(SYS_write, STDERR_FILENO, bad_memory, sizeof bad_memory - 1);
+    syscall(SYS_exit_group, 134);
+#endif
     struct sigaction again;
     memset(&again, 0, sizeof again);
     again.sa_sigaction = on_crash;
@@ -133,7 +209,10 @@ static void on_crash(int signal_number, siginfo_t* info, void* context) {
     sigemptyset(&again.sa_mask);
     sigaction(SIGABRT, &again, NULL);
     state = 1;
-    fflush(stdout);
+    // Another thread may have the output and be stuck, so the message does not wait for it for long.
+    int tries = 0;
+    while (ftrylockfile(stdout) != 0 && ++tries < 100) usleep(10000);
+    if (tries < 100) fflush(stdout);
     state = 2;
     write_error(message);
     stop_program();
@@ -190,7 +269,8 @@ void cplus_start(void) {
     // on the internet about the program during a stack trace, which takes seconds and has no
     // business happening when a program crashes.
     unsetenv("DEBUGINFOD_URLS");
-#else
+#endif
+#ifdef CPLUS_OWN_CRASH_HANDLER
     // The handler needs a stack of its own, since the program's may be what ran out. It can
     // run again if it crashes itself, which it is written to handle.
     static char crash_stack[64 * 1024];
@@ -348,7 +428,7 @@ void* cplus_dynamic_cast(void* object, void* vtable) {
 // Returns 1 when this was the last reference, so the caller destroys the object.
 int32_t cplus_release(void* object) {
     if (!object) return 0;
-    int64_t before = __atomic_fetch_sub((int64_t*)object, 1, __ATOMIC_RELEASE);
+    int64_t before = __atomic_fetch_sub((int64_t*)object, 1, LAST_RELEASE);
     if (before == 1) {
         __atomic_thread_fence(__ATOMIC_ACQUIRE);
         return 1;
@@ -482,7 +562,7 @@ static const int64_t new_deleted = 0x2165746c65642b43;  // "C+delte!"
 static int64_t live_new_blocks;
 
 // In a debug build the header is off limits to the program, so `a[-1]` is caught too.
-#ifdef CPLUS_DEBUG_RUNTIME
+#if defined(CPLUS_DEBUG_RUNTIME) && !defined(CPLUS_RACE_RUNTIME)
 void __asan_poison_memory_region(const volatile void* address, size_t size);
 void __asan_unpoison_memory_region(const volatile void* address, size_t size);
 #define HIDE_NEW_HEADER(h) __asan_poison_memory_region(h, sizeof *(h))

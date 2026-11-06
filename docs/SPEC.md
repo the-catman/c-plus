@@ -1926,7 +1926,22 @@ and any memory from `new` that was never deleted. The test suite runs every prog
 Raw [pointers](#pointers) are not counted: a pointer does not keep alive what it points
 to. Memory from [`new`](#new-and-delete) stays until `delete` frees it.
 
-Planned: `local<T>` for non-atomic sharing that cannot cross threads.
+[`local<T>`](#local-references) is a reference for code on one thread whose counting is too slow.
+
+### Local references
+
+`local<Node>` is a class reference whose count only one thread works on. The atomic steps that keep a count safe across threads are what make counting cost anything. In a loop that does nothing but copy references, a local reference is about twenty times faster. Most programs would never notice, so reach for it only when counting shows up in what you measure.
+
+```cpp
+local<Node> a = local<Node>("x");     // builds a new Node
+local<Node> b = a;                    // the same object
+a.name = "y";                         // b.name is "y" too
+```
+
+- It is used as a class reference: `a.name`, `a.go()`, shared by copies and freed with the last, `==` for being the same object, in vectors, structs and so on. It is never empty, and `local<Node>?` can be.
+- **A local reference only comes from another**, and only gives one, since the object's count must not also be used by other threads: `Node n = a;` and `local<Node> a = n;` are errors. `local<Dog>` converts to `local<Animal>`. `a.get()` lends the object as a `Node`, as for a [unique reference](#unique-references).
+- **It cannot go into `spawn`.** The compiler refuses any argument, object or result whose type holds one, however deep, in a field of a class of a struct in a vector.
+- That looks at types, so what `a.get()` lent, or what a method did with `this`, can still reach a thread, where the count would go wrong. [`--race`](#the-race-check) reports that.
 
 ### Weak references
 
@@ -2200,8 +2215,103 @@ with the same name.
 
 ## Concurrency
 
-Planned. `spawn f()` runs `f` on a thread and returns a `Task<T>`. Later,
-JavaScript-style `async`/`await` with a built-in event loop.
+`spawn` runs a call on a new thread, and gives a `Task` to get its result from. Later comes
+JavaScript-style `async`/`await`, with a built-in event loop.
+
+```cpp
+long sum(vector<long> numbers) {
+    long total = 0;
+    for (long n : numbers) total += n;
+    return total;
+}
+
+Task<long> a = spawn sum(first);
+auto b = spawn sum(second);           // the same, with the type worked out
+println("{}", a.wait() + b.wait());
+```
+
+**What `spawn` takes** is a call of a function or a method written in C+: `spawn f(x)`, `spawn object.method(x)`. The arguments, and what a
+method is called on, are worked out right there, in order, before the thread starts, so an error or a change after that has nothing to do with
+them. For a built-in such as `println`, a C function or a constructor, write a function that does it, and spawn that. Generic functions work,
+and `try` does not belong on the call, since its error goes in the task.
+
+**A thread gets values of its own.** Strings, vectors, hashmaps, structs and arrays are values, so the thread has a copy, which is cheap, and
+what it changes does not show anywhere else. The method of a struct runs on a copy of the struct. A `unique` reference is handed over with
+`move`. A **class reference is shared**, so two threads reach the same object: that is what [`Mutex`](#mutex) is for.
+
+**The type of a task** says what `wait()` gives, and whether it can fail:
+
+| The function | `spawn` gives | `wait()` |
+|--------------|---------------|----------|
+| `int f()` | `Task<int>` | gives an `int` |
+| `void f()` | `Task<void>` | gives nothing to use |
+| `int f() throws` | `Task<int, throws>` | gives an `int`, and is written `try t.wait()` |
+| `void f() throws` | `Task<void, throws>` | gives nothing to use, and is written `try t.wait()` |
+
+- `t.wait()` waits for the thread, and gives what the function returned, or throws what it threw, as what it really is. It can be called again, and
+  gives the same. A value that holds a `unique` reference is taken out by the first one, and using it after a second **stops the program**.
+- `t.done()` says whether the thread has finished, without waiting.
+- A `Task` is a class reference, so copies are the same task. It prints as `Task<int> {...}`.
+
+**Letting go of a task does not stop its thread or wait for it**, so `spawn save(data);` is fine by itself, unlike C++'s `std::async`. What it
+would have returned is dropped. An error that nothing can ever see any more is not: as with one that gets out of `main`, it is printed, and the
+program fails with exit code 1. To handle it, keep the task and wait for it.
+
+**The program does not end while a thread is running.** When `main` returns, it waits for all of them, as Node does for what it has pending, so work
+is not cut off without a word, and then it exits with what `main` returned. A thread that never ends keeps the program running. C's `exit()` does not wait.
+
+**A runtime error in any thread stops the whole program**, with the message and the place, as it would on the main thread. Each thread has 8 MiB of
+stack. Running out of it is reported as on the main thread.
+
+**What one call of `print` or `println` prints stays together**, in a program with `spawn`. The lines of different threads can come in any order.
+
+**A destructor runs on whichever thread lets go of the object last.** An object's count is atomic, so it is safe to share the references themselves.
+
+### Mutex
+
+Two threads must not use the same memory at the same time if either of them is changing it, which in C+ can only be a class's field or what a
+pointer leads to. A wrong result from that can take a very long time to show up. A `Mutex` keeps them apart:
+
+```cpp
+class Account {
+public:
+    long balance = 0;
+    Mutex lock = Mutex();
+
+    void add(long n) {
+        LockGuard guard = LockGuard(lock);    // locks it, and unlocks it at the end of the block, however it ends
+        balance += n;
+    }
+};
+```
+
+- `Mutex m = Mutex();` is a class object, so copies are the same mutex. `m.lock()`, `m.unlock()` and `m.try_lock()` work as in C++.
+- `LockGuard g = LockGuard(m);` unlocks it again when the block ends, an error included. Prefer it, since a `lock()` with no `unlock()` on the way out of an error
+  leaves every other thread waiting forever.
+- A thread that locks a mutex it already holds, or unlocks one it does not hold, **stops the program**, instead of the undefined behavior of C++.
+
+### The race check
+
+`cplus run app.cplus --race` makes a build with [ThreadSanitizer](https://clang.llvm.org/docs/ThreadSanitizer.html), which stops the program at the
+first use of memory by two threads at the same time, when at least one is changing it. It reports both places, whether or not this run gave a wrong answer. It also reports locks that
+are taken in different orders, which can leave two threads stuck, even on a run that did not get stuck.
+
+```
+WARNING: ThreadSanitizer: data race
+  Read of size 4 at 0x720800000030 by thread T2:
+    #0 cplus.addMany app.cplus:2:68
+  Previous write of size 4 at 0x720800000030 by thread T1:
+    #0 cplus.addMany app.cplus:2:68
+  ...
+fatal error: two threads used the same memory at the same time, and at least one of them was changing it
+  = help: the report above shows both places. Protect them with a Mutex, or give each thread a copy of its own
+```
+
+- It finds what happens on the run it watches, so run what the threads really do.
+- Code that mostly uses memory can be about 15 times slower with it, and take about 8 times the memory, while code that mostly computes is hardly slowed. It cannot go with `--debug`, as each watches memory in its own way. It needs the same libraries as `--debug`, such as `libclang-rt-18-dev` on Debian or Ubuntu.
+- ThreadSanitizer keeps a stack of its own, which very deep recursion can overrun. Reports of running out of stack may then be cut short, or, rarely, be only the system's own. Such a program is out of stack in every build.
+
+Not yet: `async` and `await`, waiting with a time limit, atomic values, condition variables and channels, and starting a C function directly.
 
 ---
 
@@ -2274,11 +2384,12 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Default template arguments, `requires` clauses, generic methods, working out a generic type's arguments | planned |
 | Pointers into vectors and strings | planned |
 | `unique<T>` references and `move(x)` | implemented |
-| `local<T>` references | planned |
+| `local<T>` references | implemented |
 | C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; reading C headers | planned |
 | Modules `http`, `json` and `reflect`, and raw strings | implemented |
 | `http::fetch`, modules of your own | planned |
-| Threads, async | planned |
+| Threads: `spawn`, `Task`, `Mutex`, `LockGuard`, `--race` | implemented |
+| `async`, `await`, atomic values, condition variables, channels | planned |
 
 Anything marked planned is reported by the compiler as "this compiler does not support ...
 yet", with a link here.

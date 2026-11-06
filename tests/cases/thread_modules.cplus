@@ -1,0 +1,77 @@
+// What comes with the language works on threads.
+import json;
+import reflect;
+
+struct User { string name; int age = 0; vector<string> tags; };
+
+string writeMany(User u) {
+    string last;
+    for (int i = 0; i < 200; i++) last = json::stringify(u);
+    return last;
+}
+int readMany(string text) throws {
+    int total = 0;
+    for (int i = 0; i < 200; i++) total += (try json::parse<User>(text)).age;
+    return total;
+}
+string fieldNames() {
+    string names;
+    for (auto f : reflect::type<User>().fields()) names += f.name + " ";
+    return names;
+}
+hashmap<int, string> buildMap(int n) {
+    hashmap<int, string> m;
+    for (int i = 0; i < n; i++) m[i] = format("value {}", i);
+    return m;
+}
+string joinAll(vector<string> parts) {
+    string out;
+    for (auto p : parts) out += p.substr(0, 1) + to_string(p.size()) + "/";
+    return out;
+}
+
+int main() throws {
+    User u = {"Ada", 36, {"math", "engines"}};
+    vector<Task<string>> writers;
+    for (int i = 0; i < 4; i++) writers.push_back(spawn writeMany(u));
+    string text = writers[0].wait();
+    for (auto t : writers) println("{}", t.wait() == text);
+    // expect: true
+    // expect: true
+    // expect: true
+    // expect: true
+    println("{}", text);
+    // expect: {"name":"Ada","age":36,"tags":["math","engines"]}
+
+    vector<Task<int, throws>> readers;
+    for (int i = 0; i < 4; i++) readers.push_back(spawn readMany(text));
+    for (auto t : readers) println("{}", try t.wait());
+    // expect: 7200
+    // expect: 7200
+    // expect: 7200
+    // expect: 7200
+
+    // A module's own function, with its type arguments.
+    auto parsed = spawn json::parse<User>(text);
+    println("{}", (try parsed.wait()).name);
+    // expect: Ada
+    auto wrong = spawn json::parse<User>("not json");
+    try {
+        println("{}", (wrong.wait()).name);
+    } catch (json::Error e) {
+        println("line {}", e.line);
+    } catch (Error e) {
+        println("some other error");
+    }
+    // expect: line 1
+    println("{}", (spawn json::stringify(u.age)).wait());
+    // expect: 36
+
+    println("{}", (spawn fieldNames()).wait());
+    // expect: name age tags 
+    println("{}", (spawn buildMap(1000)).wait().size());
+    // expect: 1000
+    println("{}", (spawn joinAll({"one", "three"})).wait());
+    // expect: o3/t5/
+    return 0;
+}

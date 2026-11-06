@@ -1,0 +1,21 @@
+// Two threads changing one field with nothing to keep them apart: a build with --race stops the program, and says where.
+extern "C" int usleep(int microseconds);
+class Counter { public: int total = 0; };
+void addMany(Counter c) {
+    for (int i = 0; i < 200; i++) {
+        c.total += 1;
+        usleep(100);  // so that the optimizer cannot make one step of this, and the threads overlap
+    }
+}
+
+int main() {
+    Counter c = Counter();
+    auto a = spawn addMany(c);
+    auto b = spawn addMany(c);
+    a.wait();
+    b.wait();
+    println("{}", c.total);
+    return 0;
+}
+// race: two threads used the same memory at the same time
+// race: thread_race_found.cplus:6

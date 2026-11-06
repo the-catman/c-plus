@@ -26,7 +26,7 @@ message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION}")
 # -DCPLUS_CURL_LIBRARY=... on the cmake command line picks another libcurl.
 find_path(CPLUS_CURL_INCLUDE curl/curl.h)
 find_library(CPLUS_CURL_LIBRARY curl)
-set(CPLUS_RUNTIME_SOURCES runtime/runtime.c runtime/json.c runtime/reflect.c)
+set(CPLUS_RUNTIME_SOURCES runtime/runtime.c runtime/json.c runtime/reflect.c runtime/thread.c)
 set(CPLUS_CURL_DEFINITION "")
 if(CPLUS_CURL_INCLUDE AND CPLUS_CURL_LIBRARY)
   list(APPEND CPLUS_RUNTIME_SOURCES runtime/http.c)
@@ -72,6 +72,31 @@ else()
   message(STATUS "No AddressSanitizer in the C compiler: cplus --debug will report that it is missing")
 endif()
 
+# The runtime for programs built with --race, if the C compiler has ThreadSanitizer.
+set(CMAKE_REQUIRED_FLAGS -fsanitize=thread)
+set(CMAKE_REQUIRED_LINK_OPTIONS -fsanitize=thread)
+check_c_source_compiles("int main(void) { return 0; }" CPLUS_HAVE_TSAN)
+unset(CMAKE_REQUIRED_FLAGS)
+unset(CMAKE_REQUIRED_LINK_OPTIONS)
+set(CPLUS_RUNTIME_LIB_RACE "")
+if(CPLUS_HAVE_TSAN)
+  add_library(cplusrt_race STATIC ${CPLUS_RUNTIME_SOURCES})
+  set_target_properties(cplusrt_race PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
+  target_compile_options(cplusrt_race PRIVATE -Wall -Wextra -O1 -fsanitize=thread
+    -fno-omit-frame-pointer -fno-optimize-sibling-calls ${CPLUS_RUNTIME_PATHS})
+  target_compile_definitions(cplusrt_race PRIVATE CPLUS_DEBUG_RUNTIME CPLUS_RACE_RUNTIME)
+  if(CPLUS_CURL_DEFINITION)
+    target_include_directories(cplusrt_race SYSTEM PRIVATE ${CPLUS_CURL_INCLUDE})
+  endif()
+  find_program(CPLUS_RACE_SYMBOLIZER llvm-symbolizer HINTS ${LLVM_TOOLS_BINARY_DIR})
+  if(CPLUS_RACE_SYMBOLIZER)
+    target_compile_definitions(cplusrt_race PRIVATE CPLUS_SYMBOLIZER="${CPLUS_RACE_SYMBOLIZER}")
+  endif()
+  set(CPLUS_RUNTIME_LIB_RACE "$<TARGET_FILE:cplusrt_race>")
+else()
+  message(STATUS "No ThreadSanitizer in the C compiler: cplus --race will report that it is missing")
+endif()
+
 add_executable(cplus
   compiler/main.cpp
   compiler/Diagnostics.cpp
@@ -87,6 +112,7 @@ target_compile_definitions(cplus PRIVATE ${LLVM_DEFINITIONS_LIST}
   CPLUS_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
   CPLUS_RUNTIME_LIB="$<TARGET_FILE:cplusrt>"
   CPLUS_RUNTIME_LIB_DEBUG="${CPLUS_RUNTIME_LIB_DEBUG}"
+  CPLUS_RUNTIME_LIB_RACE="${CPLUS_RUNTIME_LIB_RACE}"
   CPLUS_LINKER="${CMAKE_C_COMPILER}"
   ${CPLUS_CURL_DEFINITION})
 target_compile_options(cplus PRIVATE -Wall -Wextra)
@@ -94,6 +120,9 @@ target_link_libraries(cplus PRIVATE LLVM)
 add_dependencies(cplus cplusrt)
 if(CPLUS_HAVE_ASAN)
   add_dependencies(cplus cplusrt_debug)
+endif()
+if(CPLUS_HAVE_TSAN)
+  add_dependencies(cplus cplusrt_race)
 endif()
 
 enable_testing()

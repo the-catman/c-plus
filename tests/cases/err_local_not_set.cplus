@@ -1,0 +1,12 @@
+class Node { public: int n = 0; };
+struct Holder { local<Node> node; };
+int main() {
+    local<Node> a;
+    println("{}", a.n);
+    Holder h = {};
+    return 0;
+}
+// error: 'a' is used before it is given a value
+// error: `local<Node> a = local<Node>(...);`
+// error: 'node'
+// not-error: a = 0

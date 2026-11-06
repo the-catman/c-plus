@@ -1,0 +1,23 @@
+class Node { public: int n = 0; };
+class Other { public: int n = 0; };
+void takesPlain(Node n) {}
+void takesLocal(local<Node> n) {}
+int main() {
+    Node plain = Node();
+    local<Node> a = plain;
+    local<Node> b = local<Node>();
+    Node c = b;
+    takesPlain(b);
+    takesLocal(plain);
+    weak<Node> w = b;
+    local<Node> d = null;
+    local<Other> e = b;
+    Node? f = b;
+    return 0;
+}
+// error: expected 'local<Node>' to initialize 'a', but this is 'Node'
+// error: may be used by other threads, whose count a local reference would upset. Write `local<Node>(...)` to build a new object
+// error: expected 'Node' for parameter 'n' of 'takesPlain', but this is 'local<Node>'
+// error: write `b.get()`, which lends the object, and takes care that no other thread gets it
+// error: a local reference is never empty. For one that can be, write `local<Node>?`
+// error: the object is not a 'Other'

@@ -1,8 +1,8 @@
 # C+
 
 C+ is a compiled language shaped like C++, with safer defaults and more built in. The
-compiler is written in C++20 and generates code through LLVM 18. The current focus is
-Phase 3 of `PLAN.md`, the batteries: reflection, JSON, HTTP, `hashmap` and threads.
+compiler is written in C++20 and generates code through LLVM 18. Phases 1 to 3 of `PLAN.md` are in,
+the batteries among them: reflection, JSON, HTTP, `hashmap` and threads. Next is Phase 4.
 
 ## Where things are
 

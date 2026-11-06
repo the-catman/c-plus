@@ -1,0 +1,13 @@
+// A bad pointer on a thread is reported as it is on the main thread.
+int follow(long address) {
+    int* p = reinterpret_cast<int*>(address);
+    return *p;
+}
+
+int main() {
+    println("before");
+    println("{}", (spawn follow(8)).wait());
+    return 0;
+}
+// expect: before
+// trap: memory

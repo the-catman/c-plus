@@ -42,7 +42,7 @@ Status markers used below: **DECIDED** and **OPEN**.
 
 ### 2.2 Compiler backend — DECIDED
 LLVM IR directly. Pin one LLVM version. Benefits beyond codegen:
-- AddressSanitizer, UBSan, ThreadSanitizer in debug builds for free.
+- AddressSanitizer, UBSan in debug builds for free, and ThreadSanitizer in a build of its own.
 - Built-in coroutine lowering for the async model.
 - DWARF debug info, so gdb and lldb work on day one.
 - Cross-compilation to every tier above from one machine.
@@ -158,8 +158,14 @@ Reference cycles:
 | `local<T>` | non-atomic | no | hot single-threaded code |
 
 The compiler refuses to pass any value containing a `local<T>` into `spawn`. This is a
-shallow check that catches the common mistake. ThreadSanitizer in debug builds catches
-the rest.
+shallow check that catches the common mistake. ThreadSanitizer catches the rest, in a build
+with `--race`, since it cannot go with AddressSanitizer in `--debug`.
+
+`local<T>` decided 2026-11-07:
+- It is written `local<Node>`, built with `local<Node>(args)`, used with `.`, and copied like a class reference. It is never empty, and `local<Node>?` can be.
+- It only converts to and from another `local`, as a plain `Node` could reach a thread while this one counts without care. `x.get()` lends the object when a function needs a `Node`.
+- The check of `spawn` follows the types of arguments, of what a method is called on, and of results, through fields, class fields included. What a function does with `this` or a lent reference is left to `--race`.
+- Its count is the same word as any object's, so a class is compiled once. Only the common case is written without atomic steps. The last reference, and the part of an object that does not start it, go to the runtime.
 
 `unique<T>` decided 2026-11-06:
 - It is written `unique<Node>`, built with `unique<Node>(args)`, used with `.`, and handed over with `move(a)`.
@@ -189,6 +195,15 @@ from day one.
 
 Why not C++'s model: `std::async` is a thread launcher with a blocking destructor, and
 C++20 coroutines are a library-author toolkit with no standard loop or task type.
+
+`spawn` decided 2026-11-07:
+- `Task<T>` when the function cannot fail and `Task<T, throws>` when it can, so `wait()` needs `try` only then, as for any call. Having `wait()` always throw would be simpler, but a function not marked `throws` could then not use a task without pretending it can fail.
+- Letting go of a task neither stops its thread nor waits for it. The program waits for all of its threads when `main` is done, as Node and Python do. Go and Rust end them instead, which silently loses work that was started. A thread that never ends keeps the program running.
+- An error that no `wait()` can see any more fails the program, like one that gets out of `main`, as Node does with a promise nothing handles. It must not go unnoticed.
+- `spawn` takes what is written in C+. A built-in, a C function or a constructor needs a function around it, until lambdas.
+- Every thread has 8 MiB of stack and its own crash report. Threads are not pooled: each `spawn` is one.
+- `Mutex` and `LockGuard` are in, beyond what was first planned, since a class reference could otherwise be shared but never safely changed. Atomic values, condition variables and channels can wait.
+- ThreadSanitizer is `--race`, as it cannot go with AddressSanitizer in `--debug`. It has a runtime of its own, as it must see the runtime's atomic steps and locks. The tests build every program with `spawn` this way too.
 
 ### 2.10 Generics — DECIDED
 "Templates" in the plain sense, not C++ template metaprogramming.
@@ -297,8 +312,10 @@ types that are printed, serialized, or explicitly reflected, so dead stripping k
 - `vector`, `array`, `hashmap`, `string`, optionals.
 - `print` for any value.
 - `json` parse and serialize via reflection.
-- `http` client and WebSockets, wrapping libcurl, statically linked. This also proves
-  the C FFI early.
+- `http` client and WebSockets, wrapping libcurl. This also proves the C FFI early. Decided 2026-11-07: linked as a shared
+  library for now, and programs that stand alone come in Phase 7. The `libcurl.a` of a distribution still needs a dozen other
+  shared libraries, some with no static form, so linking it would not let a program run on any more machines. That takes a
+  libcurl built for it, with few features and its TLS library linked in too. One setting, `CPLUS_CURL_LIBRARY`, chooses which is used.
 - Threads and `spawn`.
 - Later, after async exists: `fs`, `net` on libuv.
 
@@ -563,7 +580,7 @@ a debug build with ASan, stack traces and a leak report. Every item of Phase 1 i
 criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
 `dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, generics with
 constraints, errors, `constexpr` with `if constexpr`, and `unique<T>` with `move`, which is every item of Phase 2.
-The leak report came with Phase 1. Phase 3 is in progress: `hashmap`, the descriptors of types, `json`, `reflect` and `http` with WebSockets work.
+The leak report came with Phase 1. Every item of Phase 3 is in too: `hashmap`, the descriptors of types, `json`, `reflect`, `http` with WebSockets, `spawn` with `Task`, and `local`.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -590,7 +607,7 @@ async standard library surface, `http::fetch`.
 
 **Phase 6 — Tooling.** Formatter, LSP, C header import via libclang.
 
-**Phase 7 — Platforms.** macOS CI. wasm32-wasi. Windows platform layer. Browser wasm.
+**Phase 7 — Platforms.** macOS CI. wasm32-wasi. Windows platform layer. Browser wasm. Programs that use `http` and stand alone.
 
 ---
 
@@ -629,9 +646,6 @@ will confidently write C++ wherever the two differ.
   program when `X` is used, and `constexpr` reports it while compiling. They could become one rule.
 - Printing still goes by a function the compiler writes for each type, while 2.14 says it is built on descriptors. It works, and
   it costs a program nothing it does not print. Moving it would give one way of walking a value, at the cost of a slower `println`.
-- 2.15 says libcurl is linked statically, but programs link it as a shared library for now. The `libcurl.a` of a distribution still needs a dozen other
-  shared libraries, some with no static form, so linking it would not let a program run on any more machines. Programs that stand alone need a libcurl built
-  for that, with few features and its TLS library linked in too. One setting, `CPLUS_CURL_LIBRARY`, chooses which libcurl is used.
 - `main` takes its arguments as in C++, through raw pointers. A checked form, such as
   `int main(vector<string> args)`, could come later.
 - References (`T&`): whether C+ gets them, and in what form. They decide how

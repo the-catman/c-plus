@@ -1,0 +1,6 @@
+extern "C" int usleep(int n);
+int main() {
+    auto a = spawn usleep(1);
+    return 0;
+}
+// error: `spawn` runs a function or method written in C+, and this is a C function

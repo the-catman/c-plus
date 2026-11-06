@@ -1,0 +1,9 @@
+int f() { return 1; }
+int main() {
+    Task<int> t = spawn f();
+    t.__finish(2);
+    println("{}", t.value_);
+    return 0;
+}
+// error: '__finish' is private
+// error: 'value_' is private

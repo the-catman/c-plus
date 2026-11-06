@@ -1,0 +1,6 @@
+int main() {
+    Task<int> t = Task<int>();
+    println("{}", t.wait());
+    return 0;
+}
+// error: private

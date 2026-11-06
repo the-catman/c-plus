@@ -1,0 +1,9 @@
+int main() {
+    auto a = spawn println("hi");
+    vector<int> v;
+    auto b = spawn v.size();
+    auto c = spawn sqrt(2.0);
+    return 0;
+}
+// error: `spawn` runs a function or method written in C+, and this is built in
+// error: write a function that does this, and spawn that

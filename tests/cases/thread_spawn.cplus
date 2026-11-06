@@ -1,0 +1,165 @@
+// `spawn` runs a call on a thread, and `wait()` gives what it returned, of any type.
+struct Point { int x = 0; int y = 0; };
+class User {
+public:
+    string name;
+    User(string n) : name(n) {}
+    string greet(string word) const { return word + ", " + name; }
+    virtual string role() const { return "user"; }
+};
+class Admin : public User {
+public:
+    Admin(string n) : User(n) {}
+    string role() const override { return "admin"; }
+};
+struct Tally {
+    int n = 1;
+    int bump(int by) {
+        n += by;
+        return n;
+    }
+};
+
+int add(int a, int b) { return a + b; }
+long toLong(long n) { return n; }
+double half(double d) { return d / 2; }
+bool isEven(int n) { return n % 2 == 0; }
+char first(string s) { return s[0]; }
+string shout(string s) { return s + "!"; }
+Point makePoint(int x, int y) { return Point{x, y}; }
+User makeUser(string name) { return User(name); }
+vector<int> upTo(int n) {
+    vector<int> out;
+    for (int i = 0; i < n; i++) out.push_back(i);
+    return out;
+}
+array<int, 3> three() { return {1, 2, 3}; }
+int? maybe(bool yes) {
+    if (yes) return 5;
+    return null;
+}
+hashmap<string, int> counts() { return {{"a", 1}, {"b", 2}}; }
+int sumArray(array<int, 3> a) { return a[0] + a[1] + a[2]; }
+int sumVector(vector<int> v) {
+    int total = 0;
+    for (int x : v) total += x;
+    return total;
+}
+void nothing() {}
+template<typename T> T same(T x) { return x; }
+template<typename T> Task<T> startSame(T x) { return spawn same(x); }
+Task<int> startAdd(int a, int b) { return spawn add(a, b); }
+
+class Worker {
+    int base = 10;
+    int plus(int n) { return base + n; }
+public:
+    // A method calling another by name, on `this`, even a private one.
+    Task<int> start(int n) { return spawn plus(n); }
+};
+
+int main() {
+    println("{}", (spawn add(2, 3)).wait());
+    // expect: 5
+    Task<long> l = spawn toLong(7);  // converted here, as for any call
+    println("{}", l.wait());
+    // expect: 7
+    println("{} {} {}", (spawn half(5)).wait(), (spawn isEven(4)).wait(), (spawn first("xyz")).wait());
+    // expect: 2.5 true x
+    println("{}", (spawn shout("hey")).wait());
+    // expect: hey!
+    Point p = (spawn makePoint(1, 2)).wait();
+    println("{} {}", p.x, p.y);
+    // expect: 1 2
+    println("{}", (spawn makeUser("Ada")).wait().name);
+    // expect: Ada
+    println("{}", (spawn upTo(3)).wait());
+    // expect: [0, 1, 2]
+    println("{}", (spawn three()).wait());
+    // expect: [1, 2, 3]
+    println("{} {}", (spawn maybe(true)).wait() ?? -1, (spawn maybe(false)).wait() ?? -1);
+    // expect: 5 -1
+    println("{}", (spawn counts()).wait());
+    // expect: {"a": 1, "b": 2}
+    array<int, 3> nums = {4, 5, 6};
+    println("{}", (spawn sumArray(nums)).wait());
+    // expect: 15
+    println("{}", (spawn sumVector({1, 2, 3})).wait());
+    // expect: 6
+
+    // Waiting for nothing, with and without the type written. A task can be waited for again.
+    auto a = spawn nothing();
+    a.wait();
+    Task<void> b = spawn nothing();
+    b.wait();
+    b.wait();
+    println("{}", b.done());
+    // expect: true
+    Task<int> again = spawn add(1, 1);
+    println("{} {}", again.wait(), again.wait());
+    // expect: 2 2
+
+    // A task is a reference, so copies are the same task.
+    Task<int> copy = again;
+    println("{}", copy == again);
+    // expect: true
+
+    // Methods.
+    User u = User("Ada");
+    println("{}", (spawn u.greet("hi")).wait());
+    // expect: hi, Ada
+    User admin = Admin("Grace");
+    println("{}", (spawn admin.role()).wait());
+    // expect: admin
+    Admin direct = Admin("Linus");
+    println("{}", (spawn direct.User::role()).wait());
+    // expect: user
+    println("{}", (spawn makeUser("Temp").greet("hello")).wait());
+    // expect: hello, Temp
+
+    // A struct is a value, so its method runs on a copy.
+    Tally t;
+    println("{}", (spawn t.bump(5)).wait());
+    // expect: 6
+    println("{}", t.n);
+    // expect: 1
+
+    // In a function, in a method, and in a generic.
+    println("{}", startAdd(3, 4).wait());
+    // expect: 7
+    println("{}", Worker().start(5).wait());
+    // expect: 15
+    println("{}", (spawn same(8)).wait());
+    // expect: 8
+    println("{}", (spawn same<string>("text")).wait());
+    // expect: text
+    println("{}", startSame(1.5).wait());
+    // expect: 1.5
+
+    // Many at once, kept in a vector.
+    vector<Task<int>> tasks;
+    for (int i = 0; i < 50; i++) tasks.push_back(spawn add(i, i));
+    int total = 0;
+    for (auto task : tasks) total += task.wait();
+    println("{}", total);
+    // expect: 2450
+
+    // A task can start tasks.
+    println("{}", (spawn startAdd(10, 20)).wait().wait());
+    // expect: 30
+
+    // Arguments are worked out here, in order, before anything runs.
+    int n = 1;
+    n = 2;
+    auto later = spawn add(n, n + 1);
+    n = 100;
+    println("{}", later.wait());
+    // expect: 5
+
+    // A task prints as what it is, without looking at what may still be being written.
+    println("{}", tasks[0]);
+    // expect: Task<int> {...}
+    println("{}", b);
+    // expect: Task<void> {...}
+    return 0;
+}

@@ -24,6 +24,7 @@
 #include <llvm/TargetParser/Host.h>
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Instrumentation/AddressSanitizer.h>
+#include <llvm/Transforms/Instrumentation/ThreadSanitizer.h>
 
 #include <algorithm>
 #include <functional>
@@ -47,6 +48,7 @@ struct Codegen::Impl {
     // `owner` is the reference-counted buffer holding the bytes, or null for a literal.
     llvm::StructType* stringTy = nullptr;
     llvm::FunctionCallee rtPrintStr, rtPrintQuoted, rtPrintI32, rtPrintI64, rtPrintBool, rtPrintNewline, rtTrap;
+    llvm::FunctionCallee rtThreadStart, rtThreadsFinish, rtPrintLock, rtPrintUnlock;
     llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq, rtHashBytes, rtTrapText;
     llvm::GlobalVariable* hashSeed = nullptr;
     llvm::FunctionCallee rtTrapIndex, rtTrapArrayIndex, rtVecNew, rtVecRelease, rtVecReserve;
@@ -116,6 +118,7 @@ struct Codegen::Impl {
     std::unordered_map<const Type*, llvm::GlobalVariable*> descriptors;
     std::map<std::pair<const Type*, bool>, llvm::Function*> countFunctions;
     bool usesDescriptors = false;  // a program that imports json or reflect: a class then says what it really is
+    bool usesThreads = false;      // a program with a `spawn`
 
     // A vector is a pointer to a buffer laid out as the runtime's cplus_vec: a header of
     // count, size and capacity, then the elements. Null is an empty vector.
@@ -267,6 +270,10 @@ struct Codegen::Impl {
             f->addFnAttr(llvm::Attribute::Cold);
             f->addFnAttr(llvm::Attribute::NoUnwind);
         }
+        rtThreadStart = decl("cplus_thread_start", voidTy, {ptrTy, ptrTy});
+        rtThreadsFinish = decl("cplus_threads_finish", voidTy, {});
+        rtPrintLock = decl("cplus_print_lock", voidTy, {});
+        rtPrintUnlock = decl("cplus_print_unlock", voidTy, {});
         rtAlloc = decl("cplus_alloc", ptrTy, {i64});
         rtFree = decl("cplus_free", voidTy, {ptrTy});
         rtRetain = decl("cplus_retain", voidTy, {ptrTy});
@@ -342,7 +349,7 @@ struct Codegen::Impl {
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
             case K::Array: return llvm::ArrayType::get(llvmType(t->elem), (uint64_t)t->length);
-            case K::Class: case K::Vector: case K::Null: case K::Pointer: case K::Weak: case K::Unique: return b.getPtrTy();
+            case K::Class: case K::Vector: case K::Null: case K::Pointer: case K::Weak: case K::Unique: case K::Local: return b.getPtrTy();
             // An optional class reference is a pointer that may be null. Any other
             // optional is { i1 has, T value }, and its value is all zero bytes when it
             // has none, so retaining or releasing it is harmless either way.
@@ -643,8 +650,74 @@ struct Codegen::Impl {
         return b.CreateInsertValue(opt, v, {1});
     }
 
+    // Count work for a local reference, without the atomic steps that are what cost. The word holds more than the count, as
+    // runtime.c explains. What is not the usual case goes to the runtime: the part of an object that does not start it, the
+    // last reference, and anything else it must look at.
+    static constexpr int64_t kStrongMask = 0xffffffff;
+    static constexpr int64_t kStrongMax = 0x7fffffff;
+    llvm::Function* localRetain = nullptr;
+    llvm::Function* localRelease = nullptr;
+
+    llvm::Function* localRetainFunction() {
+        if (localRetain) return localRetain;
+        localRetain = internalFunction("cplus.retain_local", b.getVoidTy(), {b.getPtrTy()});
+        SavedPoint saved(*this);
+        startHelper(localRetain);
+        llvm::Value* object = localRetain->getArg(0);
+        auto* countBB = llvm::BasicBlock::Create(ctx, "count", fn);
+        auto* fastBB = llvm::BasicBlock::Create(ctx, "fast", fn);
+        auto* slowBB = llvm::BasicBlock::Create(ctx, "slow", fn);
+        auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
+        b.CreateCondBr(b.CreateIsNull(object), doneBB, countBB);
+        b.SetInsertPoint(countBB);
+        llvm::Value* word = b.CreateAlignedLoad(b.getInt64Ty(), object, llvm::MaybeAlign(8), "word");
+        llvm::Value* strong = b.CreateAnd(word, b.getInt64(kStrongMask));
+        llvm::Value* usual = b.CreateAnd(b.CreateICmpSGT(word, b.getInt64(0)),
+                                         b.CreateAnd(b.CreateICmpNE(strong, b.getInt64(0)), b.CreateICmpSLT(strong, b.getInt64(kStrongMax))));
+        b.CreateCondBr(usual, fastBB, slowBB);
+        b.SetInsertPoint(fastBB);
+        b.CreateAlignedStore(b.CreateAdd(word, b.getInt64(1)), object, llvm::MaybeAlign(8));
+        b.CreateRetVoid();
+        b.SetInsertPoint(slowBB);
+        b.CreateCall(hasInnerParts ? rtRetainObject : rtRetainClass, {object});
+        b.CreateRetVoid();
+        b.SetInsertPoint(doneBB);
+        b.CreateRetVoid();
+        return localRetain;
+    }
+
+    llvm::Function* localReleaseFunction() {
+        if (localRelease) return localRelease;
+        localRelease = internalFunction("cplus.release_local", b.getVoidTy(), {b.getPtrTy()});
+        SavedPoint saved(*this);
+        startHelper(localRelease);
+        llvm::Value* object = localRelease->getArg(0);
+        auto* countBB = llvm::BasicBlock::Create(ctx, "count", fn);
+        auto* fastBB = llvm::BasicBlock::Create(ctx, "fast", fn);
+        auto* slowBB = llvm::BasicBlock::Create(ctx, "slow", fn);
+        auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
+        b.CreateCondBr(b.CreateIsNull(object), doneBB, countBB);
+        b.SetInsertPoint(countBB);
+        llvm::Value* word = b.CreateAlignedLoad(b.getInt64Ty(), object, llvm::MaybeAlign(8), "word");
+        llvm::Value* strong = b.CreateAnd(word, b.getInt64(kStrongMask));
+        b.CreateCondBr(b.CreateAnd(b.CreateICmpSGT(word, b.getInt64(0)), b.CreateICmpSGT(strong, b.getInt64(1))), fastBB, slowBB);
+        b.SetInsertPoint(fastBB);
+        b.CreateAlignedStore(b.CreateSub(word, b.getInt64(1)), object, llvm::MaybeAlign(8));
+        b.CreateRetVoid();
+        b.SetInsertPoint(slowBB);
+        b.CreateCall(objectRelease, {object});
+        b.CreateRetVoid();
+        b.SetInsertPoint(doneBB);
+        b.CreateRetVoid();
+        return localRelease;
+    }
+
     void retainValue(llvm::Value* v, const Type* t) {
         if (t->isOptional()) return retainValue(valueOf(v, t), t->elem);
+        if (t->isLocal()) {
+            b.CreateCall(localRetainFunction(), {v});
+            return;
+        }
         if (t->isObjectRef()) b.CreateCall(hasInnerParts ? rtRetainObject : rtRetainClass, {v});
         else if (t->isWeak()) b.CreateCall(rtWeakRetain, {v});
         else if (t->isVector()) b.CreateCall(rtRetain, {v});
@@ -656,6 +729,10 @@ struct Codegen::Impl {
 
     void releaseValue(llvm::Value* v, const Type* t) {
         if (t->isOptional()) return releaseValue(valueOf(v, t), t->elem);
+        if (t->isLocal()) {
+            b.CreateCall(localReleaseFunction(), {v});
+            return;
+        }
         if (t->isWeak()) {
             b.CreateCall(rtWeakRelease, {v});
         } else if (t->is(K::String)) {
@@ -1280,8 +1357,12 @@ struct Codegen::Impl {
         llvm::Value* v = genRaw(e, owned);
         bool isThis = e.kind == Expr::Kind::This && e.type->isClass();  // kept alive by the caller
         if (v && !isThis && isManaged(e.type)) {
-            if (!owned) retainValue(v, e.type);
-            temps.push_back({v, e.type, false});
+            // What a local reference leads to is held the way that reference counts.
+            const Type* counted = e.type;
+            if (e.kind == Expr::Kind::Borrow && static_cast<const BorrowExpr&>(e).operand->type->isLocal())
+                counted = static_cast<const BorrowExpr&>(e).operand->type;
+            if (!owned) retainValue(v, counted);
+            temps.push_back({v, counted, false});
         }
         return v;
     }
@@ -1345,7 +1426,7 @@ struct Codegen::Impl {
             case K::Float: case K::Double: return llvm::ConstantFP::get(llvmType(t), 0.0);
             case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct: return buildAggregate(*t->decl, {});
-            case K::Class: case K::Vector: case K::Pointer: case K::Weak: case K::Unique:
+            case K::Class: case K::Vector: case K::Pointer: case K::Weak: case K::Unique: case K::Local:
                 return llvm::ConstantPointerNull::get(b.getPtrTy());
             case K::Optional: return zeroValue(t);  // null
             default: llvm_unreachable("no default value for this type");
@@ -1594,6 +1675,7 @@ struct Codegen::Impl {
             case Expr::Kind::FloatLit: case Expr::Kind::CharLit: case Expr::Kind::Name: case Expr::Kind::This:
             case Expr::Kind::OptValue: case Expr::Kind::Sizeof: case Expr::Kind::Constraint:
                 return false;
+            case Expr::Kind::Spawn: return true;
             case Expr::Kind::Cast: {
                 auto& c = static_cast<const CastExpr&>(e);
                 return c.operand && mayRunCode(*c.operand);
@@ -1764,7 +1846,12 @@ struct Codegen::Impl {
                 llvm::Value* object;
                 if (!baseType->isClass()) object = addressOf(*m.base, hold, write);
                 else if (llvm::Value* f = frozenValue(*m.base)) object = f;
-                else if (hold || !isPlace(*m.base)) object = gen(*m.base);
+                else if (!hold && m.base->kind == Expr::Kind::Borrow && isPlace(*static_cast<const BorrowExpr&>(*m.base).operand)) {
+                    // Reading a field of what a variable refers to needs no count, as for a class reference. Only what runs
+                    // code in between could lose the object, and that asks to hold it.
+                    bool owned = false;
+                    object = genRaw(*m.base, owned);
+                } else if (hold || !isPlace(*m.base)) object = gen(*m.base);
                 else object = b.CreateLoad(b.getPtrTy(), addressOf(*m.base), "obj");
                 return fieldAddress(&m.fieldOwner->type, atOffset(object, pathOffset(m.path)), m.fieldIndex, m.field);
             }
@@ -2066,6 +2153,7 @@ struct Codegen::Impl {
                 b.CreateStore(updated, slot);
                 return i.prefix ? updated : old;
             }
+            case Expr::Kind::Spawn: owned = true; return genSpawn(static_cast<const SpawnExpr&>(e));
             case Expr::Kind::Call: owned = true; return genCall(static_cast<const CallExpr&>(e));
             case Expr::Kind::MethodCall: {
                 auto& call = static_cast<const MethodCallExpr&>(e);
@@ -2243,7 +2331,7 @@ struct Codegen::Impl {
 
     llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
         switch (t->kind) {
-            case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer: case K::Unique:
+            case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer: case K::Unique: case K::Local:
                 return b.CreateICmpEQ(l, r);
             case K::Float: case K::Double: return b.CreateFCmpOEQ(l, r);
             case K::String: {
@@ -2311,7 +2399,7 @@ struct Codegen::Impl {
                 break;
             case K::String: b.CreateCall(nested ? rtPrintQuoted : rtPrintStr, {out, strData(v), strLength(v)}); break;
             case K::Struct: b.CreateCall(types.at(t->decl).print, {v, out}); break;
-            case K::Class: case K::Unique:  // whatever the object really is, with all of its fields
+            case K::Class: case K::Unique: case K::Local:  // whatever the object really is, with all of its fields
             {
                 llvm::BasicBlock* endBB = nullptr;
                 if (t->isUnique()) {  // what was moved out of a field or an element shows as that
@@ -2396,6 +2484,8 @@ struct Codegen::Impl {
             out = entryAlloca(stringTy, "text");
             b.CreateStore(llvm::Constant::getNullValue(stringTy), out);
         }
+        // All the values are there by now, so what they run cannot be holding up the other threads' printing.
+        if (usesThreads && !toString) b.CreateCall(rtPrintLock, {});
         for (size_t i = 0; i < call.formatPieces.size(); ++i) {
             printText(out, call.formatPieces[i]);
             if (i >= values.size()) continue;
@@ -2408,6 +2498,7 @@ struct Codegen::Impl {
                 printValue(out, values[i], t);
         }
         if (call.builtin == Builtin::Println) b.CreateCall(rtPrintNewline, {});
+        if (usesThreads && !toString) b.CreateCall(rtPrintUnlock, {});
         return toString ? b.CreateLoad(stringTy, out, "text") : nullptr;  // a new string, owned
     }
 
@@ -2664,6 +2755,127 @@ struct Codegen::Impl {
         for (size_t i = 0; i < call.args.size(); ++i) args.push_back(holdOwned(*call.args[i], target->params[i]->type));
         pending.resize(mark);
         return callFunction(*target, std::move(args), call.method != nullptr);
+    }
+
+    // `spawn f(a, b)`: the arguments, and what a method is called on, are worked out here as for any call, then go in memory of
+    // their own, for a function made for this call, which runs on the new thread and gets them from there. A function owns its
+    // arguments, so that is all it has to do with those. A struct's method runs on a copy of the struct.
+    llvm::Value* genSpawn(const SpawnExpr& s) {
+        const FuncDecl& target = *s.target;
+        const Type* taskType = &s.task->type;
+        const auto* method = s.call->kind == Expr::Kind::MethodCall ? static_cast<const MethodCallExpr*>(s.call.get()) : nullptr;
+        const auto* plain = s.call->kind == Expr::Kind::Call ? static_cast<const CallExpr*>(s.call.get()) : nullptr;
+        size_t mark = pending.size();
+        const Type* selfType = nullptr;
+        llvm::Value* self = nullptr;
+        BasePath path;
+        bool dispatch = plain ? plain->method != nullptr : method->qualifier.empty();
+        if (method) {
+            selfType = method->receiver->type;
+            path = method->path;
+            self = holdOwned(*method->receiver, selfType);
+        } else if (plain->method) {
+            selfType = &fnDecl->owner->type;
+            path = plain->path;
+            if (selfType->isClass()) {
+                self = thisPtr;
+                retainValue(self, selfType);
+            } else {
+                self = loadValue(selfType, thisPtr, "this");
+                retainValue(self, selfType);
+            }
+            if (isManaged(selfType)) pending.push_back({self, selfType, false});
+        }
+        const auto& args = plain ? plain->args : method->args;
+        std::vector<llvm::Value*> values;
+        for (size_t i = 0; i < args.size(); ++i) values.push_back(holdOwned(*args[i], target.params[i]->type));
+
+        // A place for each of them, after the count that memory from cplus_alloc starts with, and the task.
+        std::vector<llvm::Type*> slots{b.getInt64Ty(), b.getPtrTy()};
+        if (selfType) slots.push_back(llvmType(selfType));
+        for (auto& p : target.params) slots.push_back(llvmType(p->type));
+        auto* closureTy = llvm::StructType::get(ctx, slots);
+
+        auto* run = internalFunction("cplus.spawn", b.getVoidTy(), {b.getPtrTy()});
+        {
+            SavedPoint saved(*this);
+            startHelper(run);
+            startLineTable(s.loc);  // what is inlined here would otherwise lose its lines
+            llvm::Value* closure = run->getArg(0);
+            unsigned next = 2;
+            llvm::Value* task = b.CreateLoad(b.getPtrTy(), b.CreateStructGEP(closureTy, closure, 1), "task");
+            std::vector<llvm::Value*> callArgs;
+            llvm::Value* selfSlot = nullptr;
+            if (selfType) {
+                selfSlot = b.CreateStructGEP(closureTy, closure, next++);
+                // A class is called through the reference, and a struct in its place.
+                callArgs.push_back(selfType->isClass() ? atOffset(b.CreateLoad(b.getPtrTy(), selfSlot, "self"), pathOffset(path)) : selfSlot);
+            }
+            for (auto& p : target.params) {
+                llvm::Value* slot = b.CreateStructGEP(closureTy, closure, next++);
+                callArgs.push_back(inMemory(p->type) ? slot : b.CreateLoad(llvmType(p->type), slot, p->name));
+            }
+            llvm::FunctionCallee callee = funcs.at(&target);
+            if (selfType && dispatch && target.vtableSlot >= 0)
+                callee = llvm::FunctionCallee(funcs.at(&target)->getFunctionType(),
+                                              vtableSlot(loadVtable(callArgs[0]), kVtableMethods + target.vtableSlot, target.name.c_str()));
+            llvm::Value* errorSlot = nullptr;
+            if (target.isThrows) {
+                errorSlot = entryAlloca(b.getPtrTy(), "error");
+                b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), errorSlot);
+                callArgs.push_back(errorSlot);
+            }
+            llvm::Value* result = nullptr;
+            if (inMemory(target.retType)) {
+                result = entryAlloca(llvmType(target.retType), "result");
+                callArgs.insert(callArgs.begin(), result);
+                b.CreateCall(callee, callArgs);
+            } else {
+                llvm::CallInst* inst = b.CreateCall(callee, callArgs);
+                if (!target.retType->is(K::Void)) result = inst;
+            }
+            if (selfType) releaseValue(selfType->isClass() ? b.CreateLoad(b.getPtrTy(), selfSlot, "self") : peekValue(selfType, selfSlot), selfType);
+            b.CreateCall(rtFree, {closure});
+            auto finish = [&] {
+                if (!result) result = llvm::Constant::getNullValue(llvmType(s.finish->params[0]->type));  // the empty struct of `Task<void>`
+                callFunction(*s.finish, {task, result});
+            };
+            if (target.isThrows) {
+                llvm::Value* error = b.CreateLoad(b.getPtrTy(), errorSlot, "error");
+                auto* failedBB = llvm::BasicBlock::Create(ctx, "failed", fn);
+                auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
+                auto* endBB = llvm::BasicBlock::Create(ctx, "end", fn);
+                b.CreateCondBr(b.CreateIsNotNull(error), failedBB, doneBB);
+                b.SetInsertPoint(failedBB);
+                callFunction(*s.fail, {task, error});
+                b.CreateBr(endBB);
+                b.SetInsertPoint(doneBB);
+                finish();
+                b.CreateBr(endBB);
+                b.SetInsertPoint(endBB);
+            } else {
+                finish();
+            }
+            releaseValue(task, taskType);
+            b.CreateRetVoid();
+            endLineTable();
+        }
+
+        llvm::Value* task = construct(*s.task, {});
+        retainValue(task, taskType);  // one for the thread, and one for this expression
+        llvm::Value* closure = b.CreateCall(rtAlloc, {b.getInt64(mod->getDataLayout().getTypeAllocSize(closureTy))}, "closure");
+        b.CreateStore(task, b.CreateStructGEP(closureTy, closure, 1));
+        unsigned next = 2;
+        auto put = [&](llvm::Value* v, const Type* t) {
+            llvm::Value* slot = b.CreateStructGEP(closureTy, closure, next++);
+            if (inMemory(t)) b.CreateMemCpy(slot, llvm::MaybeAlign(), v, llvm::MaybeAlign(), mod->getDataLayout().getTypeAllocSize(llvmType(t)));
+            else b.CreateStore(v, slot);
+        };
+        if (selfType) put(self, selfType);
+        for (size_t i = 0; i < values.size(); ++i) put(values[i], target.params[i]->type);
+        pending.resize(mark);
+        b.CreateCall(rtThreadStart, {run, closure});
+        return task;
     }
 
     // Calls a function of the program. One that returns a value handled through its address
@@ -3023,7 +3235,7 @@ struct Codegen::Impl {
                 auto& v = static_cast<const VarDecl&>(s);
                 llvm::Value* init = v.init ? genOwned(*v.init, v.type)
                                     : v.type->is(K::String) || v.type->hasFields() || v.type->isVector() ||
-                                              v.type->isOptional() || v.type->isArray() || v.type->isWeak() || v.type->isUnique()
+                                              v.type->isOptional() || v.type->isArray() || v.type->isWeak() || v.type->isUnique() || v.type->isLocal()
                                         ? genDefault(v.type)
                                         : nullptr;
                 flushTemps();
@@ -3594,8 +3806,13 @@ struct Codegen::Impl {
         b.CreateCall(rtStart, {});
         std::vector<llvm::Value*> args;
         if (!userMain.params.empty()) args = {fn->getArg(0), fn->getArg(1)};  // argc and argv
+        // The program does not end while a thread is running.
+        auto finish = [&](llvm::Value* code) {
+            if (usesThreads) b.CreateCall(rtThreadsFinish, {});
+            b.CreateRet(code);
+        };
         if (!userMain.isThrows) {
-            b.CreateRet(b.CreateCall(funcs.at(&userMain), args));
+            finish(b.CreateCall(funcs.at(&userMain), args));
             endLineTable();
             return;
         }
@@ -3614,9 +3831,9 @@ struct Codegen::Impl {
         printValue(text, error, errorTy);
         b.CreateCall(rtUncaught, {text});
         releaseValue(error, errorTy);
-        b.CreateRet(b.getInt32(1));
+        finish(b.getInt32(1));
         b.SetInsertPoint(doneBB);
-        b.CreateRet(code);
+        finish(code);
         endLineTable();
     }
 
@@ -3770,7 +3987,7 @@ struct Codegen::Impl {
             case K::String: kind = CPLUS_KIND_STRING; break;
             case K::Weak: kind = CPLUS_KIND_WEAK; break;
             case K::Vector: kind = CPLUS_KIND_VECTOR; elem = typeDescriptor(t->elem); break;
-            case K::Unique: kind = CPLUS_KIND_UNIQUE; elem = typeDescriptor(t->elem); break;
+            case K::Unique: case K::Local: kind = CPLUS_KIND_UNIQUE; elem = typeDescriptor(t->elem); break;
             case K::Array: kind = CPLUS_KIND_ARRAY; length = t->length; elem = typeDescriptor(t->elem); break;
             case K::Optional:
                 kind = CPLUS_KIND_OPTIONAL;
@@ -3908,6 +4125,8 @@ struct Codegen::Impl {
             llvm::Value* written = b.CreateLoad(stringTy, text, "written");
             printValue(out, written, Type::stringTy());
             releaseValue(written, Type::stringTy());
+        } else if (sd.templateOf && sd.templateOf->nameLoc.line == 0 && (sd.templateName == "Task" || sd.templateName == "__TaskThrows")) {
+            printText(out, "{...}");  // what it holds may still be being written
         } else {
             printText(out, "{");
             bool first = true;
@@ -4113,8 +4332,9 @@ struct Codegen::Impl {
     bool generate(const Program& program, std::string& error) {
         mod = std::make_unique<llvm::Module>(file.path, ctx);
         if (!setupTarget(error)) return false;
-        if (opts.debug) setupLineTable();
+        if (opts.debug || opts.race) setupLineTable();
         usesDescriptors = program.usesDescriptors();
+        usesThreads = program.usesThreads;
         stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy()}, "cplus.string");
         // Named types are created first and given bodies after, so they can refer to
         // each other in any order.
@@ -4211,6 +4431,11 @@ struct Codegen::Impl {
                 f.addFnAttr("frame-pointer", "all");
                 f.setUWTableKind(llvm::UWTableKind::Async);
             }
+            if (opts.race) {  // the same, by ThreadSanitizer
+                f.addFnAttr(llvm::Attribute::SanitizeThread);
+                f.addFnAttr("frame-pointer", "all");
+                f.setUWTableKind(llvm::UWTableKind::Async);
+            }
         }
         if (di) di->finalize();
 
@@ -4220,7 +4445,7 @@ struct Codegen::Impl {
             error = "internal compiler error: generated invalid LLVM IR\n" + os.str();
             return false;
         }
-        if (opts.optimize || opts.debug) runPasses();
+        if (opts.optimize || opts.debug || opts.race) runPasses();
         return true;
     }
 
@@ -4234,6 +4459,11 @@ struct Codegen::Impl {
         if (opts.debug)
             pb.registerOptimizerLastEPCallback([](llvm::ModulePassManager& mpm, llvm::OptimizationLevel) {
                 mpm.addPass(llvm::AddressSanitizerPass(llvm::AddressSanitizerOptions{}));
+            });
+        if (opts.race)
+            pb.registerOptimizerLastEPCallback([](llvm::ModulePassManager& mpm, llvm::OptimizationLevel) {
+                mpm.addPass(llvm::ModuleThreadSanitizerPass());
+                mpm.addPass(llvm::createModuleToFunctionPassAdaptor(llvm::ThreadSanitizerPass()));
             });
         pb.registerModuleAnalyses(mam);
         pb.registerCGSCCAnalyses(cgam);

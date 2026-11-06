@@ -1,0 +1,135 @@
+// An error in a task comes out of `wait()`, as what it really is, with `try` only where a task can fail.
+class NotFound : public Error {
+public:
+    int code;
+    NotFound(string m, int c) : Error(m), code(c) {}
+};
+
+int check(int n) throws {
+    if (n < 0) throw NotFound("below zero", n);
+    return n * 2;
+}
+void checkOnly(int n) throws {
+    if (n < 0) throw Error("void and below zero");
+}
+int outer(int n) throws { return try check(n); }
+int safe(int n) { return n + 1; }
+
+class Thing {
+public:
+    int id;
+    Thing(int i) : id(i) {}
+    ~Thing() { println("thing {} gone", id); }
+    int failWith(int n) throws {
+        if (n < 0) throw Error("method failed");
+        return id + n;
+    }
+};
+int takes(Thing t, int n) throws {
+    if (n < 0) throw Error("took it and failed");
+    return t.id;
+}
+int thrower() throws { throw Error("from an argument"); }
+
+int main() throws {
+    // No `try` for what cannot fail.
+    println("{}", (spawn safe(1)).wait());
+    // expect: 2
+
+    Task<int, throws> good = spawn check(4);
+    println("{}", try good.wait());
+    // expect: 8
+
+    auto bad = spawn check(-1);
+    try {
+        println("{}", bad.wait());
+    } catch (NotFound e) {
+        println("{} {}", e.what(), e.code);
+    } catch (Error e) {
+        println("some other error");
+    }
+    // expect: below zero -1
+
+    // Waiting again gives the same error.
+    try {
+        println("{}", bad.wait());
+    } catch (Error e) {
+        println("again: {}", e.what());
+    }
+    // expect: again: below zero
+
+    Task<void, throws> v = spawn checkOnly(-1);
+    try {
+        v.wait();
+        println("no error");
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // expect: void and below zero
+    Task<void, throws> fine = spawn checkOnly(1);
+    try fine.wait();
+    println("{}", fine.done());
+    // expect: true
+
+    // Through a function that passes it on.
+    auto through = spawn outer(-2);
+    try {
+        through.wait();
+    } catch (NotFound e) {
+        println("through: {}", e.code);
+    } catch (Error e) {
+        println("some other error");
+    }
+    // expect: through: -2
+
+    // The type holds whether it can fail, also in a vector.
+    vector<Task<int, throws>> tasks;
+    for (int i = -1; i <= 1; i++) tasks.push_back(spawn check(i));
+    for (auto t : tasks) {
+        try {
+            println("{}", t.wait());
+        } catch (Error e) {
+            println("failed");
+        }
+    }
+    // expect: failed
+    // expect: 0
+    // expect: 2
+
+    // What a method was called on, and what a function was given, are let go of when it fails.
+    {
+        Thing thing = Thing(1);
+        auto m = spawn thing.failWith(-1);
+        try {
+            println("{}", m.wait());
+        } catch (Error e) {
+            println("{}", e.what());
+        }
+        // expect: method failed
+    }
+    // expect: thing 1 gone
+    {
+        auto t = spawn takes(Thing(2), -1);
+        try {
+            println("{}", t.wait());
+        } catch (Error e) {
+            println("{}", e.what());
+        }
+        // expect: thing 2 gone
+        // expect: took it and failed
+    }
+
+    // An argument runs here, so its error comes out here, with nothing started.
+    try {
+        auto t = spawn check(try thrower());
+        println("started {}", t.done());
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // expect: from an argument
+
+    // Errors a generic passes on.
+    println("{}", (spawn safe(2)).done() || true);
+    // expect: true
+    return 0;
+}

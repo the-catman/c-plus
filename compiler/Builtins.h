@@ -314,6 +314,107 @@ template<__JsonWritable T> string json::pretty(T value) {
 }
 )cplus";
 
+// What `spawn` gives. The thread that runs the call leaves its result here: see genSpawn in Codegen.cpp. `Task<void>` is a
+// Task of the empty struct `void`, and `Task<int, throws>` is a `__TaskThrows<int>`: see addBuiltins and instanceName in Parser.cpp.
+inline constexpr const char* kTaskSource = R"cplus(
+extern "C" {
+    void* cplus_task_new();
+    void cplus_task_free(void* task);
+    void cplus_task_finish(void* task);
+    void cplus_task_wait(void* task);
+    bool cplus_task_is_done(void* task);
+    bool cplus_task_was_waited_for(void* task);
+    void cplus_task_lost_error(void* text);
+}
+
+struct __Void {};
+
+template<typename T> class Task {
+    void* state_;
+    T value_ = __zero(T);
+
+    Task() : state_(cplus_task_new()) {}
+    void __finish(T value) {
+        value_ = move(value);
+        cplus_task_finish(state_);
+    }
+
+public:
+    ~Task() { cplus_task_free(state_); }
+    T wait() {
+        cplus_task_wait(state_);
+        if constexpr (__Copyable<T>) return value_;
+        else return __move(value_);
+    }
+    bool done() const { return cplus_task_is_done(state_); }
+};
+
+template<typename T> class __TaskThrows {
+    void* state_;
+    T value_ = __zero(T);
+    Error? error_;
+
+    __TaskThrows() : state_(cplus_task_new()) {}
+    void __finish(T value) {
+        value_ = move(value);
+        cplus_task_finish(state_);
+    }
+    void __fail(Error error) {
+        error_ = error;
+        cplus_task_finish(state_);
+    }
+
+public:
+    ~__TaskThrows() {
+        if (auto error = error_) {
+            if (!cplus_task_was_waited_for(state_)) {
+                string text = format("{}", error);
+                cplus_task_lost_error((void*)&text);
+            }
+        }
+        cplus_task_free(state_);
+    }
+    T wait() throws {
+        cplus_task_wait(state_);
+        if (auto error = error_) throw error;
+        if constexpr (__Copyable<T>) return value_;
+        else return __move(value_);
+    }
+    bool done() const { return cplus_task_is_done(state_); }
+};
+)cplus";
+
+inline constexpr const char* kMutexSource = R"cplus(
+extern "C" {
+    void* cplus_mutex_new();
+    void cplus_mutex_free(void* mutex);
+    void cplus_mutex_lock(void* mutex);
+    void cplus_mutex_unlock(void* mutex);
+    bool cplus_mutex_try_lock(void* mutex);
+}
+
+class Mutex {
+    void* mutex_;
+
+public:
+    Mutex() : mutex_(cplus_mutex_new()) {}
+    ~Mutex() { cplus_mutex_free(mutex_); }
+    void lock() { cplus_mutex_lock(mutex_); }
+    void unlock() { cplus_mutex_unlock(mutex_); }
+    bool try_lock() { return cplus_mutex_try_lock(mutex_); }
+};
+)cplus";
+
+inline constexpr const char* kLockGuardSource = R"cplus(
+class LockGuard {
+    Mutex mutex_;
+
+public:
+    LockGuard(Mutex mutex) : mutex_(mutex) { mutex_.lock(); }
+    ~LockGuard() { mutex_.unlock(); }
+};
+)cplus";
+
 // The C side of this is runtime/http.c, which says why it is written as it is.
 inline constexpr const char* kHttpSource = R"cplus(
 extern "C" {

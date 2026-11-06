@@ -1,0 +1,9 @@
+struct P { int x; };
+int main() {
+    local<int> a;
+    local<P> b;
+    local<P?> c;
+    return 0;
+}
+// error: a local reference refers to a class object, but 'int' is not a class
+// error: a struct or a number is a value, which has no count to save work on

@@ -84,11 +84,19 @@ static int64_t deadline_after(double seconds) {
 static pthread_once_t curl_once = PTHREAD_ONCE_INIT;
 static pthread_key_t thread_handle_key;
 
-static void free_thread_handle(void* handle) { curl_easy_cleanup(handle); }
+static bool curl_started;
 
 static void start_curl(void) {
     curl_global_init(CURL_GLOBAL_ALL);
-    pthread_key_create(&thread_handle_key, free_thread_handle);
+    pthread_key_create(&thread_handle_key, NULL);
+    __atomic_store_n(&curl_started, true, __ATOMIC_RELEASE);
+}
+
+// Called by thread.c as a thread ends, while the program is sure to be still running.
+void cplus_http_thread_end(void) {
+    if (!__atomic_load_n(&curl_started, __ATOMIC_ACQUIRE)) return;
+    CURL* handle = pthread_getspecific(thread_handle_key);
+    if (handle) curl_easy_cleanup(handle);
 }
 
 // Requests on one thread share a handle, as that is what keeps connections open from one request to the next.

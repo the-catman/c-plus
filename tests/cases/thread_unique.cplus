@@ -1,0 +1,47 @@
+// A unique reference can be handed to a thread and back. What holds one is taken out of its task by waiting, once.
+class Node {
+public:
+    int n;
+    Node(int v) : n(v) {}
+    ~Node() { println("node {} gone", n); }
+    int read() const { return n; }
+};
+struct Holder {
+    unique<Node> node;
+    int extra = 0;
+};
+
+unique<Node> make(int n) { return unique<Node>(n); }
+int use(unique<Node> u) { return u.n * 2; }
+Holder wrap(int n) { return Holder{unique<Node>(n), 1}; }
+unique<Node> passAlong(unique<Node> u) { return u; }
+
+int main() {
+    unique<Node> a = unique<Node>(1);
+    println("{}", (spawn use(move(a))).wait());
+    // expect: node 1 gone
+    // expect: 2
+
+    Task<unique<Node>> t = spawn make(2);
+    unique<Node> got = t.wait();
+    println("{}", got.n);
+    // expect: 2
+
+    Holder h = (spawn wrap(3)).wait();
+    println("{} {}", h.node.n, h.extra);
+    // expect: 3 1
+
+    unique<Node> back = (spawn passAlong(unique<Node>(4))).wait();
+    println("{}", back.n);
+    // expect: 4
+
+    // A method through one lends the object to the thread, which keeps it alive.
+    println("{}", (spawn got.read()).wait());
+    // expect: 2
+    println("end");
+    // expect: end
+    return 0;
+    // expect: node 4 gone
+    // expect: node 3 gone
+    // expect: node 2 gone
+}

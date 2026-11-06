@@ -1,0 +1,23 @@
+// A program can use local references where it likes, as long as they stay out of `spawn`, and its threads run as usual.
+class Node { public: int n = 0; };
+
+long sumOnThisThread(int rounds) {
+    local<Node> a = local<Node>();
+    a.n = 1;
+    long total = 0;
+    for (int i = 0; i < rounds; i++) {
+        local<Node> b = a;
+        total += b.n;
+    }
+    return total;
+}
+
+int main() {
+    vector<Task<long>> tasks;
+    for (int i = 0; i < 6; i++) tasks.push_back(spawn sumOnThisThread(20000));
+    long total = sumOnThisThread(20000);
+    for (auto t : tasks) total += t.wait();
+    println("{}", total);
+    // expect: 140000
+    return 0;
+}
