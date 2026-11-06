@@ -1222,6 +1222,10 @@ The same happens for:
 When the shift amount is a literal, an out-of-range shift is a compile error instead:
 `1 << 40` is rejected because `1` is a 32-bit `int`. Write `1L << 40`.
 
+Like every runtime error, it goes to standard error, after whatever the program printed so
+far, and ends the program with exit code 134. Destructors do not run. To look around at that
+point in a debugger, set a breakpoint: `break cplus_trap` in `gdb`.
+
 C and C++ leave all of these undefined. Explicit wrapping operators for hashing and
 cryptography, and a flag to turn checks off in hot code, are planned. Floating-point
 arithmetic is not checked; see [Floating-point types](#floating-point-types).
@@ -1437,6 +1441,10 @@ What it cannot catch:
 - **A local variable whose block has ended,** while its function is still running. Only the
   end of the function is noticed.
 - **Reading memory that was never set,** such as from `malloc`.
+
+A stack trace stays on your machine. Some systems, such as Ubuntu, set `DEBUGINFOD_URLS`,
+which would have `llvm-symbolizer` ask a server on the internet about the program, so a debug
+build clears it as it starts.
 
 Debug builds need the sanitizer libraries for the C compiler, such as `libclang-rt-18-dev`
 on Debian or Ubuntu. Without them, `--debug` says so. The stack traces need `llvm-symbolizer`

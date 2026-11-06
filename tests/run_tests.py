@@ -10,7 +10,8 @@ in its comments. A test can use these, one per line, anywhere in the file:
   // error: <text>     compiling must fail, and the errors must contain <text>
   // warning: <text>   compiling must print a warning containing <text>; a test with no
                        warning directives fails if the compiler prints any warning
-  // trap: <text>      the program must stop with a runtime error containing <text>
+  // trap: <text>      the program must stop with a runtime error containing <text>,
+                       and exit code 134
   // stderr: <text>    what the program prints to stderr must contain <text>, e.g. a
                        leak report, which otherwise fails the test
   // exit: <number>    the exit code the program must return (default 0)
@@ -37,7 +38,6 @@ import concurrent.futures
 import os
 import pathlib
 import re
-import resource
 import subprocess
 import sys
 import tempfile
@@ -177,6 +177,9 @@ def run_program(cplus, rel, exe, flags, expect, traps, want_exit, warnings, stde
     if traps:
         if run.returncode == 0:
             return "expected a runtime error, but the program exited normally"
+        # 134 is a runtime error, and 1 an AddressSanitizer report, which only a debug build has.
+        if run.returncode != 134 and not ("--debug" in flags and run.returncode == 1):
+            return f"a runtime error must exit with 134, but this was {run.returncode}\n--- stderr ---\n{run.stderr}"
         missing = [t for t in traps if t not in run.stderr]
         if missing:
             return "runtime error did not contain: " + "; ".join(missing) + "\n--- stderr ---\n" + run.stderr
@@ -201,9 +204,6 @@ def main():
         return 2
     cplus = str(pathlib.Path(sys.argv[1]).resolve())
     name_filter = sys.argv[2] if len(sys.argv) > 2 else ""
-    # A runtime error aborts the program, and a crash reporter can take a second over each
-    # one. Linux starts none when this limit is exactly 1 byte; 0 does not stop it.
-    resource.setrlimit(resource.RLIMIT_CORE, (1, resource.getrlimit(resource.RLIMIT_CORE)[1]))
     ok = check_spec_anchors()
     if not name_filter:
         ok = check_examples(cplus) and ok

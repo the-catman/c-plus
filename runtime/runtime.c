@@ -65,16 +65,14 @@ __attribute__((no_sanitize("address"))) void __asan_on_error(void) {
 }
 #endif
 
-// Ends the program once a fatal error has been printed. A debug build adds a stack trace,
-// and exits as an AddressSanitizer report does, without waking a crash reporter. A shell
-// sees 134 either way.
+// Ends the program once a fatal error has been printed, with the code a shell shows for
+// abort(). The error has been explained, and abort() would wake a crash reporter, which can
+// take a second. A debug build adds a stack trace.
 _Noreturn static void stop_program(void) {
 #ifdef CPLUS_DEBUG_RUNTIME
     __sanitizer_print_stack_trace();
-    _Exit(134);
-#else
-    abort();
 #endif
+    _Exit(134);
 }
 
 #ifndef CPLUS_DEBUG_RUNTIME
@@ -106,7 +104,12 @@ static void on_crash(int signal_number, siginfo_t* info, void* context) {
 
 // Called as the program starts.
 void cplus_start(void) {
-#ifndef CPLUS_DEBUG_RUNTIME
+#ifdef CPLUS_DEBUG_RUNTIME
+    // Some systems, such as Ubuntu, set this by default. It has llvm-symbolizer ask a server
+    // on the internet about the program during a stack trace, which takes seconds and has no
+    // business happening when a program crashes.
+    unsetenv("DEBUGINFOD_URLS");
+#else
     // The handler needs a stack of its own, since the program's may be what ran out. If the
     // handler itself crashes, the signal's default action ends the program.
     static char crash_stack[64 * 1024];
