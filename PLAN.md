@@ -445,8 +445,9 @@ can be called through `extern "C"` declarations with number, `char`, `bool`, `st
 and pointer values. Raw pointers work, with pointer arithmetic, `sizeof`, null traps and
 C types known by name such as `FILE*`, `new` and `delete` with their warning, and C structs,
 through pointers and by value, including array fields, and `array<T, N>`. `--debug` makes
-a debug build with ASan, stack traces and a leak report. Every item of Phase 1 is in; next
-is its exit criterion, a non-trivial program that calls a C library.
+a debug build with ASan, stack traces and a leak report. Every item of Phase 1 is in, and
+`examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
+criterion.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

@@ -1,0 +1,212 @@
+// A reading list kept in SQLite, a C library, using its plain C API.
+//
+//     cplus run examples/books.cplus -lsqlite3
+//
+// Two classes own the C handles, so they are closed by destructors, in the right order: a
+// Statement holds a reference to its Database, and SQLite cannot close a database while a
+// statement of it is still open.
+extern "C" {
+    struct sqlite3;
+    struct sqlite3_stmt;
+
+    int sqlite3_open(string path, sqlite3** db);
+    int sqlite3_close(sqlite3* db);
+    string sqlite3_errmsg(sqlite3* db);
+    int sqlite3_prepare_v2(sqlite3* db, string sql, int length, sqlite3_stmt** statement, const char** rest);
+    int sqlite3_bind_int(sqlite3_stmt* statement, int index, int value);
+    int sqlite3_bind_double(sqlite3_stmt* statement, int index, double value);
+    int sqlite3_bind_null(sqlite3_stmt* statement, int index);
+    int sqlite3_bind_text(sqlite3_stmt* statement, int index, string text, int length, void* destructor);
+    int sqlite3_step(sqlite3_stmt* statement);
+    int sqlite3_reset(sqlite3_stmt* statement);
+    int sqlite3_finalize(sqlite3_stmt* statement);
+    int sqlite3_column_int(sqlite3_stmt* statement, int column);
+    double sqlite3_column_double(sqlite3_stmt* statement, int column);
+    int sqlite3_column_type(sqlite3_stmt* statement, int column);
+    string? sqlite3_column_text(sqlite3_stmt* statement, int column);
+}
+
+// SQLite's result codes, which are macros in C.
+int sqliteOk() { return 0; }
+int sqliteRow() { return 100; }
+int sqliteDone() { return 101; }
+int sqliteNull() { return 5; }
+
+// SQLITE_TRANSIENT, which is -1 as a pointer in C. It tells SQLite to copy the text, which
+// it must, since C+ frees its copy for C when the call returns. A number cannot be cast to a
+// pointer, so this is the address one byte before null.
+void* sqliteTransient() {
+    char* none = null;
+    return (void*)(none - 1);
+}
+
+struct Book {
+    string title;
+    string author;
+    int year;
+    double? rating;  // null until it has been read
+};
+
+class Database {
+    sqlite3* handle = null;
+
+public:
+    Database(string path) {
+        if (sqlite3_open(path, &handle) != sqliteOk()) println("could not open {}: {}", path, error());
+    }
+
+    ~Database() {
+        if (sqlite3_close(handle) != sqliteOk()) println("could not close the database: {}", error());
+    }
+
+    string error() const {
+        return sqlite3_errmsg(handle);
+    }
+
+    // Prepares one SQL statement. If it has a mistake, says so and returns null.
+    Statement? prepare(string sql) {
+        sqlite3_stmt* made = null;
+        if (sqlite3_prepare_v2(handle, sql, -1, &made, null) != sqliteOk()) {
+            println("could not prepare `{}`: {}", sql, error());
+            return null;
+        }
+        return Statement(this, made);
+    }
+
+    // Runs SQL that returns no rows. Returns whether it worked.
+    bool run(string sql) {
+        if (auto statement = prepare(sql)) return statement.finish();
+        return false;
+    }
+};
+
+class Statement {
+    Database db;
+    sqlite3_stmt* handle;
+
+public:
+    Statement(Database owner, sqlite3_stmt* made) : db(owner), handle(made) {}
+
+    ~Statement() {
+        sqlite3_finalize(handle);
+    }
+
+    void bind(int index, int value) {
+        sqlite3_bind_int(handle, index, value);
+    }
+
+    void bindText(int index, string value) {
+        sqlite3_bind_text(handle, index, value, -1, sqliteTransient());
+    }
+
+    void bindRating(int index, double? value) {
+        if (auto rating = value) sqlite3_bind_double(handle, index, rating);
+        else sqlite3_bind_null(handle, index);
+    }
+
+    // Moves to the next row. False at the end, or if something went wrong.
+    bool next() {
+        int code = sqlite3_step(handle);
+        if (code != sqliteRow() && code != sqliteDone()) println("query failed: {}", db.error());
+        return code == sqliteRow();
+    }
+
+    // Runs to the end, and makes the statement ready to run again.
+    bool finish() {
+        int code = sqlite3_step(handle);
+        if (code != sqliteDone()) println("statement failed: {}", db.error());
+        sqlite3_reset(handle);
+        return code == sqliteDone();
+    }
+
+    int integer(int column) const {
+        return sqlite3_column_int(handle, column);
+    }
+
+    string text(int column) const {
+        return sqlite3_column_text(handle, column) ?? "";
+    }
+
+    double? rating(int column) const {
+        if (sqlite3_column_type(handle, column) == sqliteNull()) return null;
+        return sqlite3_column_double(handle, column);
+    }
+};
+
+// Adds the books in one transaction, so that either all of them are stored or none are.
+bool addBooks(Database db, vector<Book> books) {
+    if (auto insert = db.prepare("INSERT INTO books (title, author, year, rating) VALUES (?, ?, ?, ?)")) {
+        if (!db.run("BEGIN")) return false;
+        for (Book book : books) {
+            insert.bindText(1, book.title);
+            insert.bindText(2, book.author);
+            insert.bind(3, book.year);
+            insert.bindRating(4, book.rating);
+            if (!insert.finish()) {
+                db.run("ROLLBACK");
+                return false;
+            }
+        }
+        return db.run("COMMIT");
+    }
+    return false;
+}
+
+// Reads the books written before a year, oldest first.
+vector<Book> booksBefore(Database db, int year) {
+    vector<Book> found;
+    if (auto query = db.prepare("SELECT title, author, year, rating FROM books WHERE year < ? ORDER BY year")) {
+        query.bind(1, year);
+        while (query.next()) found.push_back(Book{query.text(0), query.text(1), query.integer(2), query.rating(3)});
+    }
+    return found;
+}
+
+string describe(double? rating) {
+    if (auto r = rating) return format("{:.1f}", r);
+    return "not read yet";
+}
+
+void printAuthors(Database db) {
+    if (auto query = db.prepare(
+            "SELECT author, COUNT(*), AVG(rating) FROM books GROUP BY author ORDER BY COUNT(*) DESC, author")) {
+        while (query.next()) {
+            int count = query.integer(1);
+            println("{}: {} book{}, average {}", query.text(0), count, count == 1 ? "" : "s", describe(query.rating(2)));
+        }
+    }
+}
+
+int main() {
+    Database db = Database(":memory:");
+    if (!db.run("CREATE TABLE books (title TEXT NOT NULL CHECK (title <> ''), author TEXT NOT NULL, "
+                "year INTEGER NOT NULL, rating REAL)"))
+        return 1;
+
+    vector<Book> books = {
+        Book{"Frankenstein", "Mary Shelley", 1818, 4.5},
+        Book{"Dune", "Frank Herbert", 1965, 4.0},
+        Book{"The Dispossessed", "Ursula K. Le Guin", 1974, 5.0},
+        Book{"The Left Hand of Darkness", "Ursula K. Le Guin", 1969, 4.5},
+        Book{"Neuromancer", "William Gibson", 1984, null},
+        Book{"The Last Man", "Mary Shelley", 1826, null},
+    };
+    if (!addBooks(db, books)) return 1;
+
+    println("Before 1970:");
+    for (Book book : booksBefore(db, 1970))
+        println("  {} ({}) by {}: {}", book.title, book.year, book.author, describe(book.rating));
+
+    println("By author:");
+    printAuthors(db);
+
+    // A mistake in the SQL is reported, and the program carries on.
+    db.run("SELECT title FROM nowhere");
+
+    // A book with no title breaks a rule of the table, so the whole transaction is undone,
+    // and Solaris, which was fine, is not stored either.
+    bool added = addBooks(db, {Book{"Solaris", "Stanislaw Lem", 1961, null}, Book{"", "Nobody", 1900, null}});
+    println("Added them: {}", added);
+    println("Books from before 1962: {}", booksBefore(db, 1962).size());
+    return 0;
+}
