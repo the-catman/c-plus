@@ -1,6 +1,8 @@
 // The C+ runtime. Intentionally small: everything here is called by generated code.
+#define _GNU_SOURCE  // for the registers in a signal's context
 #include <inttypes.h>
 #include <math.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,6 +74,51 @@ _Noreturn static void stop_program(void) {
     _Exit(134);
 #else
     abort();
+#endif
+}
+
+#ifndef CPLUS_DEBUG_RUNTIME
+// A plain build has no AddressSanitizer to report a crash, so it says what happened here.
+// Output printed so far would otherwise be lost. The program is out of stack when the
+// address it could not reach is close to its stack pointer.
+static void on_crash(int signal_number, siginfo_t* info, void* context) {
+    (void)signal_number;
+    uintptr_t address = (uintptr_t)info->si_addr, stack = 0;
+#if defined(__x86_64__)
+    stack = (uintptr_t)((ucontext_t*)context)->uc_mcontext.gregs[REG_RSP];
+#elif defined(__aarch64__)
+    stack = (uintptr_t)((ucontext_t*)context)->uc_mcontext.sp;
+#else
+    (void)context;
+#endif
+    const uintptr_t near = 64 * 1024;
+    fflush(stdout);
+    if (stack && address + near >= stack && address <= stack + near)
+        fputs("fatal error: the program ran out of stack\n"
+              "  = help: if a function calls itself, check that its recursion stops; a very large local array can go "
+              "in a vector instead\n", stderr);
+    else
+        fputs("fatal error: the program used memory it does not own\n"
+              "  = help: a pointer may be wrong; run with --debug to see where\n", stderr);
+    stop_program();
+}
+#endif
+
+// Called as the program starts.
+void cplus_start(void) {
+#ifndef CPLUS_DEBUG_RUNTIME
+    // The handler needs a stack of its own, since the program's may be what ran out. If the
+    // handler itself crashes, the signal's default action ends the program.
+    static char crash_stack[64 * 1024];
+    stack_t stack = {.ss_sp = crash_stack, .ss_size = sizeof crash_stack};
+    sigaltstack(&stack, NULL);
+    struct sigaction action;
+    memset(&action, 0, sizeof action);
+    action.sa_sigaction = on_crash;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGSEGV, &action, NULL);
+    sigaction(SIGBUS, &action, NULL);
 #endif
 }
 

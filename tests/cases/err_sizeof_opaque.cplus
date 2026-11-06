@@ -1,0 +1,13 @@
+// A C type known only by name cannot be held in anything but a pointer, even by sizeof.
+extern "C" struct FILE;
+
+int main() {
+    println("{}", sizeof(FILE?));
+    println("{}", sizeof(vector<FILE>));
+    println("{}", sizeof(array<FILE, 2>));
+    println("{}", sizeof(FILE));
+    println("{}", sizeof(FILE*));
+    return 0;
+}
+// error: 'FILE' is a C type known only by name, so C+ can only hold a pointer to it
+// error: sizeof needs a type with a size, but this is 'FILE'

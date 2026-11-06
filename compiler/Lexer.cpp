@@ -128,6 +128,8 @@ Token Lexer::next() {
     for (const auto& p : puncts) {
         size_t n = std::char_traits<char>::length(p.text);
         if (src_.compare(pos_, n, p.text) == 0) {
+            // In `c?.5:1.5`, this is `?` and then the number `.5`, as in JavaScript.
+            if (p.kind == Tok::QuestionDot && std::isdigit((unsigned char)peek(2))) continue;
             Token t{p.kind, locHere((uint32_t)n), p.text, 0};
             for (size_t i = 0; i < n; ++i) advance();
             return t;
@@ -178,6 +180,11 @@ bool Lexer::atFloat() const {
         char after = peek(i + 1);
         char next = peek(i + 2);
         if ((after == 'f' || after == 'F') && !(std::isalnum((unsigned char)next) || next == '_')) return true;  // 1.f
+        if (after == 'e' || after == 'E') {  // `1.e5`, `1.e-5`
+            char sign = peek(i + 3);
+            if (std::isdigit((unsigned char)next)) return true;
+            if ((next == '+' || next == '-') && std::isdigit((unsigned char)sign)) return true;
+        }
         return std::isdigit((unsigned char)after) || !(std::isalpha((unsigned char)after) || after == '_' || after == '.');
     }
     if (peek(i) == 'e' || peek(i) == 'E') {  // `1e5`, and `1e` or `1e+` with the digits missing
@@ -280,7 +287,8 @@ Token Lexer::lexNumber() {
     uint64_t value = 0;
     bool overflow = false;
     int digits = 0;
-    bool leadingZero = base == 10 && peek() == '0' && std::isdigit((unsigned char)peek(1));
+    bool leadingZero = base == 10 && peek() == '0' &&
+                       (std::isdigit((unsigned char)peek(1)) || (peek(1) == '\'' && std::isdigit((unsigned char)peek(2))));
     while (true) {
         char c = peek();
         int d;
@@ -311,7 +319,8 @@ Token Lexer::lexNumber() {
         diags_.error(loc, "'" + text + "' has no digits after the prefix", "write a number such as 0xFF, 0o17 or 0b101",
                      spec::IntegerLiterals);
     } else if (leadingZero) {
-        std::string digitsOnly = text.substr(text.find_first_not_of("0'"));
+        size_t firstDigit = text.find_first_not_of("0'");
+        std::string digitsOnly = firstDigit == std::string::npos ? "0" : text.substr(firstDigit);
         diags_.error(loc, "numbers cannot start with 0 in C+",
                      "C and C++ silently read '" + text + "' as octal. Write 0o" + digitsOnly +
                          " for octal, or " + digitsOnly + " for decimal",
@@ -407,7 +416,17 @@ bool Lexer::lexEscape(std::string& value, const char* anchor) {
         case 'n': value += '\n'; return true;
         case 't': value += '\t'; return true;
         case 'r': value += '\r'; return true;
-        case '0': value += '\0'; return true;
+        case '0':
+            if (std::isdigit((unsigned char)peek())) {
+                diags_.error(escLoc, "'\\0' cannot be followed by a digit",
+                             "C and C++ read '\\012' as one byte, in octal, which C+ does not have. For that byte, "
+                             "write it in hex: '\\x0A'. For a zero byte and then digits, write '\\x00' and then the "
+                             "digits",
+                             anchor);
+                return false;
+            }
+            value += '\0';
+            return true;
         case '\\': value += '\\'; return true;
         case '"': value += '"'; return true;
         case '\'': value += '\''; return true;

@@ -1,0 +1,10 @@
+// A zero byte can be written on its own, or in hex when digits follow it.
+int main() {
+    println("{}", "a\0b".size());
+    println("{}", "\x0012".size());
+    println("{}", "\x0A".size());
+    return 0;
+}
+// expect: 3
+// expect: 3
+// expect: 1

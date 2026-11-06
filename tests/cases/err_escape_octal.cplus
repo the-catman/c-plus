@@ -1,0 +1,7 @@
+// '\0' followed by a digit is one byte in C and C++, in octal, which C+ does not have.
+int main() {
+    string s = "\012";
+    return 0;
+}
+// error: '\0' cannot be followed by a digit
+// error: write it in hex: '\x0A'

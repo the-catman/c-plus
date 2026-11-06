@@ -1974,6 +1974,13 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             bool equality = b.op == BinOp::Eq || b.op == BinOp::Ne;
             // Values of the same type can always be compared for equality: strings by
             // contents, structs field by field, and class references by identity.
+            if (equality && l->is(K::Void) && r->is(K::Void)) {
+                diags_.error(b.lhs->loc, std::string("'") + sym + "' compares two values, but a void function returns none",
+                             "call the functions as statements of their own, or have them return a value",
+                             spec::Functions);
+                result = Type::boolTy();
+                break;
+            }
             if (equality && l == r && !l->isNumber()) {
                 b.operandType = l;
                 result = Type::boolTy();
@@ -2182,7 +2189,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             }
             const Type* t = z.target;
             result = Type::longTy();
-            if (t->isError() || (t->isArray() && !checkStorable(t, e.loc))) break;
+            if (t->isError() || (!t->isOpaque() && !checkStorable(t, e.loc))) break;
             if (t->is(K::Void) || t->isNull() || t->isOpaque() || t->is(K::Auto))
                 diags_.error(e.loc, "sizeof needs a type with a size, but this is " + q(t),
                              t->isOpaque() ? q(t) + " is a C type known only by name, so only C knows its size" : "",

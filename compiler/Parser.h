@@ -12,9 +12,25 @@ class Parser {
 public:
     Parser(std::vector<Token> tokens, Diagnostics& diags);
     Program parseProgram();
+    bool gaveUp() const { return gaveUp_; }  // the program was too deeply nested to read to its end
 
 private:
     struct ParseError {};  // thrown after reporting, caught at a recovery point
+    struct TooDeep {};     // thrown after reporting, which ends the parse
+
+    // Counts how deeply the code being parsed is nested, while one parsing function runs.
+    struct Nesting {
+        Parser& parser;
+        explicit Nesting(Parser& p) : parser(p) {
+            if (++parser.nesting_ > kMaxNesting) parser.failTooDeep();
+        }
+        ~Nesting() { --parser.nesting_; }
+    };
+    static constexpr int kMaxNesting = 1000;
+    static constexpr int kMaxChain = 10000;  // `a + b + c`, `a.b.c`: no nesting, but as deep to work through
+    int nesting_ = 0;
+    bool gaveUp_ = false;
+    [[noreturn]] void failTooDeep();
 
     // Token helpers
     const Token& peek(size_t ahead = 0) const;

@@ -1,0 +1,18 @@
+// Running out of stack stops the program with a message in every build, after what it
+// printed so far. Giving C the pointer keeps -O from turning the recursion into a loop.
+extern "C" long time(long* out);
+
+long forever(long n) {
+    array<long, 64> a;
+    time(a.data());
+    a[1] = n;
+    return forever(n + 1) + a[1];
+}
+
+int main() {
+    println("before");
+    println("{}", forever(0));
+    return 0;
+}
+// expect: before
+// trap: the program ran out of stack

@@ -1,0 +1,11 @@
+// A leading zero is an error whatever follows it, since C and C++ read it as octal.
+int main() {
+    int a = 00;
+    int b = 0'10;
+    int c = 000'7;
+    return 0;
+}
+// error: numbers cannot start with 0 in C+
+// error: C and C++ silently read '00' as octal. Write 0o0 for octal, or 0 for decimal
+// error: C and C++ silently read '0'10' as octal. Write 0o10 for octal, or 10 for decimal
+// error: C and C++ silently read '000'7' as octal. Write 0o7 for octal, or 7 for decimal

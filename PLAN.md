@@ -506,9 +506,6 @@ will confidently write C++ wherever the two differ.
 - References (`T&`): whether C+ gets them, and in what form. They decide how
   `for (auto& x : v)` and `const T&` parameters work; today both are errors that point to a
   copy, which is cheap for vectors.
-- A clear message when the stack runs out, from deep recursion or a large local array,
-  in place of a plain crash, in plain builds as debug builds already have. It needs a signal
-  handler on its own stack.
 - Event loop and threads: one loop per thread versus a work-stealing scheduler. Decided
   in Phase 5 with real workloads.
 - Package manager, after v1.

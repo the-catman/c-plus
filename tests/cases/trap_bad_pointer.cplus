@@ -1,0 +1,11 @@
+// Following a pointer to memory that is not there stops the program, after what it printed
+// so far, and says what to do next.
+int main() {
+    println("before");
+    char* none = null;
+    int* p = (int*)(none + 8);
+    println("{}", *p);
+    return 0;
+}
+// expect: before
+// trap: the program used memory it does not own

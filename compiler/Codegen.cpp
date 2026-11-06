@@ -50,7 +50,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
-    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree;
+    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart;
     llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
@@ -263,6 +263,7 @@ struct Codegen::Impl {
         rtNew = decl("cplus_new", ptrTy, {i64, i64, i32, ptrTy, i32, i32});
         rtDeleteCheck = decl("cplus_delete_check", i64, {ptrTy, i32, ptrTy, i32, i32});
         rtDeleteFree = decl("cplus_delete_free", voidTy, {ptrTy});
+        rtStart = decl("cplus_start", voidTy, {});
         rtStrMutable = decl("cplus_str_mutable", ptrTy, {ptrTy});
         rtStrRepeat = decl("cplus_str_repeat", voidTy, {ptrTy, i64, i32, ptrTy, i32, i32});
         rtVecNew = decl("cplus_vec_new", ptrTy, {i64, i64});
@@ -1869,7 +1870,10 @@ struct Codegen::Impl {
         bool leftPtr = bin.lhs->type->isPointer();
         if (leftPtr && bin.rhs->type->isPointer()) {  // `p - q`: how many elements apart
             llvm::Value* l = gen(*bin.lhs);
-            return b.CreatePtrDiff(elem, l, gen(*bin.rhs), "distance");
+            llvm::Value* r = gen(*bin.rhs);
+            // Elements that take no room, such as `array<int, 0>`, are all in one place.
+            if (mod->getDataLayout().getTypeAllocSize(elem) == 0) return b.getInt64(0);
+            return b.CreatePtrDiff(elem, l, r, "distance");
         }
         llvm::Value* l = leftPtr ? gen(*bin.lhs) : genConverted(*bin.lhs, Type::longTy());
         llvm::Value* r = leftPtr ? genConverted(*bin.rhs, Type::longTy()) : gen(*bin.rhs);
@@ -2964,6 +2968,7 @@ struct Codegen::Impl {
         // With -O, the program's main is inlined here, and without a line table of its own
         // this function would lose that main's lines.
         startLineTable(userMain.nameLoc);
+        b.CreateCall(rtStart, {});
         b.CreateRet(b.CreateCall(funcs.at(&userMain), {}));
         endLineTable();
     }
@@ -3150,6 +3155,9 @@ struct Codegen::Impl {
             std::vector<llvm::Type*> fields;
             if (sd->isClass) fields.push_back(b.getInt64Ty());  // the reference count
             for (auto& f : sd->fields) fields.push_back(llvmType(f.type));
+            // As in C++, an empty struct takes one byte, so `new E[3]` makes three of them at
+            // different addresses. Inside `extern "C"` it follows C, where it takes none.
+            if (fields.empty() && !sd->externC) fields.push_back(b.getInt8Ty());
             types[sd].layout->setBody(fields);
         }
         declareRuntime();

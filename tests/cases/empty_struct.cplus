@@ -1,0 +1,35 @@
+// An empty struct takes one byte, as in C++, so each one has its own address.
+[[allow(new_delete)]];
+
+struct E {};
+
+struct Holder {
+    E first;
+    int n = 1;
+};
+
+int main() {
+    println("{}", sizeof(E));
+    E* p = new E[3];
+    println("{}", (p + 2) - p);
+    delete[] p;
+    array<E, 2> a;
+    println("{} {}", sizeof(a), a);
+    vector<E> v = {E{}, E{}};
+    println("{} {}", v.size(), v);
+    println("{}", E{} == E{});
+    println("{}", Holder{});
+
+    // A type with no elements still has a place, where pointers to it cannot be apart.
+    array<int, 0> none;
+    array<int, 0>* q = &none;
+    println("{} {}", sizeof(none), (q + 1) - q);
+    return 0;
+}
+// expect: 1
+// expect: 2
+// expect: 2 [{}, {}]
+// expect: 2 [{}, {}]
+// expect: true
+// expect: {first: {}, n: 1}
+// expect: 0 0

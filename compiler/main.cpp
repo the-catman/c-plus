@@ -1,4 +1,5 @@
 // The `cplus` command: check, build, or run a C+ program.
+#include <pthread.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -78,8 +79,10 @@ static bool frontEnd(const SourceFile& file, Diagnostics& diags, Program& progra
     Lexer lexer(file, diags);
     Parser parser(lexer.lexAll(), diags);
     program = parser.parseProgram();
-    Sema sema(diags, warnNewDelete);
-    sema.check(program);
+    if (!parser.gaveUp()) {  // otherwise what was read is too little to check
+        Sema sema(diags, warnNewDelete);
+        sema.check(program);
+    }
     if (diags.hasErrors()) {
         int n = diags.errorCount();
         std::fprintf(stderr, "error: could not compile %s because of %d error%s\n", file.path.c_str(), n,
@@ -156,7 +159,7 @@ static int build(const Options& opts, const std::string& exePath) {
     return 0;
 }
 
-int main(int argc, char** argv) {
+static int compilerMain(int argc, char** argv) {
     if (argc < 2) return usageError("no command given");
     Options opts;
     opts.command = argv[1];
@@ -221,7 +224,15 @@ int main(int argc, char** argv) {
         return build(opts, out);
     }
 
-    std::string tmpl = (fs::temp_directory_path() / "cplus-run-XXXXXX").string();
+    std::error_code tempError;
+    fs::path tempDir = fs::temp_directory_path(tempError);
+    if (tempError) {
+        std::fprintf(stderr, "error: cannot find a folder for temporary files: %s\n"
+                             "  = help: set the environment variable TMPDIR to a folder that exists\n",
+                     tempError.message().c_str());
+        return 1;
+    }
+    std::string tmpl = (tempDir / "cplus-run-XXXXXX").string();
     if (!mkdtemp(tmpl.data())) {
         std::perror("mkdtemp");
         return 1;
@@ -236,4 +247,38 @@ int main(int argc, char** argv) {
     std::error_code ec;
     fs::remove_all(tmpl, ec);
     return rc;
+}
+
+// The compiler works through nested code by recursion, and the parser allows code nested
+// far deeper than the usual 8 MiB of stack could work through, so it runs on a thread with
+// more. The memory is only used as far as it is reached.
+struct MainArgs {
+    int argc;
+    char** argv;
+    int result;
+};
+
+static void* runCompiler(void* data) {
+    auto* args = static_cast<MainArgs*>(data);
+    try {
+        args->result = compilerMain(args->argc, args->argv);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "internal compiler error: %s\n", e.what());
+        args->result = 70;
+    }
+    return nullptr;
+}
+
+int main(int argc, char** argv) {
+    MainArgs args{argc, argv, 0};
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 512 * 1024 * 1024);
+    pthread_t thread;
+    if (pthread_create(&thread, &attr, runCompiler, &args) != 0) {
+        runCompiler(&args);  // no room for that much stack: try on this one
+        return args.result;
+    }
+    pthread_join(thread, nullptr);
+    return args.result;
 }

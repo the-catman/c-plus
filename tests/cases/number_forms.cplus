@@ -1,0 +1,18 @@
+// A number can end in a bare point, or have an exponent right after it, and `?.` before a
+// digit is `?` and a number.
+int main() {
+    println("{} {} {} {} {}", 1.e5, 1.e-2, 2.E+3, 3., 4.f);
+    bool c = true;
+    println("{}", c?.5:1.5);
+    println("{}", !c?.5:1.5);
+    int? n = 1;
+    println("{}", n?.5:1.5);
+    string? s = "abc";
+    println("{}", s?.size());
+    return 0;
+}
+// expect: 1e+05 0.01 2000 3 4
+// expect: 0.5
+// expect: 1.5
+// expect: 0.5
+// expect: 3

@@ -1,0 +1,7 @@
+void f() {}
+
+int main() {
+    println("{}", f() == f());
+    return 0;
+}
+// error: '==' compares two values, but a void function returns none

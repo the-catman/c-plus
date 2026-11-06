@@ -58,6 +58,44 @@ def check_spec_anchors():
     return not missing
 
 
+def check_nesting_limit(cplus, workdir):
+    """Code nested far too deeply is an error, not a crash, and code near the limit works."""
+    n = 50000
+    too_deep = {
+        "parentheses": "int main() { return " + "(" * n + "1" + ")" * n + "; }",
+        "blocks": "int main() { " + "{" * n + "}" * n + " return 0; }",
+        "unary operators": "int main() { bool b = " + "!" * n + "true; return 0; }",
+        "assignments": "int main() { int a = 0; " + "a = " * n + "1; return a; }",
+        "conditionals": "int main() { bool c = true; int x = " + "c ? 1 : " * n + "2; return x; }",
+        "a long sum": "int main() { int a = 1; int b = a" + " + a" * n + "; return b; }",
+        "a long member chain": "struct S { int x = 0; }; int main() { S s; int y = s" + ".x" * n + "; return y; }",
+        "pointer types": "int main() { int" + "*" * n + " p = null; return 0; }",
+        "vector types": "int main() { " + "vector<" * n + "int" + ">" * n + " v; return 0; }",
+        "else-ifs": "int main() { if (true) return 0; " + "else if (true) return 1; " * n + "return 2; }",
+    }
+    close = {
+        "parentheses": "int main() { println(\"{}\", " + "(" * 300 + "7" + ")" * 300 + "); return 0; }",
+        "blocks": "int main() { " + "{" * 900 + "println(\"7\");" + "}" * 900 + " return 0; }",
+        "else-ifs": "int main() { if (false) return 1; " + "else if (false) return 1; " * 900 + "println(\"7\"); return 0; }",
+        "a long sum": "int main() { int a = 0; int b = 7" + " + a" * 9000 + "; println(\"{}\", b); return 0; }",
+    }
+    ok = True
+    source = workdir / "nesting.cplus"
+    for what, text in too_deep.items():
+        source.write_text(text)
+        run = subprocess.run([cplus, "check", str(source)], capture_output=True, text=True)
+        if run.returncode != 1 or run.stderr.count("nested too deeply") != 1 or "no main" in run.stderr:
+            print(f"FAIL nesting limit with {what}: exit code {run.returncode}\n  " + run.stderr[:500])
+            ok = False
+    for what, text in close.items():
+        source.write_text(text)
+        run = subprocess.run([cplus, "run", str(source)], capture_output=True, text=True)
+        if run.returncode != 0 or run.stdout != "7\n":
+            print(f"FAIL code near the nesting limit with {what}: exit code {run.returncode}\n  " + run.stderr[:500])
+            ok = False
+    return ok
+
+
 def build_c_library(source, workdir):
     obj = workdir / (source.stem + ".o")
     cc = os.environ.get("CC", "cc")
@@ -155,6 +193,9 @@ def main():
     passed = failed = 0
     paths = [p for p in sorted(CASES.glob("*.cplus")) if name_filter in p.name]
     with tempfile.TemporaryDirectory(prefix="cplus-tests-") as tmp:
+        if not name_filter:
+            ok = check_nesting_limit(cplus, pathlib.Path(tmp)) and ok
+
         def run_in_own_folder(path):
             workdir = pathlib.Path(tmp) / path.stem
             workdir.mkdir()

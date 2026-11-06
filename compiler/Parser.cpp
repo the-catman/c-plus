@@ -35,6 +35,13 @@ void Parser::fail(Loc loc, const std::string& message, const std::string& help, 
     throw ParseError{};
 }
 
+void Parser::failTooDeep() {
+    diags_.error(peek().loc, "this code is nested too deeply for the compiler",
+                 "split it into smaller pieces, with local variables or functions");
+    gaveUp_ = true;
+    throw TooDeep{};
+}
+
 void Parser::notYet(Loc loc, const std::string& feature, const std::string& help) {
     fail(loc, "this compiler does not support " + feature + " yet", help, spec::Status);
 }
@@ -84,6 +91,8 @@ Program Parser::parseProgram() {
         fileAttr_ = false;
         try {
             parseTopLevel(prog);
+        } catch (TooDeep&) {
+            return prog;
         } catch (ParseError&) {
             syncTopLevel();
         }
@@ -596,7 +605,9 @@ const Type* Parser::parseType(Loc& loc, bool* isConst) {
                  "write `auto p = &x;` without the '*'", spec::Variables);
         bool pointeeConst = leadingConst;  // `const char*`
         varConst = false;
+        int stars = 0;
         while (match(Tok::Star)) {
+            if (++stars > kMaxNesting) failTooDeep();
             t = Type::pointerTo(t, pointeeConst);
             pointeeConst = false;
             if (check(Tok::KwConst)) {
@@ -626,6 +637,7 @@ const Type* Parser::parseType(Loc& loc, bool* isConst) {
 }
 
 const Type* Parser::parseBaseType(Loc& loc) {
+    Nesting nesting(*this);
     const Token& t = advance();
     loc = t.loc;
     switch (t.kind) {
@@ -1108,6 +1120,7 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
 }
 
 StmtPtr Parser::parseStmt() {
+    Nesting nesting(*this);
     const Token& t = peek();
     switch (t.kind) {
         case Tok::LBrace: return parseBlock();
@@ -1280,6 +1293,7 @@ static std::optional<std::optional<BinOp>> assignOp(Tok k) {
 }
 
 ExprPtr Parser::parseAssign() {
+    Nesting nesting(*this);
     ExprPtr lhs = parseTernary();
     if (auto op = assignOp(peek().kind)) {
         Loc opLoc = advance().loc;
@@ -1292,6 +1306,7 @@ ExprPtr Parser::parseAssign() {
 // `a ?? b` binds less tightly than `||` and more tightly than `?:`, as in JavaScript and
 // C#, and groups to the right: `a ?? b ?? c` is `a ?? (b ?? c)`.
 ExprPtr Parser::parseCoalesce() {
+    Nesting nesting(*this);
     ExprPtr lhs = parseBinary(1);
     if (!check(Tok::QuestionQuestion)) return lhs;
     Loc loc = advance().loc;
@@ -1335,7 +1350,8 @@ static int precedence(Tok k, BinOp& op) {
 
 ExprPtr Parser::parseBinary(int minPrec) {
     ExprPtr lhs = parseUnary();
-    while (true) {
+    for (int terms = 0;; ++terms) {
+        if (terms > kMaxChain) failTooDeep();
         BinOp op;
         int prec = precedence(peek().kind, op);
         if (prec == 0 || prec < minPrec) return lhs;
@@ -1346,6 +1362,7 @@ ExprPtr Parser::parseBinary(int minPrec) {
 }
 
 ExprPtr Parser::parseUnary() {
+    Nesting nesting(*this);
     const Token& t = peek();
     switch (t.kind) {
         case Tok::Minus: {
@@ -1509,7 +1526,8 @@ ExprPtr Parser::parsePostfix(ExprPtr e) {
         }
         return std::move(e);
     };
-    while (true) {
+    for (int links = 0;; ++links) {
+        if (links > kMaxChain) failTooDeep();
         const Token& t = peek();
         if (t.kind == Tok::PlusPlus || t.kind == Tok::MinusMinus) {
             advance();

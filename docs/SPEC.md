@@ -43,7 +43,7 @@ template this throw throws true try typename virtual void weak while
 
 - Decimal `42`, hexadecimal `0xFF`, octal `0o755`, binary `0b1010`.
 - `'` separates digits for readability: `1'000'000`.
-- **A leading zero is an error** (`010`). C and C++ silently read `010` as octal 8, a classic
+- **A leading zero is an error** (`010`, `00`, `0'10`). C and C++ silently read `010` as octal 8, a classic
   bug when numbers are padded to line up. Write `0o10` for octal or `10` for decimal.
   JavaScript, Python, Rust and Swift use the same `0o` prefix.
 - A literal is an `int` if it fits in 32 bits, otherwise a `long`. `-2147483648` is an `int`.
@@ -56,7 +56,9 @@ template this throw throws true try typename virtual void weak while
 ### String literals
 
 `"text"` with escapes `\n \t \r \0 \\ \" \'` and `\xHH`. Adjacent literals are joined:
-`"a" "b"` is `"ab"`. A string cannot span lines.
+`"a" "b"` is `"ab"`. A string cannot span lines. `\0` cannot be followed by a digit, since C
+and C++ read `\012` as one byte, in octal: write `\x0A` for that byte, or `\x0012` for a zero
+byte and then `12`.
 
 ### Character literals
 
@@ -678,8 +680,8 @@ println("{}", string(buffer));      // hello
 
 **Large arrays.** A local array is on the stack, like any other local variable, and the stack
 is small, usually 8 MiB on Linux. Each copy takes that much stack again: a by-value parameter
-or the copy a `for` loop keeps, for example. Running out of stack stops the program with a
-crash; it never overwrites other memory. Use a vector for large amounts of data. An array in
+or the copy a `for` loop keeps, for example. Running out of stack stops the program with an
+error; it never overwrites other memory. Use a vector for large amounts of data. An array in
 a class object, or from `new`, is not on the stack.
 
 ### Pointers
@@ -1192,6 +1194,8 @@ arithmetic is not checked; see [Floating-point types](#floating-point-types).
 int* squares = (int*)malloc(5 * sizeof(int));
 ```
 
+- An empty struct takes one byte, as in C++, so `sizeof` gives 1, and each element of
+  `new E[3]` has its own address. Inside `extern "C"` it takes none, as in C.
 - `sizeof(char)` is 1, `sizeof(int)` and `sizeof(float)` are 4, and `sizeof(long)`,
   `sizeof(double)` and a pointer are 8 on 64-bit systems. A struct includes padding, as in
   C: a struct with an `int` field and then a `long` field is 16.
@@ -1375,7 +1379,7 @@ What a debug build adds:
 - **Invalid bools.** Reading a `bool` through a pointer, or as a field or element, stops the
   program when the byte is not 0 or 1. A whole struct copied through a pointer is not looked
   inside until one of its fields is read.
-- **Running out of stack** prints a message and a trace instead of a plain crash.
+- **Running out of stack, or any other crash,** prints a trace too.
 - **Leak reports.** Leaks are [reported at exit](#memory-model) without setting
   `CPLUS_CHECK_LEAKS=1`. `CPLUS_CHECK_LEAKS=0` turns the report off.
 
