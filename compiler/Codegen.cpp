@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <set>
 #include <unordered_map>
 
@@ -50,7 +51,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
-    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtIsA;
+    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtDynamicCast, rtRetainObject, rtObjectStart;
     llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
@@ -80,10 +81,11 @@ struct Codegen::Impl {
     struct TypeInfo {
         // A struct's value, or a class object. An object starts with its reference count and a
         // pointer to its vtable, which is how code that only knows a base class finds what the
-        // object really is. A class with a base class starts with the layout of that class:
-        // { i64 count, ptr vtable, fields... } or { base, fields... }.
+        // object really is. A class with base classes starts with the layout of each of them:
+        // { i64 count, ptr vtable, fields... } or { base, base, fields... }.
         llvm::StructType* layout = nullptr;
-        llvm::GlobalVariable* vtable = nullptr;  // classes
+        std::vector<BasePath> vtablePlaces;        // classes: see StructDecl::vtablePlaces
+        std::vector<llvm::GlobalVariable*> vtables;  // classes: one for each place. The first also names the class
         llvm::Function* print = nullptr;
         llvm::Function* equals = nullptr;   // structs: compares two values field by field
         llvm::Function* retain = nullptr;   // structs that hold class references
@@ -93,11 +95,16 @@ struct Codegen::Impl {
         int inMemory = -1;                  // structs: whether they hold arrays (-1: not computed)
     };
     std::unordered_map<const StructDecl*, TypeInfo> types;
-    // A vtable is a table of addresses: the vtable of the base class, which dynamic_cast walks
-    // up, then the object's destroy and print helpers, then its virtual methods by slot.
+    // A vtable is a table of addresses, for one way of seeing an object: the list of the parts of
+    // the whole object, which dynamic_cast searches; how far the part with this vtable is from
+    // the object's start; the destroy and print helpers; then the virtual methods by slot.
     static constexpr uint64_t kObjectVtableOffset = 8;
-    static constexpr uint64_t kVtableDestroy = 1, kVtablePrint = 2, kVtableMethods = 3;
+    static constexpr uint64_t kVtableParts = 0, kVtableStart = 1, kVtableDestroy = 2, kVtablePrint = 3, kVtableMethods = 4;
+    // Whether any class has more than one base class. Only then can a reference point into
+    // the middle of an object, and only then does a reference count need to be looked for.
+    bool hasInnerParts = false;
     llvm::Function* objectRelease = nullptr;  // void(ptr object), for every class
+    std::map<std::pair<const FuncDecl*, uint64_t>, llvm::Function*> thunks;  // see vtableMethod
 
     // A vector is a pointer to a buffer laid out as the runtime's cplus_vec: a header of
     // count, size and capacity, then the elements. Null is an empty vector.
@@ -274,7 +281,9 @@ struct Codegen::Impl {
         rtDeleteCheck = decl("cplus_delete_check", i64, {ptrTy, i32, ptrTy, i32, i32});
         rtDeleteFree = decl("cplus_delete_free", voidTy, {ptrTy});
         rtStart = decl("cplus_start", voidTy, {});
-        rtIsA = decl("cplus_is_a", i32, {ptrTy, ptrTy});
+        rtDynamicCast = decl("cplus_dynamic_cast", ptrTy, {ptrTy, ptrTy});
+        rtRetainObject = decl("cplus_retain_object", voidTy, {ptrTy});
+        rtObjectStart = decl("cplus_object_start", ptrTy, {ptrTy});
         rtStrMutable = decl("cplus_str_mutable", ptrTy, {ptrTy});
         rtStrRepeat = decl("cplus_str_repeat", voidTy, {ptrTy, i64, i32, ptrTy, i32, i32});
         rtVecNew = decl("cplus_vec_new", ptrTy, {i64, i64});
@@ -597,7 +606,8 @@ struct Codegen::Impl {
 
     void retainValue(llvm::Value* v, const Type* t) {
         if (t->isOptional()) return retainValue(valueOf(v, t), t->elem);
-        if (t->isClass() || t->isVector()) b.CreateCall(rtRetain, {v});
+        if (t->isClass()) b.CreateCall(hasInnerParts ? rtRetainObject : rtRetain, {v});
+        else if (t->isVector()) b.CreateCall(rtRetain, {v});
         else if (t->is(K::String)) b.CreateCall(rtRetain, {b.CreateExtractValue(v, 2, "owner")});
         else if (!isManaged(t)) return;
         else if (t->isArray()) b.CreateCall(arrayInfo(t).retain, {v});
@@ -1192,9 +1202,13 @@ struct Codegen::Impl {
     llvm::Value* convert(llvm::Value* v, const Type* from, const Type* to) {
         if (from == to) return v;
         if (from->isNull()) return zeroValue(to);
-        if (from->isOptional() && to->isOptional()) return v;  // `Dog?` to `Animal?`: the same address
+        if (from->isOptional() && to->isOptional()) {  // `Dog?` to `Animal?`
+            uint64_t offset = pathOffset(from->elem->decl->pathTo(to->elem->decl));
+            if (!offset) return v;
+            return b.CreateSelect(b.CreateIsNull(v), v, atOffset(v, offset));
+        }
         if (to->isOptional()) return wrapOptional(convert(v, from, to->elem), to);
-        if (from->isClass() && to->isClass()) return v;  // to a base class: the same address
+        if (from->isClass() && to->isClass()) return atOffset(v, pathOffset(from->decl->pathTo(to->decl)));  // to a base class
         if (from->is(K::Int) && to->is(K::Long)) return b.CreateSExt(v, b.getInt64Ty());
         if (from->is(K::Char) && to->isInteger()) return b.CreateZExt(v, llvmType(to));  // its code, 0 to 255
         if (from->is(K::Char) && to->isFloating()) return b.CreateUIToFP(v, llvmType(to));
@@ -1317,41 +1331,80 @@ struct Codegen::Impl {
     }
 
     llvm::Value* fieldAddress(const Type* owner, llvm::Value* object, int index, const std::string& name) {
-        // A class object starts with its base class, or with its count and vtable.
-        unsigned slot = !owner->isClass() ? index : owner->decl->base ? index + 1 : index + 2;
-        return b.CreateStructGEP(types.at(owner->decl).layout, object, slot, name);
+        // A class object starts with its base classes, or with its count and vtable.
+        size_t before = !owner->isClass() ? 0 : owner->decl->bases.empty() ? 2 : owner->decl->bases.size();
+        return b.CreateStructGEP(types.at(owner->decl).layout, object, index + before, name);
     }
 
-    void storeVtable(llvm::Value* object, const StructDecl& sd) {
-        b.CreateStore(types.at(&sd).vtable, b.CreateConstInBoundsGEP1_64(b.getInt8Ty(), object, kObjectVtableOffset, "vptr"));
+    // How far the base class `base` of `sd` is from the start of an `sd`.
+    uint64_t baseOffset(const StructDecl& sd, const StructDecl& base) {
+        const llvm::StructLayout* layout = mod->getDataLayout().getStructLayout(types.at(&sd).layout);
+        for (size_t i = 0; i < sd.bases.size(); ++i)
+            if (sd.bases[i] == &base) return layout->getElementOffset(i);
+        llvm_unreachable("not a base class");
     }
 
-    // What the vtable of an object holds at `slot`, for the class the object really is, or for
-    // the class of a constructor or destructor while one runs.
-    llvm::Value* vtableEntry(llvm::Value* object, uint64_t slot, const char* name) {
-        llvm::Value* vptr = b.CreateConstInBoundsGEP1_64(b.getInt8Ty(), object, kObjectVtableOffset, "vptr");
-        llvm::Value* vtable = b.CreateLoad(b.getPtrTy(), vptr, "vtable");
+    uint64_t pathOffset(const BasePath& path) {
+        uint64_t offset = 0;
+        for (size_t i = 0; i + 1 < path.size(); ++i) offset += baseOffset(*path[i], *path[i + 1]);
+        return offset;
+    }
+
+    llvm::Value* atOffset(llvm::Value* object, uint64_t offset) {
+        return offset ? b.CreateConstInBoundsGEP1_64(b.getInt8Ty(), object, offset) : object;
+    }
+
+    // Makes `object`, and any part of it with a vtable of its own, count as an object of class
+    // `sd`, which is what virtual methods then go by.
+    void storeVtables(llvm::Value* object, const StructDecl& sd) {
+        TypeInfo& info = types.at(&sd);
+        for (size_t i = 0; i < info.vtables.size(); ++i)
+            b.CreateStore(info.vtables[i], atOffset(object, pathOffset(info.vtablePlaces[i]) + kObjectVtableOffset));
+    }
+
+    llvm::Value* loadVtable(llvm::Value* object) {
+        return b.CreateLoad(b.getPtrTy(), atOffset(object, kObjectVtableOffset), "vtable");
+    }
+
+    llvm::Value* vtableSlot(llvm::Value* vtable, uint64_t slot, const char* name) {
         return b.CreateLoad(b.getPtrTy(), b.CreateConstInBoundsGEP1_64(b.getPtrTy(), vtable, slot), name);
     }
 
-    // Builds the base class in the memory of an object, from the values in a constructor's
-    // initializer list: its constructor's arguments, or else its fields, in order.
-    void buildBase(llvm::Value* object, const StructDecl& base, const std::vector<ExprPtr>* args) {
+    // Builds the base classes in the memory of an object, in the order they are declared,
+    // from what a constructor's initializer list gives each one.
+    void buildBases(llvm::Value* object, const StructDecl& sd, const FuncDecl* ctor) {
+        for (size_t i = 0; i < sd.bases.size(); ++i) {
+            const StructDecl& base = *sd.bases[i];
+            uint64_t offset = baseOffset(sd, base);
+            llvm::Value* part = atOffset(object, offset);
+            // Where a count would be, a part other than the first holds how far back to look for
+            // it, as a negative number. It is there before anything can use the part.
+            if (i > 0) b.CreateStore(b.getInt64(-(int64_t)offset), part);
+            const std::vector<ExprPtr>* args = nullptr;
+            if (ctor)
+                for (auto& init : ctor->baseInits)
+                    if (init.name == base.name) args = &init.args;
+            buildBase(part, base, args);
+        }
+    }
+
+    // Builds one base class, from its constructor's arguments, or else its fields, in order.
+    void buildBase(llvm::Value* part, const StructDecl& base, const std::vector<ExprPtr>* args) {
         if (const FuncDecl* ctor = base.constructor) {
-            std::vector<llvm::Value*> values{object};
+            std::vector<llvm::Value*> values{part};
             for (size_t i = 0; args && i < args->size(); ++i) values.push_back(genOwned(*(*args)[i], ctor->params[i]->type));
             b.CreateCall(funcs.at(ctor), values);
             return;
         }
         std::vector<llvm::Value*> given(base.fields.size(), nullptr);
         for (size_t i = 0; args && i < args->size(); ++i) given[i] = genOwned(*(*args)[i], base.fields[i].type);
-        buildObject(object, base, given);
+        buildObject(part, base, given);
     }
 
-    // Fills a class object that has no constructor: its base class, then its own fields.
+    // Fills a class object that has no constructor: its base classes, then its own fields.
     void buildObject(llvm::Value* object, const StructDecl& sd, const std::vector<llvm::Value*>& given) {
-        if (sd.base) buildBase(object, *sd.base, nullptr);
-        storeVtable(object, sd);
+        buildBases(object, sd, nullptr);
+        storeVtables(object, sd);
         fillFields(object, sd, given);
     }
 
@@ -1549,7 +1602,8 @@ struct Codegen::Impl {
         switch (e.kind) {
             case Expr::Kind::Name: {
                 auto& n = static_cast<const NameExpr&>(e);
-                if (n.implicitField >= 0) return fieldAddress(&n.fieldOwner->type, thisPtr, n.implicitField, n.name);
+                if (n.implicitField >= 0)
+                    return fieldAddress(&n.path.back()->type, atOffset(thisPtr, pathOffset(n.path)), n.implicitField, n.name);
                 return locals.at(n.decl);
             }
             case Expr::Kind::This: return thisPtr;
@@ -1561,7 +1615,7 @@ struct Codegen::Impl {
                 else if (llvm::Value* f = frozenValue(*m.base)) object = f;
                 else if (hold || !isPlace(*m.base)) object = gen(*m.base);
                 else object = b.CreateLoad(b.getPtrTy(), addressOf(*m.base), "obj");
-                return fieldAddress(&m.fieldOwner->type, object, m.fieldIndex, m.field);
+                return fieldAddress(&m.fieldOwner->type, atOffset(object, pathOffset(m.path)), m.fieldIndex, m.field);
             }
             case Expr::Kind::Unary: {  // `*p`
                 auto& u = static_cast<const UnaryExpr&>(e);
@@ -2017,8 +2071,16 @@ struct Codegen::Impl {
             case K::String: b.CreateCall(nested ? rtPrintQuoted : rtPrintStr, {out, strData(v), strLength(v)}); break;
             case K::Struct: b.CreateCall(types.at(t->decl).print, {v, out}); break;
             case K::Class:  // whatever the object really is, with all of its fields
-                b.CreateCall(types.at(t->decl).print->getFunctionType(), vtableEntry(v, kVtablePrint, "print"), {v, out});
+            {
+                llvm::Value* vtable = loadVtable(v);
+                llvm::Value* print = vtableSlot(vtable, kVtablePrint, "print");
+                if (hasInnerParts) {  // print takes the object from its start
+                    llvm::Value* start = b.CreatePtrToInt(vtableSlot(vtable, kVtableStart, "start"), b.getInt64Ty());
+                    v = b.CreateInBoundsGEP(b.getInt8Ty(), v, b.CreateNeg(start));
+                }
+                b.CreateCall(types.at(t->decl).print->getFunctionType(), print, {v, out});
                 break;
+            }
             case K::Vector: b.CreateCall(vecInfo(t).print, {v, out}); break;
             case K::Array: b.CreateCall(arrayInfo(t).print, {v, out}); break;
             case K::Null: printText(out, "null"); break;
@@ -2087,13 +2149,13 @@ struct Codegen::Impl {
         llvm::Value* v = gen(*c.operand);
         if (c.dynamic) {
             const Type* toClass = to->isOptional() ? to->elem : to;
-            llvm::Value* isA = b.CreateICmpNE(b.CreateCall(rtIsA, {v, types.at(toClass->decl).vtable}), b.getInt32(0));
-            if (to->isOptional()) return b.CreateSelect(isA, v, llvm::ConstantPointerNull::get(b.getPtrTy()));
-            trapIf(b.CreateNot(isA),
+            llvm::Value* part = b.CreateCall(rtDynamicCast, {v, types.at(toClass->decl).vtables[0]}, "part");
+            if (to->isOptional()) return part;
+            trapIf(b.CreateIsNull(part),
                    "the object is not a '" + std::string(toClass->name) + "'; dynamic_cast<" + toClass->name +
                        "?> gives null instead of stopping the program",
                    c.loc);
-            return v;
+            return part;
         }
         if (from == to) return v;
         if (to->isClass() || to->isOptional()) return convert(v, from, to);  // to a base class
@@ -2301,7 +2363,7 @@ struct Codegen::Impl {
         const FuncDecl* target = call.target ? call.target : call.method;
         if (target->isExtern) return genCCall(call, *target);
         std::vector<llvm::Value*> args;
-        if (call.method) args.push_back(thisPtr);
+        if (call.method) args.push_back(atOffset(thisPtr, pathOffset(call.path)));
         for (size_t i = 0; i < call.args.size(); ++i) args.push_back(genOwned(*call.args[i], target->params[i]->type));
         return callFunction(*target, std::move(args), call.method != nullptr);
     }
@@ -2313,7 +2375,7 @@ struct Codegen::Impl {
         llvm::FunctionCallee callee = funcs.at(&f);
         if (dispatch && f.vtableSlot >= 0)
             callee = llvm::FunctionCallee(funcs.at(&f)->getFunctionType(),
-                                          vtableEntry(args[0], kVtableMethods + f.vtableSlot, f.name.c_str()));
+                                          vtableSlot(loadVtable(args[0]), kVtableMethods + f.vtableSlot, f.name.c_str()));
         if (inMemory(f.retType)) {
             llvm::AllocaInst* result = entryAlloca(llvmType(f.retType), "result");
             args.insert(args.begin(), result);
@@ -2341,7 +2403,7 @@ struct Codegen::Impl {
         std::vector<std::pair<llvm::Value*, llvm::Value*>> held;
         llvm::Value* self;
         if (recv.type->isClass()) {
-            self = gen(recv);
+            self = atOffset(gen(recv), pathOffset(call.path));
         } else if (isPlace(recv)) {
             // A struct method may change the struct in place. Holding a vector element's
             // buffer would make an argument that writes to that vector copy it, leaving
@@ -3045,13 +3107,11 @@ struct Codegen::Impl {
         }
         if (f.role == FuncDecl::Role::Constructor) {
             if (f.owner->isClass) {
-                // The base class comes first. While its constructor runs, the object is only
-                // that class, and a virtual call finds its version, as in C++.
-                if (f.owner->base) {
-                    buildBase(thisPtr, *f.owner->base, f.callsBase ? &f.baseArgs : nullptr);
-                    flushTemps();
-                }
-                storeVtable(thisPtr, *f.owner);
+                // The base classes come first. While the constructor of one runs, the object is
+                // only that class, and a virtual call finds its version, as in C++.
+                buildBases(thisPtr, *f.owner, &f);
+                flushTemps();
+                storeVtables(thisPtr, *f.owner);
             }
             genFieldInits(f);
         }
@@ -3117,6 +3177,27 @@ struct Codegen::Impl {
                          sd.fields[i].name.c_str());
     }
 
+    // The fields of a type, those of its base classes first.
+    void printFields(llvm::Value* out, const StructDecl& sd, llvm::Value* self, bool& first) {
+        for (const StructDecl* base : sd.bases) printFields(out, *base, atOffset(self, baseOffset(sd, *base)), first);
+        for (size_t i = 0; i < sd.fields.size(); ++i) {
+            printText(out, (first ? "" : ", ") + sd.fields[i].name + ": ");
+            printValue(out, loadField(sd, self, i), sd.fields[i].type, true);
+            first = false;
+        }
+    }
+
+    // A class and its base classes, in the order they are destroyed, each with its distance
+    // from the start of the object.
+    struct ObjectPart {
+        const StructDecl* cls;
+        uint64_t offset;
+    };
+    void collectParts(const StructDecl& cls, uint64_t offset, std::vector<ObjectPart>& out) {
+        out.push_back({&cls, offset});
+        for (size_t i = cls.bases.size(); i-- > 0;) collectParts(*cls.bases[i], offset + baseOffset(cls, *cls.bases[i]), out);
+    }
+
     void defineHelpers(const StructDecl& sd) {
         TypeInfo& info = types.at(&sd);
 
@@ -3135,15 +3216,8 @@ struct Codegen::Impl {
             printText(out, sd.name + " ");
         }
         printText(out, "{");
-        std::vector<const StructDecl*> rootFirst;  // the base class's fields come first
-        for (const StructDecl* d = &sd; d; d = d->base) rootFirst.insert(rootFirst.begin(), d);
         bool first = true;
-        for (const StructDecl* d : rootFirst)
-            for (size_t i = 0; i < d->fields.size(); ++i) {
-                printText(out, (first ? "" : ", ") + d->fields[i].name + ": ");
-                printValue(out, loadField(*d, self, i), d->fields[i].type, true);
-                first = false;
-            }
+        printFields(out, sd, self, first);
         printText(out, "}");
         if (sd.isClass) b.CreateCall(rtPrintLeave, {});
         b.CreateRetVoid();
@@ -3177,40 +3251,41 @@ struct Codegen::Impl {
         }
 
         // Destroy: run the destructor, then release the fields, last declared first as in C++,
-        // and the same for each base class in turn, with the object then counting as only that
-        // class. The fields that come after the last destructor are read first, the memory
-        // freed, and then they are released. The last release is a tail call, so freeing a long
-        // chain of objects, like a linked list, needs no more stack than freeing one.
+        // and the same for each base class in turn, the last one first, with the object then
+        // counting as only that class. The fields that come after the last destructor are read
+        // first, the memory freed, and then they are released. The last release is a tail call,
+        // so freeing a long chain of objects, like a linked list, needs no more stack than
+        // freeing one.
         startHelper(info.destroy);
         self = info.destroy->getArg(0);
-        std::vector<const StructDecl*> chain;  // this class, then each base class
+        std::vector<ObjectPart> parts;
+        collectParts(sd, 0, parts);
         size_t lastDestructor = 0;
-        for (const StructDecl* d = &sd; d; d = d->base) {
-            if (d->destructor) lastDestructor = chain.size();
-            chain.push_back(d);
-        }
+        for (size_t c = 0; c < parts.size(); ++c)
+            if (parts[c].cls->destructor) lastDestructor = c;
         struct HeldField {
-            const StructDecl* owner;
+            const ObjectPart* part;
             size_t index;
-            const Type* type() const { return owner->fields[index].type; }
+            const Type* type() const { return part->cls->fields[index].type; }
         };
         std::vector<HeldField> order;  // the managed fields to release after freeing, in that order
-        for (size_t c = 0; c < chain.size(); ++c) {
-            const StructDecl& cls = *chain[c];
+        for (size_t c = 0; c < parts.size(); ++c) {
+            const StructDecl& cls = *parts[c].cls;
+            llvm::Value* part = atOffset(self, parts[c].offset);
             if (cls.destructor) {
                 // While the destructor runs, the object counts as having one reference, so
                 // passing `this` to a function cannot destroy it a second time.
                 b.CreateStore(b.getInt64(1), self);
-                if (c > 0) storeVtable(self, cls);
-                b.CreateCall(funcs.at(cls.destructor), {self});
+                if (c > 0) storeVtables(part, cls);
+                b.CreateCall(funcs.at(cls.destructor), {part});
                 trapIf(b.CreateICmpNE(b.CreateLoad(b.getInt64Ty(), self), b.getInt64(1)),
                        "the destructor of '" + cls.name + "' stored 'this' somewhere, so the object would be used after it is freed",
                        cls.destructor->nameLoc);
             }
             for (size_t i = cls.fields.size(); i-- > 0;) {
                 if (!isManaged(cls.fields[i].type)) continue;
-                if (c >= lastDestructor) order.push_back({&cls, i});
-                else releaseValue(loadField(cls, self, i), cls.fields[i].type);
+                if (c >= lastDestructor) order.push_back({&parts[c], i});
+                else releaseValue(loadField(cls, part, i), cls.fields[i].type);
             }
         }
         // The chain usually goes through the first class-typed field. It can be released
@@ -3226,9 +3301,11 @@ struct Codegen::Impl {
         }
         std::vector<llvm::Value*> values;
         for (const HeldField& f : order) {  // a value in the object's memory is copied out of it first
-            const FieldDecl& field = f.owner->fields[f.index];
-            values.push_back(inMemory(field.type) ? loadValue(field.type, fieldAddress(&f.owner->type, self, (int)f.index, field.name))
-                                                  : loadField(*f.owner, self, f.index));
+            const StructDecl& cls = *f.part->cls;
+            const FieldDecl& field = cls.fields[f.index];
+            llvm::Value* part = atOffset(self, f.part->offset);
+            values.push_back(inMemory(field.type) ? loadValue(field.type, fieldAddress(&cls.type, part, (int)f.index, field.name))
+                                                  : loadField(cls, part, f.index));
         }
         b.CreateCall(rtFree, {self});
         for (size_t k = 0; k < order.size(); ++k) {
@@ -3246,26 +3323,76 @@ struct Codegen::Impl {
     void defineObjectRelease() {
         startHelper(objectRelease);
         llvm::Value* self = objectRelease->getArg(0);
+        if (hasInnerParts) self = b.CreateCall(rtObjectStart, {self}, "start");
         auto* destroyBB = llvm::BasicBlock::Create(ctx, "destroy", fn);
         auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
         b.CreateCondBr(b.CreateICmpNE(b.CreateCall(rtRelease, {self}), b.getInt32(0)), destroyBB, doneBB);
         b.SetInsertPoint(destroyBB);
-        b.CreateCall(objectRelease->getFunctionType(), vtableEntry(self, kVtableDestroy, "destroy"), {self})
+        b.CreateCall(objectRelease->getFunctionType(), vtableSlot(loadVtable(self), kVtableDestroy, "destroy"), {self})
             ->setTailCallKind(llvm::CallInst::TCK_MustTail);
         b.CreateRetVoid();
         b.SetInsertPoint(doneBB);
         b.CreateRetVoid();
     }
 
-    void defineVtable(const StructDecl& sd) {
+    // What a vtable at a part of an object calls for method `f`. `f` wants `this` to be the part
+    // that declares it, so when that is not where this vtable lies, a small function moves it.
+    llvm::Constant* vtableMethod(const FuncDecl& f, uint64_t distance) {
+        llvm::Function* target = funcs.at(&f);
+        if (!distance) return target;
+        auto key = std::pair{&f, distance};
+        auto [it, inserted] = thunks.emplace(key, nullptr);
+        if (!inserted) return it->second;
+        auto* thunk = llvm::Function::Create(target->getFunctionType(), llvm::Function::InternalLinkage,
+                                             target->getName() + "#from" + std::to_string(distance), mod.get());
+        it->second = thunk;
+        startHelper(thunk);
+        std::vector<llvm::Value*> args;
+        for (llvm::Argument& a : thunk->args()) args.push_back(&a);
+        unsigned self = inMemory(f.retType) ? 1 : 0;
+        args[self] = b.CreateInBoundsGEP(b.getInt8Ty(), args[self], b.getInt64(-(int64_t)distance));
+        llvm::CallInst* call = b.CreateCall(target, args);
+        call->setTailCallKind(llvm::CallInst::TCK_MustTail);
+        if (call->getType()->isVoidTy()) b.CreateRetVoid();
+        else b.CreateRet(call);
+        return thunk;
+    }
+
+    // Each vtable of a class, and the list of its parts they share. A part is named by the
+    // first vtable of its class, which makes its address the class's identity.
+    void defineVtables(const StructDecl& sd) {
         TypeInfo& info = types.at(&sd);
-        std::vector<llvm::Constant*> entries;
-        entries.push_back(sd.base ? static_cast<llvm::Constant*>(types.at(sd.base).vtable)
-                                  : llvm::ConstantPointerNull::get(b.getPtrTy()));
-        entries.push_back(info.destroy);
-        entries.push_back(info.print);
-        for (const FuncDecl* m : sd.vtable) entries.push_back(funcs.at(m));
-        info.vtable->setInitializer(llvm::ConstantArray::get(llvm::cast<llvm::ArrayType>(info.vtable->getValueType()), entries));
+        std::vector<ObjectPart> parts;
+        collectParts(sd, 0, parts);
+        auto* partTy = llvm::StructType::get(ctx, {b.getPtrTy(), b.getInt64Ty()});
+        std::vector<llvm::Constant*> partValues;
+        for (const ObjectPart& p : parts)
+            partValues.push_back(llvm::ConstantStruct::get(partTy, {types.at(p.cls).vtables[0], b.getInt64(p.offset)}));
+        auto* listTy = llvm::ArrayType::get(partTy, parts.size());
+        llvm::Constant* partList = llvm::ConstantStruct::getAnon({b.getInt64(parts.size()), llvm::ConstantArray::get(listTy, partValues)});
+        auto* partsGlobal = new llvm::GlobalVariable(*mod, partList->getType(), true, llvm::GlobalValue::InternalLinkage, partList,
+                                                     "cplus.parts." + sd.name);
+        for (size_t k = 0; k < info.vtables.size(); ++k) {
+            const BasePath& place = info.vtablePlaces[k];
+            uint64_t placeOffset = pathOffset(place);
+            std::vector<llvm::Constant*> entries{
+                partsGlobal, llvm::ConstantExpr::getIntToPtr(b.getInt64(placeOffset), b.getPtrTy()), info.destroy, info.print};
+            for (const FuncDecl* m : place.back()->vtable) {
+                const FuncDecl* f = StructDecl::finalOverrider(place, m);
+                // A method declared on the way to this part is that far back. Any other came with
+                // the part, from its first base class, and lies at the same address.
+                uint64_t distance = 0;
+                for (size_t i = 0; i < place.size(); ++i)
+                    if (place[i] == f->owner) {
+                        BasePath prefix(place.begin(), place.begin() + i + 1);
+                        distance = placeOffset - pathOffset(prefix);
+                        break;
+                    }
+                entries.push_back(vtableMethod(*f, distance));
+            }
+            info.vtables[k]->setInitializer(
+                llvm::ConstantArray::get(llvm::cast<llvm::ArrayType>(info.vtables[k]->getValueType()), entries));
+        }
     }
 
     // The class of a field that refers to an object, or may: `User` or `User?`.
@@ -3300,9 +3427,9 @@ struct Codegen::Impl {
             types[sd].layout = llvm::StructType::create(ctx, (sd->isClass ? "cplus.class." : "cplus.struct.") + sd->name);
         for (const StructDecl* sd : structs) {
             std::vector<llvm::Type*> fields;
-            if (sd->isClass && sd->base) {
-                fields.push_back(types.at(sd->base).layout);
-            } else if (sd->isClass) {
+            for (const StructDecl* base : sd->bases) fields.push_back(types.at(base).layout);
+            hasInnerParts = hasInnerParts || sd->bases.size() > 1;
+            if (sd->isClass && sd->bases.empty()) {
                 fields.push_back(b.getInt64Ty());  // the reference count
                 fields.push_back(b.getPtrTy());    // the vtable
             }
@@ -3330,12 +3457,16 @@ struct Codegen::Impl {
         }
         for (const StructDecl* sd : structs) {
             if (!sd->isClass) continue;
-            auto* type = llvm::ArrayType::get(b.getPtrTy(), kVtableMethods + sd->vtable.size());
-            types.at(sd).vtable = new llvm::GlobalVariable(*mod, type, true, llvm::GlobalValue::InternalLinkage, nullptr,
-                                                           "cplus.vtable." + sd->name);
+            TypeInfo& info = types.at(sd);
+            info.vtablePlaces = sd->vtablePlaces();
+            for (const BasePath& place : info.vtablePlaces) {
+                auto* type = llvm::ArrayType::get(b.getPtrTy(), kVtableMethods + place.back()->vtable.size());
+                info.vtables.push_back(new llvm::GlobalVariable(*mod, type, true, llvm::GlobalValue::InternalLinkage, nullptr,
+                                                                "cplus.vtable." + sd->name));
+            }
         }
         for (const StructDecl* sd : structs)
-            if (sd->isClass) defineVtable(*sd);
+            if (sd->isClass) defineVtables(*sd);
         if (objectRelease) defineObjectRelease();
         for (const StructDecl* sd : structs) defineHelpers(*sd);
         for (auto& f : program.funcs) defineFunction(*f);

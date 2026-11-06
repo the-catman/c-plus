@@ -1,0 +1,117 @@
+class Base {
+public:
+    int id = 0;
+    virtual int pure() const = 0;
+    int plain() const { return 1; }
+};
+class Left : public Base {
+public:
+    int pure() const override { return 1; }
+    int same() const { return 1; }
+    int value = 1;
+};
+class Right : public Base {
+public:
+    int pure() const override { return 2; }
+    int same() const { return 2; }
+    int value = 2;
+};
+class Both : public Left, public Right {
+public:
+    int a() { return value; }
+    int b() { return same(); }
+    int c() { return id; }
+    int d() { return Base::id; }
+};
+class NoMethod {
+public:
+    virtual int run() const { return 1; }
+};
+class Twice : public Left, public Left {};
+class WrongSecond : public Left, public NoMethod {
+public:
+    int run() { return 2; }
+};
+class Hides : public Left, public NoMethod {
+public:
+    int plain() const { return 2; }
+};
+class NoOverride : public Left, public NoMethod {
+public:
+    int run() const { return 2; }
+};
+class NeedsArgument {
+public:
+    NeedsArgument(int n) {}
+};
+class NoArgumentForSecond : public Left, public NeedsArgument {
+public:
+    NoArgumentForSecond() {}
+};
+class ImplicitlyPure : public Left, public Speaker {};
+
+interface Speaker {
+    string speak() const;
+};
+interface WithField {
+    int x;
+};
+interface WithBody {
+    int f() { return 1; }
+};
+interface WithConstructor {
+    WithConstructor() {}
+};
+interface WithDestructor {
+    ~WithDestructor() {}
+};
+interface WithPrivate {
+private:
+    int f();
+};
+interface FromClass : public Left {};
+class Fine : public Speaker {
+public:
+    string speak() const override { return ""; }
+};
+class Forgot : public Speaker {
+public:
+    string speak() const { return ""; }
+};
+class Other {};
+
+int main() {
+    Both b = Both();
+    int x = b.value;
+    int y = b.same();
+    Base base = b;
+    Base cast = static_cast<Base>(b);
+    int z = b.Base::id;
+    Speaker s = Speaker();
+    ImplicitlyPure p = ImplicitlyPure();
+    Fine f = Fine();
+    Other? other = dynamic_cast<Other?>(f);
+    return 0;
+}
+// error: 'value' is ambiguous in 'Both', which has one through 'Left' and one through 'Right'
+// error: say which: `x.Left::value`, or `Left::value` inside a method
+// error: 'same' is ambiguous in 'Both', which has one through 'Left' and one through 'Right'
+// error: 'id' is ambiguous in 'Both', which has one through 'Left' and one through 'Right'
+// error: 'Both' holds 'Base' more than once, so this does not say which is meant
+// error: 'Twice' derives from 'Left' twice
+// error: 'run' must have the same parameters, return type and `const` as the method it replaces
+// error: 'Hides' cannot have its own 'plain', because 'Base' has a method with that name that is not virtual
+// error: 'run' replaces the virtual method of 'NoMethod', so it must be marked `override`
+// error: the constructor of 'NeedsArgument' needs arguments, so 'NoArgumentForSecond' must pass them
+// error: an interface cannot have fields
+// error: a method of an interface has no body
+// error: an interface cannot have a constructor
+// error: an interface cannot have a destructor
+// error: every method of an interface is public
+// error: an interface can only derive from an interface, but 'Left' is a class
+// error: 'speak' replaces the virtual method of 'Speaker', so it must be marked `override`
+// error: expected 'Base' to initialize 'base', but this is 'Both'
+// error: 'Both' holds 'Base' more than once. Say which by first casting to the base class that leads to it, e.g. `static_cast<Left>(x)`
+// error: cannot create a 'Speaker' object, because its method 'speak' has no body
+// error: cannot create a 'ImplicitlyPure' object, because its method 'speak' from 'Speaker' has no body
+// error: a 'Fine' can never be a 'Other', because no class derives from both

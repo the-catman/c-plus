@@ -30,6 +30,7 @@ inline constexpr const char* IntegerOverflow = "integer-overflow";
 inline constexpr const char* Structs = "structs";
 inline constexpr const char* Classes = "classes";
 inline constexpr const char* Inheritance = "inheritance";
+inline constexpr const char* Interfaces = "interfaces";
 inline constexpr const char* Methods = "methods";
 inline constexpr const char* Vectors = "vectors";
 inline constexpr const char* Arrays = "arrays";

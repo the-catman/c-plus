@@ -1,0 +1,90 @@
+// As in C++ without virtual inheritance, a diamond holds its shared base class twice, and a
+// name that could mean either must say which.
+class Base {
+public:
+    int id;
+    Base(int i) : id(i) { println("Base({})", i); }
+    virtual string who() const { return "base " + to_string(id); }
+    ~Base() { println("~Base {}", id); }
+};
+class Left : public Base {
+public:
+    Left() : Base(1) {}
+    string who() const override { return "left " + to_string(id); }
+};
+class Right : public Base {
+public:
+    Right() : Base(2) {}
+};
+class Both : public Left, public Right {
+public:
+    string names() const { return Left::who() + ", " + Right::who(); }
+    int sum() const { return Left::id + Right::id; }
+    void setLeft(int n) { Left::id = n; }
+};
+class Override : public Left, public Right {
+public:
+    string who() const override { return "both " + to_string(Left::id + Right::id); }
+};
+
+int main() {
+    Both b = Both();
+    println("{}", b);
+    println("{}", b.names());
+    println("{} {}", b.Left::id, b.Right::id);
+    println("{}", b.sum());
+    b.setLeft(5);
+    b.Right::id = 6;
+    println("{}", b.sum());
+    println("{}", b.Left::who());
+
+    Left l = b;
+    Right r = b;
+    println("{} {}", l.who(), r.who());
+    Base viaLeft = l;
+    Base viaRight = r;
+    println("{} {}", viaLeft.id, viaRight.id);
+    println("{}", viaLeft == viaRight);
+    Base chosen = static_cast<Right>(b);
+    println("{}", chosen == viaRight);
+
+    // dynamic_cast finds the other side, and the whole object, from either base.
+    println("{}", dynamic_cast<Both>(viaRight) == b);
+    println("{}", dynamic_cast<Both>(viaLeft) == b);
+    println("{}", dynamic_cast<Left>(viaRight) == l);
+    println("{}", dynamic_cast<Right?>(l) == r);
+    println("{}", dynamic_cast<Base?>(b) == null);
+
+    Override o = Override();
+    Left ol = o;
+    Right or2 = o;
+    println("{} {} {}", o.who(), ol.who(), or2.who());
+    Base ob = or2;
+    println("{}", ob.who());
+    return 0;
+}
+// expect: Base(1)
+// expect: Base(2)
+// expect: Both {id: 1, id: 2}
+// expect: left 1, base 2
+// expect: 1 2
+// expect: 3
+// expect: 11
+// expect: left 5
+// expect: left 5 base 6
+// expect: 5 6
+// expect: false
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: Base(1)
+// expect: Base(2)
+// expect: both 3 both 3 both 3
+// expect: both 3
+// expect: ~Base 2
+// expect: ~Base 1
+// expect: ~Base 6
+// expect: ~Base 5

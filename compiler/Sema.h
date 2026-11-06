@@ -47,10 +47,14 @@ private:
 
     void checkBases(Program& program);
     void checkOverrides(StructDecl& sd);
-    // Reports what stops the base classes of `sd` from being built with no values.
-    void checkBaseWithoutValues(const StructDecl& sd, Loc loc);
-    // The class named before `::` in `x.Animal::speak()`, when `sd` is it or derives from it.
-    const StructDecl* findQualifier(const std::string& name, const StructDecl& sd, Loc loc);
+    // Reports what stops the base class `base` of `sd` from being built with no values.
+    void checkBaseWithoutValues(const StructDecl& sd, const StructDecl& base, Loc loc);
+    // The path to the class named before `::` in `x.Animal::speak()`, when `sd` is it or
+    // derives from it. Empty after reporting an error.
+    BasePath findQualifier(const std::string& name, const StructDecl& sd, Loc loc);
+    // The path to the member called `name` in `from`, or empty if there is none. Reports the
+    // name when it does not say which member is meant, and then gives the first.
+    BasePath findMember(const StructDecl& from, const std::string& name, Loc loc);
     const Type* checkDynamicCast(CastExpr& c, const Type* from, const Type* to);
     void checkStructs(Program& program);
     void checkConstants(Program& program);

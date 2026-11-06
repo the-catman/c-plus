@@ -85,9 +85,9 @@ Program Parser::parseProgram() {
     Program prog;
     prog_ = &prog;
     for (size_t i = 0; i + 1 < toks_.size(); ++i) {
-        bool isRecord = toks_[i].kind == Tok::KwStruct || toks_[i].kind == Tok::KwClass;
+        bool isRecord = toks_[i].kind == Tok::KwStruct || toks_[i].kind == Tok::KwClass || toks_[i].kind == Tok::KwInterface;
         if (isRecord && toks_[i + 1].kind == Tok::Ident && typeNames_.insert(toks_[i + 1].text).second)
-            prog.structs.push_back(std::make_unique<StructDecl>(toks_[i + 1].text, toks_[i].kind == Tok::KwClass));
+            prog.structs.push_back(std::make_unique<StructDecl>(toks_[i + 1].text, toks_[i].kind != Tok::KwStruct));
     }
     while (!check(Tok::Eof)) {
         fileAttr_ = false;
@@ -147,7 +147,8 @@ void Parser::parseTopLevel(Program& prog) {
             return;
         }
         case Tok::KwStruct:
-        case Tok::KwClass: parseRecord(); return;
+        case Tok::KwClass:
+        case Tok::KwInterface: parseRecord(); return;
         case Tok::LBracket: {
             if (!atAttribute()) break;
             Loc attr = parseAttribute();
@@ -183,7 +184,6 @@ void Parser::parseTopLevel(Program& prog) {
         }
         case Tok::KwTemplate: notYet(t.loc, "templates (generics)");
         case Tok::KwEnum: notYet(t.loc, "enums");
-        case Tok::KwInterface: notYet(t.loc, "interfaces");
         case Tok::KwConstexpr:
             notYet(t.loc, "constexpr", "for a number, a char, a bool or a string, write a constant: `const int MAX = 100;`");
         case Tok::KwStatic:
@@ -841,8 +841,10 @@ std::unique_ptr<FuncDecl> Parser::parseFunction(const Type* retType, Loc retLoc)
 // ---- Structs and classes --------------------------------------------------
 
 void Parser::parseRecord() {
-    bool isClass = advance().kind == Tok::KwClass;
-    const char* kw = isClass ? "class" : "struct";
+    Tok keyword = advance().kind;
+    bool isClass = keyword != Tok::KwStruct;
+    bool isInterface = keyword == Tok::KwInterface;
+    const char* kw = isInterface ? "interface" : isClass ? "class" : "struct";
     const Token& name = expect(Tok::Ident, std::string("for the ") + kw + " name");
     if (check(Tok::Semi))
         fail(peek().loc, "C+ has no forward declarations",
@@ -850,29 +852,31 @@ void Parser::parseRecord() {
              "only through pointers is declared with `extern \"C\" struct " + name.text + ";`",
              spec::Structs);
     if (check(Tok::Ident) && peek().text == "final") notYet(peek().loc, "final classes", "leave out `final`");
-    std::string baseName;
-    Loc baseLoc;
+    std::vector<StructDecl::BaseName> baseNames;
     if (match(Tok::Colon)) {
         if (!isClass)
             fail(prev().loc, "a struct cannot have a base class",
                  "a struct is a value, and copying one into a variable of its base type would lose part of it. Make "
                  "both of them classes, or hold the other struct in a field",
                  spec::Inheritance);
-        bool isPublic = match(Tok::KwPublic);
-        if (check(Tok::KwVirtual))
-            fail(peek().loc, "C+ has no virtual inheritance", "write `public " + std::string(peek(1).text) + "`",
-                 spec::Inheritance);
-        if (check(Tok::KwPrivate) || check(Tok::KwProtected))
-            notYet(peek().loc, "private and protected base classes",
-                   "derive with `: public Base`, or hold an object of the other class in a field");
-        const Token& base = expect(Tok::Ident, "for the name of the base class");
-        if (!isPublic)
-            fail(base.loc, "write `public` before the base class: `class " + name.text + " : public " + base.text + "`",
-                 "in C++ a class without it derives privately, which is not what it looks like, so C+ asks for it",
-                 spec::Inheritance);
-        if (check(Tok::Comma)) notYet(peek().loc, "multiple inheritance", "derive from one class for now");
-        baseName = base.text;
-        baseLoc = base.loc;
+        do {
+            bool isPublic = match(Tok::KwPublic);
+            if (check(Tok::KwVirtual))
+                fail(peek().loc, "C+ has no virtual inheritance",
+                     "write `public " + std::string(peek(1).text) + "`. A diamond holds the shared base class twice, and "
+                     "`d.B::name` says which is meant",
+                     spec::Inheritance);
+            if (check(Tok::KwPrivate) || check(Tok::KwProtected))
+                notYet(peek().loc, "private and protected base classes",
+                       "derive with `: public Base`, or hold an object of the other class in a field");
+            const Token& base = expect(Tok::Ident, "for the name of the base class");
+            if (!isPublic)
+                fail(base.loc, std::string("write `public` before the base class: `") + kw + " " + name.text + " : public " +
+                                   base.text + "`",
+                     "in C++ a class without it derives privately, which is not what it looks like, so C+ asks for it",
+                     spec::Inheritance);
+            baseNames.push_back({base.text, base.loc});
+        } while (match(Tok::Comma));
     }
     StructDecl* sd = prog_->findStruct(name.text);  // created by the scan in parseProgram
     std::unique_ptr<StructDecl> duplicate;
@@ -884,10 +888,10 @@ void Parser::parseRecord() {
         sd = duplicate.get();
     }
     sd->nameLoc = name.loc;
-    sd->baseName = baseName;
-    sd->baseLoc = baseLoc;
+    sd->isInterface = isInterface;
+    sd->baseNames = std::move(baseNames);
     expect(Tok::LBrace, "to start the body of " + std::string(kw) + " '" + name.text + "'");
-    Access access = isClass ? Access::Private : Access::Public;  // as in C++
+    Access access = isClass && !isInterface ? Access::Private : Access::Public;  // as in C++
     while (!check(Tok::RBrace) && !check(Tok::Eof)) {
         try {
             parseMember(*sd, access);
@@ -906,18 +910,21 @@ void Parser::parseRecord() {
 void Parser::parseMemberInits(FuncDecl& ctor) {
     do {
         const Token& field = expect(Tok::Ident, "for the field name in the initializer list");
-        if (field.text == ctor.owner->baseName) {  // `Animal(name, 3)`: what builds the base class
+        bool isBase = false;
+        for (auto& base : ctor.owner->baseNames) isBase = isBase || base.name == field.text;
+        if (isBase) {  // `Animal(name, 3)`: what builds the base class
+            FuncDecl::BaseInit base{field.text, field.loc, {}};
             Tok close = match(Tok::LBrace) ? Tok::RBrace : Tok::RParen;
             if (close == Tok::RParen) expect(Tok::LParen, "after '" + field.text + "' in the initializer list");
             if (!check(close)) {
-                do ctor.baseArgs.push_back(parseExpr());
+                do base.args.push_back(parseExpr());
                 while (match(Tok::Comma));
             }
             expect(close, "to close the values for the base class '" + field.text + "'");
-            if (ctor.callsBase)
-                diags_.error(field.loc, "the base class " + field.text + " is built more than once", "", spec::Inheritance);
-            ctor.callsBase = true;
-            ctor.baseLoc = field.loc;
+            for (auto& earlier : ctor.baseInits)
+                if (earlier.name == field.text)
+                    diags_.error(field.loc, "the base class " + field.text + " is built more than once", "", spec::Inheritance);
+            ctor.baseInits.push_back(std::move(base));
             continue;
         }
         FuncDecl::MemberInit init{field.text, field.loc, nullptr, -1};
@@ -967,10 +974,15 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
             fail(loc, "a constructor cannot be virtual", "remove `virtual`", spec::Inheritance);
     }
     const Token& t = peek();
+    if (sd.isInterface && (t.kind == Tok::Tilde || (t.kind == Tok::Ident && t.text == sd.name && peek(1).kind == Tok::LParen)))
+        fail(t.loc, std::string("an interface cannot have a ") + (t.kind == Tok::Tilde ? "destructor" : "constructor"),
+             "an interface only lists methods, and holds nothing to set up. Use a class for that", spec::Interfaces);
     switch (t.kind) {
         case Tok::KwPublic: case Tok::KwPrivate: case Tok::KwProtected:
             advance();
             expect(Tok::Colon, "after '" + std::string(tokSpelling(t.kind)) + "'");
+            if (sd.isInterface && t.kind != Tok::KwPublic)
+                fail(t.loc, "every method of an interface is public", "remove this line", spec::Interfaces);
             access = t.kind == Tok::KwPublic ? Access::Public : t.kind == Tok::KwPrivate ? Access::Private : Access::Protected;
             return;
         case Tok::KwStruct: case Tok::KwClass:
@@ -1001,7 +1013,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         expect(Tok::RParen, "a destructor takes no parameters");
         // A destructor always runs for what the object really is, so `virtual` and `override`
         // change nothing. They are allowed, as C++ code is full of them.
-        if (match(Tok::KwOverride) && sd.baseName.empty())
+        if (match(Tok::KwOverride) && sd.baseNames.empty())
             fail(prev().loc, "'" + sd.name + "' has no base class, so its destructor overrides nothing",
                  "remove `override`", spec::Inheritance);
         if (match(Tok::Assign)) {  // `~Animal() = default;`, the same as having none
@@ -1082,6 +1094,23 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         rejectFinal();
         method->isOverride = match(Tok::KwOverride);
         rejectFinal();
+        if (sd.isInterface) {  // only lists it: `string speak() const;`
+            method->isVirtual = true;
+            method->isPure = true;
+            if (match(Tok::Assign)) {  // as in C++
+                if (peek().kind != Tok::IntLit || peek().intValue != 0)
+                    fail(peek().loc, "a method of an interface cannot be set to a value", "remove what comes after `=`",
+                         spec::Interfaces);
+                advance();
+            }
+            if (check(Tok::LBrace))
+                fail(peek().loc, "a method of an interface has no body", "replace `{ ... }` with `;`, and write the body in "
+                     "the classes that derive from it. For a method with a body, use a class",
+                     spec::Interfaces);
+            expect(Tok::Semi, "after the method of an interface");
+            sd.methods.push_back(std::move(method));
+            return;
+        }
         if (match(Tok::Assign)) {  // `= 0`: no body, and a class that derives must write one
             if (peek().kind != Tok::IntLit || peek().intValue != 0)
                 fail(peek().loc, "a method can only be set to `= 0`, which means it has no body",
@@ -1104,6 +1133,9 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         return;
     }
 
+    if (sd.isInterface)
+        fail(check(Tok::Ident) ? peek().loc : typeLoc, "an interface cannot have fields",
+             "an interface only lists methods. Use a class for fields", spec::Interfaces);
     if (ty->is(Type::Kind::Void))
         fail(typeLoc, "a field cannot have type void", "", spec::Structs);
     std::string firstName;

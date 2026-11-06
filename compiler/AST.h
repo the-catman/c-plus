@@ -175,11 +175,15 @@ struct StringLitExpr : Expr {
     StringLitExpr(Loc l, std::string v) : Expr(Kind::StringLit, l), value(std::move(v)) {}
 };
 
+// A class, then one of its base classes, then one of that one's, and so on: which part of an
+// object is meant, since a diamond holds the same base class twice.
+using BasePath = std::vector<const StructDecl*>;
+
 struct NameExpr : Expr {
     std::string name;
     VarDecl* decl = nullptr;  // set by Sema for a variable
     int implicitField = -1;   // set by Sema when the name is a field of `this`, inside a method
-    const StructDecl* fieldOwner = nullptr;  // set with implicitField: the type that declares the field
+    BasePath path;            // set with implicitField: from the class of `this` to the one declaring the field
     NameExpr(Loc l, std::string n) : Expr(Kind::Name, l), name(std::move(n)) {}
 };
 
@@ -295,6 +299,7 @@ struct CallExpr : Expr {
     std::vector<ExprPtr> args;
     FuncDecl* target = nullptr;              // set by Sema for user functions
     FuncDecl* method = nullptr;              // set by Sema for `name(...)` meaning `this.name(...)`
+    BasePath path;                           // set with method: from the class of `this` to the one declaring it
     const StructDecl* constructs = nullptr;  // set by Sema for `TypeName(...)`
     Builtin builtin = Builtin::None;       // set by Sema for built-ins
     const Type* vectorType = nullptr;      // `vector<int>(n)` or `vector<int>(n, value)`
@@ -325,6 +330,7 @@ struct MethodCallExpr : Expr {
     StrMethod strMethod = StrMethod::None;    // set by Sema for a string method
     OptMethod optMethod = OptMethod::None;    // set by Sema for an optional method
     std::string qualifier;                    // `d.Animal::speak()`: that class's own version, without dispatch
+    BasePath path;                            // set with method: from the receiver's type to the one declaring it
     MethodCallExpr(Loc nameLoc, ExprPtr r, std::string n, std::vector<ExprPtr> a)
         : Expr(Kind::MethodCall, nameLoc), receiver(std::move(r)), name(std::move(n)), args(std::move(a)) {}
 };
@@ -335,6 +341,7 @@ struct MemberExpr : Expr {
     std::string field;
     int fieldIndex = -1;  // set by Sema: the field's place in `fieldOwner`
     const StructDecl* fieldOwner = nullptr;  // set by Sema: the type that declares the field
+    BasePath path;                           // set by Sema: from the type of `base` to `fieldOwner`
     std::string qualifier;                   // `d.Animal::name`
     MemberExpr(Loc fieldLoc, ExprPtr b, std::string f) : Expr(Kind::Member, fieldLoc), base(std::move(b)), field(std::move(f)) {}
 };
@@ -521,9 +528,12 @@ struct FuncDecl {
     int vtableSlot = -1;          // set by Sema for a virtual method
     Access access = Access::Public;
     std::vector<MemberInit> memberInits;
-    bool callsBase = false;       // `: Animal(args)` in a constructor
-    Loc baseLoc;
-    std::vector<ExprPtr> baseArgs;
+    struct BaseInit {  // `: Animal(name, 3)` in a constructor
+        std::string name;
+        Loc loc;
+        std::vector<ExprPtr> args;
+    };
+    std::vector<BaseInit> baseInits;
     std::unique_ptr<VarDecl> thisDecl;  // stands for `this` in definite assignment; set by Sema
 };
 
@@ -546,10 +556,16 @@ struct StructDecl {
     bool defined = false;  // false if only referenced, or its definition failed to parse
     bool opaque = false;   // `extern "C" struct sqlite3;`: a C type known only by name
     bool externC = false;  // defined inside `extern "C"`: every field must be a C type
-    std::string baseName;  // `class Dog : public Animal`
-    Loc baseLoc;
-    StructDecl* base = nullptr;  // set by Sema
-    std::vector<FuncDecl*> vtable;  // set by Sema: by slot, the version of each virtual method this class uses
+    bool isInterface = false;  // `interface Speaker { ... }`: a class with only methods that have no body
+    struct BaseName {
+        std::string name;
+        Loc loc;
+    };
+    std::vector<BaseName> baseNames;  // `class Dog : public Animal, public Pet`
+    std::vector<StructDecl*> bases;   // set by Sema, in the order written
+    // Set by Sema: by slot, the version of each virtual method this class uses, from its first
+    // base class and its own. Those of its other base classes have vtables of their own.
+    std::vector<FuncDecl*> vtable;
     std::vector<FieldDecl> fields;
     std::vector<std::unique_ptr<FuncDecl>> methods;
     FuncDecl* constructor = nullptr;
@@ -560,24 +576,84 @@ struct StructDecl {
         : name(std::move(n)), isClass(cls), type{cls ? Type::Kind::Class : Type::Kind::Struct, nullptr, this} {
         type.name = name.c_str();
     }
-    const char* keyword() const { return isClass ? "class" : "struct"; }
-    // The method with this name, in this type or the nearest base class that has one.
-    FuncDecl* findMethod(const std::string& methodName) const {
-        for (const StructDecl* d = this; d; d = d->base)
-            for (auto& m : d->methods)
-                if (m->role == FuncDecl::Role::Method && m->name == methodName) return m.get();
+    const char* keyword() const { return isInterface ? "interface" : isClass ? "class" : "struct"; }
+    // The method with this name that this type declares itself.
+    FuncDecl* ownMethod(const std::string& methodName) const {
+        for (auto& m : methods)
+            if (m->role == FuncDecl::Role::Method && m->name == methodName) return m.get();
         return nullptr;
     }
+    // Everywhere in this type a field or method of this name is declared, as the path to it. A
+    // type's own member hides what its base classes have. More than one path means the name
+    // alone does not say which is meant.
+    std::vector<BasePath> memberPaths(const std::string& member) const {
+        std::vector<BasePath> out;
+        BasePath path;
+        collectMemberPaths(member, path, out);
+        return out;
+    }
+    void collectMemberPaths(const std::string& member, BasePath& path, std::vector<BasePath>& out) const {
+        path.push_back(this);
+        if (fieldIndex(member) >= 0 || ownMethod(member)) out.push_back(path);
+        else
+            for (const StructDecl* base : bases) base->collectMemberPaths(member, path, out);
+        path.pop_back();
+    }
+    // The nearest method with this name, in this type or a base class.
+    FuncDecl* findMethod(const std::string& methodName) const {
+        std::vector<BasePath> paths = memberPaths(methodName);
+        return paths.empty() ? nullptr : paths[0].back()->ownMethod(methodName);
+    }
     // Whether this is `other`, or derives from it.
-    bool derivesFrom(const StructDecl* other) const {
-        for (const StructDecl* d = this; d; d = d->base)
-            if (d == other) return true;
-        return false;
+    bool derivesFrom(const StructDecl* other) const { return partsOf(other) > 0; }
+    // How many times an object of this type holds a part of type `other`. A diamond holds its
+    // shared base class twice, and only a type with one such part converts to it.
+    int partsOf(const StructDecl* other) const {
+        if (this == other) return 1;
+        int parts = 0;
+        for (const StructDecl* base : bases) parts += base->partsOf(other);
+        return parts;
+    }
+    // The way to the part of type `other`, or the first of them.
+    BasePath pathTo(const StructDecl* other) const {
+        if (this == other) return {this};
+        for (const StructDecl* base : bases) {
+            BasePath rest = base->pathTo(other);
+            if (rest.empty()) continue;
+            rest.insert(rest.begin(), this);
+            return rest;
+        }
+        return {};
+    }
+    // Each vtable of an object of this class, as the path to the part that points to it. The first
+    // base class shares the vtable of the class deriving from it, whose vtable starts like
+    // it. Every other base class has its own, with the slots its own class has.
+    std::vector<BasePath> vtablePlaces() const {
+        std::vector<BasePath> out{{this}};
+        BasePath path{this};
+        collectVtablePlaces(path, out);
+        return out;
+    }
+    void collectVtablePlaces(BasePath& path, std::vector<BasePath>& out) const {
+        for (size_t i = 0; i < bases.size(); ++i) {
+            path.push_back(bases[i]);
+            if (i > 0) out.push_back(path);
+            bases[i]->collectVtablePlaces(path, out);
+            path.pop_back();
+        }
+    }
+    // The method that runs for virtual method `m` in the vtable at `place`: the one declared
+    // closest to the whole object on the way to that part. Other branches do not count.
+    static const FuncDecl* finalOverrider(const BasePath& place, const FuncDecl* m) {
+        for (const StructDecl* d : place)
+            if (const FuncDecl* own = d->ownMethod(m->name)) return own;
+        return m;
     }
     // A virtual method without a body that this class still has, which makes it abstract.
     const FuncDecl* firstPure() const {
-        for (const FuncDecl* m : vtable)
-            if (m->isPure) return m;
+        for (const BasePath& place : vtablePlaces())
+            for (const FuncDecl* m : place.back()->vtable)
+                if (const FuncDecl* f = finalOverrider(place, m); f->isPure) return f;
         return nullptr;
     }
     StructDecl(const StructDecl&) = delete;
@@ -589,10 +665,10 @@ struct StructDecl {
             if (fields[i].name == fieldName) return (int)i;
         return -1;
     }
-    // The type that declares this field: this one or a base class. Null if none does.
+    // The nearest type that declares this field: this one or a base class. Null if none does.
     const StructDecl* fieldOwner(const std::string& fieldName) const {
-        for (const StructDecl* d = this; d; d = d->base)
-            if (d->fieldIndex(fieldName) >= 0) return d;
+        for (const BasePath& path : memberPaths(fieldName))
+            if (path.back()->fieldIndex(fieldName) >= 0) return path.back();
         return nullptr;
     }
 };

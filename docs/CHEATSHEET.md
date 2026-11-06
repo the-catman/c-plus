@@ -31,7 +31,8 @@ long square(long n) { return n * n; }
 | Methods | written inside the type: `int area() const { return w * h; }`. Use fields by name or as `this.w` |
 | Constructors | `U(string n) : name(n) {}`, one per type. `~U() {}` destructors for classes only |
 | Access | `public:`, `private:`, `protected:`; class members are private by default, struct members public |
-| Inheritance | `class Dog : public Animal {...};`, from one class. `virtual string sound() const { ... }`, `string sound() const override { ... }`, `virtual double area() const = 0;`. `Dog(string n) : Animal(n) {}`. A `Dog` converts to an `Animal`, as the same object. `Animal::sound()` for the base class's version |
+| Inheritance | `class Dog : public Animal, public Pet {...};`. `virtual string sound() const { ... }`, `string sound() const override { ... }`, `virtual double area() const = 0;`. `Dog(string n) : Animal(n) {}`. A `Dog` converts to an `Animal`, as the same object. `Animal::sound()` for the base class's version. A diamond holds the shared base class twice, and `d.Left::id` says which |
+| Interfaces | `interface Speaker { string speak() const; };`: methods only, no bodies or fields. `class Dog : public Speaker { string speak() const override { ... } };`, then `Speaker s = Dog();` |
 | Finding the real type | `if (auto d = dynamic_cast<Dog?>(a))` (null when it is not a `Dog`), `dynamic_cast<Dog>(a)` (**stops the program** when it is not) |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
@@ -81,6 +82,7 @@ long square(long n) { return n * n; }
 | `string sound() const` replacing a virtual method | error: `override` is required, and the parameters, return type and `const` must match |
 | a method or field with the name of an inherited one | error, unless it overrides a virtual method. C++ would quietly hide the inherited one |
 | `virtual ~Animal() {}` | optional: a destructor always runs for what the object really is |
+| `class D : public virtual B` | no virtual inheritance. A diamond holds two `B`s; use an interface, or write `d.Left::x` |
 | `(long)p`, `(int*)0x1000`, `int* p = 0;` | error. A pointer to nothing is `null`; only `reinterpret_cast` converts between a pointer and a number |
 | `#define SQLITE_TRANSIENT ((void*)-1)` | `void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);` |
 | `bool ok = p;` | error: write `p != null` or `bool(p)`. `if (p)` is fine |
@@ -148,7 +150,7 @@ long square(long n) { return n * n; }
 
 | Feature | C+ form |
 |---------|---------|
-| Classes | multiple inheritance, interfaces, `final`, covariant return types |
+| Classes | `final`, covariant return types, private and protected base classes |
 | Operators | operator overloading with C++ syntax, after function overloading |
 | Errors | `int f() throws`, `throw Error("..")`, `try f()`, `try { } catch (Error e) { }` |
 | Generics | `template<typename T>`, `template<Comparable T>`; no specialization or SFINAE |

@@ -464,9 +464,9 @@ println("{}", a);              // User {name: "Alice", age: 31}
 
 ### Inheritance
 
-A class can derive from one other class, written as in C++. It gets the fields and methods of
-its base class. A method marked `virtual` runs the version of what the object really is, however
-the object is reached.
+A class can derive from other classes, written as in C++. It gets the fields and methods of its
+base classes. A method marked `virtual` runs the version of what the object really is, however the
+object is reached.
 
 ```cpp
 class Animal {
@@ -546,9 +546,66 @@ These are C++'s `dynamic_cast<Dog*>` and `dynamic_cast<Dog&>`, for a language wh
 is already a reference. It also takes an `Animal?`, where null is not a `Dog`. `static_cast<Dog>(a)`
 and `(Dog)a`, which C++ does not check, are errors. `static_cast<Animal>(dog)` and `(Animal)dog` are allowed.
 
-Not yet: multiple inheritance and interfaces. Multiple inheritance will follow C++ default semantics:
-a diamond holds two copies of the shared base, and ambiguous members are qualified as `d.B::speak()`.
-There will be no virtual inheritance.
+#### Multiple inheritance
+
+A class can have several base classes, each built in the order they are declared, and destroyed in
+the opposite order. It follows C++'s default rules, and C+ has no virtual inheritance.
+
+```cpp
+class Box : public Named, public Sized {
+public:
+    Box(string n, int s) : Named(n), Sized(s) {}
+    int area() const override { return size * size; }    // replaces Sized's
+};
+
+Sized s = Box("crate", 3);    // the same object, seen as a Sized
+```
+
+- A reference to any base class is a reference to the whole object: it keeps the object alive, and
+  it prints and runs virtual methods as what the object really is. `==` on two references compares
+  them as parts of an object, as C++ does on pointers.
+- A method overrides the virtual method of that name in every base class that has one.
+- A name that could mean a member of more than one base class is an error where it is used, not
+  where the class is defined. `x.Left::value`, or `Left::value` inside a method, says which.
+- **A diamond holds its shared base class twice.** With `class Left : public Base` and
+  `class Right : public Base`, a `class Both : public Left, public Right` has two `Base` parts with
+  separate fields. Printing shows both. A `Both` does not convert to a `Base` by itself, since it
+  is not known which is meant, so say `static_cast<Left>(both)` first. `b.Base::id` is an error too;
+  `b.Left::id` is what to write. `dynamic_cast<Base?>` gives null for the same reason.
+- `dynamic_cast` can find any part from any other, also on another branch: `dynamic_cast<Right?>(left)`.
+  It is an error only if no class derives from both.
+- A program that uses multiple inheritance anywhere pays for it with one more memory read for each
+  reference count change and for printing an object. Any other program does not.
+
+### Interfaces
+
+An interface lists methods, with no bodies and no fields, for classes to write. It is used as a
+type like any class, and it cannot be made into an object. A class derives from one as from a class,
+and from as many as it likes.
+
+```cpp
+interface Speaker {
+    string speak() const;
+};
+
+class Dog : public Animal, public Speaker {
+public:
+    string speak() const override { return "Woof"; }
+};
+
+Speaker s = Dog("Rex");
+println("{}", s.speak());
+```
+
+- Everything in an interface is public. It has no constructor or destructor.
+- `virtual` and `= 0` are allowed and mean nothing more, so an abstract class from C++ can become an
+  interface by changing one word.
+- An interface can derive from other interfaces, but not from a class.
+- A class that leaves out a method of its interfaces is abstract: it can be derived from, but no
+  object of it can be created.
+- C+ interfaces are classes in every other way, so the rules above apply to them, including two
+  copies in a diamond: `Pet` and `Robot` deriving from `Named`, and `RobotPet` from both, holds
+  `Named` twice, and one `override` replaces both.
 
 ### Methods
 
@@ -1609,8 +1666,9 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Strings: `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
 | `hashmap<K, V>`; vector `insert`, `erase`, iterators; array sizes given by a name | planned |
 | References (`T&`), including `for (auto& x : v)` | planned |
-| Inheritance from one class, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
-| Multiple inheritance, interfaces, `final`, covariant return types | planned |
+| Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
+| Multiple inheritance, interfaces | implemented |
+| `final`, covariant return types, private and protected base classes | planned |
 | Operator overloading | planned |
 | Destructors for structs, static members | planned |
 | `weak` references | planned |

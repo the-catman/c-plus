@@ -1,0 +1,112 @@
+// An interface lists methods, and a class that derives from it writes them.
+interface Speaker {
+    string speak() const;
+    int volume();
+};
+interface Walker {
+    int legs() const;
+};
+interface Pet : public Speaker, public Walker {
+    string owner() const;
+};
+
+class Animal {
+public:
+    string name;
+    Animal(string n) : name(n) {}
+    virtual string kind() const { return "animal"; }
+};
+
+class Dog : public Animal, public Pet {
+public:
+    int barks = 0;
+    Dog(string n) : Animal(n) {}
+    string kind() const override { return "dog"; }
+    string speak() const override { return name + " says woof"; }
+    int volume() override { barks++; return barks * 10; }
+    int legs() const override { return 4; }
+    string owner() const override { return "Ann"; }
+};
+
+class Robot : public Speaker {
+public:
+    string speak() const override { return "beep"; }
+    int volume() override { return 1; }
+};
+
+// An interface can be the only thing a class derives from, in any order with others, and it
+// can be asked for with dynamic_cast from anything an object might also be.
+class Bird : public Walker, public Animal {
+public:
+    Bird() : Animal("bird") {}
+    int legs() const override { return 2; }
+};
+
+string say(Speaker s) { return s.speak(); }
+Speaker choose(bool robot) {
+    if (robot) return Robot();
+    return Dog("Chosen");
+}
+
+int main() {
+    Dog d = Dog("Rex");
+    println("{}", say(d));
+    println("{}", say(Robot()));
+    println("{}", choose(true).speak());
+    println("{}", choose(false).speak());
+
+    Speaker s = d;
+    Walker w = d;
+    Pet p = d;
+    Animal a = d;
+    println("{} {} {}", s.volume(), s.volume(), d.barks);
+    println("{} {} {} {}", w.legs(), p.legs(), p.speak(), p.owner());
+    println("{}", d.legs());
+    println("{}", a.kind());
+    println("{} {}", s == d, p == d);
+    println("{}", s);
+    println("{}", w);
+
+    vector<Speaker> speakers = {d, Robot(), choose(false)};
+    for (Speaker x : speakers) println("{}", x.speak());
+
+    println("{}", dynamic_cast<Walker?>(s) == w);
+    println("{}", dynamic_cast<Dog>(w) == d);
+    println("{}", dynamic_cast<Animal>(s) == a);
+    println("{}", dynamic_cast<Speaker?>(a) == s);
+    Speaker robot = Robot();
+    println("{}", dynamic_cast<Walker?>(robot) == null);
+    Animal plain = Animal("plain");
+    println("{}", dynamic_cast<Speaker?>(plain) == null);
+
+    Bird b = Bird();
+    Walker walker = b;
+    println("{} {} {}", walker.legs(), b.name, b.kind());
+    Animal birdAnimal = b;
+    println("{}", birdAnimal.kind());
+    println("{}", birdAnimal);
+    return 0;
+}
+// expect: Rex says woof
+// expect: beep
+// expect: beep
+// expect: Chosen says woof
+// expect: 10 20 2
+// expect: 4 4 Rex says woof Ann
+// expect: 4
+// expect: dog
+// expect: true true
+// expect: Dog {name: "Rex", barks: 2}
+// expect: Dog {name: "Rex", barks: 2}
+// expect: Rex says woof
+// expect: beep
+// expect: Chosen says woof
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: 2 bird animal
+// expect: animal
+// expect: Bird {name: "bird"}

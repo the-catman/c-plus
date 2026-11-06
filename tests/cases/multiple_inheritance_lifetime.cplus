@@ -1,0 +1,92 @@
+// A reference to a base class that is not the first is still a reference to the object: it
+// keeps it alive, and the last one to go away frees it, whichever part it points to.
+class First {
+public:
+    int a = 1;
+    virtual int one() const { return 1; }
+};
+class Second {
+public:
+    string b = "second";
+    virtual int two() const { return 2; }
+    // Using `this` while the object is only a Second must count the same object.
+    Second() { keep(this); }
+    void keep(Second s) { println("kept {}", s.b); }
+    virtual string name() const { return "Second"; }
+    Second me() { return this; }
+    ~Second() { println("~Second, {}", name()); }
+};
+class Third {
+public:
+    vector<int> c;
+    virtual int three() const { return 3; }
+};
+class All : public First, public Second, public Third {
+public:
+    string own = "own";
+    int two() const override { return 22; }
+    string name() const override { return "All"; }
+    ~All() { println("~All {}", name()); keepThis(this); }
+    void keepThis(Third t) { println("third {}", t.three()); }
+};
+class Nested : public Third, public All {
+public:
+    int deep = 9;
+    int three() const override { return 33; }
+};
+Third thirdOf(All a) { return a; }
+class Holder {
+public:
+    Third t;
+    Second? s;
+    vector<Second> many;
+};
+struct Pair {
+    Third t;
+    Second s;
+};
+int main() {
+    Third t = thirdOf(All());
+    println("{}", t);
+    {
+        All a = dynamic_cast<All>(t);
+        println("{}", a.two());
+        Second s = a;
+        println("{} {}", s.two(), s.me() == s);
+        Holder h = Holder{t, s, {s, s}};
+        Pair p = {t, s};
+        Pair copy = p;
+        println("{}", copy.s == a);
+    }
+    t = Third();
+    println("freed");
+
+    Nested n = Nested();
+    println("{} {}", n.All::three(), n.three());
+    Second second = n;
+    println("{}", second.two());
+    All all = n;
+    Third inAll = all;
+    println("{}", inAll.three());
+    println("{}", dynamic_cast<Nested>(second) == n);
+    println("{}", second);
+    return 0;
+}
+// expect: kept second
+// expect: All {a: 1, b: "second", c: [], own: "own"}
+// expect: 22
+// expect: 22 true
+// expect: true
+// expect: ~All All
+// expect: third 3
+// expect: ~Second, Second
+// expect: freed
+// expect: kept second
+// expect: 3 33
+// expect: 22
+// expect: 33
+// expect: true
+// expect: Nested {c: [], a: 1, b: "second", c: [], own: "own", deep: 9}
+// expect: ~All All
+// expect: third 3
+// expect: ~Second, Second

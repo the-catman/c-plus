@@ -6,7 +6,7 @@ class NoPublic : Base {};
 class Private : private Base {};
 class Protected : protected Base {};
 class Virtual : public virtual Base {};
-class Many : public Base, public NoPublic {};
+class Second : public Base, NoPublic {};
 class Final final : public Base {};
 struct Derived : public Base {};
 struct HasVirtual {
@@ -40,7 +40,7 @@ int main() { return 0; }
 // error: write `public` before the base class: `class NoPublic : public Base`
 // error: this compiler does not support private and protected base classes yet
 // error: C+ has no virtual inheritance
-// error: this compiler does not support multiple inheritance yet
+// error: write `public` before the base class: `class Second : public NoPublic`
 // error: this compiler does not support final classes yet
 // error: a struct cannot have a base class
 // error: only a class can have virtual methods

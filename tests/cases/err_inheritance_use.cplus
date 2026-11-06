@@ -157,7 +157,7 @@ int main() {
 // error: 'Base::f' can only be called inside a method of a class that derives from 'Base'
 // error: 'Base::open' can only be used inside a method of a class that derives from 'Base'
 // error: 'Base' is not 'Other' or a base class of it
-// error: a 'Plain' can never be a 'Other', because neither class derives from the other
+// error: a 'Plain' can never be a 'Other', because no class derives from both
 // error: a class variable is already a reference, so write `dynamic_cast<Plain?>(x)`
 // error: dynamic_cast finds out whether an object is of a class, but this asks for 'int'
 // error: dynamic_cast needs a class object, but this is 'int'

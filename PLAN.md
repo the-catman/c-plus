@@ -193,6 +193,13 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
   `Dog*` and `Dog&` forms, for a language where a class variable is already a reference.
 - Every object starts with its count and a vtable pointer, 16 bytes, also when its class has no
   virtual methods, since it can be released through a base class. Swift's objects have the same.
+- A reference to a base class other than the first points into the object, as in C++, so fields and
+  methods cost nothing extra. That part's count slot holds how far back the count is, as a
+  negative number, so counting finds the object even while its constructors run. Only a program
+  with multiple inheritance pays the read this takes.
+- `interface Speaker { string speak() const; };` is a class with only methods that have no body,
+  so it needs no new rules. Decided 2026-11-06. It holds its 16 bytes as a part of each object, as
+  any base class does.
 - A struct cannot have a base class or virtual methods, since copying one into a variable of its
   base type would lose part of it.
 
@@ -462,8 +469,8 @@ through pointers and by value, including array fields, and `array<T, N>`. Consta
 outside functions, and `main` can take `argc` and `argv`. `--debug` makes
 a debug build with ASan, stack traces and a leak report. Every item of Phase 1 is in, and
 `examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
-criterion. Phase 2 is in progress: inheritance from one class works, with virtual methods,
-abstract classes and `dynamic_cast`. The leak report came with Phase 1.
+criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
+`dynamic_cast`, multiple inheritance and interfaces. The leak report came with Phase 1.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -516,8 +523,8 @@ will confidently write C++ wherever the two differ.
 
 ## 6. Open items
 
-- Remaining syntax: interfaces, `unique<T>` and `local<T>` construction, `async`
-  functions, lambdas, enums, `switch`. Settled in Phase 0 as each feature is reached.
+- Remaining syntax: `unique<T>` and `local<T>` construction, `async` functions, lambdas, enums,
+  `switch`. Settled in Phase 0 as each feature is reached.
 - Function overloading is planned, as in C++, after the v1 core.
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, since the update to the element would be lost (decided 2026-11-06). The alternative

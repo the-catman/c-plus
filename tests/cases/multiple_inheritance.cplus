@@ -1,0 +1,94 @@
+// A class can have several base classes. Each is a part of the object, built in the order
+// they are declared, and a reference to one is still the whole object.
+class Named {
+public:
+    string name;
+    Named(string n) : name(n) { println("Named({})", n); }
+    virtual string title() const { return "named " + name; }
+    ~Named() { println("~Named {}", name); }
+};
+class Sized {
+public:
+    int size = 1;
+    Sized(int s) : size(s) { println("Sized({})", s); }
+    virtual int area() const { return size * size; }
+    virtual int twice() const { return area() * 2; }
+    int bare() const { return size; }
+    ~Sized() { println("~Sized {}", size); }
+};
+class Box : public Named, public Sized {
+public:
+    int weight = 7;
+    Box(string n, int s) : Sized(s), Named(n) { println("Box({}, {}, {})", name, size, weight); }
+    int area() const override { return weight * size; }
+    string title() const override { return "box " + name; }
+    string both() const { return title() + " " + to_string(area()) + " " + to_string(bare()); }
+    ~Box() { println("~Box {} {}", name, size); }
+};
+
+int useSized(Sized s) { return s.area(); }
+string useNamed(Named n) { return n.title(); }
+Sized sizedOf(Box b) { return b; }
+
+int main() {
+    {
+        Box b = Box("crate", 3);
+        println("{}", b);
+        println("{} {} {}", b.name, b.size, b.weight);
+        println("{}", b.both());
+        println("{} {}", useSized(b), useNamed(b));
+        Sized s = b;
+        Named n = b;
+        println("{} {} {}", s.size, s.area(), s.twice());
+        println("{} {}", n.name, n.title());
+        println("{}", s);
+        println("{}", n);
+        println("{} {}", s == b, n == b);
+        println("{} {}", b.Sized::area(), s.Sized::area());
+        s.size = 4;
+        println("{}", b.size);
+        Sized again = sizedOf(b);
+        println("{}", again == s);
+
+        Sized? maybe = b;
+        println("{}", maybe?.size ?? 0);
+        Box? box = b;
+        Sized? widened = box;
+        println("{}", widened == s);
+        box = null;
+        widened = box;
+        println("{}", widened == null);
+        vector<Sized> list = {b, s};
+        list.push_back(b);
+        println("{}", list[2].area());
+        println("{}", list[0] == list[1]);
+        println("leaving");
+    }
+    println("done");
+    return 0;
+}
+// expect: Named(crate)
+// expect: Sized(3)
+// expect: Box(crate, 3, 7)
+// expect: Box {name: "crate", size: 3, weight: 7}
+// expect: crate 3 7
+// expect: box crate 21 3
+// expect: 21 box crate
+// expect: 3 21 42
+// expect: crate box crate
+// expect: Box {name: "crate", size: 3, weight: 7}
+// expect: Box {name: "crate", size: 3, weight: 7}
+// expect: true true
+// expect: 9 9
+// expect: 4
+// expect: true
+// expect: 4
+// expect: true
+// expect: true
+// expect: 28
+// expect: true
+// expect: leaving
+// expect: ~Box crate 4
+// expect: ~Sized 4
+// expect: ~Named crate
+// expect: done

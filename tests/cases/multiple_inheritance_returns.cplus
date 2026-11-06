@@ -1,0 +1,53 @@
+// A method reached through a base class that is not the first gets the `this` it expects,
+// however its result is returned.
+struct Point {
+    int x;
+    int y;
+};
+class Pad {
+public:
+    long a = 1;
+    long b = 2;
+};
+interface Source {
+    string text(string prefix, int n) const;
+    Point point(int x);
+    array<int, 3> numbers() const;
+    vector<string> words();
+    int? maybe();
+    Source self();
+    void note(array<int, 2> values);
+};
+class Impl : public Pad, public Source {
+public:
+    int base = 100;
+    int noted = 0;
+    string text(string prefix, int n) const override { return prefix + to_string(n + base); }
+    Point point(int x) override { return {x + base, base}; }
+    array<int, 3> numbers() const override { return {base, base + 1, base + 2}; }
+    vector<string> words() override { return {to_string(base)}; }
+    int? maybe() override { return base; }
+    Source self() override { return this; }
+    void note(array<int, 2> values) override { noted = values[1] + base; }
+};
+int main() {
+    Source s = Impl();
+    println("{}", s.text("n", 1));
+    println("{}", s.point(1));
+    println("{}", s.numbers());
+    println("{}", s.words());
+    println("{}", s.maybe());
+    println("{}", s.self() == s);
+    s.note({1, 2});
+    println("{}", dynamic_cast<Impl>(s).noted);
+    println("{}", s);
+    return 0;
+}
+// expect: n101
+// expect: {x: 101, y: 100}
+// expect: [100, 101, 102]
+// expect: ["100"]
+// expect: 100
+// expect: true
+// expect: 102
+// expect: Impl {a: 1, b: 2, base: 100, noted: 102}

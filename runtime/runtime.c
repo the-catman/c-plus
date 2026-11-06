@@ -220,14 +220,46 @@ void cplus_retain(void* object) {
     if (__atomic_fetch_add((int64_t*)object, 1, __ATOMIC_RELAXED) <= 0) bad_count();
 }
 
-// Whether a class object is of the class with this vtable, or of one deriving from it. A
-// vtable starts with the vtable of the base class, and an object with its count and vtable.
-int32_t cplus_is_a(void* object, void* vtable) {
-    if (!object) return 0;
-    for (void** v = ((void***)object)[1]; v; v = v[0])
-        if (v == vtable) return 1;
-    return 0;
+// What generated code keeps for each class: every part of an object of it, with the first
+// vtable of that part's class, which identifies the class, and its distance from the start.
+typedef struct {
+    void* vtable;
+    int64_t offset;
+} cplus_object_part;
+typedef struct {
+    int64_t count;
+    cplus_object_part parts[];
+} cplus_object_parts;
+
+// A class object is a count, then a vtable. The vtable starts with the list of parts, then how far
+// the part with this vtable is from the start of the whole, as a pointer-sized number.
+void* cplus_dynamic_cast(void* object, void* vtable) {
+    if (!object) return NULL;
+    void** table = ((void***)object)[1];
+    const cplus_object_parts* list = table[0];
+    char* start = (char*)object - (intptr_t)table[1];
+    void* found = NULL;
+    for (int64_t i = 0; i < list->count; ++i) {
+        if (list->parts[i].vtable != vtable) continue;
+        if (found) return NULL;  // a diamond holds it twice, and nothing says which
+        found = start + list->parts[i].offset;
+    }
+    return found;
 }
+
+// A reference can point at a base class inside an object, other than the first. Where such a
+// part would have a count, it has how far back to look for it, as a negative number.
+void* cplus_object_start(void* object) {
+    if (!object) return NULL;
+    char* part = object;
+    for (;;) {
+        int64_t count = __atomic_load_n((int64_t*)part, __ATOMIC_RELAXED);
+        if (count >= 0 || count == freed_mark) return part;
+        part += count;
+    }
+}
+
+void cplus_retain_object(void* object) { cplus_retain(cplus_object_start(object)); }
 
 // Returns 1 when this was the last reference, so the caller destroys the object.
 int32_t cplus_release(void* object) {

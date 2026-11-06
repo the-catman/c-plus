@@ -1,0 +1,113 @@
+// Things that could go wrong with a pointer into the middle of an object.
+class A { public: long a = 1; virtual int fa() { return 1; } };
+class B { public: long b = 2; virtual int fb() { return int(b); } B self() { return this; } };
+class C : public A, public B { public: long c = 3; int fb() override { return 30; } };
+class D : public C, public A2 { public: int fb() override { return C::fb() + 1; } };
+class A2 { public: string s = "a2"; virtual string fa2() { return s; } };
+interface I { int fi(); };
+class E : public D, public I { public: int fi() override { return fb() + 100; } };
+class Node : public A, public B {
+public:
+    Node? next;
+    B? other;
+    Node(Node? n) : next(n) {}
+};
+B makeB() { return C(); }
+struct S { B b; array<B?, 2> slots; vector<B> list; };
+long takes(B x) { return x.b; }
+B ret(B x) { return x; }
+int main() {
+    E e = E();
+    println("{} {} {} {}", e.fi(), e.fb(), e.fa2(), e.a);
+    I i = e;
+    println("{}", i.fi());
+    B b = e;
+    println("{} {}", b.fb(), b.self() == b);
+    println("{}", takes(makeB()));
+    println("{}", ret(ret(ret(b))) == e);
+    println("{}", ret(makeB()).fb());
+    println("{}", makeB().self().self().fb());
+    S s = {b, {b, null}, {b, b, makeB()}};
+    S t = s;
+    t.slots[1] = t.list[2];
+    println("{} {}", t.slots[1]?.fb() ?? 0, s.slots[1]?.fb() ?? 0);
+    println("{}", s.list);
+    B?  opt = e;
+    if (auto o = opt) println("{}", o.fb());
+    B again = opt ?? makeB();
+    println("{}", again == b);
+    B other = false ? b : makeB();
+    println("{}", other.fb());
+    println("{}", format("{}", b));
+    B* p = &other;
+    println("{}", p->fb());
+    *p = e;
+    println("{}", other == b);
+    auto v = vector<B>(3, b);
+    v[1] = makeB();
+    v.pop_back();
+    for (B x : v) print("{} ", x.fb());
+    println();
+
+    // a million objects freed through a non-first base; chain through a non-first base's reference
+    Node? head = null;
+    for (int k = 0; k < 1000000; k++) head = Node(head);
+    B firstB = head.value();
+    head = null;
+    println("{}", firstB.b);
+    firstB = makeB();
+
+    // cycle through inner references, broken by hand
+    Node n1 = Node(null);
+    Node n2 = Node(n1);
+    n1.other = n2;
+    println("{}", dynamic_cast<Node>(n1.other.value()) == n2);
+    n1.other = null;
+    more();
+    return 0;
+}
+interface Named { string name() const; };
+interface Pet : public Named { int age() const; };
+interface Robot : public Named { int power() const; };
+class RobotPet : public Pet, public Robot {
+public:
+    string name() const override { return "rp"; }
+    int age() const override { return 2; }
+    int power() const override { return 9; }
+};
+class Half : public Pet { public: string name() const override { return "half"; } int age() const override { return 1; } };
+string viaPet(Pet p) { return p.name() + to_string(p.age()); }
+string viaRobot(Robot r) { return r.name() + to_string(r.power()); }
+string viaNamed(Named n) { return n.name(); }
+void more() {
+    RobotPet r = RobotPet();
+    println("{} {} {}", r.name(), viaPet(r), viaRobot(r));
+    println("{} {}", viaNamed(static_cast<Pet>(r)), viaNamed(static_cast<Robot>(r)));
+    println("{}", dynamic_cast<Named?>(static_cast<Pet>(r)) == null);
+    Named n = Half();
+    println("{}", dynamic_cast<Pet>(n).age());
+    println("{}", r);
+}
+// expect: 131 31 a2 1
+// expect: 131
+// expect: 31 true
+// expect: 2
+// expect: true
+// expect: 30
+// expect: 30
+// expect: 30 0
+// expect: [E {a: 1, b: 2, c: 3, s: "a2"}, E {a: 1, b: 2, c: 3, s: "a2"}, C {a: 1, b: 2, c: 3}]
+// expect: 31
+// expect: true
+// expect: 30
+// expect: E {a: 1, b: 2, c: 3, s: "a2"}
+// expect: 30
+// expect: true
+// expect: 31 30 
+// expect: 2
+// expect: true
+// expect: rp rp2 rp9
+// expect: rp rp
+// expect: true
+// expect: 1
+// expect: RobotPet {}
