@@ -1,0 +1,59 @@
+// While its destructors run an object is already going away, as with std::weak_ptr: a weak
+// reference to it finds nothing, and one made then stays empty. As in C++, its memory is not
+// reused until the weak references are gone, but that cannot be seen.
+class Watcher {
+public:
+    weak<Thing> seen;
+};
+class Part {
+public:
+    weak<Thing> owner;
+    Part(Thing t) : owner(t) {}
+    ~Part() { println("~Part, owner {}", owner.expired() ? "gone" : "here"); }
+};
+class Base {
+public:
+    string name = "base";
+    ~Base() { println("~Base"); }
+};
+class Thing : public Base {
+public:
+    weak<Thing> me;
+    Watcher watcher;
+    Part? part;
+    Thing(Watcher w) : watcher(w) {
+        me = this;
+        part = Part(this);
+        println("in constructor {}", me.expired());
+    }
+    ~Thing() {
+        println("{} {} {}", me.expired(), me.lock() == null, me);
+        weak<Thing> late = this;
+        println("{}", late.expired());
+        watcher.seen = this;
+        Thing again = this;
+        println("{}", again.name);
+    }
+};
+
+int main() {
+    Watcher w = Watcher();
+    {
+        Thing t = Thing(w);
+        println("{}", t.me.expired());
+        w.seen = t;
+    }
+    println("{} {}", w.seen.expired(), w.seen);
+    w.seen = null;
+    println("done");
+    return 0;
+}
+// expect: in constructor false
+// expect: false
+// expect: true true null
+// expect: true
+// expect: base
+// expect: ~Part, owner gone
+// expect: ~Base
+// expect: true null
+// expect: done

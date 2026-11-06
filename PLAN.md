@@ -127,6 +127,15 @@ Always available, no `unsafe` block:
 Reference cycles:
 - Swift model. Strong by default, `weak` for back references. Cycles leak, and that is
   documented.
+- It is written `weak<Node>` and used as C++'s `std::weak_ptr`: `lock()` gives a `Node?`, with
+  `expired()` and `reset()`. Decided 2026-11-06, over Swift's `weak var parent: Node?`, since a
+  type also works in a vector, and nothing reads the object behind the code's back. It prints as
+  `weak<Node>` or `null`, not as the object, which is often the one printing it.
+- Both counts share the object's 64-bit count word, so objects do not grow: 32 bits strong, 30 weak,
+  one flag for "going away", and the sign for a part that is not at the start (§2.11). At zero strong
+  references the destructors run and the fields go. The object's memory stays until the weak references
+  go too, as with `std::make_shared`. A side table, as in Swift, would free it sooner, at the cost
+  of a slot in every object or a table lookup in every release.
 - Debug builds print a leak report at exit: each leaked object, its type, and where it
   was allocated.
 
@@ -319,7 +328,7 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
   `std::optional`. `==` compares an optional with another of the same type, a value, or
   `null`.
 - A struct cannot contain itself, even through an optional. A class can, so reference
-  cycles can now be built, and they leak until `weak` arrives (§2.7). Freeing a long chain
+  cycles can be built, and they leak unless one reference is `weak` (§2.7). Freeing a long chain
   of objects uses constant stack.
 
 ### 2.19 Floating point and casts — DECIDED
@@ -470,7 +479,8 @@ outside functions, and `main` can take `argc` and `argv`. `--debug` makes
 a debug build with ASan, stack traces and a leak report. Every item of Phase 1 is in, and
 `examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
 criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
-`dynamic_cast`, multiple inheritance and interfaces. The leak report came with Phase 1.
+`dynamic_cast`, multiple inheritance and interfaces, and so do `weak<T>` references. The leak
+report came with Phase 1.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

@@ -1,0 +1,99 @@
+// A weak reference does not keep its object alive, and knows when the object is gone.
+class Node {
+public:
+    string name;
+    Node(string n) : name(n) { println("made {}", n); }
+    ~Node() { println("freed {}", name); }
+};
+
+weak<Node> weakly(Node n) { return n; }
+bool gone(weak<Node> w) { return w.expired(); }
+
+int main() {
+    weak<Node> w;
+    println("{} {} {}", w.expired(), w.lock() == null, w);
+    {
+        Node n = Node("a");
+        w = n;
+        println("{} {}", w.expired(), w);
+        if (auto locked = w.lock()) println("{} {}", locked.name, locked == n);
+        println("{}", w.lock()?.name ?? "gone");
+        println("{}", gone(n));
+    }
+    println("{} {}", w.expired(), w);
+    println("{}", w.lock()?.name ?? "gone");
+    if (auto locked = w.lock()) println("never {}", locked.name);
+
+    // A reference from lock() keeps the object alive like any other.
+    Node? kept = null;
+    {
+        Node n = Node("b");
+        w = n;
+        kept = w.lock();
+    }
+    println("{}", w.expired());
+    kept = null;
+    println("{}", w.expired());
+
+    // Made from a new object, nothing keeps it.
+    weak<Node> temp = Node("c");
+    println("{}", temp.expired());
+    println("{}", weakly(Node("d")).expired());
+
+    // Copies are separate weak references to the same object.
+    Node e = Node("e");
+    weak<Node> one = e;
+    weak<Node> two = one;
+    auto three = weak<Node>(e);
+    auto four = weak<Node>();
+    println("{} {} {} {}", one == two, two == three, three == four, four.expired());
+    one.reset();
+    println("{} {} {}", one.expired(), two.expired(), one == two);
+    two = null;
+    println("{}", two.expired());
+    three = three;
+    println("{}", three.expired());
+    const weak<Node> fixed = e;
+    println("{} {}", fixed.lock()?.name ?? "gone", fixed.expired());
+    bool yes = true;
+    println("{} {}", (yes ? three : null).expired(), (yes ? null : three).expired());
+
+    Node? maybe = null;
+    weak<Node> fromNull = maybe;
+    println("{}", fromNull.expired());
+    maybe = e;
+    fromNull = maybe;
+    println("{}", fromNull.expired());
+    println("end");
+    return 0;
+}
+// expect: true true null
+// expect: made a
+// expect: false weak<Node>
+// expect: a true
+// expect: a
+// expect: false
+// expect: freed a
+// expect: true null
+// expect: gone
+// expect: made b
+// expect: false
+// expect: freed b
+// expect: true
+// expect: made c
+// expect: freed c
+// expect: true
+// expect: made d
+// expect: freed d
+// expect: true
+// expect: made e
+// expect: true true false true
+// expect: true false false
+// expect: true
+// expect: false
+// expect: e false
+// expect: false true
+// expect: true
+// expect: false
+// expect: end
+// expect: freed e

@@ -1505,8 +1505,8 @@ shared between threads. Counting is automatic:
   has a destructor: that destructor runs after the link is released, so each node waits for the
   rest of the chain, and a very long chain stops the program when it runs out of stack.
 - Two objects that refer to each other, such as `a.next = b; b.next = a;`, are never
-  freed; this is a reference cycle. `weak` references, which break cycles, are planned.
-  Until then, set one of the references to `null` when you are done with them.
+  freed; this is a reference cycle. Make one of the references a
+  [weak reference](#weak-references), or set one to `null` when you are done with them.
   `CPLUS_CHECK_LEAKS=1` reports the objects a cycle kept alive.
 
 A string's bytes live in a reference-counted buffer, which copies of the string share. A
@@ -1535,6 +1535,54 @@ to. Memory from [`new`](#new-and-delete) stays until `delete` frees it.
 
 Planned: `unique<T>` for a single owner with no count, and `local<T>` for non-atomic
 sharing that cannot cross threads.
+
+### Weak references
+
+`weak<Node>` refers to a class object without keeping it alive, so two objects can refer to each
+other and still be freed. It works like C++'s `std::weak_ptr`. `lock()` gives a `Node?`, which is
+null when the object is gone, and keeps the object alive for as long as that reference lasts.
+
+```cpp
+class Tree {
+public:
+    string name;
+    weak<Tree> parent;        // starts out empty
+    vector<Tree> children;
+
+    void add(Tree child) {
+        child.parent = this;
+        children.push_back(child);
+    }
+    string path() const {
+        if (auto p = parent.lock()) return p.path() + "/" + name;
+        return name;
+    }
+};
+```
+
+- `lock()` gives a `Node?`. `w.lock()?.name ?? "gone"` and `if (auto n = w.lock())` are how to reach the
+  object, since it cannot be reached through `w` itself. `expired()` is true when the object is gone.
+  `reset()`, or `w = null`, empties `w`.
+- `Node`, `Node?`, `null` and a `weak` to a class deriving from `Node` convert to `weak<Node>` by
+  themselves, as a `Dog` converts to an `Animal`. `weak<Node>(n)` makes one where `auto` needs a type, and
+  `weak<Node>()` is empty. A `weak<Node>` converts to nothing by itself, since the object may be gone.
+- `weak<Node> w = Node("a");` makes the object and frees it at once, as nothing keeps it.
+- Only a class can be the target, or an interface. A struct is a value, so nothing refers to it.
+  `weak<Node>?` is an error, since it can already be empty.
+- It is a value like any other: it can be a field or a parameter, and can go in a vector or an array.
+  `weak<Node> w;` is empty, as is a field with no value given.
+- `==` is true for two references to one object, and for two with nothing there, whether they were
+  always empty or the object has gone. It compares only with another of the same type. `w == null` is an
+  error that points to `expired()`.
+- `{}` prints `weak<Node>` while the object is there and `null` once it is gone, and does not print the
+  object, which is often the very one that is printing it.
+- While an object's destructor runs it is already going away, as in C++: `lock()` gives null and
+  `expired()` is true, also for a weak reference made in the destructor.
+
+Each object counts its weak references. When the last strong reference goes away, the object's
+destructor runs and its fields are released, freeing what they hold. The object's own memory stays
+until the last weak reference goes too, as with `std::make_shared`. An object has room for about 2 billion
+strong and 1 billion weak references. Going over that stops the program.
 
 ### Debug builds
 
@@ -1671,7 +1719,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `final`, covariant return types, private and protected base classes | planned |
 | Operator overloading | planned |
 | Destructors for structs, static members | planned |
-| `weak` references | planned |
+| `weak<T>` references: `lock`, `expired`, `reset` | implemented |
 | Errors (`throws`, `try`, `catch`) | planned |
 | Generics | planned |
 | Pointers into vectors and strings | planned |

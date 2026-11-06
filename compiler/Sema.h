@@ -101,6 +101,7 @@ private:
     const Type* checkCharFn(CallExpr& call, Flow& flow);
     const Type* checkStringFill(CallExpr& call, Flow& flow);
     const Type* checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Type* opt);
+    const Type* checkWeakMethod(MethodCallExpr& call, Flow& flow, const Type* weak);
     const Type* checkOptChain(OptChainExpr& c, Flow& flow);
     const Type* checkCoalesce(CoalesceExpr& c, Flow& flow);
     void checkCondDecl(CondDecl& d, Flow& flow, const char* stmt);

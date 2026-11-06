@@ -52,6 +52,8 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
     llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtDynamicCast, rtRetainObject, rtObjectStart;
+    llvm::FunctionCallee rtRetainClass, rtReleaseClass, rtFreeClass, rtDestructorHold, rtReferences;
+    llvm::FunctionCallee rtWeakRetain, rtWeakRelease, rtWeakLock, rtWeakAlive;
     llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
@@ -283,6 +285,15 @@ struct Codegen::Impl {
         rtStart = decl("cplus_start", voidTy, {});
         rtDynamicCast = decl("cplus_dynamic_cast", ptrTy, {ptrTy, ptrTy});
         rtRetainObject = decl("cplus_retain_object", voidTy, {ptrTy});
+        rtRetainClass = decl("cplus_retain_class", voidTy, {ptrTy});
+        rtReleaseClass = decl("cplus_release_class", i32, {ptrTy});
+        rtFreeClass = decl("cplus_free_class", voidTy, {ptrTy});
+        rtDestructorHold = decl("cplus_destructor_hold", voidTy, {ptrTy});
+        rtReferences = decl("cplus_references", i64, {ptrTy});
+        rtWeakRetain = decl("cplus_weak_retain", voidTy, {ptrTy});
+        rtWeakRelease = decl("cplus_weak_release", voidTy, {ptrTy});
+        rtWeakLock = decl("cplus_weak_lock", ptrTy, {ptrTy});
+        rtWeakAlive = decl("cplus_weak_alive", ptrTy, {ptrTy});
         rtObjectStart = decl("cplus_object_start", ptrTy, {ptrTy});
         rtStrMutable = decl("cplus_str_mutable", ptrTy, {ptrTy});
         rtStrRepeat = decl("cplus_str_repeat", voidTy, {ptrTy, i64, i32, ptrTy, i32, i32});
@@ -303,7 +314,7 @@ struct Codegen::Impl {
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
             case K::Array: return llvm::ArrayType::get(llvmType(t->elem), (uint64_t)t->length);
-            case K::Class: case K::Vector: case K::Null: case K::Pointer: return b.getPtrTy();
+            case K::Class: case K::Vector: case K::Null: case K::Pointer: case K::Weak: return b.getPtrTy();
             // An optional class reference is a pointer that may be null. Any other
             // optional is { i1 has, T value }, and its value is all zero bytes when it
             // has none, so retaining or releasing it is harmless either way.
@@ -371,7 +382,7 @@ struct Codegen::Impl {
     // vector buffers, string buffers), which are retained when the value is copied and
     // released when it goes away.
     bool isManaged(const Type* t) {
-        if (t->isClass() || t->isVector() || t->is(K::String)) return true;
+        if (t->isClass() || t->isVector() || t->is(K::String) || t->isWeak()) return true;
         if (t->isOptional() || t->isArray()) return isManaged(t->elem);
         if (!t->isStruct()) return false;
         TypeInfo& info = types.at(t->decl);
@@ -606,7 +617,8 @@ struct Codegen::Impl {
 
     void retainValue(llvm::Value* v, const Type* t) {
         if (t->isOptional()) return retainValue(valueOf(v, t), t->elem);
-        if (t->isClass()) b.CreateCall(hasInnerParts ? rtRetainObject : rtRetain, {v});
+        if (t->isClass()) b.CreateCall(hasInnerParts ? rtRetainObject : rtRetainClass, {v});
+        else if (t->isWeak()) b.CreateCall(rtWeakRetain, {v});
         else if (t->isVector()) b.CreateCall(rtRetain, {v});
         else if (t->is(K::String)) b.CreateCall(rtRetain, {b.CreateExtractValue(v, 2, "owner")});
         else if (!isManaged(t)) return;
@@ -616,7 +628,9 @@ struct Codegen::Impl {
 
     void releaseValue(llvm::Value* v, const Type* t) {
         if (t->isOptional()) return releaseValue(valueOf(v, t), t->elem);
-        if (t->is(K::String)) {
+        if (t->isWeak()) {
+            b.CreateCall(rtWeakRelease, {v});
+        } else if (t->is(K::String)) {
             b.CreateCall(rtStrRelease, {b.CreateExtractValue(v, 2, "owner")});
         } else if (t->isVector()) {
             VecInfo& info = vecInfo(t);
@@ -1202,8 +1216,9 @@ struct Codegen::Impl {
     llvm::Value* convert(llvm::Value* v, const Type* from, const Type* to) {
         if (from == to) return v;
         if (from->isNull()) return zeroValue(to);
-        if (from->isOptional() && to->isOptional()) {  // `Dog?` to `Animal?`
-            uint64_t offset = pathOffset(from->elem->decl->pathTo(to->elem->decl));
+        if (to->isWeak() || (from->isOptional() && to->isOptional())) {  // `Dog?` to `Animal?`, or an object to `weak<Animal>`
+            const Type* fromClass = from->isClass() ? from : from->elem;
+            uint64_t offset = pathOffset(fromClass->decl->pathTo(to->elem->decl));
             if (!offset) return v;
             return b.CreateSelect(b.CreateIsNull(v), v, atOffset(v, offset));
         }
@@ -1248,7 +1263,13 @@ struct Codegen::Impl {
             return convert(genInitList(list, list.type), list.type, to);
         }
         bool owned = false;
-        llvm::Value* v = convert(genRaw(e, owned), e.type, to);
+        llvm::Value* raw = genRaw(e, owned);
+        llvm::Value* v = convert(raw, e.type, to);
+        if (to->isWeak() && !e.type->isWeak()) {  // a strong reference it was made from goes away
+            retainValue(v, to);
+            if (owned) releaseValue(raw, e.type);
+            return v;
+        }
         if (!owned) retainValue(v, to);
         return v;
     }
@@ -1281,7 +1302,7 @@ struct Codegen::Impl {
             case K::Float: case K::Double: return llvm::ConstantFP::get(llvmType(t), 0.0);
             case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct: return buildAggregate(*t->decl, {});
-            case K::Class: case K::Vector: case K::Pointer: return llvm::ConstantPointerNull::get(b.getPtrTy());
+            case K::Class: case K::Vector: case K::Pointer: case K::Weak: return llvm::ConstantPointerNull::get(b.getPtrTy());
             case K::Optional: return zeroValue(t);  // null
             default: llvm_unreachable("no default value for this type");
         }
@@ -2012,6 +2033,8 @@ struct Codegen::Impl {
                                                          b.CreateExtractValue(r, 0), b.CreateExtractValue(r, 1)});
                 return b.CreateICmpNE(eq, b.getInt32(0));
             }
+            // The same object while it is there; once gone, it is the same as an empty one.
+            case K::Weak: return b.CreateICmpEQ(b.CreateCall(rtWeakAlive, {l}), b.CreateCall(rtWeakAlive, {r}));
             case K::Struct: return b.CreateCall(types.at(t->decl).equals, {l, r});
             case K::Vector: return b.CreateCall(vecInfo(t).equals, {l, r});
             case K::Array: return b.CreateCall(arrayInfo(t).equals, {l, r});
@@ -2084,6 +2107,20 @@ struct Codegen::Impl {
             case K::Vector: b.CreateCall(vecInfo(t).print, {v, out}); break;
             case K::Array: b.CreateCall(arrayInfo(t).print, {v, out}); break;
             case K::Null: printText(out, "null"); break;
+            case K::Weak: {  // not what it refers to, which is often what is printing it
+                auto* thereBB = llvm::BasicBlock::Create(ctx, "print.there", fn);
+                auto* goneBB = llvm::BasicBlock::Create(ctx, "print.gone", fn);
+                auto* endBB = llvm::BasicBlock::Create(ctx, "print.end", fn);
+                b.CreateCondBr(b.CreateIsNotNull(b.CreateCall(rtWeakAlive, {v})), thereBB, goneBB);
+                b.SetInsertPoint(thereBB);
+                printText(out, t->name);
+                b.CreateBr(endBB);
+                b.SetInsertPoint(goneBB);
+                printText(out, "null");
+                b.CreateBr(endBB);
+                b.SetInsertPoint(endBB);
+                break;
+            }
             case K::Pointer: b.CreateCall(rtPrintPtr, {out, v}); break;  // the address, as std::format prints a void*
             case K::Optional: {
                 auto* someBB = llvm::BasicBlock::Create(ctx, "print.value", fn);
@@ -2158,7 +2195,7 @@ struct Codegen::Impl {
             return part;
         }
         if (from == to) return v;
-        if (to->isClass() || to->isOptional()) return convert(v, from, to);  // to a base class
+        if (to->isClass() || to->isOptional() || to->isWeak()) return convert(v, from, to);  // to a base class, or a weak reference
         Loc loc = c.loc;
         if (to->isPointer()) {
             if (from->isInteger()) return b.CreateIntToPtr(b.CreateSExt(v, b.getInt64Ty()), b.getPtrTy());  // reinterpret_cast
@@ -2389,6 +2426,7 @@ struct Codegen::Impl {
     llvm::Value* genMethodCall(const MethodCallExpr& call) {
         const Expr& recv = *call.receiver;
         if (recv.type->isOptional()) return genOptionalMethod(call);
+        if (recv.type->isWeak()) return genWeakMethod(call);
         if (recv.type->isVector()) return genVectorMethod(call);
         if (recv.type->isArray()) return genArrayMethod(call);
         if (recv.type->is(K::String)) return genStringMethod(call);
@@ -2511,6 +2549,22 @@ struct Codegen::Impl {
         return phi;
     }
 
+    llvm::Value* genWeakMethod(const MethodCallExpr& call) {
+        switch (call.weakMethod) {
+            case WeakMethod::Lock: return b.CreateCall(rtWeakLock, {gen(*call.receiver)}, "locked");  // owned, or null
+            case WeakMethod::Expired: return b.CreateIsNull(b.CreateCall(rtWeakAlive, {gen(*call.receiver)}), "expired");
+            case WeakMethod::Reset: {
+                llvm::Value* place = addressOf(*call.receiver, /*hold=*/false, /*write=*/true);
+                llvm::Value* old = b.CreateLoad(b.getPtrTy(), place, "old");
+                b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), place);
+                b.CreateCall(rtWeakRelease, {old});
+                return nullptr;
+            }
+            case WeakMethod::None: break;
+        }
+        llvm_unreachable("unknown method of a weak reference");
+    }
+
     llvm::Value* genOptionalMethod(const MethodCallExpr& call) {
         const Type* optTy = call.receiver->type;
         const Type* inner = optTy->elem;
@@ -2590,7 +2644,7 @@ struct Codegen::Impl {
                 auto& v = static_cast<const VarDecl&>(s);
                 llvm::Value* init = v.init ? genOwned(*v.init, v.type)
                                     : v.type->is(K::String) || v.type->hasFields() || v.type->isVector() ||
-                                              v.type->isOptional() || v.type->isArray()
+                                              v.type->isOptional() || v.type->isArray() || v.type->isWeak()
                                         ? genDefault(v.type)
                                         : nullptr;
                 flushTemps();
@@ -3269,16 +3323,18 @@ struct Codegen::Impl {
             const Type* type() const { return part->cls->fields[index].type; }
         };
         std::vector<HeldField> order;  // the managed fields to release after freeing, in that order
+        bool held = false;
         for (size_t c = 0; c < parts.size(); ++c) {
             const StructDecl& cls = *parts[c].cls;
             llvm::Value* part = atOffset(self, parts[c].offset);
             if (cls.destructor) {
-                // While the destructor runs, the object counts as having one reference, so
+                // While the destructors run, the object counts as having one reference, so
                 // passing `this` to a function cannot destroy it a second time.
-                b.CreateStore(b.getInt64(1), self);
+                if (!held) b.CreateCall(rtDestructorHold, {self});
+                held = true;
                 if (c > 0) storeVtables(part, cls);
                 b.CreateCall(funcs.at(cls.destructor), {part});
-                trapIf(b.CreateICmpNE(b.CreateLoad(b.getInt64Ty(), self), b.getInt64(1)),
+                trapIf(b.CreateICmpNE(b.CreateCall(rtReferences, {self}), b.getInt64(1)),
                        "the destructor of '" + cls.name + "' stored 'this' somewhere, so the object would be used after it is freed",
                        cls.destructor->nameLoc);
             }
@@ -3307,7 +3363,7 @@ struct Codegen::Impl {
             values.push_back(inMemory(field.type) ? loadValue(field.type, fieldAddress(&cls.type, part, (int)f.index, field.name))
                                                   : loadField(cls, part, f.index));
         }
-        b.CreateCall(rtFree, {self});
+        b.CreateCall(rtFreeClass, {self});
         for (size_t k = 0; k < order.size(); ++k) {
             const Type* ft = order[k].type();
             if (k + 1 == order.size() && classOf(ft)) {
@@ -3326,7 +3382,7 @@ struct Codegen::Impl {
         if (hasInnerParts) self = b.CreateCall(rtObjectStart, {self}, "start");
         auto* destroyBB = llvm::BasicBlock::Create(ctx, "destroy", fn);
         auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
-        b.CreateCondBr(b.CreateICmpNE(b.CreateCall(rtRelease, {self}), b.getInt32(0)), destroyBB, doneBB);
+        b.CreateCondBr(b.CreateICmpNE(b.CreateCall(rtReleaseClass, {self}), b.getInt32(0)), destroyBB, doneBB);
         b.SetInsertPoint(destroyBB);
         b.CreateCall(objectRelease->getFunctionType(), vtableSlot(loadVtable(self), kVtableDestroy, "destroy"), {self})
             ->setTailCallKind(llvm::CallInst::TCK_MustTail);

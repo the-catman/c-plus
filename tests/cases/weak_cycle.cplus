@@ -1,0 +1,84 @@
+// A parent holds its children, and a child refers back without keeping the parent alive, so
+// the objects are freed. The leak check of the test suite would report them otherwise.
+class Tree {
+public:
+    string name;
+    weak<Tree> parent;
+    vector<Tree> children;
+    Tree(string n) : name(n) {}
+    ~Tree() { println("~{}", name); }
+    void add(Tree child) {
+        child.parent = this;
+        children.push_back(child);
+    }
+    string path() const {
+        if (auto p = parent.lock()) return p.path() + "/" + name;
+        return name;
+    }
+};
+
+// An object can refer to itself, and a pair to each other.
+class Selfish {
+public:
+    weak<Selfish> me;
+    int n = 1;
+    Selfish() { me = this; }
+    int read() const { return me.lock()?.n ?? 0; }
+};
+class Peer {
+public:
+    string name;
+    weak<Peer> other;
+    Peer(string n) : name(n) {}
+    ~Peer() { println("~{}, other {}", name, other.expired() ? "gone" : "here"); }
+};
+
+class Link {
+public:
+    Link? next;
+    weak<Link> previous;
+};
+
+int main() {
+    Tree leaf = Tree("leaf");
+    {
+        Tree root = Tree("root");
+        Tree branch = Tree("branch");
+        root.add(branch);
+        branch.add(leaf);
+        println("{}", leaf.path());
+        println("{}", root);
+    }
+    println("{}", leaf.path());
+    println("{}", leaf.parent.expired());
+
+    println("{}", Selfish().read());
+    {
+        Peer a = Peer("a");
+        Peer b = Peer("b");
+        a.other = b;
+        b.other = a;
+    }
+    // A long list with links both ways is freed without running out of stack.
+    Link head = Link();
+    Link tail = head;
+    for (int i = 0; i < 1000000; i++) {
+        Link added = Link();
+        added.previous = tail;
+        tail.next = added;
+        tail = added;
+    }
+    println("{}", tail.previous.lock()?.previous.expired() ?? true);
+    return 0;
+}
+// expect: root/branch/leaf
+// expect: Tree {name: "root", parent: null, children: [Tree {name: "branch", parent: weak<Tree>, children: [Tree {name: "leaf", parent: weak<Tree>, children: []}]}]}
+// expect: ~root
+// expect: ~branch
+// expect: leaf
+// expect: true
+// expect: 1
+// expect: ~b, other here
+// expect: ~a, other gone
+// expect: false
+// expect: ~leaf

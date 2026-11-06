@@ -442,6 +442,11 @@ void Parser::failStd(Loc loc, const Token& name) {
              spec::Status);
     if (n == "numbers")
         fail(loc, "C+ has no std:: namespace", "math constants are planned. Until then, `acos(-1)` is pi", spec::Math);
+    if (n == "weak_ptr")
+        fail(loc, "C+ has no std:: namespace", "write `weak<Node>`, which works like std::weak_ptr", spec::Weak);
+    if (n == "shared_ptr" || n == "make_shared")
+        fail(loc, "C+ has no std:: namespace",
+             "a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`", spec::Classes);
     fail(loc, "C+ has no std:: namespace",
          "built-ins need no prefix: `std::cout << x << std::endl;` becomes `println(\"{}\", x);`", spec::Printing);
 }
@@ -465,7 +470,7 @@ bool Parser::isTypeStart(size_t ahead) const {
             return peek(ahead + 1).kind == Tok::Ident;
         case Tok::KwString: return peek(ahead + 1).kind != Tok::ColonColon;  // not `string::npos`
         case Tok::KwInt: case Tok::KwLong: case Tok::KwBool:
-        case Tok::KwVoid: case Tok::KwAuto: case Tok::KwConst:
+        case Tok::KwVoid: case Tok::KwAuto: case Tok::KwConst: case Tok::KwWeak:
         case Tok::KwDouble: case Tok::KwFloat: case Tok::KwChar:
             return true;
         default: return false;
@@ -480,7 +485,7 @@ bool Parser::isValueOfType() const {
         case Tok::KwInt: case Tok::KwLong: case Tok::KwBool: case Tok::KwDouble: case Tok::KwFloat:
         case Tok::KwChar: case Tok::KwString:
             break;
-        case Tok::Ident:
+        case Tok::Ident: case Tok::KwWeak:
             if (peek(1).kind != Tok::Less) return false;
             after = afterAngles(1);
             if (!after) return false;
@@ -494,7 +499,7 @@ bool Parser::isTypeAt(size_t ahead) const {
     const Token& t = peek(ahead);
     switch (t.kind) {
         case Tok::KwInt: case Tok::KwLong: case Tok::KwBool: case Tok::KwString: case Tok::KwVoid:
-        case Tok::KwDouble: case Tok::KwFloat: case Tok::KwChar: case Tok::KwConst:
+        case Tok::KwDouble: case Tok::KwFloat: case Tok::KwChar: case Tok::KwConst: case Tok::KwWeak:
             return true;
         case Tok::Ident:
             if (isTypeName(t)) return true;
@@ -561,6 +566,13 @@ static const char* cIntegerEquivalent(const std::string& n) {
 
 void Parser::checkUnknownType() {
     checkUnknownPointerType();
+    if (check(Tok::Ident) && peek(1).kind == Tok::Less) {
+        if (peek().text == "weak_ptr")
+            fail(peek().loc, "C+ has no weak_ptr", "write `weak<Node>`, which works the same way", spec::Weak);
+        if (peek().text == "shared_ptr")
+            fail(peek().loc, "C+ has no shared_ptr",
+                 "a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`", spec::Classes);
+    }
     // C's spellings of integers, where a wrong guess would put a C struct's fields in the
     // wrong places.
     if (check(Tok::Ident)) {
@@ -605,6 +617,9 @@ const Type* Parser::parseType(Loc& loc, bool* isConst) {
     Loc constLoc = start;
     bool leadingConst = match(Tok::KwConst);
     const Type* t = parseBaseType(loc);
+    if (t->isWeak() && (check(Tok::Question) || check(Tok::QuestionQuestion)))
+        fail(peek().loc, "a weak reference cannot be optional",
+             "it is already empty when nothing is there: write `" + std::string(t->name) + "`", spec::Weak);
     if (check(Tok::QuestionQuestion))
         fail(peek().loc, "an optional cannot hold another optional",
              "write one '?': `" + std::string(t->name) + "?` already means " + t->name + " or null", spec::Optionals);
@@ -666,6 +681,26 @@ const Type* Parser::parseBaseType(Loc& loc) {
     const Token& t = advance();
     loc = t.loc;
     switch (t.kind) {
+        case Tok::KwWeak: {
+            if (!check(Tok::Less))
+                fail(t.loc, "weak is written with the class it refers to: `weak<Node> parent;`",
+                     "it is a type of its own, with no `?`. Read it with `parent.lock()`, which gives a `Node?`", spec::Weak);
+            advance();
+            Loc inner;
+            const Type* target = parseType(inner);
+            expectCloseAngle("to close weak<...>");
+            if (!target->isClass()) {
+                std::string name = target->name;
+                fail(inner, "a weak reference refers to a class object, but '" + name + "' is not a class",
+                     target->isOptional() && target->elem->isClass()
+                         ? "it is already empty when the object is gone: write `weak<" + std::string(target->elem->name) + ">`"
+                     : target->isStruct() ? "a struct is a value, so nothing refers to it. Make it a class, or use a pointer"
+                                          : "only objects of a class are counted, so only they can be gone",
+                     spec::Weak);
+            }
+            loc.len = prev().loc.col + prev().loc.len - t.loc.col;
+            return Type::weakOf(target);
+        }
         case Tok::KwInt: return Type::intTy();
         case Tok::KwLong:
             if (check(Tok::KwDouble))
@@ -1739,6 +1774,18 @@ static bool isCastType(Tok k) {
 ExprPtr Parser::parsePrimary() {
     const Token& t = advance();
     switch (t.kind) {
+        case Tok::KwWeak: {  // `weak<Node>(object)`, or `weak<Node>()` for an empty one
+            --pos_;  // back to `weak`, to read the whole type
+            Loc loc;
+            const Type* ty = parseBaseType(loc);
+            if (check(Tok::LBrace))
+                fail(peek().loc, "a weak reference is not built with a { } list",
+                     "write `" + std::string(ty->name) + "(object)`, or `" + ty->name + "()` for an empty one", spec::Weak);
+            expect(Tok::LParen, "after '" + std::string(ty->name) + "'");
+            ExprPtr operand = check(Tok::RParen) ? ExprPtr(std::make_unique<NullLitExpr>(loc)) : parseExpr();
+            expect(Tok::RParen, "to close '" + std::string(ty->name) + "(...)'");
+            return std::make_unique<CastExpr>(loc, ty, std::move(operand));
+        }
         case Tok::IntLit:
             if (t.intValue > (uint64_t)INT64_MAX)
                 fail(t.loc, "the number " + t.text + " is too large for any integer type",

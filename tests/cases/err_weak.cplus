@@ -1,0 +1,99 @@
+class Node {
+public:
+    int x = 1;
+    void go() {}
+};
+struct Value {
+    int x;
+};
+class Other {};
+
+extern "C" void takes(weak<Node> w);
+extern "C" {
+    struct CHolder {
+        weak<Node> w;
+    };
+}
+
+int main() {
+    weak<int> a;
+    weak<Value> b;
+    weak<Node?> c;
+    weak<Node>? d;
+    weak Node e;
+    weak<Node> w;
+    Node n = w;
+    Node? o = w;
+    int x = w.x;
+    w.go();
+    w.lock(1);
+    int y = w?.x;
+    Node f = w ?? n;
+    Node f2 = o ?? w;
+    if (w) {}
+    if (auto u = w) {}
+    bool same = w == n;
+    bool nul = w == null;
+    const weak<Node> fixed = n;
+    fixed.reset();
+    Node cast = static_cast<Node>(w);
+    Node? dyn = dynamic_cast<Node?>(w);
+    weak<Node> wrong = 3;
+    weak<Node> wrong2 = Other();
+    auto wrong3 = weak<Node>(3);
+    weak<Other> wrong4 = w;
+    return 0;
+}
+weak<Node> made() { return null; }
+struct InStruct {
+    weak<Node> w;
+    void changes() const { w.reset(); }
+};
+void more() {
+    made().reset();
+    auto c = weak<Node>{};
+    weak<Node> added;
+    added + 1;
+}
+void cpp() {
+    std::weak_ptr<Node> p;
+    std::shared_ptr<Node> q;
+    weak_ptr<Node> r;
+    shared_ptr<Node> s;
+}
+// error: a C function can take a number, char, bool, a pointer, a struct, string or string?, but this parameter is 'weak<Node>'
+// error: a C struct cannot have a field of type 'weak<Node>', because C has no equivalent of a weak reference
+// error: a weak reference refers to a class object, but 'int' is not a class
+// error: a weak reference refers to a class object, but 'Value' is not a class
+// error: a struct is a value, so nothing refers to it
+// error: a weak reference refers to a class object, but 'Node?' is not a class
+// error: it is already empty when the object is gone: write `weak<Node>`
+// error: a weak reference cannot be optional
+// error: weak is written with the class it refers to: `weak<Node> parent;`
+// error: expected 'Node' to initialize 'n', but this is 'weak<Node>'
+// error: the object may be gone. `w.lock()` gives a `Node?`
+// error: expected 'Node?' to initialize 'o', but this is 'weak<Node>'
+// error: the object of a 'weak<Node>' may be gone, so '.x' cannot be used on it directly
+// error: write `w.lock()?.x`
+// error: the object of a 'weak<Node>' may be gone, so 'go' cannot be called on it directly
+// error: lock() takes no arguments
+// error: '?.' reads from an optional, but this is 'weak<Node>'
+// error: write `w.lock() ?? other`
+// error: the fallback after '??' cannot be a weak reference
+// error: write `!w.expired()`
+// error: write `if (auto u = w.lock())`
+// error: to check whether the object is gone, write `w.expired()`
+// error: a cast cannot read a weak reference, since the object may be gone
+// error: dynamic_cast needs a class object, but this is 'weak<Node>'
+// error: expected 'weak<Node>' to initialize 'wrong', but this is 'int'
+// error: expected 'weak<Node>' to initialize 'wrong2', but this is 'Other'
+// error: weak<Node>(x) refers to an object of class 'Node', but this is 'int'
+// error: expected 'weak<Other>' to initialize 'wrong4', but this is 'weak<Node>'
+// error: reset() changes the weak reference, so it must be called on a variable or a field
+// error: 'w' cannot be changed inside const method 'changes'
+// error: a weak reference is not built with a { } list
+// error: '+' cannot be used with 'weak<Node>'
+// error: write `weak<Node>`, which works like std::weak_ptr
+// error: a class variable is already a counted reference
+// error: C+ has no weak_ptr
+// error: C+ has no shared_ptr

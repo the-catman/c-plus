@@ -1,0 +1,98 @@
+// A weak reference is a value like any other: it can go in a struct, a vector or an array,
+// and can be compared and printed.
+class Node {
+public:
+    string name;
+    Node(string n) : name(n) {}
+};
+struct Pair {
+    weak<Node> first;
+    weak<Node> second;
+    int n = 0;
+};
+class Holder {
+public:
+    weak<Node> held;
+    vector<weak<Node>> list;
+};
+
+int main() {
+    Node a = Node("a");
+    weak<Node> outlives;
+    vector<weak<Node>> all = {a};
+    {
+        Node b = Node("b");
+        all.push_back(b);
+        all.push_back(weak<Node>(b));
+        println("{}", all);
+        outlives = b;
+
+        array<weak<Node>, 2> two = {a, b};
+        println("{}", two);
+        array<weak<Node>, 2> copy = two;
+        println("{}", copy == two);
+
+        Pair p = {a, b};
+        Pair same = {a, b, 0};
+        Pair other = {b, a};
+        println("{} {}", p == same, p == other);
+        println("{}", p);
+        Pair moved = p;
+        moved.second.reset();
+        println("{} {}", moved.second.expired(), p.second.expired());
+
+        vector<Node> strong = {a, b};
+        for (weak<Node> w : strong) print("{} ", w.lock()?.name ?? "gone");
+        println();
+    }
+    println("{}", all);
+    for (auto w : all) print("{} ", w.expired());
+    println();
+    all[0].reset();
+    println("{}", all[0].expired());
+    vector<weak<Node>> copy = all;
+    copy[1] = a;
+    println("{} {}", all[1].expired(), copy[1].expired());
+
+    Pair empty = {};
+    println("{}", empty);
+    Pair gone = {outlives, outlives};
+    println("{}", gone == empty);
+
+    Holder h = Holder();
+    println("{}", h);
+    h.held = a;
+    h.list.push_back(a);
+    println("{}", h);
+    h.list[0].reset();
+    Holder? maybe = h;
+    println("{}", maybe?.held.lock()?.name ?? "none");
+    println("{}", maybe?.held.expired() ?? true);
+    auto inner = maybe?.held;
+    println("{}", inner?.expired() ?? true);
+    println("{}", inner);
+    println("{}", format("{}", h.held));
+    println("{}", sizeof(weak<Node>));
+    return 0;
+}
+// expect: [weak<Node>, weak<Node>, weak<Node>]
+// expect: [weak<Node>, weak<Node>]
+// expect: true
+// expect: true false
+// expect: {first: weak<Node>, second: weak<Node>, n: 0}
+// expect: true false
+// expect: a b 
+// expect: [weak<Node>, null, null]
+// expect: false true true 
+// expect: true
+// expect: true false
+// expect: {first: null, second: null, n: 0}
+// expect: true
+// expect: Holder {held: null, list: []}
+// expect: Holder {held: weak<Node>, list: [weak<Node>]}
+// expect: a
+// expect: false
+// expect: false
+// expect: weak<Node>
+// expect: weak<Node>
+// expect: 8

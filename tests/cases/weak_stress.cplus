@@ -1,0 +1,157 @@
+[[allow(new_delete)]];
+class Node {
+public:
+    string name;
+    weak<Node> parent;
+    vector<weak<Node>> friends;
+    Node(string n) : name(n) { println("made {}", n); }
+    ~Node() { println("freed {}", name); }
+    void clearParent() { parent.reset(); }
+    void setParent(Node p) { this.parent = p; }
+    weak<Node> self() { return this; }
+};
+struct S {
+    weak<Node> w;
+    int n = 0;
+    void clear() { w.reset(); }
+    void set(Node x) { w = x; }
+};
+interface Has {
+    weak<Node> get() const;
+};
+class Impl : public Has {
+public:
+    Node kept = Node("kept");
+    weak<Node> get() const override { return kept; }
+};
+weak<Node> pick(bool c, Node a, weak<Node> b) { if (c) return a; return b; }
+int main() {
+    weak<Node> w;
+    w = Node("assigned");
+    println("{}", w.expired());
+    Node a = Node("a");
+    w = a;
+    w = Node("replaces");
+    println("{}", w.expired());
+    w = a;
+    println("{}", w.lock()?.name ?? "gone");
+
+    // walking up
+    Node b = Node("b");
+    Node c = Node("c");
+    c.parent = b;
+    b.parent = a;
+    weak<Node> cursor = c;
+    while (auto p = cursor.lock()) {
+        print("{} ", p.name);
+        cursor = p.parent;
+    }
+    println();
+    Node? o = c;
+    o?.clearParent();
+    println("{}", c.parent.expired());
+    c.setParent(b);
+    o?.parent.reset();
+    println("{}", c.parent.expired());
+    println("{}", c.self().lock() == c);
+
+    S s = {};
+    s.set(a);
+    println("{}", s.w.expired());
+    s.clear();
+    println("{}", s.w.expired());
+    S? os = S{a};
+    println("{}", os?.w.lock()?.name ?? "none");
+
+    Impl impl = Impl();
+    Has h = impl;
+    println("{}", h.get().lock()?.name ?? "gone");
+
+    println("{}", pick(true, a, w).lock()?.name ?? "gone");
+    println("{}", pick(false, a, weak<Node>()).expired());
+
+    vector<weak<Node>> v = {a, b};
+    vector<weak<Node>> v2 = v;
+    println("{}", v == v2);
+    v2[0] = b;
+    println("{}", v == v2);
+    a.friends.push_back(b);
+    a.friends.push_back(a);
+    println("{}", a);
+
+    weak<Node>* p = new weak<Node>(a);
+    println("{} {}", p->expired(), (*p).lock()?.name ?? "gone");
+    p->reset();
+    *p = b;
+    println("{}", p->lock()?.name ?? "gone");
+    delete p;
+    weak<Node>* many = new weak<Node>[3];
+    many[1] = a;
+    println("{} {}", many[0].expired(), many[1].expired());
+    delete[] many;
+    weak<Node>* q = &w;
+    q->reset();
+    println("{}", w.expired());
+    weak<Node>** qq = &q;
+    **qq = c;
+    println("{}", w.lock()?.name ?? "gone");
+
+    array<weak<Node>, 2> arr;
+    arr[0] = a;
+    arr[1] = Node("in array");
+    println("{}", arr);
+    arr.fill(b);
+    println("{}", arr);
+    auto copy = arr;
+    arr[0].reset();
+    println("{} {}", arr[0].expired(), copy[0].expired());
+
+    // optional of a weak from ?.
+    Node? none = null;
+    auto w2 = none?.parent;
+    println("{}", w2 == null);
+    println("{}", w2);
+    println("end");
+    return 0;
+}
+// expect: made assigned
+// expect: freed assigned
+// expect: true
+// expect: made a
+// expect: made replaces
+// expect: freed replaces
+// expect: true
+// expect: a
+// expect: made b
+// expect: made c
+// expect: c b a 
+// expect: true
+// expect: true
+// expect: true
+// expect: false
+// expect: true
+// expect: a
+// expect: made kept
+// expect: kept
+// expect: a
+// expect: true
+// expect: true
+// expect: false
+// expect: Node {name: "a", parent: null, friends: [weak<Node>, weak<Node>]}
+// expect: false a
+// expect: b
+// expect: true false
+// expect: true
+// expect: c
+// expect: made in array
+// expect: freed in array
+// expect: [weak<Node>, null]
+// expect: [weak<Node>, weak<Node>]
+// expect: true false
+// expect: true
+// expect: null
+// expect: end
+// expect: freed kept
+// expect: freed c
+// expect: freed b
+// expect: freed a

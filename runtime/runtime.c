@@ -167,7 +167,8 @@ _Noreturn void cplus_trap_char(int64_t value, const char* what, const char* file
 // Class objects and vector buffers start with a 64-bit reference count. Generated code
 // retains an object when it stores a new reference to it and releases it when a
 // reference goes away; the object is destroyed when the count reaches zero. Counts are
-// atomic, so objects can later be shared between threads.
+// atomic, so objects can later be shared between threads. A class object's word also counts
+// weak references; see "Class objects" below.
 
 // Set CPLUS_CHECK_LEAKS=1 to report objects that are never freed when the program
 // exits. Freed objects are then kept and marked, so a later use of one is caught
@@ -209,10 +210,11 @@ void* cplus_alloc(int64_t size) {
     return object;
 }
 
+static void free_memory(void* object);
+
 void cplus_free(void* object) {
     __atomic_sub_fetch(&live_objects, 1, __ATOMIC_RELAXED);
-    if (keep_freed_memory && leak_checking()) *(int64_t*)object = freed_mark;
-    else free(object);
+    free_memory(object);
 }
 
 void cplus_retain(void* object) {
@@ -247,6 +249,43 @@ void* cplus_dynamic_cast(void* object, void* vtable) {
     return found;
 }
 
+// Returns 1 when this was the last reference, so the caller destroys the object.
+int32_t cplus_release(void* object) {
+    if (!object) return 0;
+    int64_t before = __atomic_fetch_sub((int64_t*)object, 1, __ATOMIC_RELEASE);
+    if (before == 1) {
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        return 1;
+    }
+    if (before <= 0) bad_count();
+    return 0;
+}
+
+// ---- Class objects ----------------------------------------------------------
+//
+// The word at the start of a class object holds, in one atomic value:
+//   bits 0 to 31    strong references, which keep the object alive
+//   bits 32 to 61   weak references, which keep only its memory
+//   bit 62          set from when the last strong reference goes away
+// When the strong references reach zero the destructors run and the fields are released. The
+// memory stays until the weak references are gone too, so that they can look at this word.
+enum { max_strong = INT32_MAX };
+static const int64_t strong_mask = 0xffffffff;
+static const int64_t weak_one = (int64_t)1 << 32;
+static const int64_t weak_mask = (int64_t)0x3fffffff << 32;
+static const int64_t destroying = (int64_t)1 << 62;
+
+_Noreturn static void too_many_references(void) {
+    fflush(stdout);
+    fputs("fatal error: there are too many references to one object\n", stderr);
+    stop_program();
+}
+
+static void free_memory(void* object) {
+    if (keep_freed_memory && leak_checking()) *(int64_t*)object = freed_mark;
+    else free(object);
+}
+
 // A reference can point at a base class inside an object, other than the first. Where such a
 // part would have a count, it has how far back to look for it, as a negative number.
 void* cplus_object_start(void* object) {
@@ -259,18 +298,68 @@ void* cplus_object_start(void* object) {
     }
 }
 
-void cplus_retain_object(void* object) { cplus_retain(cplus_object_start(object)); }
+void cplus_retain_class(void* object) {
+    if (!object) return;
+    int64_t before = __atomic_fetch_add((int64_t*)object, 1, __ATOMIC_RELAXED);
+    if (before < 0 || (before & strong_mask) == 0) bad_count();
+    if ((before & strong_mask) >= max_strong) too_many_references();
+}
 
-// Returns 1 when this was the last reference, so the caller destroys the object.
-int32_t cplus_release(void* object) {
+void cplus_retain_object(void* object) { cplus_retain_class(cplus_object_start(object)); }
+
+// Returns 1 when this was the last strong reference, so the caller destroys the object.
+int32_t cplus_release_class(void* object) {
     if (!object) return 0;
     int64_t before = __atomic_fetch_sub((int64_t*)object, 1, __ATOMIC_RELEASE);
-    if (before == 1) {
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
-        return 1;
+    if (before < 0 || (before & strong_mask) == 0) bad_count();
+    if ((before & strong_mask) != 1) return 0;
+    __atomic_fetch_or((int64_t*)object, destroying, __ATOMIC_ACQUIRE);
+    return 1;
+}
+
+// While destructors run, `this` can be passed around, which counts references, so the object
+// has one of its own. It is still going away: cplus_weak_lock looks at the flag.
+void cplus_destructor_hold(void* object) { __atomic_fetch_add((int64_t*)object, 1, __ATOMIC_RELAXED); }
+
+int64_t cplus_references(void* object) { return __atomic_load_n((int64_t*)object, __ATOMIC_RELAXED) & strong_mask; }
+
+// The object is finished. Its memory goes now, or with the last weak reference.
+void cplus_free_class(void* object) {
+    __atomic_sub_fetch(&live_objects, 1, __ATOMIC_RELAXED);
+    int64_t before = __atomic_fetch_and((int64_t*)object, weak_mask, __ATOMIC_ACQ_REL);
+    if (!(before & weak_mask)) free_memory(object);
+}
+
+void cplus_weak_retain(void* part) {
+    if (!part) return;
+    int64_t before = __atomic_fetch_add((int64_t*)cplus_object_start(part), weak_one, __ATOMIC_RELAXED);
+    if (before < 0) bad_count();
+    if ((before & weak_mask) == weak_mask) too_many_references();
+}
+
+void cplus_weak_release(void* part) {
+    if (!part) return;
+    int64_t* word = cplus_object_start(part);
+    if (__atomic_sub_fetch(word, weak_one, __ATOMIC_ACQ_REL) == 0) free_memory(word);
+}
+
+// A new strong reference, unless the object is gone or going away. Returns `part`, or null.
+void* cplus_weak_lock(void* part) {
+    if (!part) return NULL;
+    int64_t* word = cplus_object_start(part);
+    int64_t current = __atomic_load_n(word, __ATOMIC_RELAXED);
+    for (;;) {
+        if ((current & strong_mask) == 0 || (current & destroying)) return NULL;
+        if ((current & strong_mask) >= max_strong) too_many_references();
+        if (__atomic_compare_exchange_n(word, &current, current + 1, 1, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return part;
     }
-    if (before <= 0) bad_count();
-    return 0;
+}
+
+// `part` while its object is there, and null once it is gone or going away.
+void* cplus_weak_alive(void* part) {
+    if (!part) return NULL;
+    int64_t current = __atomic_load_n((int64_t*)cplus_object_start(part), __ATOMIC_RELAXED);
+    return (current & strong_mask) == 0 || (current & destroying) ? NULL : part;
 }
 
 _Noreturn static void out_of_memory(void) {

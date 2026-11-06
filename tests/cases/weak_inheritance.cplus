@@ -1,0 +1,67 @@
+// A weak reference follows the same conversions as a class, and can refer to any part of an
+// object, including a base class that is not the first.
+class First {
+public:
+    long a = 1;
+    virtual string name() const { return "first"; }
+};
+class Second {
+public:
+    long b = 2;
+    virtual string name() const { return "second"; }
+    ~Second() { println("~Second {}", b); }
+};
+interface Speaker {
+    string speak() const;
+};
+class Both : public First, public Second, public Speaker {
+public:
+    string name() const override { return "both"; }
+    string speak() const override { return "hello"; }
+    ~Both() { println("~Both"); }
+};
+
+int main() {
+    weak<Second> second;
+    weak<Speaker> speaker;
+    weak<First> first;
+    {
+        Both b = Both();
+        second = b;
+        speaker = b;
+        weak<Both> whole = b;
+        first = whole;
+        weak<Second> same = whole;
+        println("{}", same == second);
+        println("{} {}", second.lock()?.name() ?? "gone", second.lock()?.b ?? 0);
+        println("{}", speaker.lock()?.speak() ?? "gone");
+        println("{}", first.lock()?.a ?? 0);
+        println("{}", second);
+        println("{}", second.lock() == b);
+        println("{}", dynamic_cast<Speaker?>(second.lock()) == speaker.lock());
+        Both? maybe = b;
+        weak<Second> fromOptional = maybe;
+        println("{}", fromOptional == second);
+        for (weak<Second> w : vector<Both>{b}) println("{}", w == second);
+    }
+    println("{} {} {}", second.expired(), speaker.expired(), first.expired());
+    println("{} {}", second.lock() == null, second);
+    weak<Second> copy = second;
+    second.reset();
+    println("{}", copy.expired());
+    return 0;
+}
+// expect: true
+// expect: both 2
+// expect: hello
+// expect: 1
+// expect: weak<Second>
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: ~Both
+// expect: ~Second 2
+// expect: true true true
+// expect: true null
+// expect: true

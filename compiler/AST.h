@@ -17,11 +17,11 @@ struct StructDecl;
 
 struct Type {
     enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, Struct, Class, Vector, Optional, Null,
-                      Pointer, Opaque, Array };
+                      Pointer, Opaque, Array, Weak };
     Kind kind;
     const char* name;
     const StructDecl* decl = nullptr;  // for Kind::Struct, Kind::Class and Kind::Opaque
-    const Type* elem = nullptr;        // for Kind::Vector and Kind::Array, the value type of Kind::Optional, what a Kind::Pointer points to
+    const Type* elem = nullptr;        // for Kind::Vector and Kind::Array, the value type of Kind::Optional, what a Kind::Pointer points to, the class of Kind::Weak
     bool constElem = false;            // for Kind::Pointer: `const int*`, which only reads what it points to
     int64_t length = 0;                // for Kind::Array: the N of `array<T, N>`
 
@@ -31,6 +31,7 @@ struct Type {
     bool isOptional() const { return kind == Kind::Optional; }
     bool isNull() const { return kind == Kind::Null; }  // the type of `null`, which converts to any optional or pointer
     bool isPointer() const { return kind == Kind::Pointer; }
+    bool isWeak() const { return kind == Kind::Weak; }  // `weak<Node>`: a reference that does not keep the object alive
     // A C type known only by name, `extern "C" struct sqlite3;`, which C+ only points to.
     bool isOpaque() const { return kind == Kind::Opaque; }
     bool isError() const { return kind == Kind::Error; }
@@ -95,6 +96,17 @@ struct Type {
         if (inserted) {
             it->second.first = std::string(elem->name) + "?";
             it->second.second = Type{Kind::Optional, it->second.first.c_str(), nullptr, elem};
+        }
+        return &it->second.second;
+    }
+
+    // `weak<elem>`, where elem is a class. One Type per class, like vectorOf.
+    static const Type* weakOf(const Type* elem) {
+        static std::map<const Type*, std::pair<std::string, Type>> made;
+        auto [it, inserted] = made.try_emplace(elem);
+        if (inserted) {
+            it->second.first = "weak<" + std::string(elem->name) + ">";
+            it->second.second = Type{Kind::Weak, it->second.first.c_str(), nullptr, elem};
         }
         return &it->second.second;
     }
@@ -319,6 +331,8 @@ enum class StrMethod { None, Size, Empty, Substr, Find, Contains, StartsWith, En
                        Back };
 // The methods every optional has, as in std::optional.
 enum class OptMethod { None, HasValue, Value, ValueOr };
+// The methods of a weak reference, as in std::weak_ptr.
+enum class WeakMethod { None, Lock, Expired, Reset };
 
 // `receiver.name(args)`
 struct MethodCallExpr : Expr {
@@ -329,6 +343,7 @@ struct MethodCallExpr : Expr {
     VecMethod vecMethod = VecMethod::None;    // set by Sema for a vector or array method
     StrMethod strMethod = StrMethod::None;    // set by Sema for a string method
     OptMethod optMethod = OptMethod::None;    // set by Sema for an optional method
+    WeakMethod weakMethod = WeakMethod::None;  // set by Sema for a method of a weak reference
     std::string qualifier;                    // `d.Animal::speak()`: that class's own version, without dispatch
     BasePath path;                            // set with method: from the receiver's type to the one declaring it
     MethodCallExpr(Loc nameLoc, ExprPtr r, std::string n, std::vector<ExprPtr> a)

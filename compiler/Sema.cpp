@@ -23,6 +23,12 @@ static bool canConvert(const Type* from, const Type* to) {
         if (!from->isPointer() || (from->constElem && !to->constElem)) return false;
         return from->elem == to->elem || to->elem->is(K::Void);
     }
+    if (to->isWeak()) {
+        // `null`, an object that may be null, or a weak reference to a class deriving from it.
+        if (from->isNull()) return true;
+        const Type* target = from->isWeak() || from->isOptional() ? from->elem : from;
+        return target->isClass() && canConvert(target, to->elem);
+    }
     if (to->isOptional()) {
         // `null`, or a value that the optional then holds. Two optional types do not
         // convert into each other, except `Dog?` to `Animal?`.
@@ -327,7 +333,7 @@ void Sema::markAssigned(Flow& flow, const VarDecl* var, const std::string& path)
 // and bools stay unassigned.
 void Sema::markDefaults(Flow& flow, const VarDecl* var, const Type* type, const std::string& path) {
     if (tooDeep(path)) return;
-    if (type->is(K::String) || type->isVector() || type->isOptional()) {
+    if (type->is(K::String) || type->isVector() || type->isOptional() || type->isWeak()) {
         markAssigned(flow, var, path);
     } else if (type->isArray()) {  // elements are not tracked one by one: all have their default, or none do
         if (!needsValue(type)) markAssigned(flow, var, path);
@@ -911,6 +917,7 @@ static std::string whatCLacks(const Type* t, std::set<const StructDecl*>& seen) 
     if (t->is(K::String)) return "a string";
     if (t->isVector()) return "a vector";
     if (t->isClass()) return "a class reference";
+    if (t->isWeak()) return "a weak reference";
     if (t->isOptional()) return "an optional";
     if (t->isArray()) return t->length == 0 ? "an array with no elements" : whatCLacks(t->elem, seen);
     if (t->isPointer()) {
@@ -1027,7 +1034,7 @@ void Sema::checkExternFunction(FuncDecl& fn) {
                                        : "a C function can take a number, char, bool, a pointer, a struct, string or "
                                          "string?, but this parameter is " + q(t);
         std::string help;
-        if (t->isClass())
+        if (t->isClass() || t->isWeak())
             help = "C cannot hold a C+ object; pass the fields it needs as separate arguments";
         else if (t->isVector())
             message = "this compiler does not support passing vectors to or from C functions yet",
@@ -1199,6 +1206,7 @@ void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
     if (usableAsCondition(t)) return;
     std::string help;
     if (t->is(K::Void)) help = "this expression produces no value";
+    else if (t->isWeak()) help = "write `!" + spelled(e, "w") + ".expired()`, or `if (auto x = " + spelled(e, "w") + ".lock())`, which also keeps the object alive";
     else if (t->isOptional()) help = boolOptionalHelp(spelled(e, "b"));
     else if (t->is(K::Char)) help = "a char is not a condition; compare it, e.g. `c != '\\0'` or `c == 'y'`";
     else if (t->isVector() || t->is(K::String))
@@ -1451,7 +1459,10 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         return;
     }
     std::string help;
-    if (from->isClass() && to->isClass() && from->decl->partsOf(to->decl) > 1) {
+    if (from->isWeak()) {
+        help = "the object may be gone. `" + spelled(e, "w") + ".lock()` gives a `" + std::string(from->elem->name) +
+               "?`, which is null when it is, and keeps it alive while you use it";
+    } else if (from->isClass() && to->isClass() && from->decl->partsOf(to->decl) > 1) {
         help = q(from) + " holds " + q(to) + " more than once. Say which by first casting to the base class that leads to "
                "it, e.g. `static_cast<" + std::string(from->decl->bases[0]->name) + ">(x)`";
     } else if (from->isPointer() || to->isPointer()) {
@@ -1803,6 +1814,15 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         requireAssigned(flow, var, path, baseType, m.base->loc);
         var = nullptr;
         path.clear();
+    }
+    if (baseType->isWeak()) {
+        std::string n = spelled(*m.base, "w");
+        diags_.error(e.loc, "the object of a " + q(baseType) + " may be gone, so '." + m.field + "' cannot be used on it directly",
+                     "write `" + n + ".lock()?." + m.field + "`, which is null when the object is gone, or `if (auto v = " + n +
+                         ".lock()) ... v." + m.field + "`",
+                     spec::Weak);
+        var = nullptr;
+        return e.type;
     }
     if (baseType->isOptional()) {
         std::string n = spelled(*m.base);
@@ -2495,7 +2515,8 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 const Type* bad = !l->isArithmetic() ? l : r;
                 const Expr* side = !l->isArithmetic() ? b.lhs.get() : b.rhs.get();
                 std::string help;
-                if (bad->isOptional()) help = unwrapHelp(spelled(*side));
+                if ((l->isWeak() || r->isWeak()) && (equality || comparison)) help = "to check whether the object is gone, write `w.expired()`. To compare it with an object, write `w.lock() == x`";
+                else if (bad->isOptional()) help = unwrapHelp(spelled(*side));
                 else if (bad->isNull()) help = "null can only be compared with == and !=";
                 else if (bad->is(K::String)) help = "strings work with + to join them, and with == != < <= > >= to compare them";
                 else if (equality) help = "both sides of '" + std::string(sym) + "' must have the same type, but they are " + q(l) + " and " + q(r);
@@ -2593,6 +2614,8 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             else if (x->isArithmetic() && y->isArithmetic()) result = commonNumber(x, y);
             else if (const Type* ptr = commonPointer(x, y)) result = ptr;  // `c ? p : null` is a pointer
             else if (const Type* ref = commonReference(x, y)) result = ref;  // `c ? dog : animal` is an Animal
+            else if (x->isWeak() && y->isNull()) result = x;  // `c ? w : null` is an empty weak reference or `w`
+            else if (y->isWeak() && x->isNull()) result = y;
             else if (const Type* opt = optionalOfBranches(x, y)) result = opt;
             else
                 diags_.error(t.loc, "the two branches of ?: have different types, " + q(x) + " and " + q(y),
@@ -2900,6 +2923,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         return Type::error();
     }
     if (t->isOptional()) return checkOptionalMethod(call, flow, t);
+    if (t->isWeak()) return checkWeakMethod(call, flow, t);
     if (t->isPointer()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         std::string n = spelled(recv, "p");
@@ -3423,7 +3447,11 @@ const Type* Sema::checkDynamicCast(CastExpr& c, const Type* from, const Type* to
     }
     if (from->isError()) return to;
     if (!fromClass->isClass()) {
-        diags_.error(c.operand->loc, "dynamic_cast needs a class object, but this is " + q(from), "", spec::Inheritance);
+        diags_.error(c.operand->loc, "dynamic_cast needs a class object, but this is " + q(from),
+                     from->isWeak() ? "the object may be gone. Write `dynamic_cast<" + std::string(toClass->name) + "?>(" +
+                                          spelled(*c.operand, "w") + ".lock())`"
+                                    : "",
+                     spec::Inheritance);
         return to;
     }
     // An object can be of both only if some class derives from both.
@@ -3440,6 +3468,17 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     checkStorable(to, c.loc);
     if (c.reinterpret) return checkReinterpretCast(c, from, to);
     if (c.dynamic) return checkDynamicCast(c, from, to);
+    if (to->isWeak()) {  // `weak<Node>(object)`
+        if (!canConvert(from, to))
+            diags_.error(c.operand->loc, std::string(to->name) + "(x) refers to an object of class " + q(to->elem) + ", but this is " + q(from),
+                         "", spec::Weak);
+        return to;
+    }
+    if (from->isWeak()) {
+        diags_.error(c.loc, "a cast cannot read a weak reference, since the object may be gone",
+                     "write `" + spelled(*c.operand, "w") + ".lock()`, which gives a `" + std::string(from->elem->name) + "?`", spec::Weak);
+        return to;
+    }
     const Type* toClass = to->isOptional() ? to->elem : to;
     const Type* fromClass = from->isOptional() ? from->elem : from;
     if (toClass->isClass() && fromClass->isClass()) {
@@ -3680,6 +3719,8 @@ void Sema::checkCondDecl(CondDecl& d, Flow& flow, const char* stmt) {
         diags_.error(v.init->loc, std::string("the variable declared in the ") + stmt + " condition must be an "
                                       "optional, a bool or a number, but " + q(v.name) + " is " + q(v.type),
                      v.type->isOptional() ? boolOptionalHelp(v.name)
+                     : v.type->isWeak()     ? "write `" + std::string(stmt) + " (auto " + v.name + " = " + spelled(*v.init, "w") +
+                                                  ".lock())`, which runs the branch when the object is still there"
                                           : "an optional runs the branch when it holds a value, and a bool or a "
                                             "number when it is true or not zero",
                      spec::Optionals);
@@ -3692,6 +3733,10 @@ const Type* Sema::checkOptChain(OptChainExpr& c, Flow& flow) {
     const Type* inner = base;
     if (base->isOptional()) {
         inner = base->elem;
+    } else if (base->isWeak()) {
+        diags_.error(c.loc, "'?.' reads from an optional, but this is " + q(base),
+                     "write `" + spelled(*c.base, "w") + ".lock()?.`, which is null when the object is gone", spec::Weak);
+        inner = Type::error();
     } else if (base->isPointer()) {
         diags_.error(c.loc, "'?.' reads from an optional, but this is " + q(base),
                      "a pointer is followed with '->' once it is known not to be null: `if (p != null) ... p->x`",
@@ -3716,6 +3761,11 @@ const Type* Sema::checkCoalesce(CoalesceExpr& c, Flow& flow) {
     if (l->isError() || !l->isOptional()) {
         checkLooseValue(*c.rhs, rhsFlow);
         if (l->isError()) return Type::error();
+        if (l->isWeak()) {
+            diags_.error(c.loc, "'\?\?' gives a fallback for an optional, but the left side is " + q(l),
+                         "write `" + spelled(*c.lhs, "w") + ".lock() ?? other`", spec::Weak);
+            return l->elem;
+        }
         if (l->isPointer()) {
             diags_.error(c.loc, "'\?\?' gives a fallback for an optional, but the left side is " + q(l),
                          "for a pointer, write `p != null ? p : other`", spec::Pointers);
@@ -3737,6 +3787,11 @@ const Type* Sema::checkCoalesce(CoalesceExpr& c, Flow& flow) {
     if (r == l || r->isNull()) return l;  // the fallback may itself be null
     if (canConvert(r, inner)) return inner;
     if (const Type* common = commonReference(inner, r)) return common;  // `maybeDog ?? animal` is an Animal
+    if (r->isWeak()) {
+        diags_.error(c.rhs->loc, "the fallback after '\?\?' cannot be a weak reference, since its object may be gone",
+                     "write `" + spelled(*c.rhs, "w") + ".lock()`, which gives a `" + std::string(r->elem->name) + "?`", spec::Weak);
+        return inner;
+    }
     if (r->isInteger() && inner->isInteger()) return commonInteger(r, inner);
     diags_.error(c.rhs->loc, "the fallback after '\?\?' must be " + q(inner) + ", but this is " + q(r),
                  "both sides of '\?\?' hold the same type of value", spec::Optionals);
@@ -3745,6 +3800,27 @@ const Type* Sema::checkCoalesce(CoalesceExpr& c, Flow& flow) {
 
 // The methods of std::optional: has_value(), value() and value_or(fallback). Anything
 // else is a method of the value inside, which needs `?.` or unwrapping.
+const Type* Sema::checkWeakMethod(MethodCallExpr& call, Flow& flow, const Type* weak) {
+    std::string n = spelled(*call.receiver, "w");
+    for (auto& a : call.args) checkLooseValue(*a, flow);
+    if (call.name == "lock") call.weakMethod = WeakMethod::Lock;
+    else if (call.name == "expired") call.weakMethod = WeakMethod::Expired;
+    else if (call.name == "reset") call.weakMethod = WeakMethod::Reset;
+    else {
+        diags_.error(call.loc, "the object of a " + q(weak) + " may be gone, so " + q(call.name) + " cannot be called on it directly",
+                     "write `" + n + ".lock()?." + call.name + "(...)`, which does nothing when the object is gone. A weak "
+                     "reference itself has `lock()`, `expired()` and `reset()`",
+                     spec::Weak);
+        return Type::error();
+    }
+    if (!call.args.empty())
+        diags_.error(call.loc, call.name + "() takes no arguments", "write `" + n + "." + call.name + "()`", spec::Weak);
+    if (call.weakMethod == WeakMethod::Lock) return Type::optionalOf(weak->elem);
+    if (call.weakMethod == WeakMethod::Expired) return Type::boolTy();
+    checkChangingReceiver(*call.receiver, "reset", "weak reference", spec::Weak);
+    return Type::voidTy();
+}
+
 const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Type* opt) {
     const Type* inner = opt->elem;
     std::string n = spelled(*call.receiver);

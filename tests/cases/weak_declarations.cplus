@@ -1,0 +1,26 @@
+// A weak reference starts out empty however it is declared, on a stack full of other values.
+class Node { public: int x = 1; };
+struct S { weak<Node> w; array<weak<Node>, 2> a; };
+long fill() { array<long, 512> junk; junk.fill(-1234567); return junk[3]; }
+void declare() {
+    weak<Node> a;
+    S s;
+    array<weak<Node>, 3> arr;
+    vector<weak<Node>> v;
+    S? os;
+    println("{} {} {} {} {}", a.expired(), s.w.expired(), arr[2].expired(), v.empty(), os == null);
+    Node n = Node();
+    a = n;
+    s.w = n;
+    s.a[1] = n;
+    arr[2] = n;
+}
+int main() {
+    fill();
+    declare();
+    fill();
+    declare();
+    return 0;
+}
+// expect: true true true true true
+// expect: true true true true true
