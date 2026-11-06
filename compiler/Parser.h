@@ -53,6 +53,7 @@ private:
 
     // Grammar
     void parseTopLevel(Program& prog);
+    void parseConstants(Program& prog, const Type* type, Loc typeLoc);
     // `[[allow(new_delete)]]`, the one attribute C+ has. Returns where it is written.
     Loc parseAttribute();
     bool atAttribute() const { return check(Tok::LBracket) && peek(1).kind == Tok::LBracket; }

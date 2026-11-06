@@ -18,6 +18,7 @@ inline constexpr const char* Math = "math-functions";
 inline constexpr const char* ImplicitConversions = "implicit-conversions";
 inline constexpr const char* Optionals = "optionals";
 inline constexpr const char* Variables = "variables";
+inline constexpr const char* Constants = "constants";
 inline constexpr const char* DefiniteAssignment = "definite-assignment";
 inline constexpr const char* Functions = "functions";
 inline constexpr const char* MainFunction = "the-main-function";

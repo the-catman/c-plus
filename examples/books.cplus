@@ -27,10 +27,7 @@ extern "C" {
 }
 
 // SQLite's result codes, which are macros in C.
-int sqliteOk() { return 0; }
-int sqliteRow() { return 100; }
-int sqliteDone() { return 101; }
-int sqliteNull() { return 5; }
+const int SQLITE_OK = 0, SQLITE_NULL = 5, SQLITE_ROW = 100, SQLITE_DONE = 101;
 
 // SQLITE_TRANSIENT, which is -1 as a pointer in C. It tells SQLite to copy the text, which
 // it must, since C+ frees its copy for C when the call returns. A number cannot be cast to a
@@ -52,11 +49,11 @@ class Database {
 
 public:
     Database(string path) {
-        if (sqlite3_open(path, &handle) != sqliteOk()) println("could not open {}: {}", path, error());
+        if (sqlite3_open(path, &handle) != SQLITE_OK) println("could not open {}: {}", path, error());
     }
 
     ~Database() {
-        if (sqlite3_close(handle) != sqliteOk()) println("could not close the database: {}", error());
+        if (sqlite3_close(handle) != SQLITE_OK) println("could not close the database: {}", error());
     }
 
     string error() const {
@@ -66,7 +63,7 @@ public:
     // Prepares one SQL statement. If it has a mistake, says so and returns null.
     Statement? prepare(string sql) {
         sqlite3_stmt* made = null;
-        if (sqlite3_prepare_v2(handle, sql, -1, &made, null) != sqliteOk()) {
+        if (sqlite3_prepare_v2(handle, sql, -1, &made, null) != SQLITE_OK) {
             println("could not prepare `{}`: {}", sql, error());
             return null;
         }
@@ -107,16 +104,16 @@ public:
     // Moves to the next row. False at the end, or if something went wrong.
     bool next() {
         int code = sqlite3_step(handle);
-        if (code != sqliteRow() && code != sqliteDone()) println("query failed: {}", db.error());
-        return code == sqliteRow();
+        if (code != SQLITE_ROW && code != SQLITE_DONE) println("query failed: {}", db.error());
+        return code == SQLITE_ROW;
     }
 
     // Runs to the end, and makes the statement ready to run again.
     bool finish() {
         int code = sqlite3_step(handle);
-        if (code != sqliteDone()) println("statement failed: {}", db.error());
+        if (code != SQLITE_DONE) println("statement failed: {}", db.error());
         sqlite3_reset(handle);
-        return code == sqliteDone();
+        return code == SQLITE_DONE;
     }
 
     int integer(int column) const {
@@ -128,7 +125,7 @@ public:
     }
 
     double? rating(int column) const {
-        if (sqlite3_column_type(handle, column) == sqliteNull()) return null;
+        if (sqlite3_column_type(handle, column) == SQLITE_NULL) return null;
         return sqlite3_column_double(handle, column);
     }
 };

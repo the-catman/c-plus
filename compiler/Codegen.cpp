@@ -1386,7 +1386,10 @@ struct Codegen::Impl {
     // a vector or an array stored in one of those.
     static bool isPlace(const Expr& e) {
         switch (e.kind) {
-            case Expr::Kind::Name: return true;
+            case Expr::Kind::Name: {  // a constant is not stored anywhere: see genRaw
+                const VarDecl* decl = static_cast<const NameExpr&>(e).decl;
+                return !(decl && decl->isTopLevel);
+            }
             case Expr::Kind::This: return !e.type->isClass();
             case Expr::Kind::Member: {
                 auto& m = static_cast<const MemberExpr&>(e);
@@ -1606,8 +1609,16 @@ struct Codegen::Impl {
             case Expr::Kind::OptValue: return optValues.at(static_cast<const OptValueExpr*>(&e));
             case Expr::Kind::OptChain: return genOptChain(static_cast<const OptChainExpr&>(e), owned);
             case Expr::Kind::Coalesce: return genCoalesce(static_cast<const CoalesceExpr&>(e), owned);
-            case Expr::Kind::Name:
+            case Expr::Kind::Name: {
+                // A constant's value is worked out where it is used. It can only come from
+                // literals and other constants, so this does the same work every time.
+                const VarDecl* decl = static_cast<const NameExpr&>(e).decl;
+                if (decl && decl->isTopLevel) {
+                    owned = true;
+                    return genOwned(*decl->init, decl->type);
+                }
                 return loadValue(e.type, addressOf(e), static_cast<const NameExpr&>(e).name.c_str());
+            }
             case Expr::Kind::This:
                 if (e.type->isClass()) return thisPtr;
                 return loadValue(e.type, thisPtr, "this");
@@ -2969,7 +2980,9 @@ struct Codegen::Impl {
         // this function would lose that main's lines.
         startLineTable(userMain.nameLoc);
         b.CreateCall(rtStart, {});
-        b.CreateRet(b.CreateCall(funcs.at(&userMain), {}));
+        std::vector<llvm::Value*> args;
+        if (!userMain.params.empty()) args = {fn->getArg(0), fn->getArg(1)};  // argc and argv
+        b.CreateRet(b.CreateCall(funcs.at(&userMain), args));
         endLineTable();
     }
 

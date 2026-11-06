@@ -395,6 +395,7 @@ struct VarDecl : Stmt {
     Loc typeLoc;
     bool isConst = false;
     bool isParam = false;
+    bool isTopLevel = false;  // a constant outside any function
     ExprPtr init;
     const Type* type = nullptr;  // resolved by Sema
     VarDecl(Loc nameLoc, std::string n, const Type* t, Loc tl)
@@ -567,6 +568,7 @@ struct Program {
     std::vector<ImportDecl> imports;
     std::vector<std::unique_ptr<StructDecl>> structs;
     std::vector<std::unique_ptr<FuncDecl>> funcs;
+    std::vector<std::unique_ptr<VarDecl>> constants;
     bool allowNewDelete = false;  // `[[allow(new_delete)]];` at the top of the file
 
     StructDecl* findStruct(const std::string& name) const {

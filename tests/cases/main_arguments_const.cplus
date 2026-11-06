@@ -1,0 +1,6 @@
+// The arguments can be const, as in C++.
+int main(const int argc, const char** argv) {
+    println("{}", argc);
+    return argc - 1;
+}
+// expect: 1

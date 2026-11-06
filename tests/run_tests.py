@@ -17,6 +17,7 @@ in its comments. A test can use these, one per line, anywhere in the file:
   // flags: <flags>    options for the compiler, e.g. -Wno-new-delete
   // link-c: <file>     a C file under tests/c, built with the C compiler ($CC or cc)
                        and linked into the program
+  // args: <arguments>  the command-line arguments the program runs with
 
 A program that runs is built four ways, plain and as a debug build, each without and
 with -O, and must behave the same every time. It runs with CPLUS_CHECK_LEAKS=1, so a
@@ -28,7 +29,9 @@ also get CPLUS_TEST_VARIABLE=1, for tests that read an environment variable.
 Tests run at the same time, one per processor, and print in order.
 
 The runner also checks that every spec anchor in compiler/SpecRefs.h is a real
-heading in docs/SPEC.md, so diagnostics never point at a missing section.
+heading in docs/SPEC.md, so diagnostics never point at a missing section, that every
+program in examples/ compiles without warnings, and that very deeply nested code is an
+error instead of a crash.
 """
 import concurrent.futures
 import os
@@ -56,6 +59,16 @@ def check_spec_anchors():
     for r in missing:
         print(f"FAIL spec anchor '{r}' from compiler/SpecRefs.h has no heading in docs/SPEC.md")
     return not missing
+
+
+def check_examples(cplus):
+    ok = True
+    for path in sorted((ROOT / "examples").glob("*.cplus")):
+        run = subprocess.run([cplus, "check", str(path.relative_to(ROOT))], cwd=ROOT, capture_output=True, text=True)
+        if run.returncode != 0 or "warning:" in run.stderr:
+            print(f"FAIL {path.relative_to(ROOT)}\n  " + run.stderr.replace("\n", "\n  "))
+            ok = False
+    return ok
 
 
 def check_nesting_limit(cplus, workdir):
@@ -121,6 +134,8 @@ def run_case(cplus, path, workdir):
         if problem:
             return problem
         extra += ["-L", str(workdir), "-l" + (ROOT / c_file).stem]
+    args_m = re.search(r"//[ \t]*args:[ \t]*(.*?)[ \t]*$", text, re.M)
+    args = args_m.group(1).split() if args_m else []
     exit_m = re.search(r"//[ \t]*exit:[ \t]*(-?\d+)", text)
     want_exit = int(exit_m.group(1)) if exit_m else 0
     rel = path.relative_to(ROOT)
@@ -136,13 +151,13 @@ def run_case(cplus, path, workdir):
         return None
     for flags in ([], ["-O"], ["--debug"], ["--debug", "-O"]):
         problem = run_program(cplus, rel, workdir / path.stem, [*extra, *flags], expect, traps, want_exit, warnings,
-                              stderr)
+                              stderr, args)
         if problem:
             return (f"with {' '.join(flags)}: " if flags else "") + problem
     return None
 
 
-def run_program(cplus, rel, exe, flags, expect, traps, want_exit, warnings, stderr):
+def run_program(cplus, rel, exe, flags, expect, traps, want_exit, warnings, stderr, args):
     build = subprocess.run([cplus, "build", str(rel), "-o", str(exe), *flags], cwd=ROOT, capture_output=True,
                            text=True)
     if build.returncode != 0:
@@ -156,7 +171,7 @@ def run_program(cplus, rel, exe, flags, expect, traps, want_exit, warnings, stde
     if "--debug" in flags:
         del env["CPLUS_CHECK_LEAKS"]
     try:
-        run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10, env=env)
+        run = subprocess.run([str(exe), *args], capture_output=True, text=True, timeout=10, env=env)
     except subprocess.TimeoutExpired:
         return "timed out after 10 seconds"
     if traps:
@@ -190,6 +205,8 @@ def main():
     # one. Linux starts none when this limit is exactly 1 byte; 0 does not stop it.
     resource.setrlimit(resource.RLIMIT_CORE, (1, resource.getrlimit(resource.RLIMIT_CORE)[1]))
     ok = check_spec_anchors()
+    if not name_filter:
+        ok = check_examples(cplus) and ok
     passed = failed = 0
     paths = [p for p in sorted(CASES.glob("*.cplus")) if name_filter in p.name]
     with tempfile.TemporaryDirectory(prefix="cplus-tests-") as tmp:

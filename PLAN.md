@@ -444,7 +444,8 @@ leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. C fun
 can be called through `extern "C"` declarations with number, `char`, `bool`, `string`
 and pointer values. Raw pointers work, with pointer arithmetic, `sizeof`, null traps and
 C types known by name such as `FILE*`, `new` and `delete` with their warning, and C structs,
-through pointers and by value, including array fields, and `array<T, N>`. `--debug` makes
+through pointers and by value, including array fields, and `array<T, N>`. Constants work
+outside functions, and `main` can take `argc` and `argv`. `--debug` makes
 a debug build with ASan, stack traces and a leak report. Every item of Phase 1 is in, and
 `examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
 criterion.
@@ -503,6 +504,18 @@ will confidently write C++ wherever the two differ.
 - Remaining syntax: interfaces, `unique<T>` and `local<T>` construction, `async`
   functions, lambdas, enums, `switch`. Settled in Phase 0 as each feature is reached.
 - Function overloading is planned, as in C++, after the v1 core.
+- C constants that are really pointers, such as `SQLITE_TRANSIENT`, `MAP_FAILED` and `SIG_IGN`,
+  which are `-1` or `1` as a pointer. Numbers never convert to pointers, so today it takes
+  `(void*)((char*)null - 1)`, as `examples/books.cplus` does. They need a proper form.
+- A struct method changing a vector element stops the program if its body also writes to that
+  vector, since the update to the element would be lost (decided 2026-11-06). The alternative
+  is to pin a buffer separately from its reference count, so that writes land in place, at a
+  cost to every vector write.
+- Constants are worked out where they are used, so `const int X = 1 / 0;` stops the program
+  when `X` is used. `constexpr` in Phase 2 can report it at compile time, and make names
+  usable as array sizes.
+- `main` takes its arguments as in C++, through raw pointers. A checked form, such as
+  `int main(vector<string> args)`, could come later.
 - References (`T&`): whether C+ gets them, and in what form. They decide how
   `for (auto& x : v)` and `const T&` parameters work; today both are errors that point to a
   copy, which is cheap for vectors.

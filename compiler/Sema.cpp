@@ -357,7 +357,7 @@ Sema::Flow Sema::merge(const Flow& a, const Flow& b) const {
 }
 
 void Sema::requireAssigned(Flow& flow, const VarDecl* var, const std::string& path, const Type* type, Loc loc) {
-    if (!flow.reachable || isAssigned(flow, var, type, path)) return;
+    if (var->isTopLevel || !flow.reachable || isAssigned(flow, var, type, path)) return;
     std::string name = placeName(var, path);
     if (initField_ && var == thisVar()) {
         const std::string& setting = initField_->name;
@@ -523,11 +523,16 @@ void Sema::check(Program& program) {
         if (!m->retType->is(K::Int))
             diags_.error(m->retTypeLoc, "main must return int, not " + q(m->retType),
                          "write `int main()`; the returned number becomes the exit code", spec::MainFunction);
-        if (!m->params.empty())
-            diags_.error(m->params[0]->loc, "this compiler does not support command-line arguments to main yet",
-                         "write `int main()`", spec::Status);
+        auto isArgv = [](const Type* t) { return t->isPointer() && t->elem->isPointer() && t->elem->elem->is(K::Char); };
+        if (!m->params.empty() &&
+            !(m->params.size() == 2 && m->params[0]->declType->is(K::Int) && isArgv(m->params[1]->declType)))
+            diags_.error(m->params[0]->loc, "main takes no parameters, or the command-line arguments as in C++",
+                         "write `int main()`, or `int main(int argc, char** argv)`, where `string(argv[1])` is the "
+                         "first argument",
+                         spec::MainFunction);
     }
 
+    checkConstants(program);
     checkStructs(program);
     for (auto& sd : program.structs)
         if (sd->defined) checkMembers(*sd);
@@ -535,6 +540,89 @@ void Sema::check(Program& program) {
     for (auto& sd : program.structs)
         if (sd->defined)
             for (auto& m : sd->methods) checkFunction(*m);
+}
+
+// What in a constant's value cannot be worked out from literals and other constants, or
+// null if nothing is.
+static const Expr* notConstant(const Expr& e) {
+    switch (e.kind) {
+        case Expr::Kind::IntLit: case Expr::Kind::FloatLit: case Expr::Kind::CharLit: case Expr::Kind::BoolLit:
+        case Expr::Kind::StringLit: case Expr::Kind::Sizeof:
+            return nullptr;
+        case Expr::Kind::Name: {
+            auto& n = static_cast<const NameExpr&>(e);
+            return n.decl && n.decl->isTopLevel ? nullptr : &e;
+        }
+        case Expr::Kind::Unary: {
+            auto& u = static_cast<const UnaryExpr&>(e);
+            return u.op == UnOp::Deref || u.op == UnOp::AddrOf ? &e : notConstant(*u.operand);
+        }
+        case Expr::Kind::Binary: {
+            auto& b = static_cast<const BinaryExpr&>(e);
+            const Expr* bad = notConstant(*b.lhs);
+            return bad ? bad : notConstant(*b.rhs);
+        }
+        case Expr::Kind::Ternary: {
+            auto& t = static_cast<const TernaryExpr&>(e);
+            const Expr* bad = notConstant(*t.cond);
+            if (!bad) bad = notConstant(*t.thenExpr);
+            return bad ? bad : notConstant(*t.elseExpr);
+        }
+        case Expr::Kind::Cast: return notConstant(*static_cast<const CastExpr&>(e).operand);
+        default: return &e;
+    }
+}
+
+// Constants live in the outermost scope, which stays for the whole program, so a function
+// can shadow them. Each can use the others, in any order, so they are all declared first.
+void Sema::checkConstants(Program& program) {
+    scopes_.emplace_back();
+    for (auto& c : program.constants) {
+        if (auto f = funcs_.find(c->name); f != funcs_.end()) {
+            diags_.error(c->loc, q(c->name) + " is already the name of a function", "give the constant a different name",
+                         spec::Constants);
+            diags_.note(f->second->nameLoc, "the function is defined here");
+        } else if (auto s = structs_.find(c->name); s != structs_.end()) {
+            diags_.error(c->loc, q(c->name) + " is already the name of a " + s->second->keyword(),
+                         "give the constant a different name", spec::Constants);
+            diags_.note(s->second->nameLoc, "it is defined here");
+        }
+        declare(*c);
+    }
+    for (auto& c : program.constants) checkConstant(*c);
+}
+
+void Sema::checkConstant(VarDecl& c) {
+    if (constantsChecked_.count(&c)) return;
+    if (!constantsBeingChecked_.insert(&c).second) {
+        diags_.error(c.loc, "the value of " + q(c.name) + " depends on itself",
+                     "give it a value that does not lead back to " + q(c.name), spec::Constants);
+        if (!c.type) c.type = Type::error();
+        return;
+    }
+    Flow flow;
+    if (c.declType->is(K::Auto)) {
+        const Type* t = c.init ? checkExpr(*c.init, flow) : Type::error();
+        if (!c.type) c.type = t;
+    } else {
+        c.type = c.declType;
+        if (c.init) checkValue(*c.init, flow, c.type, "to initialize " + q(c.name));
+    }
+    if (!c.init) {
+        diags_.error(c.loc, "the constant " + q(c.name) + " needs a value", "write `const " +
+                     std::string(c.declType->name) + " " + c.name + " = <value>;`", spec::Constants);
+    } else if (const Type* t = c.type; !t->isError() && !t->is(K::Bool) && !t->isNumber() && !t->is(K::Char) &&
+                                       !t->is(K::String)) {
+        diags_.error(c.typeLoc, "this compiler does not support constants of type " + q(t) + " yet",
+                     "write a function that returns the value", spec::Status);
+    } else if (const Expr* bad = notConstant(*c.init); bad && !t->isError()) {
+        diags_.error(bad->loc, "the value of a constant is worked out from literals, other constants and operators",
+                     "a variable or a call cannot be used here. For a value computed while the program runs, write "
+                     "a function, or use a local variable",
+                     spec::Constants);
+    }
+    constantsBeingChecked_.erase(&c);
+    constantsChecked_.insert(&c);
 }
 
 void Sema::checkMembers(StructDecl& sd) {
@@ -1299,6 +1387,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
             reportUnknownName(n);
             return e.type = Type::error();
         }
+        if (n.decl->isTopLevel) checkConstant(*n.decl);  // another constant may use it first
         var = n.decl;
         return e.type = n.decl->type;
     }
@@ -1727,6 +1816,16 @@ const Type* Sema::checkAddressOf(UnaryExpr& u, Flow& flow) {
         diags_.error(u.loc, "the address of 'this' cannot be taken",
                      "'this' is the object a method works on, not a variable", spec::Pointers);
         return Type::error();
+    }
+    if (target.kind == Expr::Kind::Name) {
+        const VarDecl* found = lookup(static_cast<NameExpr&>(target).name);
+        if (found && found->isTopLevel) {
+            checkExpr(target, flow);
+            diags_.error(u.loc, q(found->name) + " is a constant, which has no address",
+                         "copy it into a variable first: `auto copy = " + found->name + ";`, then `&copy`",
+                         spec::Constants);
+            return Type::error();
+        }
     }
     if (!isPlaceKind(target)) {
         const Type* t = checkExpr(target, flow);

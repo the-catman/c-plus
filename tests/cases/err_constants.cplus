@@ -1,0 +1,43 @@
+// What a constant can and cannot be.
+const int NO_VALUE;
+int variable = 1;
+int f() { return 1; }
+const int FROM_CALL = f();
+const int WRONG_TYPE = "text";
+const int A = B;
+const int B = A;
+const int SELF = SELF + 1;
+const auto AUTO_SELF = AUTO_SELF;
+const int TWICE = 1;
+const int TWICE = 2;
+const vector<int> LIST = {1, 2};
+const array<int, 2> ARRAY = {1, 2};
+struct Point { int x = 0; };
+const Point ORIGIN = {0};
+const int* POINTER = null;
+const int f = 3;
+const int Point = 4;
+
+int main() {
+    TWICE = 3;
+    TWICE++;
+    int* p = &TWICE;
+    return 0;
+}
+// error: the constant 'NO_VALUE' needs a value
+// error: this compiler does not support global variables yet
+// error: for a value that never changes, write a constant: `const int variable = 0;`
+// error: the value of a constant is worked out from literals, other constants and operators
+// error: a variable or a call cannot be used here
+// error: to initialize 'WRONG_TYPE'
+// error: the value of 'A' depends on itself
+// error: the value of 'SELF' depends on itself
+// error: the value of 'AUTO_SELF' depends on itself
+// error: 'TWICE' is already declared in this scope
+// error: this compiler does not support constants of type 'vector<int>' yet
+// error: this compiler does not support constants of type 'array<int, 2>' yet
+// error: this compiler does not support constants of type 'Point' yet
+// error: 'f' is already the name of a function
+// error: 'Point' is already the name of a struct
+// error: 'TWICE' is const and cannot be
+// error: 'TWICE' is a constant, which has no address

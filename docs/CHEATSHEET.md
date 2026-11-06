@@ -48,6 +48,8 @@ long square(long n) { return n * n; }
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors and arrays element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
+| Constants | outside any function, in any order: `const int MAX = 100;`, `const string NAME = "a" + OTHER;`. A number, `char`, `bool` or `string`, from literals, other constants and operators |
+| Program | `int main()`, or `int main(int argc, char** argv)`, with `string(argv[1])` for the first argument. `cplus run app.cplus -- arg1 arg2` |
 | Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long), `1.5`, `1e-9`, `2.5f` (float), `'a'`, `'\n'` (char) |
 | Conditions | `bool`, a number, a pointer or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (p)` (not null), `if (opt)` (holds a value). Not a `char`: write `c != '\0'` |
 
@@ -56,6 +58,8 @@ long square(long n) { return n * n; }
 | C++ habit | C+ |
 |-----------|----|
 | `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;`; C functions are declared with `extern "C"` |
+| `#define MAX 100`, `constexpr int MAX = 100;`, `static const int MAX = 100;` | `const int MAX = 100;` |
+| `int count = 0;` outside a function | not supported yet. A value that never changes is a `const`; otherwise pass it to the functions that use it |
 | `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `int`. `char*` is a raw pointer, for buffers and text to free |
 | `struct FILE* f`, `struct tm t;`, `typedef struct x x;` | `extern "C" struct FILE;` once, then `FILE* f`; `tm t;`, no word `struct`; no `typedef` |
 | `char name[64];` in a C struct | `array<char, 64> name;`, read with `string(s.name)` |
@@ -142,10 +146,15 @@ long square(long n) { return n * n; }
 | Generics | `template<typename T>`, `template<Comparable T>`; no specialization or SFINAE |
 | Modules | `import net.server;`, `http::get(url)` |
 | Memory | `weak` to break reference cycles, `unique<T>`, `local<T>`; pointers into vectors and strings |
+| Types | enums, interfaces, `const` fields, types nested in a type or a function, `short` and other small integers |
+| Functions | default arguments, `auto` parameters and return types, lambdas |
+| Statements | `switch` |
+| Top level | variables outside functions, constants of other types, `constexpr` |
 | Containers | `hashmap<K, V>`; `insert`, `erase` and iterators on vectors; array sizes given by a name |
 | References | `T&` parameters, `for (auto& x : v)` |
-| Format options | width and alignment, `{:x}`, `{:>8}` |
+| Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
 | More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare`; parsing numbers from strings |
+| More C | variable arguments, vectors, C variables like `errno`, callbacks |
 | Concurrency | `spawn f()` → `Task<T>`; later `async`/`await` |
 
 ## Tools

@@ -1,0 +1,5 @@
+int main(int argc, char* argv[]) {
+    return 0;
+}
+// error: C+ has no C-style arrays
+// error: write `int main(int argc, char** argv)`

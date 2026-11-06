@@ -1,0 +1,85 @@
+// A constant outside any function can be used anywhere in the file. Its value comes from
+// literals, other constants and operators, and they can be in any order.
+const int SECONDS = MINUTES * 60;
+const int MINUTES = 5;
+const long BIG = 1L << 40, BIGGER = BIG * 2;
+const double RATE = 1.5;
+const double TWICE = RATE * 2;
+const float SMALL = 0.5f;
+const bool VERBOSE = MINUTES > 3 && !false;
+const char FIRST = 'a';
+const char NEXT = char(FIRST + 1);
+const string NAME = "ada";
+const string GREETING = "hello " + NAME + "!";
+const auto COUNT = MINUTES + 1;
+const long SIZE = sizeof(int) * 2;
+const int PICK = VERBOSE ? 1 : 2;
+const int LOW = int(RATE);
+
+struct Settings {
+    int limit = MINUTES;
+    string label = NAME;
+};
+
+class Job {
+public:
+    int seconds;
+    Job() : seconds(SECONDS) {}
+    int left() const { return SECONDS - seconds; }
+};
+
+int fromFunction() {
+    return MINUTES + 1;
+}
+
+int shadowed() {
+    int MINUTES = 100;  // a local variable can have the same name
+    return MINUTES;
+}
+
+const char* unused() {  // not a constant, though it starts with const
+    return null;
+}
+
+const int returnsConst() {  // as in C++, the const here means nothing
+    return 2;
+}
+
+int main() {
+    println("{} {} {} {}", SECONDS, MINUTES, BIG, BIGGER);
+    println("{} {} {}", RATE, TWICE, SMALL);
+    println("{} {} {}", VERBOSE, FIRST, NEXT);
+    println("{} {} {}", NAME, GREETING, GREETING.size());
+    println("{} {} {} {}", COUNT, SIZE, PICK, LOW);
+    println("{} {}", Settings{}, Job().left());
+    println("{} {} {}", fromFunction(), shadowed(), returnsConst());
+    println("{}", unused() == null);
+
+    // Used like any other value of its type.
+    string s = NAME;
+    s += "!";
+    println("{} {} {}", s, NAME[0], NAME.substr(1, 2));
+    for (char c : NAME) print("{}-", c);
+    println();
+    long total = 0;
+    for (int i = 0; i < MINUTES; i++) total += i * MINUTES;
+    println("{}", total);
+    vector<string> names = {NAME, GREETING};
+    println("{}", names);
+    int MINUTES = 1;  // a local variable in the function shadows it from here on
+    println("{}", MINUTES);
+    return 0;
+}
+// expect: 300 5 1099511627776 2199023255552
+// expect: 1.5 3 0.5
+// expect: true a b
+// expect: ada hello ada! 10
+// expect: 6 8 1 1
+// expect: {limit: 5, label: "ada"} 0
+// expect: 6 100 2
+// expect: true
+// expect: ada! a da
+// expect: a-d-a-
+// expect: 50
+// expect: ["ada", "hello ada!"]
+// expect: 1

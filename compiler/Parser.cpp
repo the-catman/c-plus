@@ -182,6 +182,11 @@ void Parser::parseTopLevel(Program& prog) {
         case Tok::KwTemplate: notYet(t.loc, "templates (generics)");
         case Tok::KwEnum: notYet(t.loc, "enums");
         case Tok::KwInterface: notYet(t.loc, "interfaces");
+        case Tok::KwConstexpr:
+            notYet(t.loc, "constexpr", "for a number, a char, a bool or a string, write a constant: `const int MAX = 100;`");
+        case Tok::KwStatic:
+            fail(t.loc, "C+ has no 'static' outside a type", "remove it, which leaves a constant or a function as it was",
+                 spec::Constants);
         case Tok::KwExtern: parseExtern(prog); return;
         case Tok::KwNamespace:
             fail(t.loc, "C+ has no namespaces; each file is a module", "remove the namespace block", spec::Modules);
@@ -209,15 +214,30 @@ void Parser::parseTopLevel(Program& prog) {
     Loc retLoc;
     bool isConst = false;
     const Type* ret = parseType(retLoc, &isConst);
-    if (isConst) notYet(t.loc, "global constants");
+    if (isConst && check(Tok::Ident) && peek(1).kind != Tok::LParen) return parseConstants(prog, ret, retLoc);
     if (ret->is(Type::Kind::Auto)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `int`");
     if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && isTypeName(peek()))
         fail(peek().loc, "methods are defined inside their " + std::string(prog_->findStruct(peek().text)->keyword()),
              "move this definition into the body of '" + peek().text + "'; C+ has no headers, so there is no "
              "separate declaration to match",
              spec::Classes);
-    if (check(Tok::Ident) && peek(1).kind != Tok::LParen) notYet(peek().loc, "global variables");
+    if (check(Tok::Ident) && peek(1).kind != Tok::LParen)
+        notYet(peek().loc, "global variables",
+               "for a value that never changes, write a constant: `const int " + peek().text + " = 0;`. For one "
+               "that changes, pass it to the functions that use it, or keep it in a class object");
     prog.funcs.push_back(parseFunction(ret, retLoc));
+}
+
+// `const int LIMIT = 10, TWICE = LIMIT * 2;`, after the type.
+void Parser::parseConstants(Program& prog, const Type* type, Loc typeLoc) {
+    StmtPtr decl = parseDeclarators(true, type, typeLoc);
+    expect(Tok::Semi, "after the constant");
+    auto add = [&](std::unique_ptr<VarDecl> constant) {
+        constant->isTopLevel = true;
+        prog.constants.push_back(std::move(constant));
+    };
+    if (decl->kind == Stmt::Kind::VarDecl) add(std::unique_ptr<VarDecl>(static_cast<VarDecl*>(decl.release())));
+    else for (auto& constant : static_cast<DeclGroupStmt&>(*decl).decls) add(std::move(constant));
 }
 
 // `extern "C" int abs(int n);` or a block of such declarations: `extern "C" { ... }`.
@@ -784,6 +804,8 @@ void Parser::parseParams(FuncDecl& fn) {
                        "copied if one of the copies changes. To let the function change the caller's variable, "
                        "pass a pointer: `int* count`, called as `f(&n)`");
             const Token& pname = expect(Tok::Ident, "for the parameter name");
+            if (check(Tok::LBracket) && fn.name == "main")
+                fail(peek().loc, "C+ has no C-style arrays", "write `int main(int argc, char** argv)`", spec::MainFunction);
             if (check(Tok::LBracket)) failCStyleArray(ty, pname.text);
             auto param = std::make_unique<VarDecl>(pname.loc, pname.text, ty, typeLoc);
             param->isParam = true;
@@ -1180,6 +1202,10 @@ StmtPtr Parser::parseStmt() {
             advance();
             expect(Tok::Semi, "after 'continue'");
             return std::make_unique<ContinueStmt>(t.loc);
+        case Tok::KwConstexpr: notYet(t.loc, "constexpr", "write `const` instead: `const int x = 1;`");
+        case Tok::KwStatic:
+            notYet(t.loc, "static local variables",
+                   "keep the value in a class object, or pass it to the function and return the new value");
         case Tok::KwSwitch: notYet(t.loc, "switch statements", "use if / else if for now");
         case Tok::KwTry: case Tok::KwThrow: notYet(t.loc, "errors (try, throw, catch)");
         case Tok::KwExtern:

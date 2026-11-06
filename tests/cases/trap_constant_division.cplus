@@ -1,0 +1,13 @@
+// A constant whose value cannot be worked out stops the program where it is used, with the
+// line of the constant.
+const int ZERO = 0;
+const int BAD = 1 / ZERO;
+
+int main() {
+    println("before");
+    println("{}", BAD);
+    return 0;
+}
+// expect: before
+// trap: division by zero
+// trap: trap_constant_division.cplus:4:

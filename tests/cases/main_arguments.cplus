@@ -1,0 +1,16 @@
+// main can take the command-line arguments as in C++: argv[0] is the program itself, and
+// the list ends with a null pointer.
+// args: one "two" 3
+int main(int argc, char** argv) {
+    println("{}", argc);
+    for (int i = 1; i < argc; i++) println("{}", string(argv[i]));
+    println("{}", argv[argc] == null);
+    println("{}", string(argv[0]).empty());
+    return 0;
+}
+// expect: 4
+// expect: one
+// expect: "two"
+// expect: 3
+// expect: true
+// expect: false

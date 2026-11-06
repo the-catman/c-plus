@@ -46,6 +46,9 @@ private:
     void requireAssigned(Flow& flow, const VarDecl* var, const std::string& path, const Type* type, Loc loc);
 
     void checkStructs(Program& program);
+    void checkConstants(Program& program);
+    void checkConstant(VarDecl& constant);
+    std::set<const VarDecl*> constantsChecked_, constantsBeingChecked_;
     void checkMembers(StructDecl& sd);
     void checkFunction(FuncDecl& fn);
     void checkExternFunction(FuncDecl& fn);

@@ -848,6 +848,30 @@ int a = 1, b = a + 1;     // several variables in one declaration
 - A name may be declared once per scope. An inner block may shadow an outer name, as in C++.
 - Brace and constructor initializers (`int x{5}`, `int x(5)`) are planned.
 
+### Constants
+
+A constant outside any function can be used anywhere in the file, before or after it is
+written.
+
+```cpp
+const int MAX_USERS = 100;
+const double RATE = 1.5, TWICE = RATE * 2;
+const string GREETING = "hello " + NAME;
+const string NAME = "Ada";
+```
+
+- A constant is a number, a `char`, a `bool` or a `string`, or `auto` for one of those. Other
+  types are not supported yet; write a function that returns the value.
+- Its value is worked out from literals, other constants, operators, casts and `sizeof`. A
+  variable or a function call is an error.
+- A value that cannot be worked out, such as `1 / 0`, stops the program when the constant is
+  used, naming the constant's line. A compile-time check will come with `constexpr`.
+- A constant cannot be changed, and it has no address. To point to it, copy it into a
+  variable first.
+- A local variable or a parameter can have the same name, and hides the constant.
+- A variable outside any function, `int count = 0;`, is not supported yet. Pass the value to
+  the functions that use it, or keep it in a class object.
+
 ### Definite assignment
 
 Reading a variable before it has been given a value is a **compile error**, checked on
@@ -904,8 +928,25 @@ long square(long n) {
 
 ### The main function
 
-Every program has exactly one `int main()`. Its return value is the process exit code.
-Falling off the end of `main` returns 0, as in C++. Command-line arguments are planned.
+Every program has exactly one `main`, which returns an `int`, the process exit code. Falling
+off the end of it returns 0, as in C++. It takes no parameters, or the command-line arguments
+as in C++:
+
+```cpp
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        println("usage: greet <name>");
+        return 1;
+    }
+    println("hello {}", string(argv[1]));
+    return 0;
+}
+```
+
+`argc` counts the arguments, and `argv[0]` is how the program was started, so the first real
+argument is `argv[1]`. `argv` is a raw [pointer](#pointers), so an index past the end is not
+checked. To pass arguments through `cplus run`, write them after `--`:
+`cplus run greet.cplus -- Ada`.
 
 ### C functions
 
@@ -1447,9 +1488,20 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | C structs: fields, array fields, through pointers, and by value on Linux x86-64 and aarch64 | implemented |
 | `array<T, N>`: checked `a[i]`, `size`, `empty`, `front`, `back`, `fill`, `data`, range-based `for`, `==`, pointers to elements, `string(a)` | implemented |
 | `new`, `new[]`, `delete`, `delete[]`, with a warning; `[[allow(new_delete)]]`, `-Wno-new-delete` | implemented |
+| Constants outside functions: numbers, `char`, `bool`, `string` | implemented |
+| `main` with `argc` and `argv` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Debug builds with `--debug`: AddressSanitizer, stack traces, misaligned pointer and invalid bool checks, leak report | implemented |
 | Imports and multi-file programs | planned |
+| Variables outside functions; constants of other types; `constexpr` | planned |
+| Enums, `switch`, interfaces, lambdas | planned |
+| Default arguments, `auto` parameters and return types | planned |
+| `const` fields, nested types, types defined inside a function | planned |
+| `int x{5}`, `int x(5)`, brace initializers for fields | planned |
+| `short`, and 8-bit and 16-bit integer types | planned |
+| Arrays of arrays from `new[]`, initial values for `new T[n]` | planned |
+| Numbered format placeholders, like `{0}` | planned |
+| C functions with variable arguments; vectors passed to or from C | planned |
 | Unsigned types | planned |
 | Format options for width, alignment and `{:x}`; math constants | planned |
 | Function overloading | planned |
