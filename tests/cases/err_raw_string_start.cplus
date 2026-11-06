@@ -1,0 +1,6 @@
+int main() {
+    println("{}", R"text");
+    println("{}", R"seventeen_letters(x)seventeen_letters");
+    return 0;
+}
+// error: a raw string starts with `R"(`, or with up to 16 characters of your own before the '('

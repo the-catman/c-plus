@@ -77,6 +77,7 @@ private:
     bool atFloat() const;
     Token lexFloat();
     Token lexString();
+    Token lexRawString(Loc loc);  // `R"(...)"` or `R"end(...)end"`, at the quote
     Token lexChar();
     bool lexEscape(std::string& value, const char* anchor);
     Token lexIdentOrKeyword();

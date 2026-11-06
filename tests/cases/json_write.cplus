@@ -1,0 +1,179 @@
+// Turning values into JSON, by what the compiler knows of their types.
+import json;
+
+struct Inner {
+    int n = 1;
+};
+struct All {
+    int i = -5;
+    long big = 5000000000;
+    float f = 0.5;
+    double d = 2.5;
+    bool yes = true;
+    char c = 'x';
+    string s = "text";
+    Inner inner;
+    vector<int> list = {1, 2};
+    array<int, 2> pair = {3, 4};
+    int? some = 7;
+    int? none;
+    string? text = "here";
+    hashmap<string, int> map = {{"a", 1}, {"b", 2}};
+};
+struct Empties {
+    vector<int> list;
+    hashmap<string, int> map;
+    string text;
+    array<int, 0> nothing;
+    Inner? missing;
+};
+struct Nothing {};
+
+class Hidden {
+    int secret = 1;
+public:
+    string shown = "yes";
+private:
+    int other = 2;
+};
+
+class Animal {
+public:
+    string name = "any";
+    virtual string sound() const { return ""; }
+};
+class Dog : public Animal {
+public:
+    int tricks = 3;
+    string sound() const override { return "woof"; }
+};
+interface Pet {
+    string owner() const;
+};
+class Cat : public Animal, public Pet {
+public:
+    int lives = 9;
+    string owner() const override { return "me"; }
+};
+class Tree {
+public:
+    int value = 0;
+    vector<Tree> kids;
+    Tree? next;
+    weak<Tree> parent;
+};
+class Owner {
+public:
+    unique<Inner2> held = unique<Inner2>();
+};
+class Inner2 {
+public:
+    int n = 4;
+};
+struct Holds {
+    unique<Inner2> u;
+};
+
+int main() {
+    println("{}", json::stringify(All{}));
+    println("{}", json::stringify(Empties{}));
+    println("{}", json::pretty(Empties{}));
+    println("{}", json::stringify(Nothing{}));
+    println("{}", json::stringify(Hidden()));
+
+    // Plain values.
+    println("{} {} {} {} {}", json::stringify(1), json::stringify(2.5), json::stringify(true), json::stringify('a'), json::stringify("s"));
+    println("{}", json::stringify(vector<string>{"a", "b"}));
+    println("{}", json::stringify(vector<vector<int>>{{1}, {}, {2, 3}}));
+    int? none = null;
+    println("{}", json::stringify(none));
+
+    // Numbers: JSON has no NaN or infinity, and whole doubles need no point.
+    vector<double> numbers = {1.0, 0.1, -2.5, 1e21, 1e-7, sqrt(-1.0), 1 / 0.0};
+    println("{}", json::stringify(numbers));
+    println("{}", json::stringify(vector<float>{0.1f, 1 / 0.0f}));
+
+    // Strings: what must be escaped is, and text in any language is left as it is.
+    println("{}", json::stringify("a\"b\\c/d\ne\rf\tg\x08h\x0Ci"));
+    println("{}", json::stringify("héllo 日本語 😀"));
+    string control = "x";
+    control[0] = char(1);
+    println("{}", json::stringify(control));
+    string notText = "ab";
+    notText[1] = char(200);
+    println("{}", json::stringify(notText));
+    println("{}", json::stringify(char(200)));
+
+    // An object is written as what it really is, whatever it is known as here.
+    Animal a = Dog();
+    println("{}", json::stringify(a));
+    Cat c = Cat();
+    Pet p = c;
+    println("{}", json::stringify(p));
+    vector<Animal> zoo = {Dog(), Animal(), c};
+    println("{}", json::stringify(zoo));
+
+    // A weak reference is left out, which is what lets a tree know its parent.
+    Tree root = Tree();
+    root.value = 1;
+    Tree kid = Tree();
+    kid.value = 2;
+    kid.parent = root;
+    root.kids.push_back(kid);
+    println("{}", json::stringify(root));
+
+    // A map with numbers for keys has them as strings, which is all an object can have.
+    hashmap<int, string> byNumber = {{1, "one"}, {-2, "two"}};
+    println("{}", json::stringify(byNumber));
+    hashmap<long, int> byLong = {{5000000000, 1}};
+    println("{}", json::stringify(byLong));
+
+    // Erased entries are not there.
+    hashmap<string, int> changed = {{"a", 1}, {"b", 2}, {"c", 3}};
+    changed.erase("b");
+    println("{}", json::stringify(changed));
+
+    // What owns its value is written as that value.
+    println("{}", json::stringify(Owner()));
+    Holds holds = {unique<Inner2>()};
+    println("{}", json::stringify(move(holds)));
+
+    println("{}", json::pretty(vector<Inner>{Inner{}}));
+    return 0;
+}
+// expect: {"i":-5,"big":5000000000,"f":0.5,"d":2.5,"yes":true,"c":"x","s":"text","inner":{"n":1},"list":[1,2],"pair":[3,4],"some":7,"none":null,"text":"here","map":{"a":1,"b":2}}
+// expect: {"list":[],"map":{},"text":"","nothing":[],"missing":null}
+// expect: {
+// expect:   "list": [],
+// expect:   "map": {},
+// expect:   "text": "",
+// expect:   "nothing": [],
+// expect:   "missing": null
+// expect: }
+// expect: {}
+// expect: {"shown":"yes"}
+// expect: 1 2.5 true "a" "s"
+// expect: ["a","b"]
+// expect: [[1],[],[2,3]]
+// expect: null
+// expect: [1,0.1,-2.5,1e+21,1e-07,null,null]
+// expect: [0.1,null]
+// expect: "a\"b\\c/d\ne\rf\tg\bh\fi"
+// expect: "héllo 日本語 😀"
+// expect: "\u0001"
+// expect: "a\ufffd"
+// expect: "\u00c8"
+// expect: {"name":"any","tricks":3}
+// expect: {"name":"any","lives":9}
+// expect: [{"name":"any","tricks":3},{"name":"any"},{"name":"any","lives":9}]
+// expect: {"value":1,"kids":[{"value":2,"kids":[],"next":null}],"next":null}
+// expect: {"1":"one","-2":"two"}
+// expect: {"5000000000":1}
+// expect: {"a":1,"c":3}
+// expect: {"held":{"n":4}}
+// expect: {"u":{"n":4}}
+// expect: [
+// expect:   {
+// expect:     "n": 1
+// expect:   }
+// expect: ]

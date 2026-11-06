@@ -42,9 +42,13 @@ long square(long n) { return n * n; }
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
 | Hash maps | `hashmap<string, int> m = {{"a", 1}};` is a **value**, copied like a vector, that keeps the order entries were added in. `m["b"] = 2`, `m["b"]++`, `m[k].push_back(x)`. `m[k]` adds a missing key with a default value, as in C++, or **stops the program** if `V` has none. `m.at(k)` (**stops the program** if missing), `m.get(k)` (a `V?`), `m.contains(k)`, `m.count(k)`, `m.insert({k, v})` (keeps what is there), `m.erase(k)`, `m.size()`, `m.empty()`, `m.clear()`, `m.keys()`, `m.values()`. `for (auto e : m)` with `e.first`, `e.second`. Prints as `{"a": 1}`. A key is a number, `char`, `bool`, string, pointer or class reference, or an optional, vector, array or struct of those |
+| JSON | `import json;`. `json::stringify(x)`, `json::pretty(x)`, `User u = try json::parse<User>(text);`, for structs, classes, vectors, arrays, optionals, hashmaps and what they hold. Public fields only. A missing key keeps the field's default, and a key that is not a field is left out. `catch (json::Error e)` has `e.line`, `e.column` and `e.what()` |
+| Any JSON | `json::Value doc = try json::parse<json::Value>(text);`, then `doc.get("a")?.at(0)?.text() ?? "none"`. `isNull()`, `number()`, `whole()`, `boolean()`, `keys()`, `items()`, `size()`. `json::object()`, `json::array()`, `json::of(x)`, `v.set(k, x)`, `v.push(x)` |
+| Reflection | `import reflect;`. `auto t = reflect::type<User>();` or `reflect::of(x)`, then `t.name()`, `t.kind()`, `t.size()`, `t.elem()`, and `for (auto f : t.fields())` with `f.name`, `f.offset`, `f.type`, `f.isPublic` |
 | Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` a number or a constant. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
 | Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>` |
 | String chars | `s[i]` and `s[i] = 'x'` (checked), `for (char c : s)`, `s + '!'`, `s += c`, `s.push_back(c)`, `s.pop_back()`, `s.front()`, `s.back()`, `string(3, '-')`, `s.find('/')` |
+| Raw strings | `R"(no "escapes" here, and any number of lines)"`, or `R"end(has )" inside)end"`, as in C++ |
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them |
 | Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(x)` for any number |
 | Optionals | `User? u = find(name);` holds a `User` or `null`; `int? n;` starts out null. `u?.name` is null when `u` is, `u?.name ?? "nobody"` gives a fallback, `if (auto x = u)` runs with the `User` inside. `has_value()`, `value()`, `value_or(x)`, `u == null` |
@@ -150,6 +154,9 @@ long square(long n) { return n * n; }
 | `vector<int> v(5);`, `vector<int> v{1, 2};` | `auto v = vector<int>(5);`, `vector<int> v = {1, 2};` |
 | `std::unordered_map<K, V>`, `std::map<K, V>` | `hashmap<K, V>`, in the order entries were added. Sorted maps are planned |
 | `for (auto [k, v] : m)`, `for (const auto& [k, v] : m)` | structured bindings are planned: `for (auto e : m)`, then `e.first` and `e.second` |
+| `nlohmann::json`, `JSON.parse(text)`, `JSON.stringify(x)` | `import json;`, then `try json::parse<User>(text)` or `try json::parse<json::Value>(text)`, and `json::stringify(x)` |
+| `NLOHMANN_DEFINE_TYPE_...`, `to_json`, `from_json` | not needed: the compiler knows the fields of every type |
+| `obj["a"]["b"]` on JSON | `obj.get("a")?.get("b")`, since any step may not be there |
 | `m.find(k) != m.end()`, `it->second` | `m.contains(k)`, `m.get(k)`, which gives a `V?`. No iterators yet |
 | `m.emplace(k, v)`, `m.insert_or_assign(k, v)` | `m.insert({k, v})`, `m[k] = v` |
 | `m[k]` on a `const` map | error, as in C++, since it adds a missing key: `m.at(k)` or `m.get(k)` |
@@ -180,7 +187,9 @@ long square(long n) { return n * n; }
 | Classes | `final`, covariant return types, private and protected base classes |
 | Operators | operator overloading with C++ syntax, after function overloading |
 | Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments |
-| Modules | `import net.server;`, `http::get(url)` |
+| Modules | your own, `import net.server;`, and `http::get(url)` |
+| JSON | other names for fields, marking a field to leave out |
+| Reflection | reading a field through its `reflect::Field`, methods |
 | Memory | `local<T>`; pointers into vectors and strings |
 | Types | enums, `const` fields, types nested in a type or a function, `short` and other small integers |
 | Functions | default arguments, `auto` parameters and return types, lambdas |

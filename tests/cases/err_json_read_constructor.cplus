@@ -1,0 +1,13 @@
+import json;
+class User {
+public:
+    string name;
+    User(string n) : name(n) {}
+};
+int main() {
+    println("{}", json::stringify(User("written is fine")));
+    auto u = try json::parse<User>("{}");
+    return 0;
+}
+// error: 'User' cannot be used for 'T' of 'json::parse', which must be 'JsonReadable'
+// error: 'User' has a constructor that needs arguments, which JSON does not know. Give it a constructor without parameters, or none

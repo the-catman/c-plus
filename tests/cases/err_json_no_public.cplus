@@ -1,0 +1,10 @@
+import json;
+class Secret {
+    int a = 1;
+    int b = 2;
+};
+int main() {
+    println("{}", json::stringify(Secret()));
+    return 0;
+}
+// error: 'Secret' has no public fields, so nothing of it would go in JSON. Put what belongs there under `public:`

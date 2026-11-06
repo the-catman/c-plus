@@ -100,10 +100,45 @@ void Parser::addBuiltinSource(const SourceFile& source) {
     toks_.insert(toks_.end() - 1, tokens.begin(), tokens.end());  // after the program, so an attribute can still come first
 }
 
+// The modules that come with the language, which an import adds to the program.
+static const char* const kBuiltinModules[] = {"json", "reflect"};
+
+static bool isBuiltinModule(const std::string& name) {
+    for (const char* module : kBuiltinModules)
+        if (name == module) return true;
+    return false;
+}
+
+// `json::parse`, for a module that is imported, becomes one identifier, which then is a name like any other.
+void Parser::joinModuleNames(const std::set<std::string>& modules) {
+    std::vector<Token> joined;
+    joined.reserve(toks_.size());
+    for (size_t i = 0; i < toks_.size(); ++i) {
+        if (toks_[i].kind == Tok::Ident && modules.count(toks_[i].text) && i + 2 < toks_.size() && toks_[i + 1].kind == Tok::ColonColon &&
+            toks_[i + 2].kind == Tok::Ident) {
+            Token name = toks_[i];
+            name.text += "::" + toks_[i + 2].text;
+            if (toks_[i + 2].loc.line == name.loc.line) name.loc.len = toks_[i + 2].loc.col + toks_[i + 2].loc.len - name.loc.col;
+            joined.push_back(std::move(name));
+            i += 2;
+            continue;
+        }
+        joined.push_back(std::move(toks_[i]));
+    }
+    toks_ = std::move(joined);
+}
+
 void Parser::addBuiltins() {
     bool usesError = false, definesError = false, usesMap = false, definesMap = false;
+    std::set<std::string> modules;
+    Loc jsonLoc;
     for (size_t i = 0; i < toks_.size(); ++i) {
         Tok k = toks_[i].kind;
+        if (k == Tok::KwImport && i + 2 < toks_.size() && toks_[i + 1].kind == Tok::Ident && toks_[i + 2].kind == Tok::Semi &&
+            isBuiltinModule(toks_[i + 1].text)) {
+            modules.insert(toks_[i + 1].text);
+            if (toks_[i + 1].text == "json") jsonLoc = toks_[i + 1].loc;
+        }
         usesError = usesError || k == Tok::KwTry || k == Tok::KwThrow || k == Tok::KwThrows || k == Tok::KwCatch ||
                     (k == Tok::Ident && toks_[i].text == "Error");
         usesMap = usesMap || (k == Tok::Ident && toks_[i].text == "hashmap");
@@ -111,6 +146,13 @@ void Parser::addBuiltins() {
             definesError = definesError || toks_[i + 1].text == "Error";
             definesMap = definesMap || toks_[i + 1].text == "hashmap";
         }
+    }
+    if (modules.count("json")) {
+        usesError = true;  // what it throws
+        usesMap = true;    // what a json::Value holds an object in
+        if (definesError)
+            diags_.error(jsonLoc, "'json' uses the built-in class 'Error', but this program has its own",
+                         "rename your class, or derive it from the built-in one by leaving yours out of this name", spec::Errors);
     }
     if (usesError && !definesError) {
         static const SourceFile builtin("<built-in>",
@@ -126,6 +168,15 @@ void Parser::addBuiltins() {
         static const SourceFile builtin("<built-in>", kHashmapSource);
         addBuiltinSource(builtin);
     }
+    if (modules.count("json") && !definesError) {
+        static const SourceFile builtin("<built-in>", kJsonSource);
+        addBuiltinSource(builtin);
+    }
+    if (modules.count("reflect")) {
+        static const SourceFile builtin("<built-in>", kReflectSource);
+        addBuiltinSource(builtin);
+    }
+    if (!modules.empty()) joinModuleNames(modules);
 }
 
 void Parser::parseProgram(Program& prog) {
@@ -2802,7 +2853,19 @@ ExprPtr Parser::parsePrimary() {
                     advance();
                     return parseMemberAccess(std::make_unique<ThisExpr>(t.loc), "::", t.text);
                 }
+                if (isBuiltinModule(t.text))
+                    fail(t.loc, "'" + t.text + "::" + peek(1).text + "' is in the module '" + t.text + "', which this program does not import",
+                         "write `import " + t.text + ";` at the top of the file", spec::Modules);
                 notYet(t.loc, "module members like '" + t.text + "::" + peek(1).text + "'");
+            }
+            if (t.loc.line == 0 && (t.text == "__zero" || t.text == "__type_of")) {  // see Builtins.h
+                expect(Tok::LParen, "after " + t.text);
+                Loc typeLoc;
+                const Type* ty = parseType(typeLoc);
+                expect(Tok::RParen, "to close " + t.text);
+                auto made = std::make_unique<SizeofExpr>(t.loc, ty, nullptr);
+                made->what = t.text == "__zero" ? SizeofExpr::What::Zero : SizeofExpr::What::Descriptor;
+                return made;
             }
             if (auto bound = bindings_.find(t.text); bound != bindings_.end() && !bound->second.type) {  // `N`
                 const TemplateBinding& b = bound->second;

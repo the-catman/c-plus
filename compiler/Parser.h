@@ -1,3 +1,4 @@
+#include <set>
 #pragma once
 
 #include <deque>
@@ -62,6 +63,7 @@ private:
     const Type* parseBaseType(Loc& loc);
     ExprPtr parseCoalesce();
     void addBuiltins();  // what is written in C+ itself, for a program that uses it. See Builtins.h
+    void joinModuleNames(const std::set<std::string>& modules);
     void addBuiltinSource(const SourceFile& source);  // `class Error`, for a program that uses errors and has none of its own
     void parseThrowsMark(FuncDecl& fn);
     StmtPtr parseTry();

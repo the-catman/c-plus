@@ -1,0 +1,116 @@
+// What the running program knows about its types.
+import reflect;
+
+struct Point {
+    int x = 0;
+    double y = 0;
+};
+class Base {
+    int hidden = 1;
+public:
+    string name = "b";
+    virtual int id() const { return 1; }
+};
+class Other {
+public:
+    long o = 0;
+    virtual int other() const { return 2; }
+};
+class Derived : public Base, public Other {
+public:
+    bool extra = false;
+    int id() const override { return 3; }
+};
+struct Node {
+    vector<Node> kids;
+    Point? where;
+    array<int, 3> numbers;
+    hashmap<string, int> counts;
+    int* pointer;
+};
+
+void show(reflect::Type t) {
+    println("{} is a {} of {} bytes", t.name(), t.kind(), t.size());
+    for (auto f : t.fields()) println("  {} at {}: {} {}", f.name, f.offset, f.type.name(), f.isPublic ? "public" : "private");
+}
+
+int main() {
+    show(reflect::type<int>());
+    show(reflect::type<string>());
+    show(reflect::type<Point>());
+    show(reflect::type<Base>());
+    show(reflect::type<Derived>());
+    show(reflect::type<Node>());
+
+    // What things hold.
+    println("{}", reflect::type<vector<string>>().elem()?.name());
+    println("{}", reflect::type<int?>().elem()?.name());
+    println("{}", reflect::type<unique<Base>>().elem()?.name());
+    println("{}", reflect::type<int>().elem()?.name());
+    println("{}", reflect::type<array<char, 7>>().length());
+    println("{}", reflect::type<int>().length());
+    println("{}", reflect::type<hashmap<string, int>>().kind());
+    println("{}", reflect::type<weak<Base>>().kind());
+    println("{}", reflect::type<int*>().kind());
+
+    // A type leads back to itself without trouble.
+    auto kids = reflect::type<Node>().fields()[0].type;
+    println("{} {}", kids.name(), kids.elem()?.name());
+    println("{}", kids.elem()?.fields()[0].type.elem()?.name());
+
+    // What a value really is.
+    Base b = Derived();
+    println("{}", reflect::of(b).name());
+    Other o = Derived();
+    println("{}", reflect::of(o).name());
+    println("{}", reflect::of(Base()).name());
+    println("{}", reflect::of(5).name());
+    println("{}", reflect::of(Point{}).kind());
+    Base? none = null;
+    println("{}", reflect::of(none).name());
+    Base? some = Derived();
+    println("{}", reflect::of(some).name());
+
+    println("{}", reflect::type<int>() == reflect::type<int>());
+    println("{}", reflect::type<int>() == reflect::type<long>());
+    return 0;
+}
+// expect: int is a int of 4 bytes
+// expect: string is a string of 24 bytes
+// expect: Point is a struct of 16 bytes
+// expect:   x at 0: int public
+// expect:   y at 8: double public
+// expect: Base is a class of 8 bytes
+// expect:   hidden at 16: int private
+// expect:   name at 24: string public
+// expect: Derived is a class of 8 bytes
+// expect:   hidden at 16: int private
+// expect:   name at 24: string public
+// expect:   o at 64: long public
+// expect:   extra at 72: bool public
+// expect: Node is a struct of 88 bytes
+// expect:   kids at 0: vector<Node> public
+// expect:   where at 8: Point? public
+// expect:   numbers at 32: array<int, 3> public
+// expect:   counts at 48: hashmap<string, int> public
+// expect:   pointer at 80: int* public
+// expect: string
+// expect: int
+// expect: Base
+// expect: null
+// expect: 7
+// expect: 0
+// expect: hashmap
+// expect: weak
+// expect: pointer
+// expect: vector<Node> Node
+// expect: Node
+// expect: Derived
+// expect: Derived
+// expect: Base
+// expect: int
+// expect: struct
+// expect: Base
+// expect: Derived
+// expect: true
+// expect: false

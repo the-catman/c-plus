@@ -1,0 +1,6 @@
+// error: this raw string is never closed
+// error: add `)"` where it should end
+int main() {
+    println("{}", R"(never closed);
+    return 0;
+}

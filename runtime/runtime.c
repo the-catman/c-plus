@@ -10,6 +10,8 @@
 #include <sys/random.h>
 #include <unistd.h>
 
+#include "internal.h"
+
 // This file is built twice. Programs built with --debug link the copy built with
 // CPLUS_DEBUG_RUNTIME, under AddressSanitizer, which frees memory for real so that
 // AddressSanitizer can catch a later use of it.
@@ -209,6 +211,14 @@ void cplus_start(void) {
 _Noreturn void cplus_trap(const char* message, const char* file, int32_t line, int32_t column) {
     fflush(stdout);
     fprintf(stderr, "fatal error: %s\n  --> %s:%" PRId32 ":%" PRId32 "\n", message, file, line, column);
+    stop_program();
+}
+
+// Called for a mistake in the program that was found where no line of it is known.
+_Noreturn void cplus_stop(const char* message, const char* help) {
+    fflush(stdout);
+    fprintf(stderr, "fatal error: %s\n", message);
+    if (*help) fprintf(stderr, "  = help: %s\n", help);
     stop_program();
 }
 
@@ -536,12 +546,6 @@ void cplus_delete_free(void* p) {
 // string never changes the bytes it can see, so copies and substrings share one
 // buffer. Appending writes after the end of a string's bytes, and only when no other
 // string holds the buffer.
-
-typedef struct {
-    const char* data;
-    int64_t length;
-    void* owner;
-} cplus_string;
 
 typedef struct {
     int64_t count;     // the reference count, as in every heap object
@@ -1022,14 +1026,6 @@ void cplus_print_newline(void) { fputc('\n', stdout); }
 // changes: that copy then gets a buffer of its own (copy-on-write). Elements follow
 // the header. Generated code passes the size of one element and, for elements that
 // hold references, functions that retain or release the element at an address.
-
-typedef struct {
-    int64_t count;  // the reference count, as in every heap object
-    int64_t size;
-    int64_t capacity;
-} cplus_vec;
-
-typedef void (*cplus_elem_fn)(void* element);
 
 static char* vec_elements(cplus_vec* v) { return (char*)(v + 1); }
 

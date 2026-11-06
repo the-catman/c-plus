@@ -1,0 +1,10 @@
+import json;
+class Shape {
+public:
+    virtual double area() const = 0;
+};
+int main() {
+    auto s = try json::parse<Shape>("{}");
+    return 0;
+}
+// error: 'Shape' has methods without a body, so nothing can be made from JSON for it

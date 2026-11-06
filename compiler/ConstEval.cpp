@@ -73,7 +73,7 @@ const char* ConstValue::typeName() const {
 
 bool isBuiltinConstraintName(const std::string& name) {
     return name == "Comparable" || name == "Number" || name == "Integer" || name == "Floating" || name == "Hashable" ||
-           name == "__Hashable" || name == "same_as" || name == "derived_from";
+           name == "__Hashable" || name == "__JsonWritable" || name == "__JsonReadable" || name == "same_as" || name == "derived_from";
 }
 
 std::optional<bool> builtinConstraint(const std::string& name, const Type* first, const Type* second) {

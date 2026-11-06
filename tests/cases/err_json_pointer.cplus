@@ -1,0 +1,14 @@
+import json;
+struct Holder {
+    int* where;
+};
+struct Outer {
+    vector<Holder> list;
+};
+int main() {
+    println("{}", json::stringify(Outer{}));
+    return 0;
+}
+// error: 'Outer' cannot be used for 'T' of 'json::stringify', which must be 'JsonWritable'
+// error: 'list.where', a 'int*', is a pointer, which only means something to this program. Make it a private field
+// error: spec: docs/SPEC.md#json

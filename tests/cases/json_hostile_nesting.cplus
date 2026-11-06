@@ -1,0 +1,58 @@
+// Text made to use up the stack gets an error, wherever the nesting is.
+import json;
+
+struct Point {
+    int x = 0;
+};
+
+string repeat(string s, int n) {
+    string out;
+    for (int i = 0; i < n; i++) out += s;
+    return out;
+}
+
+template<typename T> void bad(string text) {
+    try {
+        T value = try json::parse<T>(text);
+        println("no error");
+    } catch (json::Error e) {
+        string what = e.what();
+        println("{} {}", e.column, what.substr(what.size() - 28, 28));
+    } catch (Error e) {
+        println("not a json::Error");
+    }
+}
+
+class Tree {
+public:
+    vector<Tree> kids;
+    Tree? next;
+};
+
+int main() {
+    int n = 200000;
+    bad<Point>(R"({"unknown": )" + repeat("[", n));
+    bad<Point>(R"({"unknown": )" + repeat(R"({"a":)", n));
+    bad<vector<vector<int>>>(repeat("[", n));
+    bad<Tree>(repeat(R"({"kids": [)", n));
+    bad<Tree>(repeat(R"({"next": )", n));
+    // Close to the limit is fine.
+    Tree t = try_parse(repeat(R"({"next": )", 400) + "{}" + repeat("}", 400));
+    println("{}", json::stringify(t).size());
+    return 0;
+}
+
+Tree try_parse(string text) {
+    try {
+        return try json::parse<Tree>(text);
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    return Tree();
+}
+// expect: 525  too deeply, past 512 levels
+// expect: 2569  too deeply, past 512 levels
+// expect: 3 a number, but found an array
+// expect: 2562  too deeply, past 512 levels
+// expect: 4610  too deeply, past 512 levels
+// expect: 7623

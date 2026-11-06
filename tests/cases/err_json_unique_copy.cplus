@@ -1,0 +1,13 @@
+// Giving a value to a function copies it, which what holds a unique reference cannot be.
+import json;
+class Node {};
+struct Holds {
+    unique<Node> u;
+};
+int main() {
+    Holds h = {unique<Node>()};
+    println("{}", json::stringify(h));
+    return 0;
+}
+// error: 'h' cannot be copied
+// error: write `move(h)` to hand it over

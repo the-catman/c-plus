@@ -1,0 +1,205 @@
+// Making values from JSON. Everything here goes through a catch at the end if anything is wrong.
+import json;
+
+struct Inner {
+    int n = 1;
+    string label = "default";
+};
+struct All {
+    int i;
+    long big;
+    float f;
+    double d;
+    bool yes;
+    char c;
+    string s;
+    Inner inner;
+    vector<int> list;
+    array<int, 2> pair;
+    int? some;
+    int? none;
+    string? text;
+    hashmap<string, int> map;
+};
+struct Defaults {
+    int given = 5;
+    string text = "kept";
+    vector<int> list = {1, 2};
+    int? maybe = 3;
+    Inner inner;
+};
+struct Required {
+    string name;
+    int? optional;
+    vector<int> list;
+    hashmap<string, int> map;
+    Inner inner;
+};
+
+class Built {
+public:
+    string how = "default";
+    int n = 0;
+    Built() : how("constructor") {}
+};
+class Plain {
+public:
+    string name;
+    int n = 7;
+    vector<Plain> kids;
+    Plain? next;
+    weak<Plain> parent;
+};
+class Base {
+public:
+    int b = 1;
+};
+class Derived : public Base {
+public:
+    int d = 2;
+};
+class Hidden {
+    int secret = 42;
+public:
+    int shown = 0;
+    int getSecret() const { return secret; }
+};
+class Holds {
+public:
+    unique<Plain>? held;
+};
+class HasDefaultObject {
+public:
+    Plain inner = Plain();
+    unique<Plain> owned = unique<Plain>();
+    Plain? maybe = Plain();
+};
+
+int main() {
+    try {
+        All a = try json::parse<All>(R"({"i": -5, "big": 5000000000, "f": 0.5, "d": 2.5, "yes": true, "c": "x", "s": "text",
+            "inner": {"n": 2, "label": "L"}, "list": [1, 2, 3], "pair": [4, 5], "some": 7, "none": null, "text": "here",
+            "map": {"a": 1, "b": 2}})");
+        println("{}", a);
+
+        // Plain values, with space around them.
+        println("{}", try json::parse<int>(" 5 "));
+        println("{}", try json::parse<string>("\"s\""));
+        println("{}", try json::parse<bool>("\n\ttrue\r\n"));
+        println("{}", try json::parse<vector<int>>("[]"));
+        println("{}", try json::parse<vector<vector<int>>>("[[1], [], [2, 3]]"));
+        println("{}", try json::parse<int?>("null"));
+        println("{}", try json::parse<int?>("1"));
+        println("{}", try json::parse<hashmap<string, int>>("{}"));
+
+        // What is not there keeps its default, and what is not known is left out.
+        println("{}", try json::parse<Defaults>("{}"));
+        println("{}", try json::parse<Defaults>(R"({"given": 1, "unknown": {"a": [1, {"b": null}], "c": "}"}, "text": "new", "more": 5})"));
+        println("{}", try json::parse<Defaults>(R"({"maybe": null, "list": []})"));
+
+        // The last of two with one name counts, as in JavaScript.
+        println("{}", try json::parse<Defaults>(R"({"given": 1, "given": 2, "inner": {"n": 5}, "inner": {"label": "x"}})"));
+        println("{}", try json::parse<hashmap<string, int>>(R"({"a": 1, "b": 2, "a": 3})"));
+
+        // Numbers: whole ones can be written any way that JSON can.
+        println("{} {} {}", try json::parse<int>("1.0"), try json::parse<int>("1e3"), try json::parse<long>("-9223372036854775808"));
+        println("{} {}", try json::parse<double>("1"), try json::parse<double>("-1.5e-3"));
+        println("{} {}", try json::parse<float>("0.1"), try json::parse<int>("-0"));
+
+        // Strings: every escape.
+        println("{}", try json::parse<string>("\"a\\\"b\\\\c\\/d\\ne\\tf\""));
+        println("{}", (try json::parse<string>("\"\\b\\f\\r\"")).size());
+        println("{}", try json::parse<string>("\"\\u0041\\u00e9\\u65e5\\ud83d\\ude00\""));
+        println("{}", try json::parse<string>("\"héllo 日本語 😀\""));
+        println("{}", (try json::parse<string>("\"a\\u0000b\"")).size());
+        println("{} {}", int(try json::parse<char>("\"a\"")), int(try json::parse<char>("\"\\u00c8\"")));
+
+        // Objects: made as they are in the program, and then filled.
+        println("{}", try json::parse<Built>("{}"));
+        println("{}", try json::parse<Built>(R"({"n": 1})"));
+        Plain p = try json::parse<Plain>(R"({"name": "a", "kids": [{"name": "b"}, {"name": "c", "n": 1}], "next": {"name": "d"}, "parent": {"x": 1}})");
+        println("{}", p);
+        println("{}", p.parent.expired());
+        // Two with one name, both made in full: the first one goes away.
+        println("{}", (try json::parse<Plain>(R"({"name": "a", "next": {"name": "first"}, "next": {"name": "last"}})")).next?.name);
+        println("{}", (try json::parse<Plain>(R"({"name": "a", "kids": [{"name": "b"}], "kids": []})")).kids);
+        println("{}", try json::parse<Defaults>(R"({"text": "one", "text": "two", "list": [1], "list": [2]})"));
+        println("{}", try json::parse<Plain?>("null"));
+        println("{}", try json::parse<Derived>(R"({"b": 5, "d": 6})"));
+        Hidden h = try json::parse<Hidden>(R"({"shown": 1, "secret": 2})");
+        println("{} {}", h.shown, h.getSecret());
+        println("{}", try json::parse<Holds>(R"({"held": {"name": "u"}})"));
+        // The object a field starts with goes away when JSON gives another.
+        HasDefaultObject d = try json::parse<HasDefaultObject>(R"({"inner": {"name": "i"}, "owned": {"name": "o"}, "maybe": {"name": "m"}})");
+        println("{} {} {}", d.inner.name, d.owned.name, d.maybe?.name);
+        HasDefaultObject kept = try json::parse<HasDefaultObject>(R"({"maybe": null})");
+        println("{} {}", kept.inner.name, kept.maybe == null);
+        unique<Plain> u = try json::parse<unique<Plain>>(R"({"name": "alone"})");
+        println("{}", u.name);
+
+        println("{}", try json::parse<hashmap<int, string>>(R"({"1": "one", "-2": "two"})"));
+        println("{}", try json::parse<hashmap<long, vector<string>>>(R"({"5000000000": ["a"]})"));
+        println("{}", try json::parse<hashmap<string, Plain>>(R"({"a": {"name": "x"}})"));
+        println("{}", try json::parse<array<string, 2>>(R"(["a", "b"])"));
+
+        // What leaves as text comes back the same.
+        Plain out = Plain();
+        out.name = "round \"trip\" 日本語\n";
+        out.kids.push_back(Plain());
+        println("{}", try json::parse<Plain>(json::stringify(out)) == out);
+        string text = json::stringify(out);
+        println("{}", json::stringify(try json::parse<Plain>(text)) == text);
+        println("{}", json::pretty(try json::parse<Plain>(json::pretty(out))) == json::pretty(out));
+        All back = try json::parse<All>(json::stringify(a));
+        println("{}", back == a);
+    } catch (Error e) {
+        println("wrong: {}", e.what());
+    }
+    return 0;
+}
+// expect: {i: -5, big: 5000000000, f: 0.5, d: 2.5, yes: true, c: 'x', s: "text", inner: {n: 2, label: "L"}, list: [1, 2, 3], pair: [4, 5], some: 7, none: null, text: "here", map: {"a": 1, "b": 2}}
+// expect: 5
+// expect: s
+// expect: true
+// expect: []
+// expect: [[1], [], [2, 3]]
+// expect: null
+// expect: 1
+// expect: {}
+// expect: {given: 5, text: "kept", list: [1, 2], maybe: 3, inner: {n: 1, label: "default"}}
+// expect: {given: 1, text: "new", list: [1, 2], maybe: 3, inner: {n: 1, label: "default"}}
+// expect: {given: 5, text: "kept", list: [], maybe: null, inner: {n: 1, label: "default"}}
+// expect: {given: 2, text: "kept", list: [1, 2], maybe: 3, inner: {n: 1, label: "x"}}
+// expect: {"a": 3, "b": 2}
+// expect: 1 1000 -9223372036854775808
+// expect: 1 -0.0015
+// expect: 0.1 0
+// expect: a"b\c/d
+// expect: e	f
+// expect: 3
+// expect: Aé日😀
+// expect: héllo 日本語 😀
+// expect: 3
+// expect: 97 200
+// expect: Built {how: "constructor", n: 0}
+// expect: Built {how: "constructor", n: 1}
+// expect: Plain {name: "a", n: 7, kids: [Plain {name: "b", n: 7, kids: [], next: null, parent: null}, Plain {name: "c", n: 1, kids: [], next: null, parent: null}], next: Plain {name: "d", n: 7, kids: [], next: null, parent: null}, parent: null}
+// expect: true
+// expect: last
+// expect: []
+// expect: {given: 5, text: "two", list: [2], maybe: 3, inner: {n: 1, label: "default"}}
+// expect: null
+// expect: Derived {b: 5, d: 6}
+// expect: 1 42
+// expect: Holds {held: Plain {name: "u", n: 7, kids: [], next: null, parent: null}}
+// expect: i o m
+// expect:  true
+// expect: alone
+// expect: {1: "one", -2: "two"}
+// expect: {5000000000: ["a"]}
+// expect: {"a": Plain {name: "x", n: 7, kids: [], next: null, parent: null}}
+// expect: ["a", "b"]
+// expect: false
+// expect: true
+// expect: true
+// expect: true

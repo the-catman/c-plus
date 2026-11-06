@@ -1,0 +1,28 @@
+// As in C++: no escapes, any number of lines, and an end of your own when the text needs it.
+int main() {
+    println("{}", R"(plain)");
+    println("{}", R"(a "quoted" \n word)");
+    println("{}", R"end(has )" inside)end");
+    println("{}", R"x(y)x");
+    println("{}", R"()");
+    string lines = R"(one
+  two
+three)";
+    println("{}", lines);
+    println("{}", lines.size());
+    println("{}", R"(joined )" "with " R"(others)");
+    string R = "a variable";
+    println("{}", R);
+    return 0;
+}
+// expect: plain
+// expect: a "quoted" \n word
+// expect: has )" inside
+// expect: y
+// expect: 
+// expect: one
+// expect:   two
+// expect: three
+// expect: 15
+// expect: joined with others
+// expect: a variable

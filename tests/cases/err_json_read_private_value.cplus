@@ -1,0 +1,12 @@
+import json;
+class Other {};
+class C {
+    Other inner;
+public:
+    int n = 0;
+};
+int main() {
+    auto c = try json::parse<C>("{}");
+    return 0;
+}
+// error: 'C' has a private field 'inner' that needs a value, which JSON cannot give it. Give the field a default value

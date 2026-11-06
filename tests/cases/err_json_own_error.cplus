@@ -1,0 +1,9 @@
+import json;
+class Error {
+public:
+    int code = 0;
+};
+int main() {
+    return 0;
+}
+// error: 'json' uses the built-in class 'Error', but this program has its own

@@ -1,0 +1,13 @@
+// An error that nothing catches stops the program with what it says.
+import json;
+
+int main() throws {
+    println("before");
+    int n = try json::parse<int>("x");
+    println("{}", n);
+    return 0;
+}
+// expect: before
+// exit: 1
+// stderr: uncaught error: json::Error
+// stderr: line 1, column 1: expected a number

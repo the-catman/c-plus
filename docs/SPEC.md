@@ -60,6 +60,9 @@ template this throw throws true try typename virtual void weak while
 and C++ read `\012` as one byte, in octal: write `\x0A` for that byte, or `\x0012` for a zero
 byte and then `12`.
 
+`R"(text)"` is a raw string, as in C++: it has no escapes and can span lines, which suits JSON and
+other text full of quotes. For a text with `)"` in it, choose what ends it, up to 16 characters: `R"end(text)end"`.
+
 ### Character literals
 
 `'a'` is a [char](#char), one byte, with the same escapes as strings: `'\n'`, `'\''`,
@@ -886,6 +889,104 @@ for (auto e : ages) println("{}: {}", e.first, e.second);
   purpose. Nothing else depends on it.
 - Not yet: `find` and other iterators, `reserve`, sorted maps and sets. `m.find(k)` has an error that says what to write.
 
+### JSON
+
+`import json;` turns values into JSON and back, using what the compiler knows of their types. Nothing has to be
+written for a type.
+
+```cpp
+import json;
+
+struct Address { string city; int zip = 0; };
+struct User { string name; int age = 0; vector<string> tags; Address home; string? nick; };
+
+User u = {"Ada", 36, {"math"}, {"London"}};
+string text = json::stringify(u);          // {"name":"Ada","age":36,"tags":["math"],"home":{"city":"London","zip":0},"nick":null}
+println("{}", json::pretty(u));            // the same, over many lines, indented by two
+User back = try json::parse<User>(text);   // fails with a json::Error if the text is wrong
+```
+
+| C+ | JSON |
+|----|------|
+| `int`, `long`, `float`, `double` | a number. NaN and the infinities are `null`, as in JavaScript |
+| `bool` | `true` or `false` |
+| `string` | a string. A byte that is not UTF-8 is written as U+FFFD |
+| `char` | a string of one char |
+| `vector<T>`, `array<T, N>` | an array |
+| `T?` | `null`, or the value |
+| a struct or class | an object, with its public fields, those of base classes first |
+| `unique<T>` | what it owns |
+| `weak<T>` | left out, which is what lets a child know its parent without going in circles |
+| `hashmap<K, V>` | an object, in order. `K` is a `string`, or an `int` or a `long`, which is written as a string |
+| `json::Value` | anything |
+
+A pointer means nothing outside the program, so it is a compile error, naming the field, as long as it is public.
+
+**Writing.** `json::stringify(x)` writes on one line, and `json::pretty(x)` over many. A class reference is written as
+what the object really is, with all of that class's public fields, as when printing. Writing does not fail, but objects
+that refer to each other in a circle, or a chain more than 512 levels deep, stop the program. A value that holds a
+`unique<T>` is given with `move(x)`, as for any function.
+
+**Reading.** `json::parse<T>(text)` can fail, so it is called with `try`, and it throws a `json::Error`, which has
+`line` and `column`, and a `what()` that says where the value went wrong:
+
+```
+line 4, column 11: in points[1].x: expected a number, but found a string
+```
+
+- A key that is not a public field is left out, since what sends the JSON may know of more than this program.
+- A field that is missing keeps its default value. Without one, an optional is null, and a vector, hashmap or
+  `json::Value` is empty. Anything else that is missing is an error, as the program could not read that field either.
+- A number must fit: `3000000000` is no `int`, and neither is `1.5`, while `1e3` and `1.0` are whole. If a key comes twice, the last one counts,
+  as in JavaScript. Text must be UTF-8, and nesting past 512 levels is an error.
+- An object is made as the program would make it, with the constructor without parameters, or with its fields' defaults, and then
+  it is filled. A class whose constructor needs arguments, or with methods that have no body, cannot be read: the
+  compiler says so. It can still be written.
+
+**`json::Value`** holds JSON of any shape. `json::parse<json::Value>(text)` reads any JSON, and it can be a field of a struct. Each
+step gives null if the value is not there or not of that kind, so a chain says what to do at the end:
+
+```cpp
+json::Value doc = try json::parse<json::Value>(text);
+string city = doc.get("address")?.get("city")?.text() ?? "nowhere";
+long first = doc.get("ids")?.at(0)?.whole() ?? -1;
+```
+
+| Method | Does |
+|--------|------|
+| `isNull()`, `isBool()`, `isNumber()`, `isString()`, `isArray()`, `isObject()` | which kind it is |
+| `boolean()`, `number()`, `whole()`, `text()` | the value as a `bool?`, `double?`, `long?` or `string?`. `whole()` is exact, for a whole number that fits |
+| `get(key)`, `at(index)` | a `json::Value?`, from an object or an array |
+| `size()`, `keys()`, `items()` | how many it holds, the keys of an object, and the values of an array |
+| `set(key, value)`, `push(value)` | adds to an object or an array. On another kind, what it held goes, and it becomes one |
+
+`json::object()` and `json::array()` make empty ones, and `json::of(x)` makes one from any value that can be written. It prints as JSON, and it is a value, like a vector.
+
+Not yet: other names for fields in JSON, leaving out fields with a marker, and reading into a class that derives from the one that is asked for.
+
+### Reflection
+
+`import reflect;` lets a running program ask about types. The compiler writes down what it knows of each type a program
+asks about, and of what that type leads to: this is the same data that JSON is read and written with. A program pays for nothing it does not import.
+
+```cpp
+import reflect;
+
+struct Point { int x = 0; double y = 0; };
+
+auto t = reflect::type<Point>();
+println("{} is a {} of {} bytes", t.name(), t.kind(), t.size());      // Point is a struct of 16 bytes
+for (auto f : t.fields()) println("{} at {}: {}", f.name, f.offset, f.type.name());   // x at 0: int, then y at 8: double
+```
+
+- `reflect::type<T>()` is the type `T`, and `reflect::of(x)` the type of a value: for a class reference, what the object really is.
+- A `reflect::Type` has `name()`, `kind()`, which is `"int"`, `"struct"`, `"class"`, `"vector"`, `"optional"` and so on, `size()`, which for a class is
+  that of a reference, `length()` for an array, `elem()`, a `reflect::Type?` for what a vector, array, optional or unique reference
+  holds, and `fields()`. Two are `==` when they are the same type.
+- A `reflect::Field` has `name`, `offset`, from the start of the struct or object, `type` and `isPublic`. Private fields are there too.
+
+Not yet: reading or changing a field through its `reflect::Field`, methods, and looking up a type by its name.
+
 ### Pointers
 
 Pointers work as in C++: `&x` is the address of `x`, `*p` is what `p` points to, and
@@ -1359,16 +1460,17 @@ extern "C" struct sqlite3;      // one type on its own
 
 ### Modules
 
-Partly planned. There are no header files. One file is one module.
+Partly planned: the modules that come with the language work, which are [`json`](#json) and [`reflect`](#reflection). There are no
+header files. One file is one module.
 
 ```cpp
-import http;          // a standard module
-import net.server;    // the file net/server.cplus, relative to the project root
+import json;          // a standard module
+import net.server;    // planned: the file net/server.cplus, relative to the project root
 ```
 
-Members of a module are used with `::`, as in `http::get(url)`. There is no `std::`
-namespace and no `using`; built-ins need no prefix. The compiler currently accepts single-file
-programs only and reports an error for `import`.
+Members of a module are used with `::`, as in `json::parse<User>(text)`. There is no `std::`
+namespace and no `using`; built-ins need no prefix. The compiler only accepts single-file programs so far, and
+reports an error for any other `import`. Only what a program imports is linked into it.
 
 Nobody writes header files. For a library, the compiler can generate a `.hplus` interface
 file from a module: a readable summary of its public API, with declarations but no
@@ -2080,7 +2182,8 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `unique<T>` references and `move(x)` | implemented |
 | `local<T>` references | planned |
 | C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; reading C headers | planned |
-| Reflection, JSON, HTTP | planned |
+| Modules `json` and `reflect`, and raw strings | implemented |
+| HTTP, modules of your own | planned |
 | Threads, async | planned |
 
 Anything marked planned is reported by the compiler as "this compiler does not support ...

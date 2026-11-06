@@ -497,6 +497,20 @@ Decided 2026-11-05.
   releases, leak checks and `unique` then work as for any struct. The compiler adds what C+ cannot say yet: `m[key]` as a
   place, `for`, `{ }` lists, printing, `==` and hashing.
 
+### 2.25 JSON — DECIDED
+`import json;`, with `json::stringify(x)`, `json::pretty(x)` and `json::parse<T>(text)`, by the descriptors of 2.14. Decided 2026-11-06.
+- The JavaScript names, as what they do is what JavaScript's do: a key that is not a field is left out, the last of two with one
+  name counts, and NaN is written as `null`.
+- `parse` can fail, as text comes from outside, so it throws a `json::Error`, with the line, column and path. `stringify` does not, since
+  every value can be written, and a circle of objects is a mistake in the program, which stops it.
+- A missing key keeps the field's default. A field with no default that the type cannot do without is an error, instead of
+  the zero values Go would give it, since the program could not have read such a field either.
+- Only public fields. A class's private fields are what it does not show, which may be a password. This differs from printing, which
+  is for the person writing the program.
+- A class reference is written as what the object really is, as when printing, and read as the class that is asked for.
+- `json::Value` is for what has no known shape, and each step of looking through it gives an optional, so there is no way to stop
+  the program with text from outside.
+
 ## 3. Compiler architecture
 
 ```
@@ -540,7 +554,7 @@ a debug build with ASan, stack traces and a leak report. Every item of Phase 1 i
 criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
 `dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, generics with
 constraints, errors, `constexpr` with `if constexpr`, and `unique<T>` with `move`, which is every item of Phase 2.
-The leak report came with Phase 1. Phase 3 is in progress: `hashmap` works.
+The leak report came with Phase 1. Phase 3 is in progress: `hashmap`, the descriptors of types, `json` and `reflect` work.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -604,6 +618,8 @@ will confidently write C++ wherever the two differ.
   pointer and dropped again inside the method's body sees what the method did to the element so far.
 - A plain `const` is worked out while compiling when it can be, but `const int X = 1 / 0;` still stops the
   program when `X` is used, and `constexpr` reports it while compiling. They could become one rule.
+- Printing still goes by a function the compiler writes for each type, while 2.14 says it is built on descriptors. It works, and
+  it costs a program nothing it does not print. Moving it would give one way of walking a value, at the cost of a slower `println`.
 - `main` takes its arguments as in C++, through raw pointers. A checked form, such as
   `int main(vector<string> args)`, could come later.
 - References (`T&`): whether C+ gets them, and in what form. They decide how

@@ -1,0 +1,12 @@
+import json;
+interface Speaker {
+    string speak() const;
+};
+struct Holder {
+    Speaker? who;
+};
+int main() {
+    auto h = try json::parse<Holder>("{}");
+    return 0;
+}
+// error: 'who', a 'Speaker', has methods without a body

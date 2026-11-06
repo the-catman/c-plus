@@ -1,0 +1,6 @@
+int main() {
+    println("{}", reflect::type<int>().name());
+    return 0;
+}
+// error: 'reflect::type' is in the module 'reflect', which this program does not import
+// error: write `import reflect;` at the top of the file

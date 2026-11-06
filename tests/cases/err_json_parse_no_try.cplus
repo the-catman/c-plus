@@ -1,0 +1,6 @@
+import json;
+int main() {
+    int n = json::parse<int>("1");
+    return 0;
+}
+// error: 'json::parse<int>' can fail, so its call must say what happens then

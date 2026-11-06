@@ -1,0 +1,72 @@
+// Good text, damaged at random in many ways, must give a value or an error, and nothing else. A debug
+// build finds whatever reads outside the text, or is left behind by what was part way done.
+import json;
+
+struct Item {
+    string name;
+    int? count;
+    vector<double> numbers;
+    char mark = 'a';
+};
+class Node {
+public:
+    string name = "n";
+    vector<Node> kids;
+    Node? next;
+    hashmap<string, Item> items;
+    hashmap<int, array<int, 2>> pairs;
+};
+
+int main() {
+    string good = R"({
+        "name": "héllo \"wörld\" é😀",
+        "kids": [{"name": "a", "kids": [], "next": null}, {"name": "b", "next": {"name": "c"}}],
+        "next": {"items": {"x": {"name": "i", "count": 5, "numbers": [1, 2.5, -3e2], "mark": "z"}, "y": {"name": "j"}}},
+        "pairs": {"1": [1, 2], "-5": [3, 4]},
+        "unknown": [true, false, null, {"deep": ["x", 1.5e-3]}]
+    })";
+    println("{}", json::stringify(try_parse(good)).size() > 100);
+
+    string punctuation = "{}[]:,\"\\ \n-+.eE0123456789tfnu";
+    long seed = 12345;
+    int values = 0;
+    int errors = 0;
+    for (int round = 0; round < 4000; round++) {
+        string text = good;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        int changes = int((seed >> 16) % 4) + 1;
+        for (int c = 0; c < changes; c++) {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            long at = (seed >> 8) % text.size();
+            long what = (seed >> 3) % 5;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            char made = punctuation[(seed >> 8) % punctuation.size()];
+            if (what == 0) text[at] = made;
+            else if (what == 1) text[at] = char((seed >> 12) % 256);
+            else if (what == 2) text = text.substr(0, at) + text.substr(at + 1, text.size());
+            else if (what == 3) text = text.substr(0, at);
+            else text = text.substr(0, at) + made + text.substr(at, text.size());
+            if (text.empty()) text = " ";
+        }
+        try {
+            Node node = try json::parse<Node>(text);
+            values++;
+            if (json::stringify(node).empty()) println("wrong");
+        } catch (Error e) {
+            errors++;
+        }
+    }
+    println("{} {}", values > 100, errors > 100);
+    return 0;
+}
+
+Node try_parse(string text) {
+    try {
+        return try json::parse<Node>(text);
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    return Node();
+}
+// expect: true
+// expect: true true

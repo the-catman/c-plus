@@ -1,5 +1,7 @@
 #include "Codegen.h"
 
+#include "../runtime/reflect.h"
+
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DIBuilder.h>
@@ -102,7 +104,8 @@ struct Codegen::Impl {
     // the whole object, which dynamic_cast searches; how far the part with this vtable is from
     // the object's start; the destroy and print helpers; then the virtual methods by slot.
     static constexpr uint64_t kObjectVtableOffset = 8;
-    static constexpr uint64_t kVtableParts = 0, kVtableStart = 1, kVtableDestroy = 2, kVtablePrint = 3, kVtableMethods = 4;
+    static constexpr uint64_t kVtableType = 4;  // see CPLUS_VTABLE_TYPE in runtime/internal.h
+    static constexpr uint64_t kVtableParts = 0, kVtableStart = 1, kVtableDestroy = 2, kVtablePrint = 3, kVtableMethods = 5;
     // Whether any class has more than one base class. Only then can a reference point into
     // the middle of an object, and only then does a reference count need to be looked for.
     bool hasInnerParts = false;
@@ -110,6 +113,9 @@ struct Codegen::Impl {
     std::map<std::pair<const FuncDecl*, uint64_t>, llvm::Function*> thunks;  // see vtableMethod
     std::unordered_map<const VarDecl*, llvm::Function*> constantFunctions;
     std::unordered_map<const Type*, llvm::Function*> hashFunctions;
+    std::unordered_map<const Type*, llvm::GlobalVariable*> descriptors;
+    std::map<std::pair<const Type*, bool>, llvm::Function*> countFunctions;
+    bool usesDescriptors = false;  // a program that imports a module: a class then says what it really is
 
     // A vector is a pointer to a buffer laid out as the runtime's cplus_vec: a header of
     // count, size and capacity, then the elements. Null is an empty vector.
@@ -1899,7 +1905,13 @@ struct Codegen::Impl {
             case Expr::Kind::New: return genNew(static_cast<const NewExpr&>(e));
             case Expr::Kind::Delete: genDelete(static_cast<const DeleteExpr&>(e)); return nullptr;
             case Expr::Kind::Sizeof: {
-                const Type* t = static_cast<const SizeofExpr&>(e).target;
+                auto& z = static_cast<const SizeofExpr&>(e);
+                const Type* t = z.target;
+                if (z.what == SizeofExpr::What::Zero) {
+                    owned = true;
+                    return zeroValue(t);
+                }
+                if (z.what == SizeofExpr::What::Descriptor) return typeDescriptor(t);
                 return b.getInt64(mod->getDataLayout().getTypeAllocSize(llvmType(t)));
             }
             case Expr::Kind::Unary: {
@@ -3665,6 +3677,144 @@ struct Codegen::Impl {
         for (size_t i = cls.bases.size(); i-- > 0;) collectParts(*cls.bases[i], offset + baseOffset(cls, *cls.bases[i]), out);
     }
 
+    // Reflection: constant data that tells the running program about a type. See runtime/reflect.h. It lays each out for
+    // the types that ask for it, and what they lead to, so the rest of the program pays for nothing.
+    llvm::StructType* descriptorType() {
+        auto* ptr = b.getPtrTy();
+        auto* i64 = b.getInt64Ty();
+        return llvm::StructType::get(ctx, {i64, ptr, i64, ptr, i64, ptr, i64, ptr, ptr, ptr, ptr});
+    }
+
+    // A function that retains or releases the value at an address, for the runtime to call.
+    llvm::Constant* countFunction(const Type* t, bool retain) {
+        if (!isManaged(t)) return llvm::ConstantPointerNull::get(b.getPtrTy());
+        auto [it, inserted] = countFunctions.try_emplace(std::pair{t, retain}, nullptr);
+        if (!inserted) return it->second;
+        auto* f = internalFunction(std::string("cplus.") + t->name + (retain ? "#retain_at" : "#release_at"), b.getVoidTy(), {b.getPtrTy()});
+        it->second = f;
+        SavedPoint saved(*this);
+        startHelper(f);
+        llvm::Value* value = peekValue(t, f->getArg(0));
+        retain ? retainValue(value, t) : releaseValue(value, t);
+        b.CreateRetVoid();
+        return f;
+    }
+
+    // What makes a value in zero bytes, or null if they already are one: see cplus_type.
+    llvm::Constant* makeFunction(const Type* t) {
+        llvm::Constant* none = llvm::ConstantPointerNull::get(b.getPtrTy());
+        bool object = t->isClass();
+        if (object && (t->decl->isInterface || t->decl->firstPure() || (t->decl->constructor && !t->decl->constructor->params.empty()))) return none;
+        if (!object && !t->isStruct() && !t->isArray()) return none;
+        auto* f = internalFunction(std::string("cplus.") + t->name + "#make", b.getVoidTy(), {b.getPtrTy()});
+        SavedPoint saved(*this);
+        startHelper(f);
+        if (object) {
+            size_t mark = temps.size();
+            const StructDecl& sd = *t->decl;
+            llvm::Value* made = sd.constructor ? construct(sd, {}) : buildAggregate(sd, {});
+            b.CreateStore(made, f->getArg(0));
+            flushTemps(mark);
+        } else {
+            fillElement(f->getArg(0), t);
+        }
+        b.CreateRetVoid();
+        return f;
+    }
+
+    // Whether a JSON object must have this field: what has no value of its own until it is given one.
+    static bool mustBeGiven(const Type* t) {
+        if (t->isOptional() || t->isVector() || t->isWeak() || isHashmap(t) || isJsonValue(t)) return false;
+        if (t->isArray()) return t->length > 0 && mustBeGiven(t->elem);
+        if (!t->isStruct()) return true;
+        if (t->decl->constructor) return false;
+        for (auto& f : t->decl->fields)
+            if (!f.defaultValue && mustBeGiven(f.type)) return true;
+        return false;
+    }
+
+    // The fields of a struct or class, those of its base classes first, as each is measured from `offset`.
+    void addFieldsOf(const StructDecl& sd, uint64_t offset, std::vector<llvm::Constant*>& out) {
+        for (const StructDecl* base : sd.bases) addFieldsOf(*base, offset + baseOffset(sd, *base), out);
+        const llvm::StructLayout* layout = mod->getDataLayout().getStructLayout(types.at(&sd).layout);
+        size_t before = !sd.isClass ? 0 : sd.bases.empty() ? 2 : sd.bases.size();
+        auto* fieldTy = llvm::StructType::get(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy(), b.getInt64Ty()});
+        for (size_t i = 0; i < sd.fields.size(); ++i) {
+            const FieldDecl& f = sd.fields[i];
+            bool isPublic = f.access == Access::Public;
+            int64_t flags = (isPublic ? CPLUS_FIELD_PUBLIC : 0) |
+                            (isPublic && !f.defaultValue && !sd.constructor && mustBeGiven(f.type) ? CPLUS_FIELD_REQUIRED : 0);
+            out.push_back(llvm::ConstantStruct::get(fieldTy, {cstring(f.name), b.getInt64(offset + layout->getElementOffset(i + before)),
+                                                              typeDescriptor(f.type), b.getInt64(flags)}));
+        }
+    }
+
+    llvm::Constant* typeDescriptor(const Type* t) {
+        auto [it, inserted] = descriptors.try_emplace(t, nullptr);
+        if (!inserted) return it->second;
+        auto* g = new llvm::GlobalVariable(*mod, descriptorType(), true, llvm::GlobalValue::InternalLinkage, nullptr, std::string("cplus.type.") + t->name);
+        it->second = g;  // a type can lead back to itself
+        llvm::Constant* none = llvm::ConstantPointerNull::get(b.getPtrTy());
+        int64_t kind = CPLUS_KIND_OTHER, length = 0;
+        llvm::Constant* elem = none;
+        llvm::Constant* fields = none;
+        llvm::Constant* put = none;
+        int64_t fieldCount = 0;
+        switch (t->kind) {
+            case K::Bool: kind = CPLUS_KIND_BOOL; break;
+            case K::Int: kind = CPLUS_KIND_INT; break;
+            case K::Long: kind = CPLUS_KIND_LONG; break;
+            case K::Float: kind = CPLUS_KIND_FLOAT; break;
+            case K::Double: kind = CPLUS_KIND_DOUBLE; break;
+            case K::Char: kind = CPLUS_KIND_CHAR; break;
+            case K::String: kind = CPLUS_KIND_STRING; break;
+            case K::Weak: kind = CPLUS_KIND_WEAK; break;
+            case K::Vector: kind = CPLUS_KIND_VECTOR; elem = typeDescriptor(t->elem); break;
+            case K::Unique: kind = CPLUS_KIND_UNIQUE; elem = typeDescriptor(t->elem); break;
+            case K::Array: kind = CPLUS_KIND_ARRAY; length = t->length; elem = typeDescriptor(t->elem); break;
+            case K::Optional:
+                kind = CPLUS_KIND_OPTIONAL;
+                elem = typeDescriptor(t->elem);
+                length = t->elem->isObjectRef() ? -1 : (int64_t)mod->getDataLayout().getStructLayout(llvm::cast<llvm::StructType>(llvmType(t)))->getElementOffset(1);
+                break;
+            case K::Struct: case K::Class: {
+                const StructDecl& sd = *t->decl;
+                if (isHashmap(t)) {
+                    kind = CPLUS_KIND_MAP;
+                    elem = typeDescriptor(sd.fields[0].type->elem);
+                    length = (int64_t)mod->getDataLayout().getStructLayout(types.at(&sd).layout)->getElementOffset(1);
+                    auto* f = internalFunction("cplus." + sd.name + "#put", b.getVoidTy(), {b.getPtrTy(), b.getPtrTy()});
+                    {
+                        SavedPoint saved(*this);
+                        startHelper(f);
+                        const FuncDecl& method = *sd.ownMethod("__put");
+                        callFunction(method, {f->getArg(0), peekValue(method.params[0]->type, f->getArg(1))});
+                        b.CreateRetVoid();
+                    }
+                    put = f;
+                    break;
+                }
+                kind = t->isClass() ? CPLUS_KIND_CLASS : isJsonValue(t) ? CPLUS_KIND_JSON_VALUE : CPLUS_KIND_STRUCT;
+                std::vector<llvm::Constant*> list;
+                addFieldsOf(sd, 0, list);
+                fieldCount = (int64_t)list.size();
+                if (!list.empty()) {
+                    auto* arrayTy = llvm::ArrayType::get(list[0]->getType(), list.size());
+                    fields = new llvm::GlobalVariable(*mod, arrayTy, true, llvm::GlobalValue::InternalLinkage, llvm::ConstantArray::get(arrayTy, list),
+                                                      "cplus.fields." + sd.name);
+                }
+                break;
+            }
+            default: break;
+        }
+        uint64_t size = t->is(K::Void) || t->isOpaque() || t->isNull() ? 0 : mod->getDataLayout().getTypeAllocSize(llvmType(t));
+        bool canHold = !t->is(K::Void) && !t->isOpaque() && !t->isNull();
+        g->setInitializer(llvm::ConstantStruct::get(
+            descriptorType(), {b.getInt64(kind), cstring(t->name), b.getInt64(size), elem, b.getInt64(length), fields, b.getInt64(fieldCount),
+                               canHold ? makeFunction(t) : none, canHold ? countFunction(t, true) : none, canHold ? countFunction(t, false) : none, put}));
+        return g;
+    }
+
     // A hashmap prints as `{"a": 1, "b": 2}`, in order, and is equal to one with the same entries in any order.
     // See Builtins.h for what it holds. The insertion point is at the start of the print helper.
     void defineMapHelpers(const StructDecl& sd, TypeInfo& info) {
@@ -3748,10 +3898,22 @@ struct Codegen::Impl {
             b.SetInsertPoint(bodyBB);
             printText(out, sd.name + " ");
         }
-        printText(out, "{");
-        bool first = true;
-        printFields(out, sd, self, first);
-        printText(out, "}");
+        if (isJsonValue(&sd.type)) {  // as the JSON it stands for
+            llvm::Value* place = entryAlloca(llvmType(&sd.type), "value");
+            storeValue(self, &sd.type, place);
+            llvm::Value* text = entryAlloca(stringTy, "text");
+            b.CreateStore(llvm::Constant::getNullValue(stringTy), text);
+            // Declared by the module json, which is where this type comes from.
+            b.CreateCall(mod->getFunction("cplus_json_write"), {place, typeDescriptor(&sd.type), b.getInt32(0), text});
+            llvm::Value* written = b.CreateLoad(stringTy, text, "written");
+            printValue(out, written, Type::stringTy());
+            releaseValue(written, Type::stringTy());
+        } else {
+            printText(out, "{");
+            bool first = true;
+            printFields(out, sd, self, first);
+            printText(out, "}");
+        }
         if (sd.isClass) b.CreateCall(rtPrintLeave, {});
         b.CreateRetVoid();
 
@@ -3911,7 +4073,8 @@ struct Codegen::Impl {
             const BasePath& place = info.vtablePlaces[k];
             uint64_t placeOffset = pathOffset(place);
             std::vector<llvm::Constant*> entries{
-                partsGlobal, llvm::ConstantExpr::getIntToPtr(b.getInt64(placeOffset), b.getPtrTy()), info.destroy, info.print};
+                partsGlobal, llvm::ConstantExpr::getIntToPtr(b.getInt64(placeOffset), b.getPtrTy()), info.destroy, info.print,
+                usesDescriptors ? typeDescriptor(&sd.type) : llvm::ConstantPointerNull::get(b.getPtrTy())};
             for (const FuncDecl* m : place.back()->vtable) {
                 const FuncDecl* f = StructDecl::finalOverrider(place, m);
                 // A method declared on the way to this part is that far back. Any other came with
@@ -3951,6 +4114,7 @@ struct Codegen::Impl {
         mod = std::make_unique<llvm::Module>(file.path, ctx);
         if (!setupTarget(error)) return false;
         if (opts.debug) setupLineTable();
+        usesDescriptors = !program.imports.empty();
         stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy()}, "cplus.string");
         // Named types are created first and given bodies after, so they can refer to
         // each other in any order.

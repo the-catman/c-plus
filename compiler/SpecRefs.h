@@ -27,6 +27,7 @@ inline constexpr const char* Conditions = "conditions";
 inline constexpr const char* ControlFlow = "control-flow";
 inline constexpr const char* NestingLimits = "nesting-limits";
 inline constexpr const char* HashMaps = "hash-maps";
+inline constexpr const char* Json = "json";
 inline constexpr const char* Operators = "operators";
 inline constexpr const char* IntegerOverflow = "integer-overflow";
 inline constexpr const char* Structs = "structs";

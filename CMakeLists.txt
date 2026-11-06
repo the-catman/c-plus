@@ -23,7 +23,7 @@ find_package(LLVM 18.1 REQUIRED CONFIG)  # LLVM matches on major.minor
 message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION}")
 
 # Runtime linked into every C+ program.
-add_library(cplusrt STATIC runtime/runtime.c)
+add_library(cplusrt STATIC runtime/runtime.c runtime/json.c runtime/reflect.c)
 set_target_properties(cplusrt PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
 # Programs carry the runtime's debug information, which must not name this machine's folders.
 set(CPLUS_RUNTIME_PATHS -ffile-prefix-map=${CMAKE_SOURCE_DIR}=/cplus)
@@ -38,7 +38,7 @@ unset(CMAKE_REQUIRED_FLAGS)
 unset(CMAKE_REQUIRED_LINK_OPTIONS)
 set(CPLUS_RUNTIME_LIB_DEBUG "")
 if(CPLUS_HAVE_ASAN)
-  add_library(cplusrt_debug STATIC runtime/runtime.c)
+  add_library(cplusrt_debug STATIC runtime/runtime.c runtime/json.c runtime/reflect.c)
   set_target_properties(cplusrt_debug PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
   target_compile_options(cplusrt_debug PRIVATE -Wall -Wextra -O1 -fsanitize=address
     -fno-omit-frame-pointer -fno-optimize-sibling-calls ${CPLUS_RUNTIME_PATHS})

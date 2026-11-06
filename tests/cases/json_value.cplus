@@ -1,0 +1,158 @@
+// JSON whose shape is not known until the program runs.
+import json;
+
+struct Point {
+    int x = 1;
+    string name = "p";
+};
+
+int main() throws {
+    json::Value doc = try json::parse<json::Value>(R"({
+        "name": "Ada",
+        "age": 36,
+        "score": 2.5,
+        "active": true,
+        "nothing": null,
+        "tags": ["a", "b", 3],
+        "address": {"city": "London", "zip": 123},
+        "id": 9007199254740993
+    })");
+    println("{}", doc);
+    println("{}", doc.isObject());
+    println("{}", doc.size());
+    println("{}", doc.keys());
+
+    // Each step gives null when the value is not there, or not of that kind.
+    println("{}", doc.get("name")?.text() ?? "nobody");
+    println("{}", doc.get("missing")?.text() ?? "nobody");
+    println("{}", doc.get("age")?.text() ?? "not text");
+    println("{}", doc.get("age")?.number() ?? -1);
+    println("{}", doc.get("age")?.whole() ?? -1);
+    println("{}", doc.get("score")?.whole() ?? -1);
+    println("{}", doc.get("score")?.number() ?? -1);
+    println("{}", doc.get("active")?.boolean() ?? false);
+    println("{}", doc.get("address")?.get("city")?.text() ?? "nowhere");
+    println("{}", doc.get("name")?.get("city")?.text() ?? "nowhere");
+    println("{}", doc.get("tags")?.at(1)?.text() ?? "none");
+    println("{}", doc.get("tags")?.at(99)?.text() ?? "none");
+    println("{}", doc.get("tags")?.at(-1)?.text() ?? "none");
+    println("{}", doc.get("nothing")?.isNull() ?? false);
+    // A whole number stays exact, past what a double can hold.
+    println("{}", doc.get("id")?.whole() ?? -1);
+
+    if (auto tags = doc.get("tags"))
+        for (auto tag : tags.items()) println("{} {} {}", tag, tag.isString(), tag.isNumber());
+
+    // Every kind of value, as itself.
+    for (auto text : vector<string>{"null", "true", "false", "0", "-1.5", "\"s\"", "[]", "{}", "[[1],{\"a\":[]}]", " 1e3 "}) {
+        json::Value v = try json::parse<json::Value>(text);
+        println("{} {} {} {} {} {} {}", v, v.isNull(), v.isBool(), v.isNumber(), v.isString(), v.isArray(), v.isObject());
+    }
+
+    // Made in the program.
+    json::Value made = json::object();
+    made.set("a", json::of(1));
+    made.set("b", json::of("text"));
+    made.set("c", json::of(Point{}));
+    made.set("d", json::of(vector<int>{1, 2}));
+    json::Value list = json::array();
+    list.push(json::of(true));
+    list.push(json::of(2.5));
+    list.push(made);
+    println("{}", list);
+    println("{}", json::stringify(list));
+    println("{}", json::pretty(made));
+
+    json::Value empty;
+    println("{}", empty);
+    empty.push(json::of(1));
+    println("{}", empty);
+    empty.set("now an object", json::of(1));
+    println("{}", empty);
+
+    // A value, like a vector: a copy does not see what is done to the first.
+    json::Value copy = made;
+    copy.set("a", json::of(100));
+    println("{} {}", made.get("a"), copy.get("a"));
+    println("{}", made == copy);
+    json::Value same = try json::parse<json::Value>(json::stringify(made));
+    println("{}", made == same);
+
+    // Inside what has a known shape.
+    try struct_with_value();
+    return 0;
+}
+
+struct Envelope {
+    string kind;
+    json::Value body;
+    vector<json::Value> more;
+    hashmap<string, json::Value> extra;
+};
+
+void struct_with_value() throws {
+    Envelope e = try json::parse<Envelope>(R"({"kind": "x", "body": {"any": [1, 2]}, "more": [1, "a"], "extra": {"k": null}})");
+    println("{}", e.kind);
+    println("{}", e.body.get("any")?.size() ?? 0);
+    println("{}", json::stringify(e));
+    println("{}", e);
+    Envelope noBody = try json::parse<Envelope>(R"({"kind": "y"})");
+    println("{}", noBody.body.isNull());
+}
+// expect: {"name":"Ada","age":36,"score":2.5,"active":true,"nothing":null,"tags":["a","b",3],"address":{"city":"London","zip":123},"id":9007199254740993}
+// expect: true
+// expect: 8
+// expect: ["name", "age", "score", "active", "nothing", "tags", "address", "id"]
+// expect: Ada
+// expect: nobody
+// expect: not text
+// expect: 36
+// expect: 36
+// expect: -1
+// expect: 2.5
+// expect: true
+// expect: London
+// expect: nowhere
+// expect: b
+// expect: none
+// expect: none
+// expect: true
+// expect: 9007199254740993
+// expect: "a" true false
+// expect: "b" true false
+// expect: 3 false true
+// expect: null true false false false false false
+// expect: true false true false false false false
+// expect: false false true false false false false
+// expect: 0 false false true false false false
+// expect: -1.5 false false true false false false
+// expect: "s" false false false true false false
+// expect: [] false false false false true false
+// expect: {} false false false false false true
+// expect: [[1],{"a":[]}] false false false false true false
+// expect: 1000 false false true false false false
+// expect: [true,2.5,{"a":1,"b":"text","c":{"x":1,"name":"p"},"d":[1,2]}]
+// expect: [true,2.5,{"a":1,"b":"text","c":{"x":1,"name":"p"},"d":[1,2]}]
+// expect: {
+// expect:   "a": 1,
+// expect:   "b": "text",
+// expect:   "c": {
+// expect:     "x": 1,
+// expect:     "name": "p"
+// expect:   },
+// expect:   "d": [
+// expect:     1,
+// expect:     2
+// expect:   ]
+// expect: }
+// expect: null
+// expect: [1]
+// expect: {"now an object":1}
+// expect: 1 100
+// expect: false
+// expect: true
+// expect: x
+// expect: 2
+// expect: {"kind":"x","body":{"any":[1,2]},"more":[1,"a"],"extra":{"k":null}}
+// expect: {kind: "x", body: {"any":[1,2]}, more: [1, "a"], extra: {"k": null}}
+// expect: true

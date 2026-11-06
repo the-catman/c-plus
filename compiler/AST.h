@@ -258,6 +258,8 @@ inline bool isDeref(const Expr& e) {
 struct SizeofExpr : Expr {
     const Type* target;  // `sizeof(T)`, or null
     ExprPtr operand;     // `sizeof x`, or null
+    enum class What { Size, Zero, Descriptor };
+    What what = What::Size;  // see Builtins.h for `__zero(T)` and `__type_of(T)`
     SizeofExpr(Loc l, const Type* t, ExprPtr e) : Expr(Kind::Sizeof, l), target(t), operand(std::move(e)) {}
 };
 
@@ -853,6 +855,8 @@ inline bool holdsUnique(const Type* t) {
 inline bool isHashmap(const Type* t) {
     return t->isStruct() && t->decl->templateOf && t->decl->templateOf->nameLoc.line == 0 && t->decl->templateOf->name == "hashmap";
 }
+
+inline bool isJsonValue(const Type* t) { return t->isStruct() && t->decl->nameLoc.line == 0 && t->decl->name == "json::Value"; }
 
 // Whether a value of this type can be the key of a hashmap: whether `==` on it looks only at things that can
 // be hashed, and it can be copied. `seen` stops at a struct already looked at.

@@ -1,0 +1,202 @@
+// All that can be wrong with JSON text says what and where. A debug build finds anything left behind by the
+// values that were part way done when it went wrong.
+import json;
+
+struct Point {
+    int x;
+    int y = 0;
+};
+class Node {
+public:
+    string name;
+    vector<Node> kids;
+    Node? next;
+};
+struct Lists {
+    vector<Point> points;
+    array<int, 2> pair;
+    hashmap<string, Point> map;
+};
+
+template<typename T> void bad(string text) {
+    try {
+        T value = try json::parse<T>(text);
+        println("no error for {}: {}", text, value);
+    } catch (json::Error e) {
+        println("{}", e.what());
+    } catch (Error e) {
+        println("not a json::Error: {}", e.what());
+    }
+}
+
+int main() {
+    // Not JSON at all.
+    bad<int>("");
+    bad<int>("   ");
+    bad<int>("abc");
+    bad<int>("5 6");
+    bad<Point>(R"({"x": 1} x)");
+    bad<bool>("tru");
+    bad<bool>("TRUE");
+
+    // Numbers.
+    bad<int>("+1");
+    bad<int>("01");
+    bad<double>("1.");
+    bad<double>(".5");
+    bad<double>("1e");
+    bad<double>("-");
+    bad<double>("NaN");
+    bad<double>("Infinity");
+    bad<double>("1e999");
+    bad<float>("1e39");
+    bad<int>("2147483648");
+    bad<int>("-2147483649");
+    bad<long>("9223372036854775808");
+    bad<int>("1.5");
+    bad<long>("1e30");
+
+    // Strings.
+    bad<string>("\"abc");
+    bad<string>("\"a\nb\"");
+    bad<string>("\"\\q\"");
+    bad<string>("\"\\u12\"");
+    bad<string>("\"\\uzzzz\"");
+    bad<string>("\"\\ud83d\"");
+    bad<string>("\"\\ud83d\\u0041\"");
+    bad<string>("\"\\ude00\"");
+    bad<string>("\"\\");
+    string notText = "\"ab\"";
+    notText[2] = char(200);
+    bad<string>(notText);
+    bad<char>("\"ab\"");
+    bad<char>("\"\"");
+
+    // Lists.
+    bad<vector<int>>("[");
+    bad<vector<int>>("[1");
+    bad<vector<int>>("[1,");
+    bad<vector<int>>("[1,]");
+    bad<vector<int>>("[,1]");
+    bad<vector<int>>("[1 2]");
+    bad<vector<int>>("[1, \"a\"]");
+    bad<array<int, 2>>("[1]");
+    bad<array<int, 2>>("[1, 2, 3]");
+    bad<array<int, 2>>("[1, ");
+
+    // Objects.
+    bad<Point>("{");
+    bad<Point>(R"({"x"})");
+    bad<Point>(R"({"x":)");
+    bad<Point>(R"({"x": 1)");
+    bad<Point>(R"({"x": 1,)");
+    bad<Point>(R"({"x": 1,})");
+    bad<Point>(R"({x: 1})");
+    bad<Point>(R"({"x": 1 "y": 2})");
+    bad<Point>("[1]");
+    bad<Point>("{}");
+    bad<Point>(R"({"y": 2})");
+    bad<Point>("null");
+    bad<hashmap<string, int>>(R"({"a" 1})");
+    bad<hashmap<string, int>>(R"({"a": "b"})");
+    bad<hashmap<string, int>>("{");
+    bad<hashmap<string, int>>("[]");
+    bad<hashmap<int, int>>(R"({"a": 1})");
+    bad<hashmap<int, int>>(R"({"": 1})");
+    bad<hashmap<int, int>>(R"({"99999999999": 1})");
+    bad<hashmap<long, int>>(R"({" 1": 1})");
+
+    // Wrong in something unknown, which is left out but must still be JSON.
+    bad<Point>(R"({"x": 1, "other": [1, })");
+    bad<Point>(R"({"x": 1, "other": {"a"}})");
+    bad<Point>(R"({"x": 1, "other": tru})");
+    bad<Point>(R"({"x": 1, "other": "abc})");
+
+    // Where it is, as lines and as a path, with what was done so far released.
+    bad<Lists>(R"({
+  "points": [
+    {"x": 1},
+    {"x": "two"}
+  ]
+})");
+    bad<Lists>(R"({"pair": [1, "x"]})");
+    bad<Lists>(R"({"map": {"a": {"x": 1}, "b": {"y": 2}}})");
+    bad<Node>(R"({"name": "a", "kids": [{"name": "b", "kids": [{"name": 5}]}]})");
+    bad<Node>(R"({"name": "a", "next": {"name": "b", "next": {"kids": []}}})");
+    bad<vector<Node>>(R"([{"name": "a"}, {"name": "b"}, {"name": 1}])");
+    return 0;
+}
+// expect: line 1, column 1: expected a number, but found the end of the text
+// expect: line 1, column 4: expected a number, but found the end of the text
+// expect: line 1, column 1: expected a number, but found something that is not JSON
+// expect: line 1, column 3: expected the end of the text, but found a number
+// expect: line 1, column 10: expected the end of the text, but found something that is not JSON
+// expect: line 1, column 1: expected a bool, but found something that is not JSON
+// expect: line 1, column 1: expected a bool, but found something that is not JSON
+// expect: line 1, column 1: expected a number, but found something that is not JSON
+// expect: line 1, column 1: a number cannot start with 0 in JSON
+// expect: line 1, column 3: expected a digit after the '.' of a number
+// expect: line 1, column 1: expected a number, but found something that is not JSON
+// expect: line 1, column 3: expected a digit in the exponent of a number
+// expect: line 1, column 1: expected a number, but found something that is not JSON
+// expect: line 1, column 1: expected a number, but found something that is not JSON
+// expect: line 1, column 1: expected a number, but found something that is not JSON
+// expect: line 1, column 1: this number is too large for a double
+// expect: line 1, column 1: this number is too large for a float
+// expect: line 1, column 1: 2147483648 does not fit in an int
+// expect: line 1, column 1: -2147483649 does not fit in an int
+// expect: line 1, column 1: 9223372036854775808 does not fit in a long
+// expect: line 1, column 1: 1.5 has a fraction, which an int cannot hold
+// expect: line 1, column 1: 1e30 does not fit in a long exactly
+// expect: line 1, column 1: this string has no closing quote
+// expect: line 1, column 3: a string cannot hold a control character as it is; write it as \n, \t or \u00XX
+// expect: line 1, column 2: this is not an escape that JSON has; a backslash goes before one of " \ / b f n r t u
+// expect: line 1, column 4: '\u' must be followed by four hex digits
+// expect: line 1, column 4: '\u' must be followed by four hex digits
+// expect: line 1, column 2: this is the first half of a surrogate pair, without the second
+// expect: line 1, column 2: this is the first half of a surrogate pair, without the second
+// expect: line 1, column 2: this is the second half of a surrogate pair, without the first
+// expect: line 1, column 1: this string has no closing quote
+// expect: line 1, column 3: this is not valid UTF-8, which all JSON text must be
+// expect: line 1, column 1: expected a string of one char, but this has more
+// expect: line 1, column 1: expected a string of one char, but this has more
+// expect: line 1, column 2: in [0]: expected a number, but found the end of the text
+// expect: line 1, column 1: this array has no closing ']'
+// expect: line 1, column 4: in [1]: expected a number, but found the end of the text
+// expect: line 1, column 4: in [1]: expected a number, but found something that is not JSON
+// expect: line 1, column 2: in [0]: expected a number, but found something that is not JSON
+// expect: line 1, column 4: expected ',' or ']', but found a number
+// expect: line 1, column 5: in [1]: expected a number, but found a string
+// expect: line 1, column 1: 'array<int, 2>' holds 2 elements, but this array has 1
+// expect: line 1, column 8: 'array<int, 2>' holds 2 elements, but this array has more
+// expect: line 1, column 5: in [1]: expected a number, but found the end of the text
+// expect: line 1, column 2: expected '}' or a key, but found the end of the text
+// expect: line 1, column 5: expected ':' after the key, but found something that is not JSON
+// expect: line 1, column 6: in x: expected a number, but found the end of the text
+// expect: line 1, column 1: this object has no closing '}'
+// expect: line 1, column 9: expected '}' or a key, but found the end of the text
+// expect: line 1, column 9: expected a string as a key, but found something that is not JSON
+// expect: line 1, column 2: expected a string as a key, but found something that is not JSON
+// expect: line 1, column 9: expected ',' or '}', but found a string
+// expect: line 1, column 1: expected an object for a 'Point', but found an array
+// expect: line 1, column 2: this 'Point' has no "x", which it needs. A field that can be left out has a default value, or is optional
+// expect: line 1, column 8: this 'Point' has no "x", which it needs. A field that can be left out has a default value, or is optional
+// expect: line 1, column 1: expected an object for a 'Point', but found null
+// expect: line 1, column 6: expected ':' after the key, but found a number
+// expect: line 1, column 7: in ["a"]: expected a number, but found a string
+// expect: line 1, column 2: expected '}' or a key, but found the end of the text
+// expect: line 1, column 1: expected an object, but found an array
+// expect: line 1, column 2: this key must be a whole number that fits in an int
+// expect: line 1, column 2: this key must be a whole number that fits in an int
+// expect: line 1, column 2: this key must be a whole number that fits in an int
+// expect: line 1, column 2: this key must be a whole number that fits in a long
+// expect: line 1, column 23: expected a value, but found something that is not JSON
+// expect: line 1, column 23: expected ':' after the key, but found something that is not JSON
+// expect: line 1, column 19: expected a value, but found something that is not JSON
+// expect: line 1, column 19: this string has no closing quote
+// expect: line 4, column 11: in points[1].x: expected a number, but found a string
+// expect: line 1, column 14: in pair[1]: expected a number, but found a string
+// expect: line 1, column 37: in map["b"]: this 'Point' has no "x", which it needs. A field that can be left out has a default value, or is optional
+// expect: line 1, column 56: in kids[0].kids[0].name: expected a string, but found a number
+// expect: line 1, column 56: in next.next: this 'Node' has no "name", which it needs. A field that can be left out has a default value, or is optional
+// expect: line 1, column 41: in [2].name: expected a string, but found a number

@@ -1,0 +1,17 @@
+// An object is written as what it really is, so what derives from a class counts too.
+import json;
+class Base {
+public:
+    int n = 0;
+};
+class Derived : public Base {
+public:
+    int* where;
+    Derived() : where(null) {}
+};
+int main() {
+    Base b = Base();
+    println("{}", json::stringify(b));
+    return 0;
+}
+// error: is a pointer, which only means something to this program

@@ -1,0 +1,21 @@
+import json;
+
+class Node {
+public:
+    Node? next;
+};
+
+int main() {
+    Node first = Node();
+    Node last = first;
+    for (int i = 0; i < 1000; i++) {
+        Node more = Node();
+        last.next = more;
+        last = more;
+    }
+    println("before");
+    println("{}", json::stringify(first).size());
+    return 0;
+}
+// expect: before
+// trap: a value is nested too deeply to write as JSON

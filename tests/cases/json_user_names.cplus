@@ -1,0 +1,23 @@
+// A program can use the name of a module for its own things, and json keeps working around them.
+import json;
+
+struct Value {
+    int problem = 1;
+    int line = 2;
+};
+int text() { return 3; }
+const int out = 4;
+
+int main() throws {
+    string json = "a variable";
+    println("{}", json);
+    Value v;
+    println("{}", json::stringify(v));
+    println("{}", try json::parse<Value>(R"({"problem": 5})"));
+    println("{} {}", text(), out);
+    return 0;
+}
+// expect: a variable
+// expect: {"problem":1,"line":2}
+// expect: {problem: 5, line: 2}
+// expect: 3 4

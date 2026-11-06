@@ -1,0 +1,13 @@
+import json;
+struct P {
+    int x;
+    P(int a) : x(a) {}
+};
+struct Q {
+    vector<P> list;
+};
+int main() {
+    auto q = try json::parse<Q>("{}");
+    return 0;
+}
+// error: 'list', a 'P', has a constructor that needs arguments

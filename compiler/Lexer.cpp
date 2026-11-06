@@ -156,6 +156,7 @@ Token Lexer::lexIdentOrKeyword() {
     while (std::isalnum((unsigned char)peek()) || peek() == '_') advance();
     std::string text = src_.substr(start, pos_ - start);
     loc.len = (uint32_t)text.size();
+    if (text == "R" && peek() == '"') return lexRawString(loc);
     // C++'s prefixed literals: L'a', u8"text", u"text" and U'a'. C+ text is UTF-8 already.
     if ((text == "L" || text == "u" || text == "U" || text == "u8") && (peek() == '\'' || peek() == '"')) {
         bool isChar = peek() == '\'';
@@ -404,6 +405,33 @@ Token Lexer::lexString() {
         lexEscape(value, spec::StringLiterals);
     }
     loc.len = loc.line == line_ ? col_ - loc.col : 1;
+    return Token{Tok::StringLit, loc, value, 0};
+}
+
+// As in C++: what is between `R"(` and `)"` is the text, with no escapes, over any number of lines. A text that
+// has `)"` in it can choose what ends it: `R"end(...)end"`.
+Token Lexer::lexRawString(Loc loc) {
+    advance();  // the quote
+    std::string end = ")";
+    while (pos_ < src_.size() && peek() != '(' && peek() != '\n' && peek() != ' ' && peek() != '"' && peek() != ')' && peek() != '\\') end += advance();
+    if (peek() != '(' || end.size() > 17) {
+        diags_.error(loc, "a raw string starts with `R\"(`, or with up to 16 characters of your own before the '('",
+                     "write `R\"(text)\"`, or `R\"end(text)end\"` for a text that has `)\"` in it", spec::StringLiterals);
+        return Token{Tok::StringLit, loc, "", 0};
+    }
+    advance();  // the '('
+    end += '"';
+    size_t stop = src_.find(end, pos_);
+    if (stop == std::string::npos) {
+        loc.len = 2;
+        diags_.error(loc, "this raw string is never closed", "add `" + end + "` where it should end", spec::StringLiterals);
+        while (pos_ < src_.size()) advance();
+        return Token{Tok::StringLit, loc, "", 0};
+    }
+    std::string value = src_.substr(pos_, stop - pos_);
+    uint32_t startLine = loc.line;
+    while (pos_ < stop + end.size()) advance();
+    loc.len = startLine == line_ ? col_ - loc.col : 1;
     return Token{Tok::StringLit, loc, value, 0};
 }
 

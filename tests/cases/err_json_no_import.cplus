@@ -1,0 +1,7 @@
+int main() {
+    println("{}", json::stringify(1));
+    return 0;
+}
+// error: 'json::stringify' is in the module 'json', which this program does not import
+// error: write `import json;` at the top of the file
+// error: spec: docs/SPEC.md#modules

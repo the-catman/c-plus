@@ -534,8 +534,9 @@ void Sema::reportUnknownName(const NameExpr& n) {
 void Sema::check(Program& program) {
     program_ = &program;
     for (auto& imp : program.imports)
-        diags_.error(imp.loc, "this compiler does not support modules yet, so '" + imp.path + "' cannot be imported",
-                     "remove the import for now; built-ins like println need no import", spec::Status);
+        if (imp.path != "json" && imp.path != "reflect")
+            diags_.error(imp.loc, "this compiler does not support modules yet, except for `json` and `reflect`, so '" + imp.path + "' cannot be imported",
+                         "remove the import for now; built-ins like println need no import", spec::Status);
 
     adoptTypes();
 
@@ -545,7 +546,7 @@ void Sema::check(Program& program) {
                          "give your function a different name", spec::Printing);
             continue;
         }
-        if (fn->isExtern && (fn->name == "main" || fn->name.rfind("cplus_", 0) == 0)) {
+        if (fn->isExtern && fn->nameLoc.line && (fn->name == "main" || fn->name.rfind("cplus_", 0) == 0)) {
             diags_.error(fn->nameLoc,
                          fn->name == "main" ? "'main' is where a C+ program starts, so it cannot be a C function"
                                             : "names starting with 'cplus_' are reserved for the C+ runtime",
@@ -639,7 +640,10 @@ void Sema::checkNewStructs() {
         if (sd.templateOf) diags_.pushContext(sd.usedAt, "in " + q(sd.name) + ", which is used here");
         checkMembers(sd);
         if (sd.templateOf) diags_.popContext();
-        if (isHashmap(&sd.type)) mapMethod(&sd.type, "__same");  // for ==, wherever it is hidden in other types
+        if (isHashmap(&sd.type)) {
+            mapMethod(&sd.type, "__same");  // for ==, wherever it is hidden in other types
+            if (!program_->imports.empty()) mapMethod(&sd.type, "__put");  // for reading JSON, which goes by descriptors
+        }
         // A generic class's other methods wait until they are used, as in C++, so that it
         // can have methods that not all of its arguments allow.
         for (auto& m : sd.methods)
@@ -647,7 +651,7 @@ void Sema::checkNewStructs() {
     }
 }
 
-static const char* const kBuiltinConstraints[] = {"Comparable", "Number", "Integer", "Floating", "Hashable", "__Hashable"};
+static const char* const kBuiltinConstraints[] = {"Comparable", "Number", "Integer", "Floating", "Hashable", "__Hashable", "__JsonWritable", "__JsonReadable"};
 
 // Each generic's name must be free, and each of its constraints must exist.
 void Sema::checkTemplateNames(Program& program) {
@@ -3279,6 +3283,14 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
         case Expr::Kind::Delete: result = checkDelete(static_cast<DeleteExpr&>(e), flow); break;
         case Expr::Kind::Sizeof: {
             auto& z = static_cast<SizeofExpr&>(e);
+            if (z.what == SizeofExpr::What::Zero) {
+                result = z.target;
+                break;
+            }
+            if (z.what == SizeofExpr::What::Descriptor) {
+                result = Type::pointerTo(Type::voidTy());
+                break;
+            }
             if (z.operand) {
                 Flow unevaluated = flow;  // `sizeof x` does not read x
                 unevaluated.reachable = false;
@@ -3745,13 +3757,65 @@ bool Sema::checkConstraints(TemplateDecl& t, const std::vector<TemplateArg>& arg
         std::string problem = constraintProblem(p.constraint, args[i].type, where);
         if (problem.empty()) continue;
         ok = false;
-        std::string shown = p.constraint == "__Hashable" ? "Hashable" : p.constraint;
+        std::string shown = p.constraint.rfind("__", 0) == 0 ? p.constraint.substr(2) : p.constraint;
         diags_.error(usedAt, q(args[i].type) + " cannot be used for " + q(p.name) + " of " + q(t.name) + ", which must be " + q(shown),
-                     problem, t.nameLoc.line ? spec::Constraints : spec::HashMaps);
+                     problem, t.nameLoc.line ? spec::Constraints : t.name == "hashmap" ? spec::HashMaps : spec::Json);
         if (where.line) diags_.note(where, q(p.constraint) + " requires this, which does not work for " + q(args[i].type));
         else if (p.constraintLoc.line) diags_.note(p.constraintLoc, "the constraint is written here");
     }
     return ok;
+}
+
+// Why a value of this type cannot be turned into JSON, or made from it. `path` is how it was reached, and `seen` stops
+// at a struct or class already looked at, since a type can lead back to itself. A private field is left out of JSON.
+static std::string jsonProblem(const Program& program, const Type* t, bool reading, const std::string& path, std::vector<const StructDecl*>& seen) {
+    std::string where = path.empty() ? q(t) : q(path) + ", a " + q(t) + ",";
+    if (t->isNumber() || t->is(K::Bool) || t->is(K::Char) || t->is(K::String) || t->isWeak()) return "";
+    if (t->isOptional() || t->isVector() || t->isArray() || t->isUnique()) return jsonProblem(program, t->elem, reading, path, seen);
+    if (isJsonValue(t)) return "";
+    if (isHashmap(t)) {
+        const Type* key = t->decl->templateArgs[0].type;
+        if (!key->is(K::String) && !key->is(K::Int) && !key->is(K::Long))
+            return where + " has keys of type " + q(key) + ", while a JSON object has strings. A key can be a string, an int or a long, which is written as a string";
+        return jsonProblem(program, t->decl->templateArgs[1].type, reading, path.empty() ? "[key]" : path + "[key]", seen);
+    }
+    if (!t->hasFields()) return where + " is a pointer, which only means something to this program. Make it a private field, which is left out of JSON";
+    const StructDecl& sd = *t->decl;
+    for (const StructDecl* d : seen)
+        if (d == &sd) return "";
+    seen.push_back(&sd);
+    if (reading) {
+        if (sd.isInterface || sd.firstPure()) return where + " has methods without a body, so nothing can be made from JSON for it. Use a class that has them all";
+        if (sd.constructor && !sd.constructor->params.empty())
+            return where + " has a constructor that needs arguments, which JSON does not know. Give it a constructor without parameters, or none";
+    }
+    std::vector<const FieldDecl*> fields;
+    std::function<void(const StructDecl&)> collect = [&](const StructDecl& d) {
+        for (const StructDecl* base : d.bases) collect(*base);
+        for (auto& f : d.fields) fields.push_back(&f);
+    };
+    collect(sd);
+    size_t shown = 0;
+    std::set<std::string> names;
+    for (const FieldDecl* f : fields) {
+        std::string inner = path.empty() ? f->name : path + "." + f->name;
+        if (f->access != Access::Public) {
+            if (reading && !sd.constructor && !f->defaultValue && needsValue(f->type))
+                return where + " has a private field " + q(f->name) + " that needs a value, which JSON cannot give it. Give the field a default value";
+            continue;
+        }
+        ++shown;
+        if (!names.insert(f->name).second)
+            return where + " has two fields named " + q(f->name) + ", from two base classes, and JSON could not tell them apart";
+        if (std::string problem = jsonProblem(program, f->type, reading, inner, seen); !problem.empty()) return problem;
+    }
+    if (!fields.empty() && !shown)
+        return where + " has no public fields, so nothing of it would go in JSON. Put what belongs there under `public:`";
+    if (!reading && sd.isClass)  // what is written is whatever the object really is
+        for (auto& other : program.structs)
+            if (other->defined && other.get() != &sd && other->derivesFrom(&sd))
+                if (std::string problem = jsonProblem(program, &other->type, reading, path, seen); !problem.empty()) return problem;
+    return "";
 }
 
 std::string Sema::constraintProblem(const std::string& constraint, const Type* t, Loc& where) {
@@ -3805,6 +3869,10 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
     if (constraint == "Number") return t->isNumber() ? "" : q(t) + " is not int, long, float or double";
     if (constraint == "Integer") return t->isInteger() ? "" : q(t) + " is not int or long";
     if (constraint == "Floating") return t->isFloating() ? "" : q(t) + " is not float or double";
+    if (constraint == "__JsonWritable" || constraint == "__JsonReadable") {
+        std::vector<const StructDecl*> seen;
+        return jsonProblem(*program_, t, constraint == "__JsonReadable", "", seen);
+    }
     if (constraint == "Hashable" || constraint == "__Hashable")
         return isHashable(t) ? ""
                              : q(t) + " cannot be a key. Numbers, chars, bools, strings, pointers and class references can, and so can "

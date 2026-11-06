@@ -1,0 +1,7 @@
+import json;
+int main() {
+    hashmap<double, int> m;
+    println("{}", json::stringify(m));
+    return 0;
+}
+// error: has keys of type 'double', while a JSON object has strings. A key can be a string, an int or a long

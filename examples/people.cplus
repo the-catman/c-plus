@@ -1,0 +1,54 @@
+// Reads a list of people from JSON, changes it, and writes it back. A program can check what it
+// knows the shape of, and look through what it does not.
+import json;
+
+struct Address {
+    string city;
+    string? country;
+};
+
+struct Person {
+    string name;
+    int age = 0;
+    vector<string> languages;
+    Address home;
+};
+
+string oldest(vector<Person> people) {
+    string name = "nobody";
+    int age = -1;
+    for (auto p : people) {
+        if (p.age > age) {
+            age = p.age;
+            name = p.name;
+        }
+    }
+    return name;
+}
+
+int main() {
+    string text = R"([
+        {"name": "Ada", "age": 36, "languages": ["en", "fr"], "home": {"city": "London"}},
+        {"name": "Grace", "age": 85, "home": {"city": "New York", "country": "USA"}, "rank": "Rear Admiral"}
+    ])";
+
+    try {
+        vector<Person> people = try json::parse<vector<Person>>(text);
+        println("The oldest is {}", oldest(people));
+        people[0].languages.push_back("it");
+        println("{}", json::pretty(people[0]));
+
+        // The rank is not in Person, so here it is looked at without one.
+        json::Value any = try json::parse<json::Value>(text);
+        println("{}", any.at(1)?.get("rank")?.text() ?? "no rank");
+
+        // A mistake says what, and where.
+        Person wrong = try json::parse<Person>(R"({"name": "Bob", "age": "old", "home": {"city": "Paris"}})");
+        println("{}", wrong);
+    } catch (json::Error e) {
+        println("Could not read it: {}", e.what());
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    return 0;
+}

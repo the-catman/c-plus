@@ -1,0 +1,6 @@
+import json;
+int main() {
+    println("{}", json::dump(1));
+    return 0;
+}
+// error: there is no function named 'json::dump'
