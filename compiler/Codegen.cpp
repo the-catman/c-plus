@@ -2,6 +2,7 @@
 
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DIBuilder.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Intrinsics.h>
@@ -20,6 +21,7 @@
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/TargetParser/Host.h>
 #include <llvm/TargetParser/Triple.h>
+#include <llvm/Transforms/Instrumentation/AddressSanitizer.h>
 
 #include <algorithm>
 #include <functional>
@@ -52,6 +54,12 @@ struct Codegen::Impl {
     llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
+
+    // In a debug build, the line table that lets a stack trace name files and lines.
+    // `diFunction` is the C+ function being generated; generated helpers have none.
+    std::unique_ptr<llvm::DIBuilder> di;
+    llvm::DIFile* diFile = nullptr;
+    llvm::DISubprogram* diFunction = nullptr;
 
     // How one value travels to a C function. A struct is passed in the values `parts`,
     // read from its bytes; on the stack, where the callee finds a copy; or as a pointer to
@@ -151,6 +159,43 @@ struct Codegen::Impl {
         mod->setTargetTriple(triple);
         mod->setDataLayout(tm->createDataLayout());
         return true;
+    }
+
+    void setupLineTable() {
+        mod->addModuleFlag(llvm::Module::Warning, "Debug Info Version", llvm::DEBUG_METADATA_VERSION);
+        mod->addModuleFlag(llvm::Module::Warning, "Dwarf Version", 5);
+        di = std::make_unique<llvm::DIBuilder>(*mod);
+        diFile = di->createFile(file.path, "");  // as given, so a trace shows the path the user typed
+        di->createCompileUnit(llvm::dwarf::DW_LANG_C_plus_plus, diFile, "cplus", opts.optimize, "", 0, "",
+                              llvm::DICompileUnit::LineTablesOnly);
+    }
+
+    // Code generated from here on belongs to `loc`, in a stack trace.
+    void setLine(Loc loc) {
+        if (diFunction && loc.line) b.SetCurrentDebugLocation(llvm::DILocation::get(ctx, loc.line, loc.col, diFunction));
+    }
+
+    // The same, until the end of a scope: an expression's operands have their own places,
+    // and the expression's own code comes back to its place after them.
+    struct AtLine {
+        Impl& g;
+        llvm::DebugLoc saved;
+        AtLine(Impl& impl, Loc loc) : g(impl), saved(impl.b.getCurrentDebugLocation()) { g.setLine(loc); }
+        ~AtLine() { g.b.SetCurrentDebugLocation(saved); }
+    };
+
+    void startLineTable(Loc loc) {
+        if (!di) return;
+        auto* type = di->createSubroutineType(di->getOrCreateTypeArray({}));
+        diFunction = di->createFunction(diFile, fn->getName(), "", diFile, loc.line, type, loc.line,
+                                        llvm::DINode::FlagZero, llvm::DISubprogram::SPFlagDefinition);
+        fn->setSubprogram(diFunction);
+        setLine(loc);
+    }
+
+    void endLineTable() {
+        diFunction = nullptr;
+        b.SetCurrentDebugLocation(llvm::DebugLoc());
     }
 
     void declareRuntime() {
@@ -385,6 +430,29 @@ struct Codegen::Impl {
     // `*`, `->` or `[ ]`.
     void checkNotNull(llvm::Value* p, const std::string& op, Loc loc) {
         trapIf(b.CreateIsNull(p), "null pointer: '" + op + "' was used on a pointer that is null", loc);
+    }
+
+    // In a debug build, stops the program when `p` is not a multiple of what `elem` needs,
+    // which LLVM takes for granted and a cast from a char* can break.
+    void checkAligned(llvm::Value* p, const Type* elem, const std::string& op, Loc loc) {
+        if (!opts.debug) return;
+        uint64_t align = mod->getDataLayout().getABITypeAlign(llvmType(elem)).value();
+        if (align <= 1) return;
+        llvm::Value* offset = b.CreateAnd(b.CreatePtrToInt(p, b.getInt64Ty()), b.getInt64(align - 1));
+        trapIf(b.CreateIsNotNull(offset),
+               "misaligned pointer: '" + op + "' was used on a pointer to '" + elem->name +
+                   "' whose address is not a multiple of " + std::to_string(align),
+               loc);
+    }
+
+    // Reads a place that a pointer may lead to. In a debug build, a bool read from a byte
+    // other than 0 or 1 stops the program, since LLVM takes those two for granted.
+    llvm::Value* loadPlace(const Expr& e, const char* name) {
+        llvm::Value* place = addressOf(e);
+        if (opts.debug && e.type->is(K::Bool))
+            trapIf(b.CreateICmpUGT(b.CreateLoad(b.getInt8Ty(), place, "bool.byte"), b.getInt8(1)),
+                   "invalid bool: a 'bool' was read from a byte that is neither 0 nor 1", e.loc);
+        return loadValue(e.type, place, name);
     }
 
     // The char a computed code stands for. `wide` is an i64; a value that is not from 0
@@ -659,10 +727,18 @@ struct Codegen::Impl {
         Impl& g;
         llvm::IRBuilderBase::InsertPoint ip;
         llvm::Function* fn;
-        explicit SavedPoint(Impl& impl) : g(impl), ip(impl.b.saveIP()), fn(impl.fn) {}
+        llvm::DebugLoc line;
+        llvm::DISubprogram* diFunction;
+        explicit SavedPoint(Impl& impl)
+            : g(impl), ip(impl.b.saveIP()), fn(impl.fn), line(impl.b.getCurrentDebugLocation()),
+              diFunction(impl.diFunction) {
+            g.endLineTable();
+        }
         ~SavedPoint() {
             g.b.restoreIP(ip);
             g.fn = fn;
+            g.b.SetCurrentDebugLocation(line);
+            g.diFunction = diFunction;
         }
     };
 
@@ -1110,6 +1186,7 @@ struct Codegen::Impl {
     // and one read from a variable or field is retained first, so reassigning that
     // variable later in the statement cannot free it.
     llvm::Value* gen(const Expr& e) {
+        AtLine line(*this, e.loc);
         bool owned = false;
         llvm::Value* v = genRaw(e, owned);
         bool isThis = e.kind == Expr::Kind::This && e.type->isClass();  // kept alive by the caller
@@ -1352,6 +1429,7 @@ struct Codegen::Impl {
     // while other code runs (the receiver of a struct method). With `write`, the place
     // is about to change, so each vector it lies in first gets a buffer of its own.
     llvm::Value* addressOf(const Expr& e, bool hold = false, bool write = false) {
+        AtLine line(*this, e.loc);
         switch (e.kind) {
             case Expr::Kind::Name: {
                 auto& n = static_cast<const NameExpr&>(e);
@@ -1372,6 +1450,7 @@ struct Codegen::Impl {
                 auto& u = static_cast<const UnaryExpr&>(e);
                 llvm::Value* p = gen(*u.operand);
                 checkNotNull(p, u.isArrow() ? "->" : "*", u.loc);
+                checkAligned(p, e.type, u.isArrow() ? "->" : "*", u.loc);
                 return p;
             }
             case Expr::Kind::Index: {
@@ -1382,6 +1461,7 @@ struct Codegen::Impl {
                     llvm::Value* p = gen(*ix.base);
                     llvm::Value* index = genIndex(*ix.index);
                     checkNotNull(p, "[ ]", ix.loc);
+                    checkAligned(p, vt->elem, "[ ]", ix.loc);
                     return b.CreateGEP(llvmType(vt->elem), p, index, "elem.addr");
                 }
                 if (vt->isArray()) {
@@ -1471,11 +1551,11 @@ struct Codegen::Impl {
                 return loadValue(e.type, thisPtr, "this");
             case Expr::Kind::Member: {
                 auto& m = static_cast<const MemberExpr&>(e);
-                if (isPlace(e)) return loadValue(e.type, addressOf(e), m.field.c_str());
+                if (isPlace(e)) return loadPlace(e, m.field.c_str());
                 // A field of a struct value that is not stored anywhere, e.g. makePoint().x
                 return loadField(*m.base->type->decl, gen(*m.base), m.fieldIndex);
             }
-            case Expr::Kind::Index: return loadValue(e.type, addressOf(e), "elem");
+            case Expr::Kind::Index: return loadPlace(e, "elem");
             case Expr::Kind::InitList:
                 owned = true;
                 return genInitList(static_cast<const InitListExpr&>(e), e.type);
@@ -1487,7 +1567,7 @@ struct Codegen::Impl {
             }
             case Expr::Kind::Unary: {
                 auto& u = static_cast<const UnaryExpr&>(e);
-                if (u.op == UnOp::Deref) return loadValue(e.type, addressOf(e), "deref");
+                if (u.op == UnOp::Deref) return loadPlace(e, "deref");
                 if (u.op == UnOp::AddrOf) return addressOf(*u.operand);
                 if (u.op == UnOp::Not) return b.CreateNot(genCond(*u.operand));
                 llvm::Value* v = genConverted(*u.operand, e.type);  // a char becomes an int first
@@ -2262,6 +2342,7 @@ struct Codegen::Impl {
     }
 
     void genStmt(const Stmt& s) {
+        setLine(s.loc);
         switch (s.kind) {
             case Stmt::Kind::VarDecl: {
                 auto& v = static_cast<const VarDecl&>(s);
@@ -2763,6 +2844,7 @@ struct Codegen::Impl {
         fnDecl = &f;
         locals.clear();
         b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
+        startLineTable(f.nameLoc);
         unsigned first = (inMemory(f.retType) ? 1 : 0) + (f.owner ? 1 : 0);
         thisPtr = f.owner ? fn->getArg(first - 1) : nullptr;
         // Parameters own their values, like locals, and are released when the function ends.
@@ -2782,13 +2864,18 @@ struct Codegen::Impl {
             else b.CreateUnreachable();       // Sema proved this is never reached
         }
         scopes.clear();
+        endLineTable();
     }
 
     void defineEntryPoint(const FuncDecl& userMain) {
         auto* type = llvm::FunctionType::get(b.getInt32Ty(), {b.getInt32Ty(), b.getPtrTy()}, false);
-        auto* entry = llvm::Function::Create(type, llvm::Function::ExternalLinkage, "main", mod.get());
-        b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", entry));
+        fn = llvm::Function::Create(type, llvm::Function::ExternalLinkage, "main", mod.get());
+        b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
+        // With -O, the program's main is inlined here, and without a line table of its own
+        // this function would lose that main's lines.
+        startLineTable(userMain.nameLoc);
         b.CreateRet(b.CreateCall(funcs.at(&userMain), {}));
+        endLineTable();
     }
 
     // ---- Generated functions for structs and classes -----------------------
@@ -2959,6 +3046,7 @@ struct Codegen::Impl {
     bool generate(const Program& program, std::string& error) {
         mod = std::make_unique<llvm::Module>(file.path, ctx);
         if (!setupTarget(error)) return false;
+        if (opts.debug) setupLineTable();
         stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy()}, "cplus.string");
         // Named types are created first and given bodies after, so they can refer to
         // each other in any order.
@@ -2999,8 +3087,16 @@ struct Codegen::Impl {
         // A large array on the stack must not step over the guard page below it into other
         // memory: each new page is touched in turn, so running out of stack always stops
         // the program.
-        for (llvm::Function& f : *mod)
-            if (!f.isDeclaration()) f.addFnAttr("probe-stack", "inline-asm");
+        for (llvm::Function& f : *mod) {
+            if (f.isDeclaration()) continue;
+            f.addFnAttr("probe-stack", "inline-asm");
+            if (opts.debug) {  // checked by AddressSanitizer, with frames a stack trace can walk
+                f.addFnAttr(llvm::Attribute::SanitizeAddress);
+                f.addFnAttr("frame-pointer", "all");
+                f.setUWTableKind(llvm::UWTableKind::Async);
+            }
+        }
+        if (di) di->finalize();
 
         std::string verifyErrors;
         llvm::raw_string_ostream os(verifyErrors);
@@ -3008,22 +3104,29 @@ struct Codegen::Impl {
             error = "internal compiler error: generated invalid LLVM IR\n" + os.str();
             return false;
         }
-        if (opts.optimize) optimize();
+        if (opts.optimize || opts.debug) runPasses();
         return true;
     }
 
-    void optimize() {
+    void runPasses() {
         llvm::LoopAnalysisManager lam;
         llvm::FunctionAnalysisManager fam;
         llvm::CGSCCAnalysisManager cgam;
         llvm::ModuleAnalysisManager mam;
         llvm::PassBuilder pb(tm.get());
+        // After the optimizer, so its checks are not optimized and it checks what will run.
+        if (opts.debug)
+            pb.registerOptimizerLastEPCallback([](llvm::ModulePassManager& mpm, llvm::OptimizationLevel) {
+                mpm.addPass(llvm::AddressSanitizerPass(llvm::AddressSanitizerOptions{}));
+            });
         pb.registerModuleAnalyses(mam);
         pb.registerCGSCCAnalyses(cgam);
         pb.registerFunctionAnalyses(fam);
         pb.registerLoopAnalyses(lam);
         pb.crossRegisterProxies(lam, fam, cgam, mam);
-        pb.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2).run(*mod, mam);
+        llvm::ModulePassManager mpm = opts.optimize ? pb.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2)
+                                                    : pb.buildO0DefaultPipeline(llvm::OptimizationLevel::O0);
+        mpm.run(*mod, mam);
     }
 };
 

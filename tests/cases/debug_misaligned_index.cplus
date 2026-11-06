@@ -1,0 +1,13 @@
+// The same for p[i].
+// flags: --debug
+[[allow(new_delete)]];
+
+int main() {
+    char* bytes = new char[32];
+    long* p = (long*)(bytes + 4);
+    println("{}", p[1]);
+    delete[] bytes;
+    return 0;
+}
+// trap: misaligned pointer: '[ ]' was used on a pointer to 'long' whose address is not a multiple of 8
+// trap: debug_misaligned_index.cplus:8:

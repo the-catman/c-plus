@@ -1,0 +1,5 @@
+// flags: -fsanitize=address
+int main() {
+    return 0;
+}
+// error: '-fsanitize=address' is not an option of cplus; write --debug

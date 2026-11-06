@@ -1,0 +1,20 @@
+// A debug build stops at a pointer to a local variable used after its function returned.
+// -O cannot remove the variable, which C is given, or work out the depth to inline it all.
+// flags: --debug
+extern "C" long time(long* out);
+
+long* dangling(long depth) {
+    long x = depth;
+    time(&x);
+    if (depth > 0) return dangling(depth - 1);
+    return &x;
+}
+
+int main() {
+    long* p = dangling(time(null) % 2 + 1);
+    println("{}", *p);
+    return 0;
+}
+// trap: a pointer to a local variable was used after its function returned
+// trap: stack-use-after-return
+// trap: debug_after_return.cplus:15:

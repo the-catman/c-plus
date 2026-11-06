@@ -1,0 +1,18 @@
+// The same for p->x.
+// flags: --debug
+[[allow(new_delete)]];
+
+struct Point {
+    int x;
+    int y;
+};
+
+int main() {
+    char* bytes = new char[32];
+    Point* p = (Point*)(bytes + 2);
+    println("{}", p->y);
+    delete[] bytes;
+    return 0;
+}
+// trap: misaligned pointer: '->' was used on a pointer to 'Point' whose address is not a multiple of 4
+// trap: debug_misaligned_arrow.cplus:13:

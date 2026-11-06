@@ -1,0 +1,20 @@
+// A debug build stops at a pointer that goes past the end of memory from new.
+// flags: --debug
+[[allow(new_delete)]];
+
+int main() {
+    int* a = new int[3];
+    for (int i = 0; i <= 3; i++) {
+        println("{}", i);
+        a[i] = i;
+    }
+    delete[] a;
+    return 0;
+}
+// expect: 0
+// expect: 1
+// expect: 2
+// expect: 3
+// trap: a pointer went outside the memory it was allocated with
+// trap: heap-buffer-overflow
+// trap: debug_heap_overrun.cplus:9:

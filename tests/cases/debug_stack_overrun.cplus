@@ -1,0 +1,19 @@
+// A debug build stops at a pointer that goes past the end of a local array. a[i] itself is
+// always checked; a pointer is not. Giving C the pointer keeps -O from taking the array apart.
+// flags: --debug
+extern "C" long time(long* out);
+
+int main() {
+    array<long, 3> a = {0, 2, 3};
+    long* p = a.data();
+    time(p);
+    int i = 2;
+    println("{}", p[i]);
+    i += 1;
+    println("{}", p[i]);
+    return 0;
+}
+// expect: 3
+// trap: a pointer went outside a local variable or array
+// trap: stack-buffer-overflow
+// trap: debug_stack_overrun.cplus:13:

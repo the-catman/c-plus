@@ -29,13 +29,16 @@ static const char* kUsage =
     "\n"
     "build and run also take -l<library> and -L<directory>, as a C compiler does, for\n"
     "the libraries of C functions declared with extern \"C\", e.g. -lsqlite3.\n"
-    "-Wno-new-delete turns off the warning for new and delete in every file.\n";
+    "-Wno-new-delete turns off the warning for new and delete in every file.\n"
+    "--debug makes a debug build: slower, but memory errors stop the program with a stack\n"
+    "trace, and leaks are reported at exit. Build and run take it, with or without -O.\n";
 
 struct Options {
     std::string command;
     std::string input;
     std::string output;
     bool optimize = false;
+    bool debug = false;
     bool emitLLVM = false;
     bool warnNewDelete = true;  // -Wno-new-delete turns the warning off
     std::vector<std::string> linkArgs;  // -l and -L, passed on to the linker
@@ -108,7 +111,15 @@ static int build(const Options& opts, const std::string& exePath) {
     if (!frontEnd(file, diags, program, opts.warnNewDelete)) return 1;
     if (opts.command == "check") return 0;
 
-    Codegen codegen(file, CodegenOptions{opts.optimize});
+    const std::string runtimeLib = opts.debug ? CPLUS_RUNTIME_LIB_DEBUG : CPLUS_RUNTIME_LIB;
+    if (runtimeLib.empty() && !opts.emitLLVM) {
+        std::fprintf(stderr, "error: --debug needs AddressSanitizer, which the C compiler did not have when this "
+                             "compiler was built\n  = help: install the sanitizer libraries for your C compiler, "
+                             "such as `libclang-rt-18-dev` on Debian or Ubuntu, then run cmake and build again\n");
+        return 1;
+    }
+
+    Codegen codegen(file, CodegenOptions{opts.optimize, opts.debug});
     std::string error;
     if (!codegen.generate(program, error)) {
         std::fprintf(stderr, "error: %s\n", error.c_str());
@@ -123,7 +134,8 @@ static int build(const Options& opts, const std::string& exePath) {
         std::fprintf(stderr, "error: %s\n", error.c_str());
         return 1;
     }
-    std::vector<std::string> link{CPLUS_LINKER, objPath, CPLUS_RUNTIME_LIB};
+    std::vector<std::string> link{CPLUS_LINKER, objPath, runtimeLib};
+    if (opts.debug) link.push_back("-fsanitize=address");
     link.insert(link.end(), opts.linkArgs.begin(), opts.linkArgs.end());
     link.push_back("-lm");  // the math functions, part of the C standard library
     link.insert(link.end(), {"-o", exePath});
@@ -171,6 +183,11 @@ int main(int argc, char** argv) {
             opts.output = argv[i];
         } else if (a == "-O") {
             opts.optimize = true;
+        } else if (a == "--debug") {
+            opts.debug = true;
+        } else if (a == "-g" || a.rfind("-fsanitize", 0) == 0) {
+            return usageError("'" + a + "' is not an option of cplus; write --debug, which turns on line numbers and "
+                              "the memory checks together");
         } else if (a == "-Wno-new-delete") {
             opts.warnNewDelete = false;
         } else if (a.rfind("-l", 0) == 0 || a.rfind("-L", 0) == 0) {

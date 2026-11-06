@@ -1,0 +1,18 @@
+// The bytes just before memory from new are kept for delete. A debug build stops the
+// program from reaching them with a negative index.
+// flags: --debug
+[[allow(new_delete)]];
+
+int main() {
+    int* a = new int[3];
+    int i = 0;
+    println("{}", a[i]);
+    i -= 1;
+    println("{}", a[i]);
+    delete[] a;
+    return 0;
+}
+// expect: 0
+// trap: a pointer went before the start of memory from `new`
+// trap: use-after-poison
+// trap: debug_heap_underrun.cplus:11:

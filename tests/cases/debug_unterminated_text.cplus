@@ -1,0 +1,16 @@
+// string(p) reads up to a zero byte. A debug build stops when there is none in the memory.
+// flags: --debug
+[[allow(new_delete)]];
+
+int main() {
+    char* text = new char[3];
+    text[0] = 'a';
+    text[1] = 'b';
+    text[2] = 'c';
+    println("{}", string(text));
+    delete[] text;
+    return 0;
+}
+// trap: a pointer went outside the memory it was allocated with
+// trap: heap-buffer-overflow
+// trap: debug_unterminated_text.cplus:10:

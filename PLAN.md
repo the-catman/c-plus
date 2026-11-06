@@ -117,6 +117,12 @@ Always available, no `unsafe` block:
   and a `new_delete { }` block because its braces would end the scope of what it allocates.
 - Debug builds run under ASan and UBSan, so use-after-free, double free, buffer overrun,
   and null dereference stop the program with a readable message and a stack trace.
+  Decided 2026-11-06: a debug build is asked for with `--debug`, and `cplus build` without
+  it stays a plain build, since ASan needs libraries that not every machine has and makes a
+  program about twice as slow. UBSan is written into clang, not LLVM, so C+ generates what it
+  needs itself: checks for misaligned pointers and invalid bools, reported as ordinary
+  runtime errors. The rest of what UBSan checks either stops the program in every build or
+  cannot happen in the IR C+ generates.
 
 Reference cycles:
 - Swift model. Strong by default, `weak` for back references. Cycles leak, and that is
@@ -438,8 +444,9 @@ leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. C fun
 can be called through `extern "C"` declarations with number, `char`, `bool`, `string`
 and pointer values. Raw pointers work, with pointer arithmetic, `sizeof`, null traps and
 C types known by name such as `FILE*`, `new` and `delete` with their warning, and C structs,
-through pointers and by value, including array fields, and `array<T, N>`. Next in Phase 1:
-debug builds with ASan and UBSan.
+through pointers and by value, including array fields, and `array<T, N>`. `--debug` makes
+a debug build with ASan, stack traces and a leak report. Every item of Phase 1 is in; next
+is its exit criterion, a non-trivial program that calls a C library.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -499,7 +506,8 @@ will confidently write C++ wherever the two differ.
   `for (auto& x : v)` and `const T&` parameters work; today both are errors that point to a
   copy, which is cheap for vectors.
 - A clear message when the stack runs out, from deep recursion or a large local array,
-  in place of a plain crash. It needs a signal handler on its own stack.
+  in place of a plain crash, in plain builds as debug builds already have. It needs a signal
+  handler on its own stack.
 - Event loop and threads: one loop per thread versus a work-stealing scheduler. Decided
   in Phase 5 with real workloads.
 - Package manager, after v1.

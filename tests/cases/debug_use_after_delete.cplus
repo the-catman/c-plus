@@ -1,0 +1,22 @@
+// A debug build stops at memory used after delete, and says where it was used, freed
+// and allocated. Output printed before that is kept.
+// flags: --debug
+[[allow(new_delete)]];
+
+int read(int* p) {
+    return *p;
+}
+
+int main() {
+    println("before");
+    int* p = new int(5);
+    delete p;
+    println("{}", read(p));
+    return 0;
+}
+// expect: before
+// trap: memory was used after it was freed
+// trap: heap-use-after-free
+// trap: debug_use_after_delete.cplus:7:
+// trap: debug_use_after_delete.cplus:13:
+// trap: debug_use_after_delete.cplus:12:

@@ -1,0 +1,17 @@
+// A debug build stops at a pointer that is not a multiple of what its type needs, which a
+// cast from a char* can make.
+// flags: --debug
+[[allow(new_delete)]];
+
+int main() {
+    char* bytes = new char[16];
+    int* aligned = (int*)bytes;
+    println("{}", *aligned);
+    int* p = (int*)(bytes + 1);
+    println("{}", *p);
+    delete[] bytes;
+    return 0;
+}
+// expect: 0
+// trap: misaligned pointer: '*' was used on a pointer to 'int' whose address is not a multiple of 4
+// trap: debug_misaligned.cplus:11:

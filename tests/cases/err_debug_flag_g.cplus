@@ -1,0 +1,5 @@
+// flags: -g
+int main() {
+    return 0;
+}
+// error: '-g' is not an option of cplus; write --debug

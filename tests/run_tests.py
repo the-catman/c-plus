@@ -18,16 +18,23 @@ in its comments. A test can use these, one per line, anywhere in the file:
   // link-c: <file>     a C file under tests/c, built with the C compiler ($CC or cc)
                        and linked into the program
 
-A program that runs is built twice, without and with -O, and must behave the same
-both times. It runs with CPLUS_CHECK_LEAKS=1, so a class object that is never freed,
-or one used after it was freed, fails the test.
+A program that runs is built four ways, plain and as a debug build, each without and
+with -O, and must behave the same every time. It runs with CPLUS_CHECK_LEAKS=1, so a
+class object that is never freed, or one used after it was freed, fails the test. A
+debug build runs without that setting, since it reports leaks by itself. Debug builds
+need the sanitizer libraries, such as libclang-rt-18-dev on Debian or Ubuntu. Programs
+also get CPLUS_TEST_VARIABLE=1, for tests that read an environment variable.
+
+Tests run at the same time, one per processor, and print in order.
 
 The runner also checks that every spec anchor in compiler/SpecRefs.h is a real
 heading in docs/SPEC.md, so diagnostics never point at a missing section.
 """
+import concurrent.futures
 import os
 import pathlib
 import re
+import resource
 import subprocess
 import sys
 import tempfile
@@ -89,7 +96,7 @@ def run_case(cplus, path, workdir):
         if missing:
             return "compile errors did not contain: " + "; ".join(missing) + "\n--- stderr ---\n" + build.stderr
         return None
-    for flags in ([], ["-O"]):
+    for flags in ([], ["-O"], ["--debug"], ["--debug", "-O"]):
         problem = run_program(cplus, rel, workdir / path.stem, [*extra, *flags], expect, traps, want_exit, warnings,
                               stderr)
         if problem:
@@ -107,7 +114,9 @@ def run_program(cplus, rel, exe, flags, expect, traps, want_exit, warnings, stde
     missing = [w for w in warnings if w not in build.stderr]
     if missing:
         return "warnings did not contain: " + "; ".join(missing) + "\n--- stderr ---\n" + build.stderr
-    env = dict(os.environ, CPLUS_CHECK_LEAKS="1")
+    env = dict(os.environ, CPLUS_CHECK_LEAKS="1", CPLUS_TEST_VARIABLE="1")
+    if "--debug" in flags:
+        del env["CPLUS_CHECK_LEAKS"]
     try:
         run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10, env=env)
     except subprocess.TimeoutExpired:
@@ -139,18 +148,25 @@ def main():
         return 2
     cplus = str(pathlib.Path(sys.argv[1]).resolve())
     name_filter = sys.argv[2] if len(sys.argv) > 2 else ""
+    # A runtime error aborts the program, and a crash reporter can take a second over each
+    # one. Linux starts none when this limit is exactly 1 byte; 0 does not stop it.
+    resource.setrlimit(resource.RLIMIT_CORE, (1, resource.getrlimit(resource.RLIMIT_CORE)[1]))
     ok = check_spec_anchors()
     passed = failed = 0
+    paths = [p for p in sorted(CASES.glob("*.cplus")) if name_filter in p.name]
     with tempfile.TemporaryDirectory(prefix="cplus-tests-") as tmp:
-        for path in sorted(CASES.glob("*.cplus")):
-            if name_filter not in path.name:
-                continue
-            problem = run_case(cplus, path, pathlib.Path(tmp))
-            if problem:
-                failed += 1
-                print(f"FAIL {path.relative_to(ROOT)}\n  " + problem.replace("\n", "\n  "))
-            else:
-                passed += 1
+        def run_in_own_folder(path):
+            workdir = pathlib.Path(tmp) / path.stem
+            workdir.mkdir()
+            return run_case(cplus, path, workdir)
+
+        with concurrent.futures.ThreadPoolExecutor(os.cpu_count()) as pool:
+            for path, problem in zip(paths, pool.map(run_in_own_folder, paths)):
+                if problem:
+                    failed += 1
+                    print(f"FAIL {path.relative_to(ROOT)}\n  " + problem.replace("\n", "\n  "))
+                else:
+                    passed += 1
     print(f"{passed} passed, {failed} failed")
     return 0 if ok and failed == 0 else 1
 

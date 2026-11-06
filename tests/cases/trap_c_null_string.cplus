@@ -1,7 +1,7 @@
 extern "C" string getenv(string name);
 
 int main() {
-    println("{}", getenv("CPLUS_CHECK_LEAKS"));
+    println("{}", getenv("CPLUS_TEST_VARIABLE"));
     println("{}", getenv("CPLUS_VARIABLE_THAT_IS_NOT_SET"));
     return 0;
 }

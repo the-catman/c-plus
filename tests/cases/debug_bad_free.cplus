@@ -1,0 +1,13 @@
+// Memory from new is not freed with C's free. A debug build stops the program.
+// flags: --debug
+[[allow(new_delete)]];
+extern "C" void free(void* p);
+
+int main() {
+    int* p = new int(1);
+    free(p);
+    return 0;
+}
+// trap: `free` was given a pointer that did not come from `malloc`
+// trap: bad-free
+// trap: debug_bad_free.cplus:8:

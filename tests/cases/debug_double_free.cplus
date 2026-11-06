@@ -1,0 +1,18 @@
+// A debug build stops when C's free is given the same memory twice.
+// flags: --debug
+extern "C" void* malloc(long n);
+extern "C" void free(void* p);
+extern "C" char* strcpy(char* to, string from);
+
+int main() {
+    char* text = (char*)malloc(8);
+    strcpy(text, "hi");
+    println("{}", string(text));
+    free(text);
+    free(text);
+    return 0;
+}
+// expect: hi
+// trap: memory was freed twice
+// trap: double-free
+// trap: debug_double_free.cplus:12:

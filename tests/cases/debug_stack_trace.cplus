@@ -1,0 +1,18 @@
+// In a debug build, every runtime error also prints the functions that led to it.
+// flags: --debug
+int inner(int n) {
+    return 10 / n;
+}
+
+int outer(int n) {
+    return inner(n - 1);
+}
+
+int main() {
+    println("{}", outer(1));
+    return 0;
+}
+// trap: division by zero
+// trap: debug_stack_trace.cplus:4:
+// trap: debug_stack_trace.cplus:8:
+// trap: debug_stack_trace.cplus:12:

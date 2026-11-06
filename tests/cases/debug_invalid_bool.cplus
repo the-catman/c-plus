@@ -1,0 +1,13 @@
+// A bool must be stored as 0 or 1. A debug build stops at any other byte read as a bool,
+// which a cast from a char* can do.
+// flags: --debug
+int main() {
+    array<char, 2> bytes = {char(1), char(2)};
+    bool* flags = (bool*)bytes.data();
+    println("{}", flags[0]);
+    println("{}", flags[1]);
+    return 0;
+}
+// expect: true
+// trap: invalid bool: a 'bool' was read from a byte that is neither 0 nor 1
+// trap: debug_invalid_bool.cplus:8:

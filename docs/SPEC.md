@@ -713,7 +713,8 @@ if (p) println("{}", *p);       // a pointer is true when it is not null
 - **Following a null pointer stops the program** with file:line, whether by `*`, `->` or
   `[ ]`. C++ leaves it undefined.
 - **Indexing and arithmetic.** `p[i]` is `*(p + i)`, with an `int` or `long` index. It is
-  not checked, since a pointer does not know how much memory follows it. `p + n`,
+  not checked, since a pointer does not know how much memory follows it, though a
+  [debug build](#debug-builds) catches most overruns. `p + n`,
   `p - n`, `p += n`, `p -= n`, `++` and `--` move by whole elements, and `p - q` is the
   number of elements between two pointers to the same type, as a `long`. None of these
   work on a `void*`.
@@ -739,8 +740,8 @@ if (p) println("{}", *p);       // a pointer is true when it is not null
   to another object.
 - **A pointer is not checked for lifetime.** It does not keep alive what it points to, so
   following a pointer to a local variable whose function has returned, or to memory that
-  has been freed, is undefined, as in C++. A pointer to a class variable does not count
-  as a reference to the object.
+  has been freed, is undefined, as in C++. A [debug build](#debug-builds) catches most of
+  these. A pointer to a class variable does not count as a reference to the object.
 - **Memory from `malloc` holds no values yet.** Numbers, chars, bools and pointers can
   be stored into it. A string, vector, class reference or optional, or a struct holding
   one, cannot: assigning releases the old value first, and there is none, so this is
@@ -800,7 +801,7 @@ delete[] many;
   `new T`, stop the program with file:line; C++ leaves them undefined. Deleting memory
   twice, or memory that did not come from `new`, is undefined, as in C++, but `delete`
   looks for a mark that `new` leaves, so it nearly always stops the program too. Using
-  memory after it is deleted is not checked.
+  memory after it is deleted is not checked, except in a [debug build](#debug-builds).
 - `delete` cannot free a `void*`, since C+ would not know what it holds, or a C type known
   [only by name](#c-types-known-by-name). Memory from C's `malloc` is freed with `free`.
 - `CPLUS_CHECK_LEAKS=1` reports how many allocations from `new` were never deleted (see
@@ -1325,7 +1326,68 @@ Raw [pointers](#pointers) are not counted: a pointer does not keep alive what it
 to. Memory from [`new`](#new-and-delete) stays until `delete` frees it.
 
 Planned: `unique<T>` for a single owner with no count, and `local<T>` for non-atomic
-sharing that cannot cross threads. Debug builds will run with AddressSanitizer and UBSan.
+sharing that cannot cross threads.
+
+### Debug builds
+
+`--debug` on `cplus build` or `cplus run` makes a debug build. It takes about twice the
+time and more memory, and stops the program at memory errors that a plain build lets
+pass, so use it while looking for a bug or testing code that uses pointers.
+
+```
+cplus run app.cplus --debug
+```
+
+```
+fatal error: memory was used after it was freed
+  = help: the traces below show where it was used, where it was freed, and where it was allocated; free it after its last use
+==73189==ERROR: AddressSanitizer: heap-use-after-free on address 0x503000000050 ...
+READ of size 4 at 0x503000000050 thread T0
+    #0 0x62362444481c in cplus.use app.cplus:4:12
+    #1 0x623624444921 in cplus.main app.cplus:11:19
+    ...
+```
+
+The first lines say what went wrong. Each trace after them lists the functions that led
+there, innermost first, with file:line:column. `cplus.` comes before the name of every C+
+function. Code that is fine behaves as in a plain build, and every other kind of runtime
+error prints its usual message, followed by a trace.
+
+What a debug build adds:
+
+- **[AddressSanitizer](https://clang.llvm.org/docs/AddressSanitizer.html)** stops the
+  program when a pointer goes outside memory from `new` or `malloc` or a local variable or
+  array, when memory is used after it is freed, when a pointer to a local variable is used
+  after its function returned, and when `free` is misused. This covers code in C libraries
+  only where it calls `malloc`, `free` and functions like `strlen`, unless the library was
+  also built with `-fsanitize=address`.
+- **Misaligned pointers.** `*p`, `p->x` and `p[i]` stop the program when the address is not
+  a multiple of what the type needs, which a cast from a `char*` can cause.
+- **Invalid bools.** Reading a `bool` through a pointer, or as a field or element, stops the
+  program when the byte is not 0 or 1. A whole struct copied through a pointer is not looked
+  inside until one of its fields is read.
+- **Running out of stack** prints a message and a trace instead of a plain crash.
+- **Leak reports.** Leaks are [reported at exit](#memory-model) without setting
+  `CPLUS_CHECK_LEAKS=1`. `CPLUS_CHECK_LEAKS=0` turns the report off.
+
+Everything else that is undefined in C and C++, such as integer overflow and shifting too
+far, already stops the program in every build, so a debug build has nothing to add.
+
+What it cannot catch:
+
+- **`-O` can hide errors.** `--debug` works with `-O`, but the optimizer can remove a bad
+  read or inline a function so that its local variable stays alive, before anything checks
+  it. Leave `-O` off when looking for a memory bug.
+- **A far-off pointer.** A pointer that lands inside other valid memory is not noticed,
+  such as `p[1000]` reaching another allocation.
+- **A local variable whose block has ended,** while its function is still running. Only the
+  end of the function is noticed.
+- **Reading memory that was never set,** such as from `malloc`.
+
+Debug builds need the sanitizer libraries for the C compiler, such as `libclang-rt-18-dev`
+on Debian or Ubuntu. Without them, `--debug` says so. The stack traces need `llvm-symbolizer`
+to show lines, which comes with LLVM. When the compiler was built with gcc as its C compiler,
+traces name the C+ functions but not their lines.
 
 ## Generics
 
@@ -1373,6 +1435,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `array<T, N>`: checked `a[i]`, `size`, `empty`, `front`, `back`, `fill`, `data`, range-based `for`, `==`, pointers to elements, `string(a)` | implemented |
 | `new`, `new[]`, `delete`, `delete[]`, with a warning; `[[allow(new_delete)]]`, `-Wno-new-delete` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
+| Debug builds with `--debug`: AddressSanitizer, stack traces, misaligned pointer and invalid bool checks, leak report | implemented |
 | Imports and multi-file programs | planned |
 | Unsigned types | planned |
 | Format options for width, alignment and `{:x}`; math constants | planned |

@@ -6,12 +6,81 @@
 #include <stdlib.h>
 #include <string.h>
 
+// This file is built twice. Programs built with --debug link the copy built with
+// CPLUS_DEBUG_RUNTIME, under AddressSanitizer, which frees memory for real so that
+// AddressSanitizer can catch a later use of it.
+#ifdef CPLUS_DEBUG_RUNTIME
+void __sanitizer_print_stack_trace(void);
+const char* __asan_get_report_description(void);
+
+// Read by AddressSanitizer as the program starts. Leaks are left to report_leaks below.
+// Running out of memory is left to the same message as in other builds.
+const char* __asan_default_options(void) {
+    return "detect_leaks=0:print_legend=0:allocator_may_return_null=1"
+#ifdef CPLUS_SYMBOLIZER
+           ":external_symbolizer_path='" CPLUS_SYMBOLIZER "'"
+#endif
+        ;
+}
+
+// Called by AddressSanitizer just before its report, which would otherwise end the
+// program with the output so far unwritten. Says what the report means in C+'s terms.
+__attribute__((no_sanitize("address"))) void __asan_on_error(void) {
+    static const struct {
+        const char* report;
+        const char* message;
+        const char* help;
+    } meanings[] = {
+        {"heap-use-after-free", "memory was used after it was freed",
+         "the traces below show where it was used, where it was freed, and where it was allocated; free it after its "
+         "last use"},
+        {"heap-buffer-overflow", "a pointer went outside the memory it was allocated with",
+         "the first trace below shows where, and the last where the memory was allocated; check the index and the size"},
+        {"stack-buffer", "a pointer went outside a local variable or array",
+         "the first trace below shows where; check the index, or use `a[i]` on the array, which is checked"},
+        {"stack-use-after-return", "a pointer to a local variable was used after its function returned",
+         "the first trace below shows where; return the value itself, or keep it in memory from `new`"},
+        {"stack-overflow", "the program ran out of stack",
+         "if the trace below repeats a function, its recursion may never stop; a very large local array can go in a "
+         "vector instead"},
+        {"double-free", "memory was freed twice", "the traces below show both places; free it only once"},
+        {"bad-free", "`free` was given a pointer that did not come from `malloc`",
+         "memory from `new` is freed with `delete`, and a local variable is not freed at all"},
+        {"use-after-poison", "a pointer went before the start of memory from `new`",
+         "the first trace below shows where; check the index"},
+    };
+    const char* report = __asan_get_report_description();
+    const char* message = "the program used memory it does not own";
+    const char* help = "the first trace below shows where";
+    for (size_t i = 0; report && i < sizeof meanings / sizeof meanings[0]; ++i)
+        if (strstr(report, meanings[i].report)) {
+            message = meanings[i].message;
+            help = meanings[i].help;
+            break;
+        }
+    fflush(stdout);
+    fprintf(stderr, "fatal error: %s\n  = help: %s\n", message, help);
+}
+#endif
+
+// Ends the program once a fatal error has been printed. A debug build adds a stack trace,
+// and exits as an AddressSanitizer report does, without waking a crash reporter. A shell
+// sees 134 either way.
+_Noreturn static void stop_program(void) {
+#ifdef CPLUS_DEBUG_RUNTIME
+    __sanitizer_print_stack_trace();
+    _Exit(134);
+#else
+    abort();
+#endif
+}
+
 // Called when a runtime check fails (integer overflow, division by zero, ...).
 // Output printed so far is flushed first so the error appears after it.
 _Noreturn void cplus_trap(const char* message, const char* file, int32_t line, int32_t column) {
     fflush(stdout);
     fprintf(stderr, "fatal error: %s\n  --> %s:%" PRId32 ":%" PRId32 "\n", message, file, line, column);
-    abort();
+    stop_program();
 }
 
 // Called when an index is outside a vector.
@@ -53,14 +122,21 @@ _Noreturn void cplus_trap_char(int64_t value, const char* what, const char* file
 // Set CPLUS_CHECK_LEAKS=1 to report objects that are never freed when the program
 // exits. Freed objects are then kept and marked, so a later use of one is caught
 // instead of reading reused memory. The test suite runs every program this way.
+// A debug build reports leaks unless CPLUS_CHECK_LEAKS=0, and frees memory for real.
 static int64_t live_objects;
 static int check_leaks = -1;
 static const int64_t freed_mark = INT64_MIN;
 
+#ifdef CPLUS_DEBUG_RUNTIME
+enum { leak_check_default = 1, keep_freed_memory = 0 };
+#else
+enum { leak_check_default = 0, keep_freed_memory = 1 };
+#endif
+
 static int leak_checking(void) {
     if (check_leaks < 0) {
         const char* value = getenv("CPLUS_CHECK_LEAKS");
-        check_leaks = value && *value && strcmp(value, "0") != 0;
+        check_leaks = value && *value ? strcmp(value, "0") != 0 : leak_check_default;
     }
     return check_leaks;
 }
@@ -68,7 +144,7 @@ static int leak_checking(void) {
 _Noreturn static void bad_count(void) {
     fflush(stdout);
     fputs("internal error: an object was used after it was freed; this is a bug in the C+ compiler\n", stderr);
-    abort();
+    stop_program();
 }
 
 void* cplus_alloc(int64_t size) {
@@ -76,7 +152,7 @@ void* cplus_alloc(int64_t size) {
     if (!object) {
         fflush(stdout);
         fputs("fatal error: out of memory\n", stderr);
-        abort();
+        stop_program();
     }
     *object = 1;
     __atomic_add_fetch(&live_objects, 1, __ATOMIC_RELAXED);
@@ -85,7 +161,7 @@ void* cplus_alloc(int64_t size) {
 
 void cplus_free(void* object) {
     __atomic_sub_fetch(&live_objects, 1, __ATOMIC_RELAXED);
-    if (leak_checking()) *(int64_t*)object = freed_mark;
+    if (keep_freed_memory && leak_checking()) *(int64_t*)object = freed_mark;
     else free(object);
 }
 
@@ -109,7 +185,7 @@ int32_t cplus_release(void* object) {
 _Noreturn static void out_of_memory(void) {
     fflush(stdout);
     fputs("fatal error: out of memory\n", stderr);
-    abort();
+    stop_program();
 }
 
 // ---- new and delete --------------------------------------------------------
@@ -129,6 +205,17 @@ static const int64_t new_array = 0x2179617272612b43;    // "C+array!"
 static const int64_t new_deleted = 0x2165746c65642b43;  // "C+delte!"
 static int64_t live_new_blocks;
 
+// In a debug build the header is off limits to the program, so `a[-1]` is caught too.
+#ifdef CPLUS_DEBUG_RUNTIME
+void __asan_poison_memory_region(const volatile void* address, size_t size);
+void __asan_unpoison_memory_region(const volatile void* address, size_t size);
+#define HIDE_NEW_HEADER(h) __asan_poison_memory_region(h, sizeof *(h))
+#define SHOW_NEW_HEADER(h) __asan_unpoison_memory_region(h, sizeof *(h))
+#else
+#define HIDE_NEW_HEADER(h) ((void)0)
+#define SHOW_NEW_HEADER(h) ((void)0)
+#endif
+
 void* cplus_new(int64_t elem_size, int64_t count, int32_t is_array, const char* file, int32_t line, int32_t column) {
     if (count < 0) {
         char message[128];
@@ -141,12 +228,15 @@ void* cplus_new(int64_t elem_size, int64_t count, int32_t is_array, const char* 
     if (!h) out_of_memory();
     h->count = count;
     h->kind = is_array ? new_array : new_one;
+    HIDE_NEW_HEADER(h);
     __atomic_add_fetch(&live_new_blocks, 1, __ATOMIC_RELAXED);
     return h + 1;
 }
 
 // Checks that `p`, which is not null, came from the same form of new, and returns the
-// number of elements it holds.
+// number of elements it holds. The header it reads may be anything, or already freed, so
+// AddressSanitizer does not stop this function: it says what went wrong itself.
+__attribute__((no_sanitize("address")))
 int64_t cplus_delete_check(void* p, int32_t is_array, const char* file, int32_t line, int32_t column) {
     cplus_new_header* h = (cplus_new_header*)p - 1;
     if (h->kind == (is_array ? new_array : new_one)) return h->count;
@@ -166,9 +256,10 @@ int64_t cplus_delete_check(void* p, int32_t is_array, const char* file, int32_t 
 
 void cplus_delete_free(void* p) {
     cplus_new_header* h = (cplus_new_header*)p - 1;
+    SHOW_NEW_HEADER(h);
     h->kind = new_deleted;
     __atomic_sub_fetch(&live_new_blocks, 1, __ATOMIC_RELAXED);
-    if (!leak_checking()) free(h);
+    if (!(keep_freed_memory && leak_checking())) free(h);
 }
 
 // ---- Strings ---------------------------------------------------------------

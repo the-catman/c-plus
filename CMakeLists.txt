@@ -25,7 +25,33 @@ message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION}")
 # Runtime linked into every C+ program.
 add_library(cplusrt STATIC runtime/runtime.c)
 set_target_properties(cplusrt PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
-target_compile_options(cplusrt PRIVATE -Wall -Wextra -O2)
+# Programs carry the runtime's debug information, which must not name this machine's folders.
+set(CPLUS_RUNTIME_PATHS -ffile-prefix-map=${CMAKE_SOURCE_DIR}=/cplus)
+target_compile_options(cplusrt PRIVATE -Wall -Wextra -O2 ${CPLUS_RUNTIME_PATHS})
+
+# The runtime for programs built with --debug, if the C compiler has AddressSanitizer.
+include(CheckCSourceCompiles)
+set(CMAKE_REQUIRED_FLAGS -fsanitize=address)
+set(CMAKE_REQUIRED_LINK_OPTIONS -fsanitize=address)
+check_c_source_compiles("int main(void) { return 0; }" CPLUS_HAVE_ASAN)
+unset(CMAKE_REQUIRED_FLAGS)
+unset(CMAKE_REQUIRED_LINK_OPTIONS)
+set(CPLUS_RUNTIME_LIB_DEBUG "")
+if(CPLUS_HAVE_ASAN)
+  add_library(cplusrt_debug STATIC runtime/runtime.c)
+  set_target_properties(cplusrt_debug PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
+  target_compile_options(cplusrt_debug PRIVATE -Wall -Wextra -O1 -fsanitize=address
+    -fno-omit-frame-pointer -fno-optimize-sibling-calls ${CPLUS_RUNTIME_PATHS})
+  target_compile_definitions(cplusrt_debug PRIVATE CPLUS_DEBUG_RUNTIME)
+  # Turns the addresses in a stack trace into files and lines.
+  find_program(CPLUS_SYMBOLIZER llvm-symbolizer HINTS ${LLVM_TOOLS_BINARY_DIR})
+  if(CPLUS_SYMBOLIZER)
+    target_compile_definitions(cplusrt_debug PRIVATE CPLUS_SYMBOLIZER="${CPLUS_SYMBOLIZER}")
+  endif()
+  set(CPLUS_RUNTIME_LIB_DEBUG "$<TARGET_FILE:cplusrt_debug>")
+else()
+  message(STATUS "No AddressSanitizer in the C compiler: cplus --debug will report that it is missing")
+endif()
 
 add_executable(cplus
   compiler/main.cpp
@@ -40,10 +66,14 @@ target_compile_definitions(cplus PRIVATE ${LLVM_DEFINITIONS_LIST}
   CPLUS_VERSION="${PROJECT_VERSION}"
   CPLUS_LLVM_VERSION="${LLVM_PACKAGE_VERSION}"
   CPLUS_RUNTIME_LIB="$<TARGET_FILE:cplusrt>"
+  CPLUS_RUNTIME_LIB_DEBUG="${CPLUS_RUNTIME_LIB_DEBUG}"
   CPLUS_LINKER="${CMAKE_C_COMPILER}")
 target_compile_options(cplus PRIVATE -Wall -Wextra)
 target_link_libraries(cplus PRIVATE LLVM)
 add_dependencies(cplus cplusrt)
+if(CPLUS_HAVE_ASAN)
+  add_dependencies(cplus cplusrt_debug)
+endif()
 
 enable_testing()
 add_test(NAME language-tests

@@ -39,7 +39,7 @@ long square(long n) { return n * n; }
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them |
 | Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(x)` for any number |
 | Optionals | `User? u = find(name);` holds a `User` or `null`; `int? n;` starts out null. `u?.name` is null when `u` is, `u?.name ?? "nobody"` gives a fallback, `if (auto x = u)` runs with the `User` inside. `has_value()`, `value()`, `value_or(x)`, `u == null` |
-| Pointers | `int* p = &x;`, `*p = 5`, `p->x`, `p[i]` (unchecked), `p + n`, `p - q`, `p++`, `const int*`, `int* const`, `void*`, `int**`, `null`, `if (p)`. Following a null pointer **stops the program**. `sizeof(T)`, `sizeof x` (a `long`). `string(p)` copies a `char*`'s text. A pointer prints as `0x...` |
+| Pointers | `int* p = &x;`, `*p = 5`, `p->x`, `p[i]` (unchecked), `p + n`, `p - q`, `p++`, `const int*`, `int* const`, `void*`, `int**`, `null`, `if (p)`. Following a null pointer **stops the program**. `sizeof(T)`, `sizeof x` (a `long`). `string(p)` copies a `char*`'s text. A pointer prints as `0x...`. Run with `--debug` to catch overruns and use after free |
 | Manual memory | `int* p = new int(5); delete p;`, `new Point{1, 2}`, `int* a = new int[n]; delete[] a;`. Values start as their default, and each `new`/`delete` **warns**. Turn it off with `[[allow(new_delete)]]` before a function, `[[allow(new_delete)]];` at the top of the file, or `-Wno-new-delete`. The wrong form of delete **stops the program** |
 | C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`, `void* malloc(long n);`, `double frexp(double x, int* e);`. Strings are converted at each call. Link other libraries with `-lname` |
 | C types by name | `extern "C" struct FILE;`, then `FILE* f = fopen(...)`. Only pointers to it can be used |
@@ -91,6 +91,7 @@ long square(long n) { return n * n; }
 | `new User("a")`, `delete u` on a class | `User("a")`; the object is freed automatically. `new` is for other values: `new Point{1, 2}` |
 | `int* p = new int;` then read `*p` | it is 0: `new` always gives a default value |
 | `#pragma`, `[[nodiscard]]`, `[[maybe_unused]]` | the one attribute is `[[allow(new_delete)]]` |
+| `-g`, `-fsanitize=address,undefined`, valgrind for a memory bug | `cplus run app.cplus --debug`: memory errors stop the program with a stack trace, and leaks are reported at exit |
 | `new (buffer) T`, `new int[3]{1, 2, 3}` | no placement new; set array elements afterward, in a loop |
 | `this->x`, `u->name` | `this.x`, `u.name`; `->` is only for pointers, `T*` |
 | `int Rect::area() { ... }` outside the type | write the method body inside the type |
@@ -155,6 +156,7 @@ cplus run file.cplus        # build and run
 cplus build file.cplus -o app [-O] [--emit-llvm]
 cplus build app.cplus -lsqlite3 -L dir   # link C libraries, as with a C compiler
 cplus build app.cplus -Wno-new-delete    # no warning for new and delete
+cplus run app.cplus --debug              # slower, but catches memory errors, with a stack trace
 ```
 
 Compiler errors say what is wrong, how to fix it, and which spec section explains the rule.

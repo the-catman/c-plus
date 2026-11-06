@@ -57,8 +57,8 @@ int main() {
     unsetenv("CPLUS_TEST_VALUE");
     println("{} {}", getenv("CPLUS_TEST_VALUE"), getenv("CPLUS_TEST_VALUE") ?? "unset");
     // expect: null unset
-    if (auto v = getenv("CPLUS_CHECK_LEAKS")) println("leak checks: {}", v);
-    // expect: leak checks: 1
+    if (auto v = getenv("CPLUS_TEST_VARIABLE")) println("variable: {}", v);
+    // expect: variable: 1
 
     // A null `string?` is passed as NULL. LC_ALL is 6 on Linux.
     println("{}", setlocale(6, null));

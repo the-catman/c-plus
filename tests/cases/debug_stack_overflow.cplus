@@ -1,0 +1,19 @@
+// A debug build says so when the stack runs out, and shows the function that repeats.
+// Giving C the pointer keeps -O from turning the recursion into a loop.
+// flags: --debug
+extern "C" long time(long* out);
+
+long forever(long n) {
+    array<long, 64> a;
+    time(a.data());
+    a[1] = n;
+    return forever(n + 1) + a[1];
+}
+
+int main() {
+    println("{}", forever(0));
+    return 0;
+}
+// trap: the program ran out of stack
+// trap: stack-overflow
+// trap: debug_stack_overflow.cplus:10:
