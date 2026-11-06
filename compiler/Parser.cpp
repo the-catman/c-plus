@@ -1084,6 +1084,12 @@ void Parser::failStd(Loc loc, const Token& name) {
         fail(loc, "C+ has no std:: namespace", "math constants are planned. Until then, `acos(-1)` is pi", spec::Math);
     if (n == "weak_ptr")
         fail(loc, "C+ has no std:: namespace", "write `weak<Node>`, which works like std::weak_ptr", spec::Weak);
+    if (n == "unique_ptr")
+        fail(loc, "C+ has no std:: namespace", "write `unique<Node>`, which works like std::unique_ptr, but is never empty", spec::Unique);
+    if (n == "make_unique")
+        fail(loc, "C+ has no std:: namespace", "write `unique<Node>(...)`, which builds a new Node", spec::Unique);
+    if (n == "move")
+        fail(loc, "C+ has no std:: namespace", "built-ins need no prefix: write `move(x)`", spec::Unique);
     if (n == "shared_ptr" || n == "make_shared")
         fail(loc, "C+ has no std:: namespace",
              "a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`", spec::Classes);
@@ -1100,6 +1106,8 @@ bool Parser::isTypeStart(size_t ahead) const {
                     return isTypeAt(ahead + 2) || peek(ahead + 2).kind == Tok::KwAuto ||
                            peek(ahead + 2).kind == Tok::Greater ||
                            (peek(ahead + 2).kind == Tok::Ident && peek(ahead + 3).kind == Tok::Comma);
+                // So is `unique`: `unique < n` is a comparison.
+                if (peek(ahead).text == "unique") return isTypeAt(ahead + 2);
                 return peek(ahead).text == "vector" || peek(ahead).text == "hashmap" || classTemplate(peek(ahead).text);
             }
             // `Box b`: reports that its arguments are missing.
@@ -1146,7 +1154,7 @@ bool Parser::isTypeAt(size_t ahead) const {
         case Tok::Ident:
             if (isTypeName(t)) return true;
             if (peek(ahead + 1).kind != Tok::Less) return false;
-            return t.text == "vector" || (t.text == "array" && isTypeAt(ahead + 2)) || classTemplate(t.text);
+            return t.text == "vector" || ((t.text == "array" || t.text == "unique") && isTypeAt(ahead + 2)) || classTemplate(t.text);
         default: return false;
     }
 }
@@ -1211,6 +1219,8 @@ void Parser::checkUnknownType() {
     if (check(Tok::Ident) && peek(1).kind == Tok::Less) {
         if (peek().text == "weak_ptr")
             fail(peek().loc, "C+ has no weak_ptr", "write `weak<Node>`, which works the same way", spec::Weak);
+        if (peek().text == "unique_ptr")
+            fail(peek().loc, "C+ has no unique_ptr", "write `unique<Node>`, which works the same way, but is never empty", spec::Unique);
         if (peek().text == "shared_ptr")
             fail(peek().loc, "C+ has no shared_ptr",
                  "a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`", spec::Classes);
@@ -1377,6 +1387,22 @@ const Type* Parser::parseBaseType(Loc& loc) {
                 return made;
             }
             if (isTypeName(t)) return &prog_->findStruct(t.text)->type;
+            if (t.text == "unique" && check(Tok::Less)) {
+                advance();
+                Loc inner;
+                const Type* target = parseType(inner);
+                expectCloseAngle("to close unique<...>");
+                if (!target->isClass() && !dryRun_) {
+                    std::string name = target->name;
+                    fail(inner, "a unique reference owns a class object, but '" + name + "' is not a class",
+                         target->isOptional() && target->elem->isClass()
+                             ? "for one that can be empty, write `unique<" + std::string(target->elem->name) + ">?`"
+                             : "a struct or a number is a value, which already has one owner: the variable that holds it",
+                         spec::Unique);
+                }
+                loc.len = prev().loc.col + prev().loc.len - t.loc.col;
+                return Type::uniqueOf(target);
+            }
             if (t.text == "vector" && check(Tok::Less)) {
                 Loc start = t.loc;
                 advance();
@@ -2776,6 +2802,24 @@ ExprPtr Parser::parsePrimary() {
                 return call;
             }
             if (isTypeName(t) && match(Tok::LBrace)) return parseInitList(t.loc, &prog_->findStruct(t.text)->type);
+            if (t.text == "make_unique" && check(Tok::Less))
+                fail(t.loc, "C+ has no make_unique", "write `unique<Node>(...)`, which builds a new Node", spec::Unique);
+            if (t.text == "unique" && check(Tok::Less) && isTypeAt(1)) {  // `unique<Node>(args)`
+                --pos_;  // back to `unique`, to read the whole type
+                Loc loc;
+                const Type* ty = parseBaseType(loc);
+                if (match(Tok::LBrace)) return parseInitList(loc, ty);
+                expect(Tok::LParen, "or '{' after '" + std::string(ty->name) + "'");
+                std::vector<ExprPtr> args;
+                if (!check(Tok::RParen)) {
+                    do args.push_back(parseExpr());
+                    while (match(Tok::Comma));
+                }
+                expect(Tok::RParen, "to close the argument list of '" + std::string(ty->name) + "'");
+                auto call = std::make_unique<CallExpr>(loc, ty->elem->name, std::move(args));
+                call->uniqueType = ty;
+                return call;
+            }
             if (t.text == "vector" && check(Tok::Less)) {
                 --pos_;  // back to `vector`, to read the whole type
                 Loc loc;

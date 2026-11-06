@@ -1,0 +1,13 @@
+// Each of these would make a second owner of the object, so each is its own test.
+class Node {
+public:
+    int n = 1;
+};
+unique<Node> make() { return unique<Node>(); }
+int main() {
+    unique<Node>? o = null;
+    if (auto x = o) println("{}", x.n);
+    return 0;
+}
+// error: 'o' cannot be copied, since a 'unique<Node>?' holds what has one owner
+// error: write `move(o)` to hand it over

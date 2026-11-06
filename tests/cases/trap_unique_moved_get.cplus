@@ -1,0 +1,16 @@
+class Node {
+public:
+    int n = 1;
+};
+struct Holder {
+    unique<Node> held;
+};
+int main() {
+    Holder h = {unique<Node>()};
+    unique<Node> taken = move(h.held);
+    println("{}", taken.n);
+    Node lent = h.held.get();
+    return 0;
+}
+// expect: 1
+// trap: this 'unique<Node>' has been moved away

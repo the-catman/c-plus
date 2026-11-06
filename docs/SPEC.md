@@ -1665,8 +1665,7 @@ and any memory from `new` that was never deleted. The test suite runs every prog
 Raw [pointers](#pointers) are not counted: a pointer does not keep alive what it points
 to. Memory from [`new`](#new-and-delete) stays until `delete` frees it.
 
-Planned: `unique<T>` for a single owner with no count, and `local<T>` for non-atomic
-sharing that cannot cross threads.
+Planned: `local<T>` for non-atomic sharing that cannot cross threads.
 
 ### Weak references
 
@@ -1715,6 +1714,43 @@ Each object counts its weak references. When the last strong reference goes away
 destructor runs and its fields are released, freeing what they hold. The object's own memory stays
 until the last weak reference goes too, as with `std::make_shared`. An object has room for about 2 billion
 strong and 1 billion weak references. Going over that stops the program.
+
+### Unique references
+
+`unique<Node>` is the one owner of a class object, like C++'s `std::unique_ptr`, except that it is never empty.
+It cannot be copied, only handed over with `move`, and the object goes away with its owner.
+
+```cpp
+unique<Node> a = unique<Node>("first");     // builds a new Node, with these constructor arguments
+a.name = "changed";                         // used directly, with '.'
+println("{} {}", a.name, a);
+unique<Node> b = move(a);                   // b owns it now, and a has no value
+a.rename("x");                              // error: 'a' has no value here, since it may have been moved away
+a = unique<Node>("second");                 // a can be used again
+take(move(b));                              // handed to the function, which frees it when it returns
+lend(a.get());                              // `void lend(Node n)`: a keeps it
+```
+
+- **`move(x)`** gives x's value away, and leaves a variable with no value until it gets a new one. The compiler follows this
+  through branches, loops, `&&` and try blocks. A value moved in a loop needs a new value before the loop goes round. `return a;` on a
+  local variable moves it by itself, as in C++. `move` works on a value of any type, so generic code can use it for every `T`.
+- **Fields and elements** are not followed by the compiler. `move(o.child)` or `move(v[0])` leaves that place empty, and using it then
+  stops the program. For a type that can be copied, such as a string or a class, `move` on a field or an element copies it and leaves it as it was.
+- **It cannot be copied**, so neither can what holds one, such as a struct with a `unique<Node>` field or a `vector<unique<Node>>`: `b = a` is an
+  error that shows what to write. Move them instead, and reach elements by position, as `for (auto x : v)` would copy each.
+- **Never empty:** `unique<Node> u;` must be assigned before it is read, as a class variable must. For one that can be empty, write
+  `unique<Node>?`, and use `?.`, `if (auto n = move(opt))` and `opt = null`. A field needs a value when the object is built.
+- **`u.get()`** lends the object as an ordinary `Node`, a counted reference. If it is kept, the object stays until that is gone too, so a borrowed
+  reference can never dangle, though the object then outlives its owner. It is the one method of the reference itself, so a method named `get`
+  of the object is written `u.get().get()`.
+- **Conversions:** `unique<Dog>` converts to `unique<Animal>` and to `Animal` when moved. Going to `Animal` gives up being unique for good. Nothing
+  converts to a `unique`, since an object that may be shared has no one owner.
+- Only a class can be the target, or an interface. `make_unique` and `unique_ptr` are written `unique<Node>(...)` and `unique<Node>`. There is no `reset` or
+  `release`: assign a new object, or use `unique<Node>?` and `null`.
+- `==` is true for the same object, and `{}` prints the object, as with a class reference.
+
+An object held by `unique` has the same layout as any other, so a class is compiled once however it is held. The count is only touched when a reference is
+lent, or while a method runs or a value is read for a statement, which keeps the object safe if that code replaces its owner. A move touches no count.
 
 ### Debug builds
 
@@ -1973,6 +2009,8 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Constraints: `Comparable`, `Number`, `Integer`, `Floating`, interfaces and classes, `concept ... = requires` | implemented |
 | Default template arguments, `requires` clauses, generic methods, working out a generic type's arguments | planned |
 | Pointers into vectors and strings | planned |
+| `unique<T>` references and `move(x)` | implemented |
+| `local<T>` references | planned |
 | C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; reading C headers | planned |
 | Reflection, JSON, HTTP | planned |
 | Threads, async | planned |

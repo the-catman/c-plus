@@ -24,6 +24,9 @@ static bool canConvert(const Type* from, const Type* to) {
         if (!from->isPointer() || (from->constElem && !to->constElem)) return false;
         return from->elem == to->elem || to->elem->is(K::Void);
     }
+    // A unique reference only comes from another, since an object that may be shared has no one owner.
+    if (to->isUnique()) return from->isUnique() && canConvert(from->elem, to->elem);
+    if (from->isUnique() && to->isClass()) return canConvert(from->elem, to);  // it gives up being unique
     if (to->isWeak()) {
         // `null`, an object that may be null, or a weak reference to a class deriving from it.
         if (from->isNull()) return true;
@@ -34,7 +37,7 @@ static bool canConvert(const Type* from, const Type* to) {
         // `null`, or a value that the optional then holds. Two optional types do not
         // convert into each other, except `Dog?` to `Animal?`.
         if (from->isNull()) return true;
-        if (from->isOptional()) return from->elem->isClass() && canConvert(from->elem, to->elem);
+        if (from->isOptional()) return from->elem->isObjectRef() && canConvert(from->elem, to->elem);
         return canConvert(from, to->elem);
     }
     // To a base class that the object holds once. Holding it twice, it is not known which is meant.
@@ -124,6 +127,14 @@ static std::string spelled(const Expr& e, const std::string& fallback = "opt") {
         std::string base = spelled(*static_cast<const UnaryExpr&>(e).operand, "");
         if (!base.empty()) return "*" + base;
     }
+    if (e.kind == Expr::Kind::Index) {  // `v[0]` or `v[i]`
+        auto& ix = static_cast<const IndexExpr&>(e);
+        std::string base = spelled(*ix.base, "");
+        std::string index = ix.index->kind == Expr::Kind::IntLit ? std::to_string(static_cast<const IntLitExpr&>(*ix.index).value)
+                                                                 : spelled(*ix.index, "");
+        if (!base.empty() && !index.empty()) return base + "[" + index + "]";
+    }
+    if (e.kind == Expr::Kind::Borrow) return spelled(*static_cast<const BorrowExpr&>(e).operand, fallback);
     return fallback;
 }
 
@@ -201,7 +212,7 @@ static bool tooDeep(const std::string& path) { return std::count(path.begin(), p
 // A class reference cannot be empty, so a field holding one (directly or inside a
 // struct field) must be given a value when an object is built.
 static bool needsValue(const Type* t, int depth = 0) {
-    if (t->isClass()) return true;
+    if (t->isObjectRef()) return true;
     if (t->isArray()) {  // its elements are made one by one, which may take a value or a constructor's arguments
         const FuncDecl* ctor = t->elem->isStruct() ? t->elem->decl->constructor : nullptr;
         return t->length > 0 && depth <= 32 && ((ctor && !ctor->params.empty()) || needsValue(t->elem, depth + 1));
@@ -212,10 +223,20 @@ static bool needsValue(const Type* t, int depth = 0) {
     return false;
 }
 
+// Whether a value can be copied. What has one owner cannot, nor can what holds one.
+static bool isCopyable(const Type* t, int depth = 0) {
+    if (t->isUnique()) return false;
+    if (t->isOptional() || t->isVector() || t->isArray()) return isCopyable(t->elem, depth);
+    if (!t->isStruct() || depth > 32) return true;
+    for (auto& f : t->decl->fields)
+        if (!isCopyable(f.type, depth + 1)) return false;
+    return true;
+}
+
 // Why a value of type `t` cannot be made without being given one.
 static std::string elementDefaultProblem(const Type* t) {
     if (t->isArray()) return elementDefaultProblem(t->elem);
-    if (t->isClass()) return "a " + q(t) + " reference cannot be empty";
+    if (t->isObjectRef()) return "a " + q(t) + " reference cannot be empty";
     if (needsValue(t)) return q(t) + " holds a class reference that cannot be empty";
     return "the constructor of " + q(t) + " needs arguments";
 }
@@ -413,6 +434,11 @@ void Sema::requireAssigned(Flow& flow, const VarDecl* var, const std::string& pa
                      "assign " + q(missing) + " on every path before this line, or give the field a default in "
                      "the struct, e.g. `int x = 0;`",
                      spec::DefiniteAssignment);
+    } else if (auto moved = std::find_if(moveLog_.rbegin(), moveLog_.rend(), [&](auto& m) { return m.first == var; });
+               path.empty() && moved != moveLog_.rend()) {
+        diags_.error(loc, q(name) + " has no value here, since it may have been moved away",
+                     "give it a new value first, with `" + name + " = ...;`, on every path to this line", spec::Unique);
+        diags_.note(moved->second, "it is moved here");
     } else if (path.empty()) {
         diags_.error(loc, q(name) + " is used before it is given a value",
                      "give it a value where it is declared, e.g. `" + std::string(type->name) + " " + var->name +
@@ -1024,6 +1050,7 @@ static std::string whatCLacks(const Type* t, std::set<const StructDecl*>& seen) 
     if (t->isVector()) return "a vector";
     if (t->isClass()) return "a class reference";
     if (t->isWeak()) return "a weak reference";
+    if (t->isUnique()) return "a unique reference";
     if (t->isOptional()) return "an optional";
     if (t->isArray()) return t->length == 0 ? "an array with no elements" : whatCLacks(t->elem, seen);
     if (t->isPointer()) {
@@ -1152,7 +1179,7 @@ void Sema::checkExternFunction(FuncDecl& fn) {
                                        : "a C function can take a number, char, bool, a pointer, a struct, string or "
                                          "string?, but this parameter is " + q(t);
         std::string help;
-        if (t->isClass() || t->isWeak())
+        if (t->isObjectRef() || t->isWeak())
             help = "C cannot hold a C+ object; pass the fields it needs as separate arguments";
         else if (t->isVector())
             message = "this compiler does not support passing vectors to or from C functions yet",
@@ -1472,6 +1499,7 @@ void Sema::checkTry(TryStmt& st, Flow& flow) {
     // Any call inside can fail before anything else has happened, so a catch only knows what
     // was known before the block.
     Flow before = flow;
+    size_t movesBefore = moveLog_.size();
     int failsBefore = failPoints_;
     ++tryBlocks_;
     checkStmt(*st.body, flow);
@@ -1507,6 +1535,7 @@ void Sema::checkTry(TryStmt& st, Flow& flow) {
             c.held->type = &error->type;
         }
         Flow branch = before;
+        dropMovedSince(branch, movesBefore);  // the call that failed may have come after a move
         scopes_.emplace_back();  // the variable and the body share one scope, as in C++
         if (c.var) {
             c.var->type = c.var->declType;
@@ -1531,6 +1560,7 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
     if (v.init) {
         if (v.declType->is(K::Auto)) {
             const Type* t = checkExpr(*v.init, flow);
+            rejectCopy(*v.init);
             if (t->is(K::Void))
                 diags_.error(v.init->loc, "cannot store the result of a void function in " + q(v.name), "",
                              spec::Variables);
@@ -1577,6 +1607,7 @@ void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
     std::string help;
     if (t->is(K::Void)) help = "this expression produces no value";
     else if (t->isWeak()) help = "write `!" + spelled(e, "w") + ".expired()`, or `if (auto x = " + spelled(e, "w") + ".lock())`, which also keeps the object alive";
+    else if (t->isUnique()) help = "a unique reference is never empty. For one that can be, write `" + std::string(t->name) + "?`";
     else if (t->isOptional()) help = boolOptionalHelp(spelled(e, "b"));
     else if (t->is(K::Char)) help = "a char is not a condition; compare it, e.g. `c != '\\0'` or `c == 'y'`";
     else if (t->isVector() || t->is(K::String))
@@ -1658,6 +1689,8 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
         }
         case Stmt::Kind::While: {
             auto& st = static_cast<WhileStmt&>(s);
+            Flow head = flow;
+            size_t movesBefore = moveLog_.size();
             if (st.decl) checkCondDecl(*st.decl, flow, "while");
             else checkCondition(*st.cond, flow, "while condition");
             loops_.emplace_back();
@@ -1668,6 +1701,7 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
                 markAssigned(body, st.decl->var.get(), "");
             }
             checkLoopBody(*st.body, body);
+            checkMovedInLoop(head, movesBefore, body);
             scopes_.pop_back();
             Flow after = flow;
             // Only a break leaves `while (true)`.
@@ -1679,10 +1713,13 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
         }
         case Stmt::Kind::DoWhile: {
             auto& st = static_cast<DoWhileStmt&>(s);
+            Flow head = flow;
+            size_t movesBefore = moveLog_.size();
             loops_.emplace_back();
             checkLoopBody(*st.body, flow);  // the body always runs at least once
             for (auto& c : loops_.back().continues) flow = merge(flow, c);
             checkCondition(*st.cond, flow, "do-while condition");
+            checkMovedInLoop(head, movesBefore, flow);
             if (isConstantTrue(st.cond.get())) flow.reachable = false;
             for (auto& b : loops_.back().breaks) flow = merge(flow, b);
             loops_.pop_back();
@@ -1692,17 +1729,18 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
             auto& st = static_cast<ForStmt&>(s);
             scopes_.emplace_back();
             if (st.init) checkStmt(*st.init, flow);
+            Flow head = flow;
+            size_t movesBefore = moveLog_.size();
             if (st.cond) checkCondition(*st.cond, flow, "for loop condition");
             loops_.emplace_back();
             Flow body = flow;
             checkLoopBody(*st.body, body);
-            if (!st.steps.empty()) {
-                Flow stepFlow = body;
-                for (auto& c : loops_.back().continues) stepFlow = merge(stepFlow, c);
-                // If the step can never run, stepFlow is unreachable: types are still
-                // checked, but definite assignment is not.
-                for (auto& step : st.steps) checkExpr(*step, stepFlow);
-            }
+            Flow stepFlow = body;
+            for (auto& c : loops_.back().continues) stepFlow = merge(stepFlow, c);
+            // If the step can never run, stepFlow is unreachable: types are still
+            // checked, but definite assignment is not.
+            for (auto& step : st.steps) checkExpr(*step, stepFlow);
+            checkMovedInLoop(head, movesBefore, stepFlow);
             Flow after = flow;
             if (isConstantTrue(st.cond.get())) after.reachable = false;
             for (auto& b : loops_.back().breaks) after = merge(after, b);
@@ -1721,6 +1759,18 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
                     diags_.error(st.value->loc, "function " + q(fn_->name) + " returns void, so it cannot return a value",
                                  "change the return type to " + q(t) + ", or write just `return;`", spec::Functions);
                 } else {
+                    // A local variable about to go away hands over what it holds, as in C++.
+                    if (st.value->kind == Expr::Kind::Name) {
+                        const VarDecl* local = lookup(static_cast<NameExpr&>(*st.value).name);
+                        if (local && !local->isTopLevel && !local->isConst && local->type && !isCopyable(local->type)) {
+                            std::vector<ExprPtr> args;
+                            Loc loc = st.value->loc;
+                            args.push_back(std::move(st.value));
+                            auto call = std::make_unique<CallExpr>(loc, "move", std::move(args));
+                            call->builtin = Builtin::Move;
+                            st.value = std::move(call);
+                        }
+                    }
                     checkValue(*st.value, flow, ret, "as the return value of " + q(fn_->name));
                 }
             } else if (!ret->is(K::Void)) {
@@ -1764,6 +1814,9 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
                      spec::RangeFor);
         rangeType = Type::error();
     }
+    if (rangeType->elem && !isCopyable(rangeType->elem))
+        diags_.error(st.range->loc, "a range-based for loop copies each element, but a " + q(rangeType->elem) + " cannot be copied",
+                     "loop over the positions: `for (int i = 0; i < v.size(); i++) ... v[i] ...`", spec::Unique);
     st.rangeVar = std::make_unique<VarDecl>(st.range->loc, "range", rangeType, st.range->loc);
     st.rangeVar->type = rangeType;
 
@@ -1781,10 +1834,13 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
     }
     scopes_.emplace_back();
     loops_.emplace_back();
+    Flow head = flow;
+    size_t movesBefore = moveLog_.size();
     Flow body = flow;
     declare(v);
     markAssigned(body, &v, "");
     checkLoopBody(*st.body, body);
+    checkMovedInLoop(head, movesBefore, body);
     Flow after = flow;
     for (auto& b : loops_.back().breaks) after = merge(after, b);
     loops_.pop_back();
@@ -1824,8 +1880,23 @@ static std::string pointerHelp(const Expr& e, const Type* from, const Type* to) 
     return "";
 }
 
+void Sema::rejectCopy(const Expr& e) {
+    if (!e.type || e.type->isError() || isCopyable(e.type)) return;
+    const Expr* x = &e;
+    while (x->kind == Expr::Kind::Try) x = static_cast<const TryExpr*>(x)->operand.get();
+    if (x->kind == Expr::Kind::Assign) x = static_cast<const AssignExpr*>(x)->target.get();  // `b = (a = make())` would leave two
+    if (!isPlaceKind(*x) && x->kind != Expr::Kind::OptValue) return;
+    std::string n = spelled(*x, "x");
+    diags_.error(x->loc, q(n) + " cannot be copied, since a " + q(e.type) +
+                             (e.type->isUnique() ? " has one owner" : " holds what has one owner"),
+                 "write `move(" + n + ")` to hand it over, after which " + n + " has no value" +
+                     (e.type->isUnique() ? ", or `" + n + ".get()` to lend the object, as a `" + e.type->elem->name + "`" : ""),
+                 spec::Unique);
+}
+
 void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& context) {
     const Type* from = e.type;
+    rejectCopy(e);
     if (canConvert(from, to)) return;
     const Type* target = to->isOptional() ? to->elem : to;
     if (target->is(K::Float) && isDoubleConstant(e)) {  // `float f = 1.5;`
@@ -1835,7 +1906,14 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         return;
     }
     std::string help;
-    if (from->isWeak()) {
+    if (from->isObjectRef() && to->isUnique()) {
+        help = from->isClass() ? "a '" + std::string(from->name) + "' may be shared, so it has no one owner. Write `" + std::string(to->name) + "(...)` to build a new object"
+                               : "the object is not a '" + std::string(to->elem->name) + "'";
+    } else if (from->isNull() && to->isUnique()) {
+        help = "a unique reference is never empty. For one that can be, write `" + std::string(to->name) + "?`";
+    } else if (from->isUnique() && to->isWeak()) {
+        help = "write `" + spelled(e, "u") + ".get()`, which lends the object";
+    } else if (from->isWeak()) {
         help = "the object may be gone. `" + spelled(e, "w") + ".lock()` gives a `" + std::string(from->elem->name) +
                "?`, which is null when it is, and keeps it alive while you use it";
     } else if (from->isClass() && to->isClass() && from->decl->partsOf(to->decl) > 1) {
@@ -1946,7 +2024,7 @@ void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
                          "list every element", spec::Arrays);
         return;
     }
-    if (type->isError() || !type->hasFields()) {
+    if (type->isError() || (!type->hasFields() && !type->isUnique())) {
         if (!type->isError())
             diags_.error(list.loc, "a { } list builds a struct, a class object, a vector or an array, but " + q(type) +
                                        " is expected here",
@@ -1957,7 +2035,7 @@ void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
     }
     std::vector<ConstructArg> args;
     for (auto& el : list.elements) args.push_back({el.designator, el.loc, el.value.get(), &el.fieldIndex});
-    checkConstruction(*type->decl, std::move(args), flow, list.loc);
+    checkConstruction(*type->decl, std::move(args), flow, list.loc);  // `unique<Node>{...}` builds a Node
 }
 
 void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc, bool asBase) {
@@ -2197,6 +2275,14 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         requireAssigned(flow, var, path, baseType, m.base->loc);
         var = nullptr;
         path.clear();
+    }
+    if (baseType->isUnique()) {  // the field of the object it owns
+        if (baseIsPlace && var) requireAssigned(flow, var, path, baseType, m.base->loc);
+        bool isVariable = m.base->kind == Expr::Kind::Name && static_cast<NameExpr&>(*m.base).implicitField < 0;
+        Loc loc = m.base->loc;
+        m.base = std::make_unique<BorrowExpr>(loc, std::move(m.base), !isVariable);
+        m.base->type = baseType->elem;
+        return resolvePlace(e, flow, var, path);
     }
     if (baseType->isWeak()) {
         std::string n = spelled(*m.base, "w");
@@ -2441,8 +2527,8 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
         if (t->isOptional())
             help = "write `" + n + "?." + u.arrowMember + "`, which is null when " + n + " is, or unwrap it first: `if (auto v = " +
                    n + ") ... v." + u.arrowMember + "`";
-        else if (t->hasFields())
-            help = std::string(t->isClass() ? "a class reference is used directly, so " : "") +
+        else if (t->hasFields() || t->isUnique())
+            help = std::string(t->isClass() ? "a class reference is used directly, so " : t->isUnique() ? "a unique reference is used directly, so " : "") +
                    "fields and methods are reached with '.': write `" + n + "." + u.arrowMember + "`";
         diags_.error(u.loc, "'->' follows a pointer, but " + q(n) + " is " + q(t), help, spec::Pointers);
         return;
@@ -2452,6 +2538,8 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
                ")`";
     else if (t->isClass())
         help = "a class reference is used directly: write `" + n + "` without '*'";
+    else if (t->isUnique())
+        help = "a unique reference is used directly: `" + n + ".field`, or `" + n + ".get()` for the object";
     diags_.error(u.loc, "'*' follows a pointer, but this is " + q(t), help, spec::Pointers);
 }
 
@@ -2501,7 +2589,7 @@ Layout layoutOf(const Type* t, std::unordered_map<const StructDecl*, Layout>& se
             return {elem.size && length > kSizeCap / elem.size ? kSizeCap : elem.size * length, elem.align};
         }
         case K::Optional: {
-            if (t->elem->isClass()) return {8, 8};
+            if (t->elem->isObjectRef()) return {8, 8};
             Layout elem = layoutOf(t->elem, seen);
             uint64_t end = (elem.align + elem.size + elem.align - 1) / elem.align * elem.align;  // a bool comes first
             return {capped(end), elem.align};
@@ -2727,6 +2815,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             result = static_cast<FloatLitExpr&>(e).isFloat ? Type::floatTy() : Type::doubleTy();
             break;
         case Expr::Kind::Cast: result = checkCast(static_cast<CastExpr&>(e), flow); break;
+        case Expr::Kind::Borrow: result = e.type; break;  // its operand was checked when it was made
         case Expr::Kind::Constraint: {
             auto& c = static_cast<ConstraintExpr&>(e);
             c.value = constraintHolds(c);
@@ -2812,7 +2901,9 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (b.op == BinOp::LogAnd || b.op == BinOp::LogOr) {
                 const Type* l = checkExpr(*b.lhs, flow);
                 Flow rhsFlow = flow;  // the right side may not run, so what it assigns does not count
+                size_t movesBefore = moveLog_.size();
                 const Type* r = checkExpr(*b.rhs, rhsFlow);
+                dropMovedSince(flow, movesBefore);
                 for (auto [side, t] : {std::pair{b.lhs.get(), l}, std::pair{b.rhs.get(), r}})
                     if (!usableAsCondition(t))
                         diags_.error(side->loc, std::string("both sides of '") + sym + "' must be a bool, a number, a pointer or an optional, but this is " + q(t),
@@ -3008,6 +3099,8 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             Flow a = flow, b = flow;
             const Type* x = checkExpr(*t.thenExpr, a);
             const Type* y = checkExpr(*t.elseExpr, b);
+            rejectCopy(*t.thenExpr);
+            rejectCopy(*t.elseExpr);
             flow = merge(a, b);
             if (x->isError() || y->isError()) break;
             if (x == y) result = x;
@@ -3240,6 +3333,14 @@ const Type* Sema::checkMath(CallExpr& call, Flow& flow) {
 }
 
 const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
+    if (call.builtin == Builtin::Move) return checkMove(call, flow);
+    if (call.uniqueType) {  // `unique<Node>(args)` builds a new Node
+        call.constructs = call.uniqueType->decl;
+        std::vector<ConstructArg> args;
+        for (auto& a : call.args) args.push_back({"", a->loc, a.get(), nullptr});
+        checkConstruction(*call.constructs, std::move(args), flow, call.loc);
+        return call.uniqueType;
+    }
     if (call.vectorType) return checkVectorConstruction(call, flow);
     if (call.callee == "println" || call.callee == "print" || call.callee == "format") return checkPrint(call, flow);
     if (call.callee == "to_string") return checkToString(call, flow);
@@ -3280,6 +3381,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
                              canConvert(given, sd.constructor->params[0]->declType);
             bool fieldTakes = !sd.constructor && sd.bases.empty() && !sd.fields.empty() && canConvert(given, sd.fields[0].type);
             if (!given->isError() && !ctorTakes && !fieldTakes && canConvert(given, &sd.type)) {
+                rejectCopy(*call.args[0]);
                 call.copies = true;
                 return &sd.type;
             }
@@ -3293,6 +3395,10 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (TemplateDecl* t = program_->findTemplate(call.callee); t && t->kind == TemplateDecl::Kind::Function)
         return checkTemplateCall(call, *t, flow);
     auto it = funcs_.find(call.callee);
+    if (it == funcs_.end() && call.callee == "move") {
+        call.builtin = Builtin::Move;
+        return checkMove(call, flow);
+    }
     if (it == funcs_.end() && findMath(call.callee)) return checkMath(call, flow);
     if (it == funcs_.end() && findCharFn(call.callee)) return checkCharFn(call, flow);
     if (it == funcs_.end()) {
@@ -3368,9 +3474,12 @@ struct Deduction {
                 if (a->isPointer()) match(p->elem, a->elem);
                 break;
             case K::Weak: match(p->elem, a->isWeak() || a->isOptional() ? a->elem : a); break;
+            case K::Unique:
+                if (a->isUnique()) match(p->elem, a->elem);
+                break;
             case K::Dependent: {
                 if (a->isOptional()) a = a->elem;
-                if (a->isWeak()) a = a->elem;
+                if (a->isWeak() || a->isUnique()) a = a->elem;
                 if (!a->hasFields()) break;
                 if (const StructDecl* made = findMade(*a->decl, p->pattern->tmpl))
                     for (size_t i = 0; i < p->pattern->args.size(); ++i) {
@@ -3550,6 +3659,68 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
     return "";  // unknown, which was reported at the generic
 }
 
+void Sema::markMoved(Flow& flow, const VarDecl* var, Loc loc) {
+    if (!flow.reachable) return;  // `sizeof(move(x))` moves nothing
+    moveLog_.push_back({var, loc});
+    for (auto it = flow.assigned.begin(); it != flow.assigned.end();) {
+        if (it->first == var) it = flow.assigned.erase(it);
+        else ++it;
+    }
+}
+
+void Sema::dropMovedSince(Flow& flow, size_t logStart) {
+    for (size_t i = logStart; i < moveLog_.size(); ++i) {
+        const VarDecl* var = moveLog_[i].first;
+        for (auto it = flow.assigned.begin(); it != flow.assigned.end();) {
+            if (it->first == var) it = flow.assigned.erase(it);
+            else ++it;
+        }
+    }
+}
+
+void Sema::checkMovedInLoop(const Flow& head, size_t logStart, const Flow& end) {
+    std::set<const VarDecl*> reported;
+    for (size_t i = logStart; i < moveLog_.size(); ++i) {
+        auto [var, loc] = moveLog_[i];
+        if (!head.reachable || !isAssigned(head, var, var->type, "") || reported.count(var)) continue;
+        bool gone = end.reachable && !isAssigned(end, var, var->type, "");
+        for (auto& c : loops_.back().continues) gone = gone || (c.reachable && !isAssigned(c, var, var->type, ""));
+        if (!gone) continue;
+        reported.insert(var);
+        diags_.error(loc, q(var->name) + " is moved inside a loop, so it would have no value the next time round",
+                     "give it a new value before the loop goes round, or leave the loop right after, with `break` or `return`",
+                     spec::Unique);
+    }
+}
+
+const Type* Sema::checkMove(CallExpr& call, Flow& flow) {
+    if (call.args.size() != 1) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, "move takes one value", "write `move(x)`", spec::Unique);
+        return Type::error();
+    }
+    Expr& x = *call.args[0];
+    if (!isPlaceKind(x)) return checkExpr(x, flow);  // a value nothing else holds has nothing to give up
+    const VarDecl* var = nullptr;
+    std::string path;
+    const Type* t = resolvePlace(x, flow, var, path);
+    if (t->isError()) return t;
+    if (var) requireAssigned(flow, var, path, t, x.loc);
+    if (x.kind == Expr::Kind::This) {
+        diags_.error(x.loc, "'this' cannot be moved, since the object is still in use",
+                     "write `this` to pass a reference to it", spec::Unique);
+        return t;
+    }
+    if (var && var->isTopLevel) {
+        diags_.error(x.loc, "the constant " + q(var->name) + " cannot be moved", "remove `move`", spec::Unique);
+        return t;
+    }
+    if (!checkChangeable(x, "moved", var, path)) return t;
+    bool wholeVariable = x.kind == Expr::Kind::Name && static_cast<NameExpr&>(x).implicitField < 0;
+    if (wholeVariable) markMoved(flow, var, call.loc);
+    return t;
+}
+
 const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     const VarDecl* var = nullptr;
     std::string path;
@@ -3570,6 +3741,18 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     }
     if (t->isOptional()) return checkOptionalMethod(call, flow, t);
     if (t->isWeak()) return checkWeakMethod(call, flow, t);
+    if (t->isUnique()) {
+        if (call.name == "get" && call.args.empty()) {  // lends the object, as a counted reference
+            call.uniqueGet = true;
+            return t->elem;
+        }
+        // Everything else is a method of the object.
+        bool isVariable = recv.kind == Expr::Kind::Name && static_cast<NameExpr&>(recv).implicitField < 0;
+        Loc loc = recv.loc;
+        call.receiver = std::make_unique<BorrowExpr>(loc, std::move(call.receiver), !isVariable);
+        call.receiver->type = t->elem;
+        return checkMethodCall(call, flow);
+    }
     if (t->isPointer()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         std::string n = spelled(recv, "p");
@@ -3698,6 +3881,9 @@ const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type
     const VectorMethodInfo* info = nullptr;
     for (auto& m : kVectorMethods)
         if (call.name == m.name) info = &m;
+    if (!isCopyable(vecType->elem) && (call.name == "front" || call.name == "back"))
+        diags_.error(call.loc, call.name + "() gives a copy, but a " + q(vecType->elem) + " cannot be copied",
+                     "read the element in place, as in `v[0].name`, or take it with `move(v[0])`", spec::Unique);
     if (!info) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         std::string help;
@@ -3754,6 +3940,9 @@ const Type* Sema::checkArrayMethod(MethodCallExpr& call, Flow& flow, const Type*
     const VectorMethodInfo* info = nullptr;
     for (auto& m : kArrayMethods)
         if (call.name == m.name) info = &m;
+    if (!isCopyable(arrayType->elem) && (call.name == "front" || call.name == "back" || call.name == "fill"))
+        diags_.error(call.loc, call.name + "() copies an element, but a " + q(arrayType->elem) + " cannot be copied",
+                     "reach the element in place, as in `a[0].name`, or take it with `move(a[0])`", spec::Unique);
     if (!info) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         static const std::set<std::string> grow = {"push_back", "emplace_back", "pop_back", "clear", "insert",
@@ -3842,6 +4031,7 @@ const Type* Sema::checkVectorConstruction(CallExpr& call, Flow& flow) {
     } else if (!call.args.empty()) {
         const Type* given = checkExpr(*call.args[0], flow);
         if (given == vt && call.args.size() == 1) {  // `vector<int>(v)` copies it, as in C++
+            rejectCopy(*call.args[0]);
             call.copies = true;
             return vt;
         }
@@ -3849,6 +4039,9 @@ const Type* Sema::checkVectorConstruction(CallExpr& call, Flow& flow) {
     }
     if (call.args.size() == 2) {
         checkValue(*call.args[1], flow, vt->elem, "as the element value of " + q(vt));
+        if (!isCopyable(vt->elem))
+            diags_.error(call.args[1]->loc, "every element would be a copy of this, but a " + q(vt->elem) + " cannot be copied",
+                         "add them one by one with `push_back(...)`", spec::Unique);
     } else if (call.args.size() == 1 && !hasDefault(vt->elem)) {
         diags_.error(call.loc, name + "(n) cannot make its elements on its own, because " + elementDefaultProblem(vt->elem),
                      "give the value to fill it with, as in `" + name + "(n, value)`, or start empty and use push_back",
@@ -4107,7 +4300,8 @@ const Type* Sema::checkDynamicCast(CastExpr& c, const Type* from, const Type* to
         diags_.error(c.operand->loc, "dynamic_cast needs a class object, but this is " + q(from),
                      from->isWeak() ? "the object may be gone. Write `dynamic_cast<" + std::string(toClass->name) + "?>(" +
                                           spelled(*c.operand, "w") + ".lock())`"
-                                    : "",
+                     : from->isUnique() ? "write `dynamic_cast<" + std::string(toClass->name) + "?>(" + spelled(*c.operand, "u") + ".get())`"
+                                        : "",
                      spec::Inheritance);
         return to;
     }
@@ -4126,7 +4320,16 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     checkStorable(to, c.loc);
     if (c.reinterpret) return checkReinterpretCast(c, from, to);
     if (c.dynamic) return checkDynamicCast(c, from, to);
-    if (from == to) return to;  // a copy, which is what `T(x)` is when x is a T
+    if (from == to) {  // a copy, which is what `T(x)` is when x is a T
+        rejectCopy(*c.operand);
+        return to;
+    }
+    if (from->isUnique() || to->isUnique()) {
+        diags_.error(c.loc, "a cast cannot change who owns an object, as this one from " + q(from) + " to " + q(to) + " would",
+                     "a unique reference converts by itself when it is moved: `" + std::string(to->name) + " x = move(u);`. `u.get()` lends the object",
+                     spec::Unique);
+        return to;
+    }
     if (to->isWeak()) {  // `weak<Node>(object)`
         if (!canConvert(from, to))
             diags_.error(c.operand->loc, std::string(to->name) + "(x) refers to an object of class " + q(to->elem) + ", but this is " + q(from),
@@ -4351,6 +4554,7 @@ const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
 void Sema::checkCondDecl(CondDecl& d, Flow& flow, const char* stmt) {
     VarDecl& v = *d.var;
     const Type* t = checkExpr(*v.init, flow);
+    rejectCopy(*v.init);
     const Type* declared = v.declType;
     v.type = declared->is(K::Auto) ? Type::error() : declared;
     if (t->isError()) return;
@@ -4407,8 +4611,13 @@ const Type* Sema::checkOptChain(OptChainExpr& c, Flow& flow) {
     }
     c.value->type = inner;
     Flow bodyFlow = flow;  // the rest of the chain may not run
+    size_t movesBefore = moveLog_.size();
     const Type* body = checkExpr(*c.body, bodyFlow);
+    dropMovedSince(flow, movesBefore);
     if (base->isError() || body->isError()) return Type::error();
+    if (!isCopyable(body))
+        diags_.error(c.loc, "'?.' gives a copy, but a " + q(body) + " cannot be copied",
+                     "go on to a field or a method, as in `x?.field.name`", spec::Unique);
     if (!base->isOptional() || body->is(K::Void) || body->isOptional()) return body;
     return Type::optionalOf(body);
 }
@@ -4416,7 +4625,15 @@ const Type* Sema::checkOptChain(OptChainExpr& c, Flow& flow) {
 // `opt ?? fallback`. With a fallback that cannot be null, the result cannot be either.
 const Type* Sema::checkCoalesce(CoalesceExpr& c, Flow& flow) {
     const Type* l = checkExpr(*c.lhs, flow);
+    rejectCopy(*c.lhs);
     Flow rhsFlow = flow;  // the fallback may not run
+    size_t movesBefore = moveLog_.size();
+    struct FallbackMoves {
+        Sema& s;
+        Flow& flow;
+        size_t start;
+        ~FallbackMoves() { s.dropMovedSince(flow, start); }
+    } fallbackMoves{*this, flow, movesBefore};
     if (l->isError() || !l->isOptional()) {
         checkLooseValue(*c.rhs, rhsFlow);
         if (l->isError()) return Type::error();
@@ -4483,6 +4700,9 @@ const Type* Sema::checkWeakMethod(MethodCallExpr& call, Flow& flow, const Type* 
 const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Type* opt) {
     const Type* inner = opt->elem;
     std::string n = spelled(*call.receiver);
+    if (!isCopyable(inner) && (call.name == "value" || call.name == "value_or") && isPlaceKind(*call.receiver))
+        diags_.error(call.loc, call.name + "() gives a copy, but a " + q(inner) + " cannot be copied",
+                     "read through it with `" + n + "?.field`, or take it with `move(" + n + ")." + call.name + "(...)`", spec::Unique);
     size_t want = 0;
     if (call.name == "has_value") call.optMethod = OptMethod::HasValue;
     else if (call.name == "value") call.optMethod = OptMethod::Value;

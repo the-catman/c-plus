@@ -1,0 +1,199 @@
+// With inheritance, interfaces, multiple inheritance, generics and errors.
+class Animal {
+public:
+    string name = "animal";
+    virtual string sound() const { return "..."; }
+    virtual ~Animal() { println("  ~Animal {}", name); }
+};
+class Dog : public Animal {
+public:
+    Dog() { name = "dog"; }
+    string sound() const override { return "woof"; }
+};
+interface Speaker {
+    string speak() const;
+};
+class Padding {
+public:
+    long a = 1;
+};
+class Robot : public Padding, public Speaker {
+public:
+    string speak() const override { return "beep"; }
+    ~Robot() { println("  ~Robot"); }
+};
+unique<Animal> choose(bool dog) {
+    if (dog) return unique<Dog>();
+    return unique<Animal>();
+}
+string hear(unique<Animal> a) {
+    return a.sound();
+}
+
+// Generics
+template<typename T>
+class Stack {
+public:
+    vector<T> items;
+    void push(T x) { items.push_back(move(x)); }
+    T pop() {
+        T top = move(items[items.size() - 1]);
+        items.pop_back();
+        return top;
+    }
+    long size() const { return items.size(); }
+};
+template<typename T>
+unique<T> build() {
+    return unique<T>();
+}
+template<typename T>
+T handOver(T x) {
+    return x;
+}
+template<typename T>
+string nameOf(unique<T> x) {
+    return x.name;
+}
+
+// Errors: what was moved in is released by whoever holds it then.
+void fails(unique<Animal> a) throws {
+    println("  fails has {}", a.name);
+    throw Error("failed");
+}
+unique<Animal> maybe(bool ok) throws {
+    if (!ok) throw Error("not ok");
+    return unique<Animal>();
+}
+void afterMove() throws {
+    unique<Animal> a = unique<Animal>();
+    a.name = "moved in";
+    unique<Animal> b = unique<Animal>();
+    b.name = "kept";
+    try fails(move(a));
+}
+void held(unique<Animal> a, unique<Animal> b) {}
+void waiting() throws {
+    held(unique<Animal>(), try maybe(false));
+}
+
+int main() {
+    println("inheritance:");
+    {
+        unique<Animal> a = unique<Dog>();
+        println("{}", a.sound());
+        unique<Dog> d = unique<Dog>();
+        unique<Animal> up = move(d);
+        println("{}", up.sound());
+        println("{} {}", choose(true).sound(), choose(false).sound());
+        println("{}", hear(unique<Dog>()));
+        println("{}", dynamic_cast<Dog?>(a.get()) != null);
+        println("{}", a);
+        Animal shared = move(a);
+        println("{}", shared.name);
+    }
+    println("multiple inheritance:");
+    {
+        unique<Speaker> s = unique<Robot>();
+        println("{}", s.speak());
+        unique<Robot> r = unique<Robot>();
+        unique<Speaker> s2 = move(r);
+        println("{}", s2.speak());
+        println("{}", s2.get().speak());
+        vector<unique<Speaker>> v;
+        v.push_back(move(s));
+        v.push_back(move(s2));
+        println("{}", v[1].speak());
+    }
+    println("generics:");
+    {
+        Stack<unique<Animal>> st = Stack<unique<Animal>>();
+        st.push(unique<Dog>());
+        st.push(unique<Animal>());
+        println("{}", st.size());
+        unique<Animal> top = st.pop();
+        println("{} {}", top.sound(), st.size());
+        Stack<int> numbers = Stack<int>();
+        numbers.push(4);
+        println("{}", numbers.pop());
+        Stack<string> strings = Stack<string>();
+        strings.push("s");
+        println("{}", strings.pop());
+        Stack<Animal> shared = Stack<Animal>();
+        shared.push(Dog());
+        println("{}", shared.pop().name);
+        println("{}", build<Dog>().name);
+        println("{}", handOver(unique<Dog>()).name);
+        println("{}", nameOf(unique<Dog>()));
+    }
+    println("errors:");
+    try {
+        afterMove();
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    try {
+        waiting();
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // Moved in a try block, and given a new value in the catch before use.
+    unique<Animal> a = unique<Animal>();
+    try {
+        fails(move(a));
+        a = unique<Animal>();
+    } catch (Error e) {
+        a = unique<Animal>();
+        a.name = "new";
+    }
+    println("{}", a.name);
+    println("end");
+    return 0;
+}
+// expect: inheritance:
+// expect: woof
+// expect: woof
+// expect: woof ...
+// expect:   ~Animal animal
+// expect:   ~Animal dog
+// expect:   ~Animal dog
+// expect: woof
+// expect: true
+// expect: Dog {name: "dog"}
+// expect: dog
+// expect:   ~Animal dog
+// expect:   ~Animal dog
+// expect: multiple inheritance:
+// expect: beep
+// expect: beep
+// expect: beep
+// expect: beep
+// expect:   ~Robot
+// expect:   ~Robot
+// expect: generics:
+// expect: 2
+// expect: ... 1
+// expect: 4
+// expect: s
+// expect: dog
+// expect:   ~Animal dog
+// expect: dog
+// expect:   ~Animal dog
+// expect: dog
+// expect:   ~Animal dog
+// expect:   ~Animal dog
+// expect: dog
+// expect:   ~Animal animal
+// expect:   ~Animal dog
+// expect: errors:
+// expect:   fails has moved in
+// expect:   ~Animal moved in
+// expect:   ~Animal kept
+// expect: failed
+// expect:   ~Animal animal
+// expect: not ok
+// expect:   fails has animal
+// expect:   ~Animal animal
+// expect: new
+// expect: end
+// expect:   ~Animal new

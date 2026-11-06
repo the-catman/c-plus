@@ -1,0 +1,120 @@
+class Node {
+public:
+    int n = 1;
+    void go() {}
+};
+class Other {};
+class Derived : public Node {};
+struct Value {
+    int x;
+};
+struct Holds {
+    unique<Node> u;
+};
+class Abstract {
+public:
+    virtual int f() const = 0;
+};
+void take(unique<Node> u) {}
+void takeNode(Node n) {}
+unique<Node> make() { return unique<Node>(); }
+void afterMove(bool c) {
+    unique<Node> a = unique<Node>();
+    unique<Node> b = move(a);
+    println("{}", a.n);
+    unique<Node> d = unique<Node>();
+    if (c) take(move(d));
+    d.go();
+    unique<Node> e = unique<Node>();
+    bool used = c && makesTrue(move(e));
+    println("{}", e.n);
+    unique<Node> f = unique<Node>();
+    Node? viaChain = maybeNode();
+    int r = viaChain?.n ?? takeInt(move(f));
+    println("{}", f.n);
+    int plain = 1;
+    int moved = move(plain);
+    println("{}", plain);
+}
+bool makesTrue(unique<Node> u) { return true; }
+int takeInt(unique<Node> u) { return 1; }
+Node? maybeNode() { return null; }
+void loops(bool c) {
+    unique<Node> a = unique<Node>();
+    for (int i = 0; i < 2; i++) take(move(a));
+    unique<Node> b = unique<Node>();
+    while (c) {
+        take(move(b));
+    }
+    unique<Node> d = unique<Node>();
+    do {
+        take(move(d));
+    } while (c);
+    unique<Node> e = unique<Node>();
+    vector<int> items;
+    for (int x : items) take(move(e));
+    unique<Node> f = unique<Node>();
+    for (int i = 0; i < 2; i++) {
+        if (i == 0) continue;
+        take(move(f));
+        if (c) continue;
+        f = unique<Node>();
+    }
+    unique<Node> g = unique<Node>();
+    while (takeInt(move(g)) > 0) {}
+}
+void tryBlocks() {
+    unique<Node> a = unique<Node>();
+    try {
+        mayFail(move(a));
+    } catch (Error e) {
+        println("{}", a.n);
+    }
+}
+void mayFail(unique<Node> u) throws {}
+const int CONSTANT = 1;
+class Member {
+    unique<Node> held = unique<Node>();
+    int number = 1;
+    void reads() const {
+        unique<Node> taken = move(held);
+    }
+};
+void movingWrong() {
+    const unique<Node> c = unique<Node>();
+    unique<Node> x = move(c);
+    int k = move(CONSTANT);
+    auto y = move();
+    auto z = move(1, 2);
+}
+void cpp() {
+    std::unique_ptr<Node> p;
+    unique_ptr<Node> q;
+    auto r = std::make_unique<Node>();
+    auto s = make_unique<Node>();
+    auto t = std::move(q);
+}
+int main() {
+    return 0;
+}
+// error: 'a' has no value here, since it may have been moved away
+// error: 'd' has no value here, since it may have been moved away
+// error: it is moved here
+// error: 'e' has no value here, since it may have been moved away
+// error: 'f' has no value here, since it may have been moved away
+// error: 'plain' has no value here, since it may have been moved away
+// error: 'a' is moved inside a loop, so it would have no value the next time round
+// error: 'b' is moved inside a loop, so it would have no value the next time round
+// error: 'd' is moved inside a loop, so it would have no value the next time round
+// error: 'e' is moved inside a loop, so it would have no value the next time round
+// error: 'f' is moved inside a loop, so it would have no value the next time round
+// error: 'g' is moved inside a loop, so it would have no value the next time round
+// error: 'held' cannot be moved inside const method 'reads'
+// error: 'c' is const and cannot be moved
+// error: the constant 'CONSTANT' cannot be moved
+// error: move takes one value
+// error: write `unique<Node>`, which works like std::unique_ptr, but is never empty
+// error: C+ has no unique_ptr
+// error: write `unique<Node>(...)`, which builds a new Node
+// error: C+ has no make_unique
+// error: built-ins need no prefix: write `move(x)`

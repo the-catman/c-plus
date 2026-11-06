@@ -1,0 +1,76 @@
+class Node {
+public:
+    int n = 1;
+    void go() {}
+};
+class Other {};
+class Derived : public Node {};
+struct Value {
+    int x;
+};
+struct Holds {
+    unique<Node> u;
+};
+class Abstract {
+public:
+    virtual int f() const = 0;
+};
+void take(unique<Node> u) {}
+void takeNode(Node n) {}
+unique<Node> make() { return unique<Node>(); }
+void reading() {
+    unique<Node> a = unique<Node>();
+    if (a) {}
+    if (auto x = a) {}
+    a->n = 1;
+    *a;
+    Node n = static_cast<Node>(a);
+    unique<Node> s = static_cast<unique<Node>>(a);
+    Derived? d = dynamic_cast<Derived?>(a);
+    a.missing;
+    a.nope();
+}
+void containers() {
+    vector<unique<Node>> v;
+    unique<Node> f = v.front();
+    unique<Node> g = v.back();
+    unique<Node> h = v[0];
+    for (auto x : v) {}
+    auto many = vector<unique<Node>>(3);
+    auto filled = vector<unique<Node>>(3, unique<Node>());
+    array<unique<Node>, 2> a = {unique<Node>(), unique<Node>()};
+    a.fill(unique<Node>());
+    unique<Node> front = a.front();
+    for (auto x : a) {}
+    array<unique<Node>, 2> b;
+    unique<Node>? o = null;
+    unique<Node> val = o.value();
+    if (auto x = o) {}
+    unique<Node> fall = o ?? make();
+    auto chain = (o?.get());
+    Holds? hh = null;
+    unique<Node>? fromChain = hh?.u;
+}
+int main() {
+    return 0;
+}
+// error: a unique reference is never empty. For one that can be, write `unique<Node>?`
+// error: the variable declared in the if condition must be an optional, a bool or a number, but 'x' is 'unique<Node>'
+// error: '->' follows a pointer, but 'a' is 'unique<Node>'
+// error: a unique reference is used directly, so fields and methods are reached with '.': write `a.n`
+// error: a unique reference is used directly: `a.field`, or `a.get()` for the object
+// error: a cast cannot change who owns an object, as this one from 'unique<Node>' to 'Node' would
+// error: write `dynamic_cast<Derived?>(a.get())`
+// error: 'Node' has no field named 'missing'
+// error: 'Node' has no method named 'nope'
+// error: front() gives a copy, but a 'unique<Node>' cannot be copied
+// error: back() gives a copy, but a 'unique<Node>' cannot be copied
+// error: 'v[0]' cannot be copied
+// error: a range-based for loop copies each element, but a 'unique<Node>' cannot be copied
+// error: cannot make its elements on its own, because a 'unique<Node>' reference cannot be empty
+// error: every element would be a copy of this, but a 'unique<Node>' cannot be copied
+// error: fill() copies an element, but a 'unique<Node>' cannot be copied
+// error: front() copies an element, but a 'unique<Node>' cannot be copied
+// error: value() gives a copy, but a 'unique<Node>' cannot be copied
+// error: 'o' cannot be copied, since a 'unique<Node>?' holds what has one owner
+// error: '?.' gives a copy, but a 'unique<Node>' cannot be copied

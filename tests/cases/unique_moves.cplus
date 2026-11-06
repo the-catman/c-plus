@@ -1,0 +1,149 @@
+// `move` works on anything, and leaves a variable with no value until it gets a new one.
+class Node {
+public:
+    int n = 1;
+    Node? next;
+};
+struct Point {
+    int x = 1;
+    int y = 2;
+};
+struct Big {
+    array<string, 2> parts;
+};
+class Holder {
+public:
+    string text = "text";
+    vector<int> numbers = {1, 2};
+    Node node = Node();
+    Point point;
+};
+// A long list, with each node owned by the one before it, frees without running out of stack.
+class Link {
+public:
+    unique<Link>? next;
+    int n = 0;
+};
+class Base {
+public:
+    int n = 1;
+};
+class Derived : public Base {
+public:
+    unique<Derived>? next;
+};
+int sum(vector<int> v) {
+    int total = 0;
+    for (int x : v) total += x;
+    return total;
+}
+int leftLoop(bool stop) {
+    unique<Link> u = unique<Link>();
+    for (int i = 0; i < 3; i++) {
+        if (i == 1) {
+            unique<Link> taken = move(u);
+            return taken.n + i;
+        }
+    }
+    return u.n;
+}
+int newValueEachRound() {
+    unique<Link> u = unique<Link>();
+    int total = 0;
+    for (int i = 0; i < 3; i++) {
+        unique<Link> taken = move(u);
+        taken.n = i;
+        total += taken.n;
+        u = unique<Link>();
+    }
+    return total + u.n;
+}
+int breakAfter() {
+    unique<Link> u = unique<Link>();
+    while (true) {
+        unique<Link> taken = move(u);
+        break;
+    }
+    return 1;
+}
+int main() {
+    string s = "abc";
+    string t = move(s);
+    s = "new";
+    println("{} {}", s, t);
+    vector<int> v = {1, 2};
+    vector<int> w = move(v);
+    v = {9};
+    println("{} {} {}", v, w, sum(move(w)));
+    int n = 5;
+    int m = move(n);
+    n = 6;
+    println("{} {}", n, m);
+    Node a = Node();
+    Node b = move(a);
+    a = Node();
+    println("{}", a == b);
+    Point p;
+    Point q = move(p);
+    p = {3, 4};
+    println("{} {}", p, q);
+    Big big;
+    big.parts[0] = "held";
+    Big other = move(big);
+    big = Big{};
+    big.parts[0] = "new";
+    println("{} {}", big, other);
+    array<string, 2> arr = {"a", "b"};
+    array<string, 2> arr2 = move(arr);
+    println("{}", arr2);
+    string? opt = "x";
+    string? opt2 = move(opt);
+    println("{}", opt2);
+
+    // From a field or an element, what can be copied just is, and keeps its value there.
+    Holder h = Holder();
+    string copied = move(h.text);
+    vector<int> numbers = move(h.numbers);
+    Node kept = move(h.node);
+    Point pt = move(h.point);
+    println("{} {} {} {}", copied, numbers, kept == h.node, pt);
+    vector<string> names = {"n"};
+    string first = move(names[0]);
+    println("{} {}", first, names);
+    // A value not stored anywhere.
+    println("{}", move(string("made")));
+    println("{}", move(sum(vector<int>{1})));
+
+    println("{} {} {}", leftLoop(true), newValueEachRound(), breakAfter());
+
+    unique<Link> head = unique<Link>();
+    for (int i = 0; i < 1000000; i++) {
+        unique<Link> node = unique<Link>();
+        node.next = move(head);
+        head = move(node);
+    }
+    println("built");
+    unique<Derived> dhead = unique<Derived>();
+    for (int i = 0; i < 1000000; i++) {
+        unique<Derived> node = unique<Derived>();
+        node.next = move(dhead);
+        dhead = move(node);
+    }
+    println("{}", dhead.n);
+    return 0;
+}
+// expect: new abc
+// expect: [9] [1, 2] 3
+// expect: 6 5
+// expect: false
+// expect: {x: 3, y: 4} {x: 1, y: 2}
+// expect: {parts: ["new", ""]} {parts: ["held", ""]}
+// expect: ["a", "b"]
+// expect: x
+// expect: text [1, 2] true {x: 1, y: 2}
+// expect: n ["n"]
+// expect: made
+// expect: 1
+// expect: 1 3 1
+// expect: built
+// expect: 1

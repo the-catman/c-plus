@@ -38,6 +38,7 @@ long square(long n) { return n * n; }
 | Errors | `int f() throws { if (bad) throw Error("why"); return 1; }`. Each call that can fail is `try f()`, which passes the error on, or is inside `try { f(); } catch (NotFound e) { } catch (Error e) { println("{}", e.what()); }`. `class NotFound : public Error {...}`. `catch (...)`, `throw;`, `int main() throws`. Everything is released on the way out |
 | Generics | `template<typename T> T largest(T a, T b) { ... }`, called as `largest(1, 2)` or `largest<long>(1, 2)`. `template<typename T> class Stack { ... };`, used as `Stack<int>` with its arguments always written. `template<typename T, int N> struct Buffer { array<T, N> items; };`. `T()` is the default value of T |
 | Constraints | `template<Comparable T>`, `template<Number T>`, `template<Integer T>`, `template<Floating T>`, `template<Speaker T>` for an interface or class. Your own: `template<typename T> concept Addable = requires(T a, T b) { a + b; };` |
+| Unique references | `unique<Node> a = unique<Node>("x");` is the one owner, never empty: `a.name`, `a.go()`. `unique<Node> b = move(a);` leaves `a` with no value. `take(move(b))` hands it over, `lend(a.get())` lends it as a `Node`. `unique<Node>?` can be empty. Copying is an error |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
 | Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` a number or a constant. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
@@ -92,6 +93,8 @@ long square(long n) { return n * n; }
 | `template<typename T> requires Comparable<T>` | `template<Comparable T>` |
 | an error only from inside a generic that is used | a generic is only checked when used, once for each set of types. `cplus check` needs code that uses it |
 | `std::shared_ptr<Node>`, `std::make_shared<Node>()` | `Node n = Node();`: a class variable is already a counted reference |
+| `std::unique_ptr<Node>`, `std::make_unique<Node>(x)`, `std::move(a)` | `unique<Node>`, `unique<Node>(x)`, `move(a)`. Reading `a` after `move(a)` is an error |
+| `u->x`, `*u`, `if (u)`, `u.reset()` on a unique reference | `u.x`, `u.get()`. It is never empty; `unique<Node>?` can be, with `opt = null` |
 | `std::weak_ptr<Node>` | `weak<Node>`, with `lock()`, which gives a `Node?`, `expired()` and `reset()` |
 | `w == null`, `if (w)` on a `weak<Node>` | `w.expired()`, `if (auto n = w.lock())`. A weak reference is not a condition |
 | `dynamic_cast<Dog*>(a)`, `static_cast<Dog*>(a)` | a class variable is already a reference: `dynamic_cast<Dog?>(a)` |
@@ -171,7 +174,7 @@ long square(long n) { return n * n; }
 | Operators | operator overloading with C++ syntax, after function overloading |
 | Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments |
 | Modules | `import net.server;`, `http::get(url)` |
-| Memory | `unique<T>`, `local<T>`; pointers into vectors and strings |
+| Memory | `local<T>`; pointers into vectors and strings |
 | Types | enums, `const` fields, types nested in a type or a function, `short` and other small integers |
 | Functions | default arguments, `auto` parameters and return types, lambdas |
 | Statements | `switch` |

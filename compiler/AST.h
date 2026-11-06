@@ -19,12 +19,12 @@ struct TemplatePattern;
 
 struct Type {
     enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, Struct, Class, Vector, Optional, Null,
-                      Pointer, Opaque, Array, Weak,
+                      Pointer, Opaque, Array, Weak, Unique,
                       // Only while a generic definition is read, to learn its shape; never in checked code.
                       TypeParam, Dependent };
     Kind kind;
     const char* name;
-    const StructDecl* decl = nullptr;  // for Kind::Struct, Kind::Class and Kind::Opaque
+    const StructDecl* decl = nullptr;  // for Kind::Struct, Kind::Class, Kind::Unique and Kind::Opaque
     const Type* elem = nullptr;        // for Kind::Vector and Kind::Array, the value type of Kind::Optional, what a Kind::Pointer points to, the class of Kind::Weak
     bool constElem = false;            // for Kind::Pointer: `const int*`, which only reads what it points to
     int64_t length = 0;                // for Kind::Array: the N of `array<T, N>`; for Kind::TypeParam: which parameter it is
@@ -37,6 +37,8 @@ struct Type {
     bool isNull() const { return kind == Kind::Null; }  // the type of `null`, which converts to any optional or pointer
     bool isPointer() const { return kind == Kind::Pointer; }
     bool isWeak() const { return kind == Kind::Weak; }  // `weak<Node>`: a reference that does not keep the object alive
+    bool isUnique() const { return kind == Kind::Unique; }  // `unique<Node>`: the one owner of an object, which is never copied
+    bool isObjectRef() const { return isClass() || isUnique(); }  // at run time, these are the same pointer
     // A C type known only by name, `extern "C" struct sqlite3;`, which C+ only points to.
     bool isOpaque() const { return kind == Kind::Opaque; }
     bool isError() const { return kind == Kind::Error; }
@@ -117,6 +119,17 @@ struct Type {
         return &it->second.second;
     }
 
+    // `unique<elem>`, where elem is a class. One Type per class, like vectorOf.
+    static const Type* uniqueOf(const Type* elem) {
+        static std::map<const Type*, std::pair<std::string, Type>> made;
+        auto [it, inserted] = made.try_emplace(elem);
+        if (inserted) {
+            it->second.first = "unique<" + std::string(elem->name) + ">";
+            it->second.second = Type{Kind::Unique, it->second.first.c_str(), elem->decl, elem};
+        }
+        return &it->second.second;
+    }
+
     // `elem*`, or `const elem*` with `constElem`: a raw pointer, which may be null. One
     // Type per pointee and constness, like vectorOf.
     static const Type* pointerTo(const Type* elem, bool constElem = false) {
@@ -157,7 +170,7 @@ struct TemplatePattern {
 struct Expr {
     enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
                       Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof, New,
-                      Delete, Try, Constraint };
+                      Delete, Try, Constraint, Borrow };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -254,6 +267,13 @@ struct TryExpr : Expr {
     TryExpr(Loc l, ExprPtr e) : Expr(Kind::Try, l), operand(std::move(e)) {}
 };
 
+// Set by Sema on what is reached through a `unique<Node>`, as in `a.name`: the object, as a Node.
+struct BorrowExpr : Expr {
+    ExprPtr operand;
+    bool checkEmpty;  // what holds it could have been moved from, which only the running program can see
+    BorrowExpr(Loc l, ExprPtr e, bool check) : Expr(Kind::Borrow, l), operand(std::move(e)), checkEmpty(check) {}
+};
+
 // `Number<T>`, `same_as<T, int>` or `Addable<T>`: whether a type fits a constraint, as a bool.
 struct ConstraintExpr : Expr {
     std::string name;
@@ -314,7 +334,7 @@ struct IncDecExpr : Expr {
         : Expr(Kind::IncDec, l), increment(inc), prefix(pre), target(std::move(t)) {}
 };
 
-enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill };
+enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill, Move };
 
 // The math functions of C++'s <cmath>, and abs, min and max.
 enum class MathFn {
@@ -353,6 +373,7 @@ struct CallExpr : Expr {
     std::vector<TemplateArg> templateArgs;   // `max<long>(a, b)`
     const StructDecl* constructs = nullptr;  // set by Sema for `TypeName(...)`
     bool copies = false;                     // set by Sema for `Point(p)` where `p` is a Point
+    const Type* uniqueType = nullptr;        // `unique<Node>(args)`, which builds a new Node
     Builtin builtin = Builtin::None;       // set by Sema for built-ins
     const Type* vectorType = nullptr;      // `vector<int>(n)` or `vector<int>(n, value)`
     std::vector<std::string> formatPieces;  // print, println, format, to_string: literal text around each {}
@@ -384,6 +405,7 @@ struct MethodCallExpr : Expr {
     StrMethod strMethod = StrMethod::None;    // set by Sema for a string method
     OptMethod optMethod = OptMethod::None;    // set by Sema for an optional method
     WeakMethod weakMethod = WeakMethod::None;  // set by Sema for a method of a weak reference
+    bool uniqueGet = false;                    // set by Sema for `u.get()` on a unique reference
     std::string qualifier;                    // `d.Animal::speak()`: that class's own version, without dispatch
     BasePath path;                            // set with method: from the receiver's type to the one declaring it
     MethodCallExpr(Loc nameLoc, ExprPtr r, std::string n, std::vector<ExprPtr> a)

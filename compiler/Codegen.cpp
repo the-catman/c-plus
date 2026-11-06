@@ -329,12 +329,12 @@ struct Codegen::Impl {
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
             case K::Array: return llvm::ArrayType::get(llvmType(t->elem), (uint64_t)t->length);
-            case K::Class: case K::Vector: case K::Null: case K::Pointer: case K::Weak: return b.getPtrTy();
+            case K::Class: case K::Vector: case K::Null: case K::Pointer: case K::Weak: case K::Unique: return b.getPtrTy();
             // An optional class reference is a pointer that may be null. Any other
             // optional is { i1 has, T value }, and its value is all zero bytes when it
             // has none, so retaining or releasing it is harmless either way.
             case K::Optional:
-                if (t->elem->isClass()) return b.getPtrTy();
+                if (t->elem->isObjectRef()) return b.getPtrTy();
                 return llvm::StructType::get(ctx, {b.getInt1Ty(), llvmType(t->elem)});
             default: llvm_unreachable("unresolved type reached codegen");
         }
@@ -397,7 +397,7 @@ struct Codegen::Impl {
     // vector buffers, string buffers), which are retained when the value is copied and
     // released when it goes away.
     bool isManaged(const Type* t) {
-        if (t->isClass() || t->isVector() || t->is(K::String) || t->isWeak()) return true;
+        if (t->isObjectRef() || t->isVector() || t->is(K::String) || t->isWeak()) return true;
         if (t->isOptional() || t->isArray()) return isManaged(t->elem);
         if (!t->isStruct()) return false;
         TypeInfo& info = types.at(t->decl);
@@ -607,19 +607,19 @@ struct Codegen::Impl {
     // ---- Optionals ---------------------------------------------------------
 
     llvm::Value* hasValue(llvm::Value* opt, const Type* t) {
-        if (t->elem->isClass()) return b.CreateIsNotNull(opt, "has");
+        if (t->elem->isObjectRef()) return b.CreateIsNotNull(opt, "has");
         if (inMemory(t)) return b.CreateLoad(b.getInt1Ty(), b.CreateStructGEP(llvmType(t), opt, 0), "has");
         return b.CreateExtractValue(opt, 0, "has");
     }
 
     llvm::Value* valueOf(llvm::Value* opt, const Type* t) {
-        if (t->elem->isClass()) return opt;
+        if (t->elem->isObjectRef()) return opt;
         if (inMemory(t)) return b.CreateStructGEP(llvmType(t), opt, 1, "value");
         return b.CreateExtractValue(opt, 1, "value");
     }
 
     llvm::Value* wrapOptional(llvm::Value* v, const Type* t) {
-        if (t->elem->isClass()) return v;
+        if (t->elem->isObjectRef()) return v;
         if (inMemory(t)) {
             llvm::AllocaInst* opt = entryAlloca(llvmType(t), "opt");
             b.CreateStore(b.getInt1(true), b.CreateStructGEP(llvmType(t), opt, 0));
@@ -632,7 +632,7 @@ struct Codegen::Impl {
 
     void retainValue(llvm::Value* v, const Type* t) {
         if (t->isOptional()) return retainValue(valueOf(v, t), t->elem);
-        if (t->isClass()) b.CreateCall(hasInnerParts ? rtRetainObject : rtRetainClass, {v});
+        if (t->isObjectRef()) b.CreateCall(hasInnerParts ? rtRetainObject : rtRetainClass, {v});
         else if (t->isWeak()) b.CreateCall(rtWeakRetain, {v});
         else if (t->isVector()) b.CreateCall(rtRetain, {v});
         else if (t->is(K::String)) b.CreateCall(rtRetain, {b.CreateExtractValue(v, 2, "owner")});
@@ -1239,13 +1239,13 @@ struct Codegen::Impl {
         if (from == to) return v;
         if (from->isNull()) return zeroValue(to);
         if (to->isWeak() || (from->isOptional() && to->isOptional())) {  // `Dog?` to `Animal?`, or an object to `weak<Animal>`
-            const Type* fromClass = from->isClass() ? from : from->elem;
+            const Type* fromClass = from->isObjectRef() ? from : from->elem;
             uint64_t offset = pathOffset(fromClass->decl->pathTo(to->elem->decl));
             if (!offset) return v;
             return b.CreateSelect(b.CreateIsNull(v), v, atOffset(v, offset));
         }
         if (to->isOptional()) return wrapOptional(convert(v, from, to->elem), to);
-        if (from->isClass() && to->isClass()) return atOffset(v, pathOffset(from->decl->pathTo(to->decl)));  // to a base class
+        if (from->isObjectRef() && to->isObjectRef()) return atOffset(v, pathOffset(from->decl->pathTo(to->decl)));  // to a base class
         if (from->is(K::Int) && to->is(K::Long)) return b.CreateSExt(v, b.getInt64Ty());
         if (from->is(K::Char) && to->isInteger()) return b.CreateZExt(v, llvmType(to));  // its code, 0 to 255
         if (from->is(K::Char) && to->isFloating()) return b.CreateUIToFP(v, llvmType(to));
@@ -1332,7 +1332,8 @@ struct Codegen::Impl {
             case K::Float: case K::Double: return llvm::ConstantFP::get(llvmType(t), 0.0);
             case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct: return buildAggregate(*t->decl, {});
-            case K::Class: case K::Vector: case K::Pointer: case K::Weak: return llvm::ConstantPointerNull::get(b.getPtrTy());
+            case K::Class: case K::Vector: case K::Pointer: case K::Weak: case K::Unique:
+                return llvm::ConstantPointerNull::get(b.getPtrTy());
             case K::Optional: return zeroValue(t);  // null
             default: llvm_unreachable("no default value for this type");
         }
@@ -1769,6 +1770,13 @@ struct Codegen::Impl {
             case Expr::Kind::Cast: return genCast(static_cast<const CastExpr&>(e));
             case Expr::Kind::Try: return genRaw(*static_cast<const TryExpr&>(e).operand, owned);
             case Expr::Kind::Constraint: return b.getInt1(static_cast<const ConstraintExpr&>(e).value);
+            case Expr::Kind::Borrow: {  // the object a unique reference owns
+                auto& borrow = static_cast<const BorrowExpr&>(e);
+                llvm::Value* object = isPlace(*borrow.operand) ? loadPlace(*borrow.operand, "object") : genRaw(*borrow.operand, owned);
+                if (borrow.checkEmpty)
+                    trapIf(b.CreateIsNull(object), "this '" + std::string(borrow.operand->type->name) + "' has been moved away", e.loc);
+                return object;
+            }
             case Expr::Kind::CharLit: return b.getInt8(static_cast<const CharLitExpr&>(e).value);
             case Expr::Kind::BoolLit: return b.getInt1(static_cast<const BoolLitExpr&>(e).value);
             case Expr::Kind::StringLit: return stringValue(static_cast<const StringLitExpr&>(e).value);
@@ -2070,7 +2078,7 @@ struct Codegen::Impl {
     // class references by identity.
     llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
         switch (t->kind) {
-            case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer:
+            case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer: case K::Unique:
                 return b.CreateICmpEQ(l, r);
             case K::Float: case K::Double: return b.CreateFCmpOEQ(l, r);
             case K::String: {
@@ -2087,7 +2095,7 @@ struct Codegen::Impl {
             case K::Optional: {
                 // Both null, or both holding equal values. An empty optional holds zero
                 // bytes, which compare safely.
-                if (t->elem->isClass()) return b.CreateICmpEQ(l, r);
+                if (t->elem->isObjectRef()) return b.CreateICmpEQ(l, r);
                 llvm::Value* hl = hasValue(l, t);
                 llvm::Value* same = genEquals(valueOf(l, t), valueOf(r, t), t->elem);
                 return b.CreateAnd(b.CreateICmpEQ(hl, hasValue(r, t)), b.CreateOr(b.CreateNot(hl), same));
@@ -2138,7 +2146,7 @@ struct Codegen::Impl {
                 break;
             case K::String: b.CreateCall(nested ? rtPrintQuoted : rtPrintStr, {out, strData(v), strLength(v)}); break;
             case K::Struct: b.CreateCall(types.at(t->decl).print, {v, out}); break;
-            case K::Class:  // whatever the object really is, with all of its fields
+            case K::Class: case K::Unique:  // whatever the object really is, with all of its fields
             {
                 llvm::Value* vtable = loadVtable(v);
                 llvm::Value* print = vtableSlot(vtable, kVtablePrint, "print");
@@ -2418,7 +2426,32 @@ struct Codegen::Impl {
         llvm_unreachable("unknown math function");
     }
 
+    // `move(x)`: x's value, owned by whoever takes it. A variable is left empty, so that when it goes
+    // away there is nothing to release, and Sema stops anything from reading it. In a field or an element, what
+    // can be copied just is, and what cannot is left empty, which reading it through a Borrow finds.
+    llvm::Value* genMove(const CallExpr& call) {
+        const Expr& x = *call.args[0];
+        const Type* t = x.type;
+        bool variable = x.kind == Expr::Kind::Name && static_cast<const NameExpr&>(x).implicitField < 0;
+        if (!isPlace(x) || (!variable && !holdsUnique(t))) return genOwned(x, t);
+        llvm::Value* place = addressOf(x, false, true);
+        llvm::Value* value = loadValue(t, place, "moved");
+        if (inMemory(t)) b.CreateMemSet(place, b.getInt8(0), sizeOf(t), alignOf(t));
+        else b.CreateStore(llvm::Constant::getNullValue(llvmType(t)), place);
+        return value;
+    }
+
+    static bool holdsUnique(const Type* t) {
+        if (t->isUnique()) return true;
+        if (t->isOptional() || t->isVector() || t->isArray()) return holdsUnique(t->elem);
+        if (!t->isStruct()) return false;
+        for (auto& f : t->decl->fields)
+            if (holdsUnique(f.type)) return true;
+        return false;
+    }
+
     llvm::Value* genCall(const CallExpr& call) {
+        if (call.builtin == Builtin::Move) return genMove(call);
         if (call.copies) return genOwned(*call.args[0], call.vectorType ? call.vectorType : &call.constructs->type);  // `Point(p)`
         if (call.vectorType) return genVectorConstruction(call);
         if (call.builtin == Builtin::Math) return genMath(call);
@@ -2484,6 +2517,12 @@ struct Codegen::Impl {
         if (recv.type->isVector()) return genVectorMethod(call);
         if (recv.type->isArray()) return genArrayMethod(call);
         if (recv.type->is(K::String)) return genStringMethod(call);
+        if (call.uniqueGet) {  // lends the object, as a reference of its own
+            llvm::Value* object = gen(recv);
+            trapIf(b.CreateIsNull(object), "this '" + std::string(recv.type->name) + "' has been moved away", call.loc);
+            retainValue(object, recv.type->elem);
+            return object;
+        }
         std::vector<llvm::Value*> args{nullptr};  // `this` comes first, and is set below
         auto genArgs = [&] {
             size_t mark = pending.size();
@@ -2801,7 +2840,7 @@ struct Codegen::Impl {
                 auto& v = static_cast<const VarDecl&>(s);
                 llvm::Value* init = v.init ? genOwned(*v.init, v.type)
                                     : v.type->is(K::String) || v.type->hasFields() || v.type->isVector() ||
-                                              v.type->isOptional() || v.type->isArray() || v.type->isWeak()
+                                              v.type->isOptional() || v.type->isArray() || v.type->isWeak() || v.type->isUnique()
                                         ? genDefault(v.type)
                                         : nullptr;
                 flushTemps();
@@ -3657,14 +3696,14 @@ struct Codegen::Impl {
     // The class of a field that refers to an object, or may: `User` or `User?`.
     static const Type* classOf(const Type* t) {
         if (t->isOptional()) t = t->elem;
-        return t->isClass() ? t : nullptr;
+        return t->isObjectRef() ? t : nullptr;
     }
 
     // Whether releasing a value of this type could free an object, and so run a
     // destructor.
     static bool mayRunDestructor(const Type* t, std::set<const StructDecl*>& seen) {
         if (t->isOptional() || t->isVector() || t->isArray()) return mayRunDestructor(t->elem, seen);
-        if (t->isClass()) return true;
+        if (t->isObjectRef()) return true;
         if (!t->isStruct() || !seen.insert(t->decl).second) return false;
         for (auto& f : t->decl->fields)
             if (mayRunDestructor(f.type, seen)) return true;

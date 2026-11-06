@@ -1,0 +1,164 @@
+// A unique reference can be a field, or go in a vector, an array, an optional or a struct, which can
+// then only be moved too. Everything is freed once.
+class Node {
+public:
+    string name;
+    Node(string s) : name(s) {}
+    ~Node() { println("  freed {}", name); }
+};
+class Owner {
+public:
+    unique<Node> first;
+    unique<Node>? second;
+    vector<unique<Node>> many;
+    Owner(unique<Node> f) : first(move(f)) {}
+    string names() const {
+        string out = first.name;
+        out += second?.name ?? "-";
+        for (int i = 0; i < many.size(); i++) out += many[i].name;
+        return out;
+    }
+    unique<Node> takeFirst(unique<Node> replacement) {
+        unique<Node> old = move(first);
+        first = move(replacement);
+        return old;
+    }
+};
+struct Pair {
+    unique<Node> a;
+    int n = 1;
+    string text() const { return a.name + to_string(n); }
+};
+struct WithDefault {
+    unique<Node> a = unique<Node>("from default");
+};
+Pair makePair(string s) {
+    return {unique<Node>(s)};
+}
+unique<Node>? findIt(bool found) {
+    if (found) return unique<Node>("found");
+    return null;
+}
+vector<unique<Node>> list() {
+    vector<unique<Node>> v;
+    v.push_back(unique<Node>("x"));
+    v.push_back(unique<Node>("y"));
+    return v;
+}
+int main() {
+    println("fields:");
+    {
+        Owner o = Owner(unique<Node>("one"));
+        o.second = unique<Node>("two");
+        o.many.push_back(unique<Node>("three"));
+        println("{}", o.names());
+        unique<Node> old = o.takeFirst(unique<Node>("four"));
+        println("{} {}", old.name, o.names());
+        o.second = null;
+        println("{}", o.names());
+    }
+    println("structs:");
+    {
+        Pair p = makePair("p");
+        println("{}", p.text());
+        Pair q = move(p);
+        q.a.name = "q";
+        println("{}", q);
+        p = makePair("p again");
+        println("{} {}", p.text(), q.text());
+        println("{}", WithDefault().a.name);
+    }
+    println("optionals:");
+    {
+        unique<Node>? none = null;
+        unique<Node>? some = unique<Node>("some");
+        println("{} {}", none == null, some == null);
+        println("{} {}", none?.name ?? "none", some?.name ?? "none");
+        println("{}", some);
+        if (auto taken = move(some)) println("{}", taken.name);
+        println("{}", findIt(true)?.name ?? "not found");
+        println("{}", findIt(false)?.name ?? "not found");
+        if (auto got = findIt(true)) println("{}", got.name);
+        unique<Node> plain = unique<Node>("plain");
+        unique<Node>? held = move(plain);
+        println("{}", held?.get().name ?? "");
+        if (held) println("holds");
+        println("{}", move(held).value().name);
+    }
+    println("vectors:");
+    {
+        vector<unique<Node>> v = list();
+        println("{} {}", v.size(), v[1].name);
+        v[0].name = "changed";
+        println("{}", v);
+        v.push_back(unique<Node>("z"));
+        v[1] = unique<Node>("replaced");
+        unique<Node> out = move(v[2]);
+        println("{}", out.name);
+        v.pop_back();
+        println("{}", v.size());
+        vector<unique<Node>> w = move(v);
+        println("{}", w.size());
+        w.clear();
+        println("cleared");
+    }
+    println("arrays:");
+    {
+        array<unique<Node>, 2> a = {unique<Node>("a0"), unique<Node>("a1")};
+        println("{} {}", a[0].name, a);
+        a[1] = unique<Node>("a2");
+        array<unique<Node>, 2> b = move(a);
+        println("{}", b[1].name);
+    }
+    println("end");
+    return 0;
+}
+// expect: fields:
+// expect: onetwothree
+// expect: one fourtwothree
+// expect:   freed two
+// expect: four-three
+// expect:   freed one
+// expect:   freed three
+// expect:   freed four
+// expect: structs:
+// expect: p1
+// expect: {a: Node {name: "q"}, n: 1}
+// expect: p again1 q1
+// expect: from default
+// expect:   freed from default
+// expect:   freed q
+// expect:   freed p again
+// expect: optionals:
+// expect: true false
+// expect: none some
+// expect: Node {name: "some"}
+// expect: some
+// expect:   freed some
+// expect: found
+// expect:   freed found
+// expect: not found
+// expect: found
+// expect:   freed found
+// expect: plain
+// expect: holds
+// expect: plain
+// expect:   freed plain
+// expect: vectors:
+// expect: 2 y
+// expect: [Node {name: "changed"}, Node {name: "y"}]
+// expect:   freed y
+// expect: z
+// expect: 2
+// expect: 2
+// expect:   freed changed
+// expect:   freed replaced
+// expect: cleared
+// expect:   freed z
+// expect: arrays:
+// expect: a0 [Node {name: "a0"}, Node {name: "a1"}]
+// expect:   freed a1
+// expect: a2
+// expect:   freed a2
+// expect:   freed a0
+// expect: end

@@ -1,0 +1,15 @@
+class Node {
+public:
+    int n = 1;
+    int get() const { return n; }
+};
+int main() {
+    vector<unique<Node>> v;
+    v.push_back(unique<Node>());
+    unique<Node> taken = move(v[0]);
+    println("{}", taken.n);
+    println("{}", v[0].get());
+    return 0;
+}
+// expect: 1
+// trap: this 'unique<Node>' has been moved away

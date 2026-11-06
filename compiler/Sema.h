@@ -86,6 +86,13 @@ private:
     void checkLoopBody(Stmt& body, Flow& flow);
     void checkForEach(ForEachStmt& st, Flow& flow);
     void checkIfConstexpr(IfStmt& st, Flow& flow);
+    // `move(x)`, which leaves a variable with no value.
+    const Type* checkMove(CallExpr& call, Flow& flow);
+    void markMoved(Flow& flow, const VarDecl* var, Loc loc);
+    void dropMovedSince(Flow& flow, size_t logStart);  // for code that may or may not have run
+    // A variable moved in a loop has no value the next time round, unless it gets a new one.
+    void checkMovedInLoop(const Flow& head, size_t logStart, const Flow& end);
+    void rejectCopy(const Expr& e);  // reports reading what has one owner as if it could be copied
     // Working out values while compiling. `what` starts the message of an error.
     ConstHooks constHooks();
     bool evaluate(const Expr& e, ConstValue& out, const std::string& what);
@@ -192,6 +199,7 @@ private:
     std::set<const StructDecl*> basesWalked_, overridesDone_;
     std::unordered_map<const StructDecl*, int> structState_;  // 1 = being visited, 2 = done
     std::deque<FuncDecl*> pendingMethods_;
+    std::vector<std::pair<const VarDecl*, Loc>> moveLog_;  // every `move(x)` of a variable so far
     int tryBlocks_ = 0;     // the `try { }` blocks around the code being checked
     int tryPrefixes_ = 0;   // the same for `try f()`
     int failPoints_ = 0;    // how many places that can fail have been seen, to tell if a try block has any

@@ -1,0 +1,32 @@
+// A unique reference that is declared without a value holds nothing, on a stack full of other values.
+class Node {
+public:
+    int n = 1;
+};
+struct S {
+    unique<Node>? a;
+    array<unique<Node>?, 2> b;
+};
+long fill() {
+    array<long, 512> junk;
+    junk.fill(-1234567);
+    return junk[3];
+}
+void declare(bool give) {
+    unique<Node> a;
+    unique<Node>? b;
+    S s;
+    vector<unique<Node>> v;
+    array<unique<Node>?, 3> arr;
+    if (give) a = unique<Node>();
+    println("{} {} {} {}", b == null, s.a == null, v.empty(), arr[2] == null);
+}
+int main() {
+    fill();
+    declare(false);
+    fill();
+    declare(true);
+    return 0;
+}
+// expect: true true true true
+// expect: true true true true

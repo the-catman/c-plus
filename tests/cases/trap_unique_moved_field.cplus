@@ -1,0 +1,19 @@
+// What is moved out of a field or an element cannot be followed by the compiler, so the program stops.
+class Node {
+public:
+    int n = 1;
+};
+class Owner {
+public:
+    unique<Node> held = unique<Node>();
+};
+int main() {
+    Owner o = Owner();
+    unique<Node> taken = move(o.held);
+    println("{}", taken.n);
+    println("{}", o.held.n);
+    return 0;
+}
+// expect: 1
+// trap: this 'unique<Node>' has been moved away
+// trap: trap_unique_moved_field.cplus:14

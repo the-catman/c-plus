@@ -1,0 +1,85 @@
+class Node {
+public:
+    int n = 1;
+    void go() {}
+};
+class Other {};
+class Derived : public Node {};
+struct Value {
+    int x;
+};
+struct Holds {
+    unique<Node> u;
+};
+class Abstract {
+public:
+    virtual int f() const = 0;
+};
+extern "C" void takesC(unique<Node> u);
+void take(unique<Node> u) {}
+void takeNode(Node n) {}
+unique<Node> make() { return unique<Node>(); }
+unique<Node> fromField(Holds h) {
+    return h.u;
+}
+unique<Node> fromConst() {
+    const unique<Node> c = unique<Node>();
+    return c;
+}
+void copies() {
+    unique<Node> a = unique<Node>();
+    unique<Node> b = a;
+    auto c = a;
+    take(a);
+    takeNode(a);
+    unique<Node>? o = a;
+    Node n = a;
+    vector<unique<Node>> v = {a};
+    v.push_back(a);
+    a = b;
+    Holds h = {a};
+    Holds h2 = h;
+    auto h3 = h;
+    vector<unique<Node>> w = v;
+    bool yes = true;
+    unique<Node> t = yes ? a : b;
+    weak<Node> wk = a;
+    Node p = Node(a);
+    unique<Node> q = unique<Node>(a);
+}
+void fromShared(Node n) {
+    unique<Node> a = n;
+    unique<Node> b = null;
+    unique<Node> c = Node();
+    unique<Other> d = unique<Node>();
+    unique<Derived> e = unique<Node>();
+}
+void wrongTypes() {
+    unique<int> a;
+    unique<Value> b;
+    unique<Node?> c;
+    weak<unique<Node>> d;
+    unique<Abstract> e = unique<Abstract>();
+    unique<Node> f = unique<Node>(1, 2);
+}
+int main() {
+    return 0;
+}
+// error: a C function can take a number, char, bool, a pointer, a struct, string or string?, but this parameter is 'unique<Node>'
+// error: 'h.u' cannot be copied, since a 'unique<Node>' has one owner
+// error: 'c' cannot be copied, since a 'unique<Node>' has one owner
+// error: 'a' cannot be copied, since a 'unique<Node>' has one owner
+// error: write `move(a)` to hand it over, after which a has no value, or `a.get()` to lend the object, as a `Node`
+// error: 'h' cannot be copied, since a 'Holds' holds what has one owner
+// error: 'v' cannot be copied, since a 'vector<unique<Node>>' holds what has one owner
+// error: write `a.get()`, which lends the object
+// error: a 'Node' may be shared, so it has no one owner. Write `unique<Node>(...)` to build a new object
+// error: a unique reference is never empty. For one that can be, write `unique<Node>?`
+// error: the object is not a 'Other'
+// error: expected 'unique<Derived>' to initialize 'e', but this is 'unique<Node>'
+// error: a unique reference owns a class object, but 'int' is not a class
+// error: a unique reference owns a class object, but 'Value' is not a class
+// error: for one that can be empty, write `unique<Node>?`
+// error: a weak reference refers to a class object, but 'unique<Node>' is not a class
+// error: cannot create a 'Abstract' object, because its method 'f' has no body
+// error: 'Node' has 1 field but 2 values were given

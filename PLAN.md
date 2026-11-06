@@ -161,6 +161,18 @@ The compiler refuses to pass any value containing a `local<T>` into `spawn`. Thi
 shallow check that catches the common mistake. ThreadSanitizer in debug builds catches
 the rest.
 
+`unique<T>` decided 2026-11-06:
+- It is written `unique<Node>`, built with `unique<Node>(args)`, used with `.`, and handed over with `move(a)`.
+  `b = a` is an error. Unlike C++, it is never empty, and using a moved variable is a compile error: `move` feeds
+  definite assignment, through branches, loops, `&&` and try blocks. A moved field or element cannot be followed
+  while compiling, so it is left empty, and using it stops the program. `unique<Node>?` is the one that can be empty.
+- An object has the same layout however it is held, so a class is compiled once. So "no count" in the table above means no
+  count work on a move or a read of a field through the variable, not that the object has none. A method call or a
+  value read for a statement still counts, which keeps the object alive if the code replaces its owner, and `u.get()`
+  lends a counted reference. The object can then outlive its owner, but it can never dangle. Rust checks borrows
+  instead, which C+ does not do.
+- `move` works on every type, so generic code can write `move(x)` for any `T`.
+
 ### 2.9 Concurrency and async — DECIDED
 Model: JavaScript-style `async`/`await` with a built-in event loop, plus real threads.
 - `spawn f()` runs `f` on a thread and returns `Task<T>` with `.wait()`.
@@ -510,8 +522,8 @@ a debug build with ASan, stack traces and a leak report. Every item of Phase 1 i
 `examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
 criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
 `dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, generics with
-constraints, errors, and `constexpr` with `if constexpr`. `unique` and `local` are left. The leak
-report came with Phase 1.
+constraints, errors, `constexpr` with `if constexpr`, and `unique<T>` with `move`. `local<T>` is left, which
+has little use until there are threads. The leak report came with Phase 1.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -564,8 +576,8 @@ will confidently write C++ wherever the two differ.
 
 ## 6. Open items
 
-- Remaining syntax: `unique<T>` and `local<T>` construction, `async` functions, lambdas, enums,
-  `switch`. Settled in Phase 0 as each feature is reached.
+- Remaining syntax: `local<T>` construction, `async` functions, lambdas, enums, `switch`. Settled as each
+  feature is reached.
 - Function overloading is planned, as in C++, after the v1 core.
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, since the update to the element would be lost (decided 2026-11-06). The alternative

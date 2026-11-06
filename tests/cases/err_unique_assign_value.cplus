@@ -1,0 +1,11 @@
+class Node {
+public:
+    int n = 1;
+};
+unique<Node> make() { return unique<Node>(); }
+int main() {
+    unique<Node> a = make();
+    unique<Node> b = (a = make());
+    return 0;
+}
+// error: 'a' cannot be copied, since a 'unique<Node>' has one owner

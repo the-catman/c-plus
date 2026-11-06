@@ -1,0 +1,146 @@
+// `unique<Node>` is the one owner of an object. It cannot be copied, only handed over with `move`.
+class Node {
+public:
+    string name;
+    int n = 0;
+    Node(string s) : name(s) { println("made {}", s); }
+    ~Node() { println("freed {}", name); }
+    void rename(string s) { name = s; }
+    int twice() const { return n * 2; }
+    string other() { return "other " + name; }
+};
+void take(unique<Node> n) {
+    println("took {}", n.name);
+}
+unique<Node> make(string s) {
+    unique<Node> n = unique<Node>(s);
+    n.n = 1;
+    return n;   // a local variable hands it over by itself, as in C++
+}
+unique<Node> pass(unique<Node> n) {
+    n.n++;
+    return n;
+}
+string show(Node n) {
+    return n.name;
+}
+string showBoth(Node a, Node b) {
+    return a.name + b.name;
+}
+int main() {
+    {
+        unique<Node> a = unique<Node>("a");
+        println("{}", a.name);
+        a.rename("b");
+        a.n = 3;
+        a.n += 1;
+        println("{} {} {}", a.twice(), a.other(), a);
+    }
+    println("left the block");
+
+    // Handed over: only one owner runs the destructor, and at the right time.
+    auto m = make("m");
+    take(move(m));
+    println("after take");
+    println("{}", pass(pass(make("p"))).n);
+
+    // A variable can be used again once it is given a new value. Replacing frees the old one.
+    unique<Node> b = unique<Node>("b");
+    unique<Node> c = move(b);
+    b = unique<Node>("b2");
+    println("{} {}", b.name, c.name);
+    c = unique<Node>("c2");
+    println("replaced");
+
+    // A value not held anywhere needs no move, and reading it is fine.
+    println("{}", make("temp").name);
+    println("{}", make("temp2").twice());
+    make("dropped");
+    println("{}", unique<Node>("inline").name);
+
+    // Lending the object, as a counted reference.
+    println("{}", show(b.get()));
+    println("{}", showBoth(b.get(), c.get()));
+    Node lent = b.get();
+    lent.n = 9;
+    println("{}", b.n);
+
+    // Giving up being unique: the object is then shared as usual.
+    unique<Node> d = unique<Node>("d");
+    Node shared = move(d);
+    Node shared2 = shared;
+    println("{}", shared == shared2);
+
+    // A weak reference to it, and the lent reference keeping it alive past its owner, safely.
+    weak<Node> w = c.get();
+    println("{}", w.expired());
+    {
+        unique<Node> e = unique<Node>("e");
+        lent = e.get();
+    }
+    println("{}", lent.name);
+
+    // On paths that may or may not hand it over, it is freed once, wherever it ends up.
+    for (int i = 0; i < 2; i++) {
+        unique<Node> f = unique<Node>("f" + to_string(i));
+        if (i == 0) take(move(f));
+        println("end of round {}", i);
+    }
+    // Compared by who they are, as class references are.
+    unique<Node> g = unique<Node>("g");
+    println("{} {}", g == g, g == c);
+    println("end");
+    return 0;
+}
+// expect: made a
+// expect: a
+// expect: 8 other b Node {name: "b", n: 4}
+// expect: freed b
+// expect: left the block
+// expect: made m
+// expect: took m
+// expect: freed m
+// expect: after take
+// expect: made p
+// expect: 3
+// expect: freed p
+// expect: made b
+// expect: made b2
+// expect: b2 b
+// expect: made c2
+// expect: freed b
+// expect: replaced
+// expect: made temp
+// expect: temp
+// expect: freed temp
+// expect: made temp2
+// expect: 2
+// expect: freed temp2
+// expect: made dropped
+// expect: freed dropped
+// expect: made inline
+// expect: inline
+// expect: freed inline
+// expect: b2
+// expect: b2c2
+// expect: 9
+// expect: made d
+// expect: true
+// expect: false
+// expect: made e
+// expect: e
+// expect: made f0
+// expect: took f0
+// expect: freed f0
+// expect: end of round 0
+// expect: made f1
+// expect: end of round 1
+// expect: freed f1
+// expect: made g
+// expect: true false
+// expect: end
+// expect: freed g
+// expect: freed d
+// expect: freed e
+// expect: freed c2
+// expect: freed b2

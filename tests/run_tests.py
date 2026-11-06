@@ -31,8 +31,10 @@ Tests run at the same time, one per processor, and print in order.
 
 The runner also checks that every spec anchor in compiler/SpecRefs.h is a real
 heading in docs/SPEC.md, so diagnostics never point at a missing section, that every
-program in examples/ compiles without warnings, and that very deeply nested code is an
-error instead of a crash.
+program in examples/ compiles without warnings, that very deeply nested code is an
+error instead of a crash, and that no way of copying a unique reference compiles. That
+last one builds each case by itself, since one test file with many errors would pass with
+one of them missing.
 """
 import concurrent.futures
 import os
@@ -105,6 +107,57 @@ def check_nesting_limit(cplus, workdir):
         run = subprocess.run([cplus, "run", str(source)], capture_output=True, text=True)
         if run.returncode != 0 or run.stdout != "7\n":
             print(f"FAIL code near the nesting limit with {what}: exit code {run.returncode}\n  " + run.stderr[:500])
+            ok = False
+    return ok
+
+
+def check_unique_copies(cplus, workdir):
+    """Each of these would give an object a second owner, so each must be an error by itself."""
+    before = """
+class Node { public: int n = 1; };
+class Dog : public Node {};
+struct Holds { unique<Node> u; };
+class Owner { public: unique<Node> held; Owner(unique<Node> h) : held(move(h)) {} };
+unique<Node> make() { return unique<Node>(); }
+void take(unique<Node> u) {}
+template<typename T> T same(T x) { return x; }
+template<typename T> void noReturn(T x) {}
+unique<Node> mayFail(unique<Node> u) throws { return u; }
+int main() {
+    unique<Node> a = unique<Node>();
+    unique<Node> a2 = unique<Node>();
+    unique<Node>? o = null;
+    vector<unique<Node>> v;
+    vector<Holds> hs;
+    array<unique<Node>, 1> arr = {unique<Node>()};
+    Holds h = {unique<Node>()};
+    Holds? ho = null;
+    Owner own = Owner(unique<Node>());
+    bool yes = true;
+"""
+    copies = [
+        "unique<Node> b = a;", "auto b = a;", "auto b = (a);", "unique<Node> b = yes ? a : make();",
+        "unique<Node> b = yes ? make() : a;", "unique<Node>? b = a;", "Node b = a;", "take(a);", "v.push_back(a);",
+        "vector<unique<Node>> w = {a};", "array<unique<Node>, 1> w = {a};", "Holds x = {a};", "Holds x = Holds{a};",
+        "Holds x = Holds(a);", "auto p = new unique<Node>(a);", "unique<Node>* p = &a; unique<Node> b = *p;", "o = a;",
+        "a2 = a;", "Owner x = Owner(a);", "auto t = static_cast<unique<Node>>(a);", "unique<Node> b = unique<Node>(a);",
+        "auto b = h.u;", "auto b = v[0];", "auto b = own.held;", "auto b = hs[0];", "auto b = hs[0].u;", "auto b = ho?.u;",
+        "auto w = v;", "vector<unique<Node>> w = vector<unique<Node>>(v);", "auto b = arr;",
+        "auto w = array<unique<Node>, 1>(arr);", "auto x = h;", "Holds x = Holds(h);", "same(a);", "noReturn(a);",
+        "noReturn(h);", "noReturn(v);", "for (unique<Node> x : v) {}", "for (auto x : arr) {}", "if (auto x = o) {}",
+        "if (unique<Node> x = o) {}", "while (auto x = o) {}", "auto b = o;", "auto b = o ?? make();",
+        "int y = (o ?? a).n;", "auto b = o.value();", "auto b = o.value_or(make());", "auto b = v.front();",
+        "auto b = v.back();", "auto b = arr.front();", "try { auto b = mayFail(a); } catch (Error e) {}",
+        "unique<Node> b = (a2 = a);", "unique<Node> b = (a2 = make());", "Node n = yes ? a : a2;",
+        "unique<Node>* p = &a; take(*p);", "weak<Node> w = a;", "unique<Dog> d = unique<Dog>(); unique<Node> up = d;",
+    ]
+    ok = True
+    source = workdir / "copies.cplus"
+    for copy in copies:
+        source.write_text(before + "    " + copy + "\n    return 0;\n}\n")
+        run = subprocess.run([cplus, "check", str(source)], capture_output=True, text=True)
+        if run.returncode != 1:
+            print(f"FAIL this copies a unique reference, but it compiled: {copy}\n  " + run.stderr[:300])
             ok = False
     return ok
 
@@ -212,6 +265,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="cplus-tests-") as tmp:
         if not name_filter:
             ok = check_nesting_limit(cplus, pathlib.Path(tmp)) and ok
+            ok = check_unique_copies(cplus, pathlib.Path(tmp)) and ok
 
         def run_in_own_folder(path):
             workdir = pathlib.Path(tmp) / path.stem
