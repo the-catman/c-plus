@@ -1,0 +1,65 @@
+// A hashmap can own what has one owner. Then the map itself cannot be copied, and its values are
+// reached where they are.
+class Node {
+public:
+    int n = 1;
+    Node(int a) : n(a) {}
+    ~Node() { println("gone {}", n); }
+};
+
+struct Holds {
+    unique<Node> u;
+};
+
+int main() {
+    hashmap<string, unique<Node>> owners;
+    owners["a"] = unique<Node>(1);
+    unique<Node> made = unique<Node>(2);
+    owners["b"] = move(made);
+    println("{} {}", owners["a"].n, owners.at("b").n);
+    owners["a"].n = 10;
+    println("{}", owners);
+    println("{}", owners.insert({"c", unique<Node>(3)}));
+    println("{}", owners.insert({"c", unique<Node>(4)}));
+    println("{} {}", owners.keys(), owners.contains("c"));
+
+    unique<Node> taken = move(owners["b"]);
+    println("{} {}", taken.n, owners);
+
+    println("erase");
+    owners.erase("c");
+    println("overwrite");
+    owners["a"] = unique<Node>(5);
+    println("{}", owners.size());
+
+    hashmap<int, Holds> holds;
+    holds[1] = Holds{unique<Node>(6)};
+    println("{}", holds[1].u.n);
+    hashmap<int, hashmap<int, unique<Node>>> nested;
+    nested[1][2] = unique<Node>(7);
+    println("{}", nested[1][2].n);
+    hashmap<string, unique<Node>> other = move(owners);
+    println("{}", other.size());
+    println("end");
+    return 0;
+}
+// expect: 1 2
+// expect: {"a": Node {n: 10}, "b": Node {n: 2}}
+// expect: true
+// expect: gone 4
+// expect: false
+// expect: ["a", "b", "c"] true
+// expect: 2 {"a": Node {n: 10}, "b": moved, "c": Node {n: 3}}
+// expect: erase
+// expect: gone 3
+// expect: overwrite
+// expect: gone 10
+// expect: 2
+// expect: 6
+// expect: 7
+// expect: 2
+// expect: end
+// expect: gone 5
+// expect: gone 7
+// expect: gone 6
+// expect: gone 2

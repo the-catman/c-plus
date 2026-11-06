@@ -1,0 +1,106 @@
+// Many changes, chosen by a fixed sequence of numbers, each checked against a plain list.
+struct Pair {
+    int key;
+    int value;
+};
+
+long find(vector<Pair> model, int key) {
+    for (long i = 0; i < model.size(); i++)
+        if (model[i].key == key) return i;
+    return -1;
+}
+
+vector<Pair> without(vector<Pair> model, long at) {
+    vector<Pair> out;
+    for (long i = 0; i < model.size(); i++)
+        if (i != at) out.push_back(model[i]);
+    return out;
+}
+
+bool same(hashmap<int, int> m, vector<Pair> model) {
+    auto items = m.items();
+    if (items.size() != model.size() || m.size() != model.size()) return false;
+    for (long i = 0; i < model.size(); i++)
+        if (items[i].first != model[i].key || items[i].second != model[i].value) return false;
+    return true;
+}
+
+int main() {
+    hashmap<int, int> m;
+    vector<Pair> model;
+    long state = 12345;
+    long added = 0;
+    long erased = 0;
+    for (int step = 0; step < 6000; step++) {
+        state = (state * 1103515245 + 12345) % 2147483648;
+        int key = int((state >> 8) % 200);
+        int what = int((state >> 20) % 10);
+        long at = find(model, key);
+        if (what < 5) {  // assign
+            m[key] = step;
+            if (at >= 0) model[at].value = step;
+            else {
+                model.push_back(Pair{key, step});
+                added++;
+            }
+        } else if (what < 8) {  // erase
+            long gone = m.erase(key);
+            if (gone != (at >= 0 ? 1 : 0)) println("erase is wrong at step {}", step);
+            if (at >= 0) {
+                model = without(model, at);
+                erased++;
+            }
+        } else if (what == 8) {  // read
+            int expected = at >= 0 ? model[at].value : -1;
+            if ((m.get(key) ?? -1) != expected) println("get is wrong at step {}", step);
+            if (m.contains(key) != (at >= 0)) println("contains is wrong at step {}", step);
+        } else {  // insert
+            bool did = m.insert({key, step});
+            if (did != (at < 0)) println("insert is wrong at step {}", step);
+            if (at < 0) {
+                model.push_back(Pair{key, step});
+                added++;
+            }
+        }
+        if (step % 50 == 0 && !same(m, model)) println("the order is wrong at step {}", step);
+        if (step == 3000) {  // a copy must not be disturbed by what comes after
+            auto copy = m;
+            auto before = model;
+            m.clear();
+            model = {};
+            if (!same(copy, before)) println("the copy is wrong");
+            m = copy;
+            model = before;
+        }
+    }
+    println("{}", same(m, model));
+    println("{}", added > 500 && erased > 500);
+
+    // A key per step, in a big map, so that it grows many times, and then all but a few leave.
+    hashmap<long, long> big;
+    for (long i = 0; i < 20000; i++) big[i * i] = i;
+    bool found = true;
+    for (long i = 0; i < 20000; i++) found = found && big.at(i * i) == i;
+    println("{} {}", big.size(), found);
+    for (long i = 0; i < 19990; i++) big.erase(i * i);
+    println("{}", big.values());
+
+    // Added at one end and erased at the other, it must not grow without end.
+    hashmap<int, int> queue;
+    for (int i = 0; i < 20000; i++) {
+        queue[i] = i;
+        if (i >= 8) queue.erase(i - 8);
+    }
+    println("{}", queue.keys());
+
+    hashmap<string, int> words;
+    for (int i = 0; i < 3000; i++) words["word" + to_string(i % 700)]++;
+    println("{} {} {}", words.size(), words["word0"], words["word699"]);
+    return 0;
+}
+// expect: true
+// expect: true
+// expect: 20000 true
+// expect: [19990, 19991, 19992, 19993, 19994, 19995, 19996, 19997, 19998, 19999]
+// expect: [19992, 19993, 19994, 19995, 19996, 19997, 19998, 19999]
+// expect: 700 5 4

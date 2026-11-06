@@ -37,10 +37,11 @@ long square(long n) { return n * n; }
 | Weak references | `weak<Node> parent;` starts empty and does not keep the object alive, which breaks cycles. `parent = node;`, `if (auto p = parent.lock())`, `parent.lock()?.name`, `parent.expired()`, `parent.reset()`. As `std::weak_ptr` |
 | Errors | `int f() throws { if (bad) throw Error("why"); return 1; }`. Each call that can fail is `try f()`, which passes the error on, or is inside `try { f(); } catch (NotFound e) { } catch (Error e) { println("{}", e.what()); }`. `class NotFound : public Error {...}`. `catch (...)`, `throw;`, `int main() throws`. Everything is released on the way out |
 | Generics | `template<typename T> T largest(T a, T b) { ... }`, called as `largest(1, 2)` or `largest<long>(1, 2)`. `template<typename T> class Stack { ... };`, used as `Stack<int>` with its arguments always written. `template<typename T, int N> struct Buffer { array<T, N> items; };`. `T()` is the default value of T |
-| Constraints | `template<Comparable T>`, `template<Number T>`, `template<Integer T>`, `template<Floating T>`, `template<Speaker T>` for an interface or class. Your own: `template<typename T> concept Addable = requires(T a, T b) { a + b; };` |
+| Constraints | `template<Comparable T>`, `template<Number T>`, `template<Integer T>`, `template<Floating T>`, `template<Hashable T>`, `template<Speaker T>` for an interface or class. Your own: `template<typename T> concept Addable = requires(T a, T b) { a + b; };` |
 | Unique references | `unique<Node> a = unique<Node>("x");` is the one owner, never empty: `a.name`, `a.go()`. `unique<Node> b = move(a);` leaves `a` with no value. `take(move(b))` hands it over, `lend(a.get())` lends it as a `Node`. `unique<Node>?` can be empty. Copying is an error |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
+| Hash maps | `hashmap<string, int> m = {{"a", 1}};` is a **value**, copied like a vector, that keeps the order entries were added in. `m["b"] = 2`, `m["b"]++`, `m[k].push_back(x)`. `m[k]` adds a missing key with a default value, as in C++, or **stops the program** if `V` has none. `m.at(k)` (**stops the program** if missing), `m.get(k)` (a `V?`), `m.contains(k)`, `m.count(k)`, `m.insert({k, v})` (keeps what is there), `m.erase(k)`, `m.size()`, `m.empty()`, `m.clear()`, `m.keys()`, `m.values()`. `for (auto e : m)` with `e.first`, `e.second`. Prints as `{"a": 1}`. A key is a number, `char`, `bool`, string, pointer or class reference, or an optional, vector, array or struct of those |
 | Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` a number or a constant. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
 | Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>` |
 | String chars | `s[i]` and `s[i] = 'x'` (checked), `for (char c : s)`, `s + '!'`, `s += c`, `s.push_back(c)`, `s.pop_back()`, `s.front()`, `s.back()`, `string(3, '-')`, `s.find('/')` |
@@ -147,6 +148,12 @@ long square(long n) { return n * n; }
 | `for (auto& x : v)`, `const vector<int>& v` | no references yet: `for (auto x : v)` and `vector<int> v` copy cheaply. Change elements with `v[i] = ...` |
 | `void f(int& n)` | no references yet: `void f(int* n)`, called as `f(&x)` |
 | `vector<int> v(5);`, `vector<int> v{1, 2};` | `auto v = vector<int>(5);`, `vector<int> v = {1, 2};` |
+| `std::unordered_map<K, V>`, `std::map<K, V>` | `hashmap<K, V>`, in the order entries were added. Sorted maps are planned |
+| `for (auto [k, v] : m)`, `for (const auto& [k, v] : m)` | structured bindings are planned: `for (auto e : m)`, then `e.first` and `e.second` |
+| `m.find(k) != m.end()`, `it->second` | `m.contains(k)`, `m.get(k)`, which gives a `V?`. No iterators yet |
+| `m.emplace(k, v)`, `m.insert_or_assign(k, v)` | `m.insert({k, v})`, `m[k] = v` |
+| `m[k]` on a `const` map | error, as in C++, since it adds a missing key: `m.at(k)` or `m.get(k)` |
+| `std::hash<Point>` for a struct key | not needed: a struct of hashable fields is hashable. Your own hash is planned |
 | `v.emplace_back(x)`, `v.at(i)` | `v.push_back(x)`, `v[i]` (always checked) |
 | `int a[5];`, `int a[5] = {1, 2};` | `array<int, 5> a;`, `array<int, 5> a = {1, 2};`. Every element starts with a value, 0 if none is given |
 | `int a[n];` with a variable `n` | an array's size must be known while compiling: `constexpr int N = 5; array<int, N> a;`. For a size known only at run time, `auto a = vector<int>(n);` |
@@ -179,8 +186,9 @@ long square(long n) { return n * n; }
 | Functions | default arguments, `auto` parameters and return types, lambdas |
 | Statements | `switch` |
 | Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
-| Containers | `hashmap<K, V>`; `insert`, `erase` and iterators on vectors |
+| Containers | `insert`, `erase` and iterators on vectors; `find` on a hashmap; sorted maps and sets |
 | References | `T&` parameters, `for (auto& x : v)` |
+| Structured bindings | `for (auto [k, v] : m)`, `auto [a, b] = f();` |
 | Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
 | More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare`; parsing numbers from strings |
 | More C | variable arguments, vectors, C variables like `errno`, callbacks |

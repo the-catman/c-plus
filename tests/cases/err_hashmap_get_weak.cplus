@@ -1,0 +1,7 @@
+class Node {};
+int main() {
+    hashmap<string, weak<Node>> m;
+    println("{}", m.get("a"));
+    return 0;
+}
+// error: 'get' gives null for a missing key, but a 'weak<Node>' cannot be null

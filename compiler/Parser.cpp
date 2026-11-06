@@ -1,5 +1,7 @@
 #include "Parser.h"
 
+#include "Builtins.h"
+
 #include "SpecRefs.h"
 
 namespace cplus {
@@ -82,33 +84,53 @@ void Parser::syncStatement() {
 // ---- Declarations ----------------------------------------------------------
 
 // What `throw` takes, for a program with errors. Its tokens have no place in the file.
-void Parser::addBuiltinError() {
-    bool uses = false, defines = false;
-    for (size_t i = 0; i < toks_.size(); ++i) {
-        Tok k = toks_[i].kind;
-        uses = uses || k == Tok::KwTry || k == Tok::KwThrow || k == Tok::KwThrows || k == Tok::KwCatch ||
-               (k == Tok::Ident && toks_[i].text == "Error");
-        defines = defines || ((k == Tok::KwClass || k == Tok::KwStruct || k == Tok::KwInterface) && i + 1 < toks_.size() &&
-                              toks_[i + 1].kind == Tok::Ident && toks_[i + 1].text == "Error");
-    }
-    if (!uses || defines) return;
-    static const SourceFile builtin("<built-in>",
-                                    "class Error {\n"
-                                    "public:\n"
-                                    "    string message;\n"
-                                    "    Error(string m) : message(m) {}\n"
-                                    "    virtual string what() const { return message; }\n"
-                                    "};\n");
-    Lexer lexer(builtin, diags_);
+// A generic with arguments that could be given to it, for advice.
+static std::string exampleArguments(const TemplateDecl& t) {
+    if (t.name == "hashmap" && t.nameLoc.line == 0) return "hashmap<string, int>";
+    std::string written = t.name + "<";
+    for (size_t i = 0; i < t.params.size(); ++i) written += std::string(i ? ", " : "") + (t.params[i].valueType ? "4" : "int");
+    return written + ">";
+}
+
+void Parser::addBuiltinSource(const SourceFile& source) {
+    Lexer lexer(source, diags_);
     std::vector<Token> tokens = lexer.lexAll();
     tokens.pop_back();  // its end of file
     for (Token& t : tokens) t.loc = Loc{};
     toks_.insert(toks_.end() - 1, tokens.begin(), tokens.end());  // after the program, so an attribute can still come first
 }
 
+void Parser::addBuiltins() {
+    bool usesError = false, definesError = false, usesMap = false, definesMap = false;
+    for (size_t i = 0; i < toks_.size(); ++i) {
+        Tok k = toks_[i].kind;
+        usesError = usesError || k == Tok::KwTry || k == Tok::KwThrow || k == Tok::KwThrows || k == Tok::KwCatch ||
+                    (k == Tok::Ident && toks_[i].text == "Error");
+        usesMap = usesMap || (k == Tok::Ident && toks_[i].text == "hashmap");
+        if ((k == Tok::KwClass || k == Tok::KwStruct || k == Tok::KwInterface) && i + 1 < toks_.size() && toks_[i + 1].kind == Tok::Ident) {
+            definesError = definesError || toks_[i + 1].text == "Error";
+            definesMap = definesMap || toks_[i + 1].text == "hashmap";
+        }
+    }
+    if (usesError && !definesError) {
+        static const SourceFile builtin("<built-in>",
+                                        "class Error {\n"
+                                        "public:\n"
+                                        "    string message;\n"
+                                        "    Error(string m) : message(m) {}\n"
+                                        "    virtual string what() const { return message; }\n"
+                                        "};\n");
+        addBuiltinSource(builtin);
+    }
+    if (usesMap && !definesMap) {
+        static const SourceFile builtin("<built-in>", kHashmapSource);
+        addBuiltinSource(builtin);
+    }
+}
+
 void Parser::parseProgram(Program& prog) {
     prog_ = &prog;
-    addBuiltinError();
+    addBuiltins();
     try {
         scanDeclarations(prog);
         for (auto& t : prog.templates) readTemplate(*t);
@@ -590,7 +612,7 @@ std::vector<TemplateArg> Parser::parseTemplateArgs(const TemplateDecl& t, Loc na
             if (args.size() == t.params.size())
                 fail(peek().loc, "'" + t.name + "' takes " + std::to_string(t.params.size()) + " template argument" +
                                      (t.params.size() == 1 ? "" : "s") + ", but more were given",
-                     "", spec::Generics);
+                     "write e.g. `" + exampleArguments(t) + "`", spec::Generics);
             const TemplateParam& p = t.params[args.size()];
             if (p.valueType) {
                 args.push_back(parseTemplateValue(p));
@@ -609,12 +631,14 @@ std::vector<TemplateArg> Parser::parseTemplateArgs(const TemplateDecl& t, Loc na
         fail(nameLoc, "'" + t.name + "' takes " + std::to_string(t.params.size()) + " template argument" +
                           (t.params.size() == 1 ? "" : "s") + ", but " + std::to_string(args.size()) +
                           (args.size() == 1 ? " was" : " were") + " given",
-             "", spec::Generics);
+             "write e.g. `" + exampleArguments(t) + "`", spec::Generics);
     return args;
 }
 
 const Type* Parser::genericRecord(TemplateDecl& t, Loc nameLoc) {
     std::vector<TemplateArg> args = parseTemplateArgs(t, nameLoc, false);
+    if (t.nameLoc.line == 0 && t.name == "hashmap" && args[1].type->is(Type::Kind::Void))
+        fail(nameLoc, "a hashmap cannot hold 'void' values", "for a key with nothing to say about it, write `hashmap<string, bool>`", spec::HashMaps);
     if (!dryRun_) return instantiateRecord(t, args, nameLoc);
     patterns_.push_back({&t, args, instanceName(t, args), Type{Type::Kind::Dependent, nullptr}});
     patterns_.back().type.name = patterns_.back().name.c_str();
@@ -1106,6 +1130,8 @@ void Parser::failStd(Loc loc, const Token& name) {
         fail(loc, "C+ has no std:: namespace", "write `unique<Node>(...)`, which builds a new Node", spec::Unique);
     if (n == "move")
         fail(loc, "C+ has no std:: namespace", "built-ins need no prefix: write `move(x)`", spec::Unique);
+    if (n == "unordered_map" || n == "map")
+        fail(loc, "C+ has no std:: namespace", "write `hashmap<K, V>`, used like std::unordered_map", spec::HashMaps);
     if (n == "shared_ptr" || n == "make_shared")
         fail(loc, "C+ has no std:: namespace",
              "a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`", spec::Classes);
@@ -1124,7 +1150,8 @@ bool Parser::isTypeStart(size_t ahead) const {
                            (peek(ahead + 2).kind == Tok::Ident && peek(ahead + 3).kind == Tok::Comma);
                 // So is `unique`: `unique < n` is a comparison.
                 if (peek(ahead).text == "unique") return isTypeAt(ahead + 2);
-                return peek(ahead).text == "vector" || peek(ahead).text == "hashmap" || classTemplate(peek(ahead).text);
+                return peek(ahead).text == "vector" || peek(ahead).text == "unordered_map" || peek(ahead).text == "map" ||
+                       classTemplate(peek(ahead).text);
             }
             // `Box b`: reports that its arguments are missing.
             if (classTemplate(peek(ahead).text) && !boundType(peek(ahead)) && peek(ahead + 1).kind == Tok::Ident) return true;
@@ -1285,13 +1312,15 @@ const Type* Parser::parseType(Loc& loc, bool* isConst) {
     Loc constLoc = start;
     bool leadingConst = match(Tok::KwConst);
     const Type* t = parseBaseType(loc);
-    if (t->isWeak() && (check(Tok::Question) || check(Tok::QuestionQuestion)))
+    if (t->isWeak() && peek().loc.line && (check(Tok::Question) || check(Tok::QuestionQuestion)))
         fail(peek().loc, "a weak reference cannot be optional",
              "it is already empty when nothing is there: write `" + std::string(t->name) + "`", spec::Weak);
     if (check(Tok::QuestionQuestion))
         fail(peek().loc, "an optional cannot hold another optional",
              "write one '?': `" + std::string(t->name) + "?` already means " + t->name + " or null", spec::Optionals);
-    if (check(Tok::Question)) {
+    if (check(Tok::Question) && peek().loc.line == 0 && (t->isOptional() || t->isPointer() || t->isWeak())) {
+        advance();  // it can already be empty: see Builtins.h
+    } else if (check(Tok::Question)) {
         Loc q = advance().loc;
         if (t->is(Type::Kind::Void) || t->is(Type::Kind::Auto))
             fail(loc, std::string("'") + t->name + "' cannot be optional",
@@ -1397,7 +1426,7 @@ const Type* Parser::parseBaseType(Loc& loc) {
             if (TemplateDecl* tmpl = classTemplate(t.text)) {
                 if (!check(Tok::Less))
                     fail(t.loc, "'" + t.text + "' is generic, so its template arguments must be written",
-                         "write e.g. `" + t.text + "<int>`", spec::Generics);
+                         "write e.g. `" + exampleArguments(*tmpl) + "`", spec::Generics);
                 const Type* made = genericRecord(*tmpl, t.loc);
                 loc.len = prev().loc.col + prev().loc.len - t.loc.col;
                 return made;
@@ -1495,8 +1524,10 @@ const Type* Parser::parseBaseType(Loc& loc) {
                          "write a whole number, zero or more", spec::Arrays);
                 return Type::arrayOf(elem, length.i);
             }
-            if (t.text == "hashmap" && check(Tok::Less))
-                notYet(t.loc, "hash maps (hashmap<K, V>)", "use vector<T> for now");
+            if (t.text == "unordered_map" || t.text == "map")
+                fail(t.loc, "unknown type '" + t.text + "'",
+                     "write `hashmap<K, V>`, used like std::unordered_map. It keeps its entries in the order they were added",
+                     spec::HashMaps);
             fail(t.loc, "unknown type '" + t.text + "'", "", spec::IntegerTypes);
         default: fail(t.loc, "expected a type, found " + describeToken(t), "", spec::IntegerTypes);
     }
@@ -2090,6 +2121,9 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
     std::vector<std::unique_ptr<VarDecl>> decls;
     do {
         if (!decls.empty()) parseLaterStars(ty, decls[0]->name, "variable");
+        if (check(Tok::LBracket) || ((check(Tok::Amp) || check(Tok::AmpAmp)) && peek(1).kind == Tok::LBracket))
+            notYet(peek().loc, "structured bindings",
+                   "name the whole value, and reach into it: `for (auto e : m) ... e.first ... e.second`, or `auto p = f(); ... p.x`");
         if (check(Tok::Amp) || check(Tok::AmpAmp))
             notYet(peek().loc, "references",
                    "a variable holds its own value. To refer to another variable, use a pointer: `int* p = &x;`");
@@ -2793,7 +2827,7 @@ ExprPtr Parser::parsePrimary() {
             TemplateDecl* tmpl = classTemplate(t.text);
             if (tmpl && !boundType(t) && (check(Tok::LParen) || check(Tok::LBrace)))
                 fail(t.loc, "'" + t.text + "' is generic, so its template arguments must be written",
-                     "write e.g. `" + t.text + "<int>(...)`. Working them out from the values is planned", spec::Generics);
+                     "write e.g. `" + exampleArguments(*tmpl) + "(...)`. Working them out from the values is planned", spec::Generics);
             // A variable can have the same name: `Box < 3` is a comparison.
             if (tmpl && !boundType(t) && check(Tok::Less) && (tmpl->params[0].valueType || isTypeAt(1))) {
                 --pos_;  // back to the name, to read the whole type
@@ -2891,11 +2925,6 @@ ExprPtr Parser::parsePrimary() {
                 }
                 expect(Tok::RParen, "to close the argument list of '" + t.text + "'");
                 return std::make_unique<CallExpr>(t.loc, t.text, std::move(args));
-            }
-            if (check(Tok::Less) && t.text == "hashmap") {
-                --pos_;
-                Loc loc;
-                parseBaseType(loc);  // reports that the container is not supported yet
             }
             return std::make_unique<NameExpr>(t.loc, t.text);
         }

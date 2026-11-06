@@ -1,0 +1,7 @@
+int main() {
+    unordered_map<string, int> m;
+    return 0;
+}
+// error: unknown type 'unordered_map'
+// error: write `hashmap<K, V>`, used like std::unordered_map. It keeps its entries in the order they were added
+// error: spec: docs/SPEC.md#hash-maps

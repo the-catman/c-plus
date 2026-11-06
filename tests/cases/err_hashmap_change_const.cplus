@@ -1,0 +1,11 @@
+// Said once, for one mistake.
+struct P {
+    int x = 0;
+};
+int main() {
+    const hashmap<string, P> m = {};
+    m["a"].x = 2;
+    return 0;
+}
+// error: '[ ]' adds a key that is missing, so it cannot be used on the const 'm'
+// not-error: is const

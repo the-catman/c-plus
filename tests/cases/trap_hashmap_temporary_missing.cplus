@@ -1,0 +1,10 @@
+// A map that is not stored anywhere has nowhere to add a key.
+hashmap<string, int> make() { return {{"a", 1}}; }
+
+int main() {
+    println("{}", make()["a"]);
+    println("{}", make()["b"]);
+    return 0;
+}
+// expect: 1
+// trap: the key "b" is not in this hashmap

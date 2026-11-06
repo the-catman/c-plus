@@ -11,7 +11,8 @@ Phase 3 of `PLAN.md`, the batteries: reflection, JSON, HTTP, `hashmap` and threa
 - `docs/SPEC.md` is the language specification. Compiler errors link to its headings.
 - `docs/CHEATSHEET.md` is the one-page summary of how C+ differs from C++.
 - `compiler/` is the `cplus` compiler: Lexer, Parser, Sema (type checking and definite
-  assignment), Codegen (LLVM IR), and `main.cpp` (the driver).
+  assignment), Codegen (LLVM IR), `Builtins.h` (what is written in C+ itself, such as `hashmap`),
+  and `main.cpp` (the driver).
 - `runtime/` is the small C runtime linked into every program.
 - `tests/cases/` holds the language tests. `tests/run_tests.py` documents their directives.
 - `examples/` holds small sample programs.

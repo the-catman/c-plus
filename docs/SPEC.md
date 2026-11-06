@@ -736,8 +736,7 @@ Building a vector:
   holding it, the program stops when the method returns, since what the method did to the
   element would be lost. C++ leaves this undefined if `v` moves. Call the method on a copy of
   the element and store it back.
-- Not yet: `insert`, `erase`, `resize`, `reserve`, iterators (`begin()`, `end()`), and
-  `hashmap<K, V>`.
+- Not yet: `insert`, `erase`, `resize`, `reserve`, and iterators (`begin()`, `end()`).
 
 **Copies are cheap.** The copies of a vector share one buffer of elements until one of them
 changes; that copy first gets a buffer of its own (copy-on-write). Passing or returning a
@@ -831,6 +830,61 @@ is small, usually 8 MiB on Linux. Each copy takes that much stack again: a by-va
 or the copy a `for` loop keeps, for example. Running out of stack stops the program with an
 error; it never overwrites other memory. Use a vector for large amounts of data. An array in
 a class object, or from `new`, is not on the stack.
+
+### Hash maps
+
+`hashmap<K, V>` finds values by key, and is used like C++'s `std::unordered_map`. It needs nothing to be
+imported.
+
+```cpp
+hashmap<string, int> ages = {{"ada", 36}, {"bob", 25}};
+ages["cid"] = 40;
+ages["ada"]++;
+println("{}", ages);                                       // {"ada": 37, "bob": 25, "cid": 40}
+println("{}", ages["zed"]);                                // 0, and "zed" is in the map now
+if (auto age = ages.get("bob")) println("{}", age);        // 25
+for (auto e : ages) println("{}: {}", e.first, e.second);
+```
+
+- **A value.** It is copied like a vector, and as cheaply: copies share what they hold until one of them
+  changes. A copy never sees the changes of another. A function that changes a map it is given takes a pointer.
+- **In order.** It goes over its entries in the order they were added, which `std::unordered_map` leaves open, so a
+  program prints the same thing every time it runs. Assigning to a key that is there keeps its place. A key
+  that is erased and added again goes last.
+- **`m[key]`** is the value, in place, as with `v[i]`: `m[key] = 1`, `m[key]++`, `m[key].x = 1`,
+  `m[key].push_back(1)`. As in C++, a key that is missing is added first, with a default value. So it cannot be used
+  on a const map, or in a const method. If the type has no default value, such as a class reference or a struct
+  whose constructor needs arguments, there is nothing to add, so a missing key **stops the program**, except that
+  `m[key] = value` always works. A temporary map, `make()["a"]`, has nowhere to add a key either.
+- **Keys.** A key can be a number, a `char`, a `bool`, a string, a pointer or a class reference, or an optional, a
+  vector, an array or a struct of those. Two keys are the same when they are `==`, so a class reference is
+  the same key only for the same object. `0.0` and `-0.0` are one key, and NaN is never found, since it is not
+  `==` to itself, as in C++. The hash comes by itself, and a hash function of your own is planned. A generic can ask
+  for such a type with the [constraint](#constraints) `Hashable`.
+- **Values** can be of any type except `void`. With a `unique<T>`, the map cannot be copied either: put values in
+  with `m[key] = move(u)`, reach them as `m[key].x`, and take them out with `move(m[key])`. `get`, `values`, `items` and
+  a loop over the map copy values, so they are errors then.
+- **Erasing** releases the key and the value right away, and a value's destructor can use the map.
+
+| Method | Does |
+|--------|------|
+| `m.size()`, `m.empty()` | how many entries it has, as a `long`, and whether it has none |
+| `m.contains(key)`, `m.count(key)` | whether the key is there, as a `bool`, or as a `long`, 0 or 1 |
+| `m.get(key)` | a `V?`: the value, or null. If `V` can be null already, use `contains` to tell the two apart |
+| `m.at(key)` | a copy of the value, or **stops the program** with the key that is missing |
+| `m.insert({key, value})` | adds it unless the key is there, which keeps the value that is there, and says whether it added it |
+| `m.erase(key)` | removes it, and says how many it removed, as a `long`, 0 or 1 |
+| `m.clear()` | removes everything |
+| `m.keys()`, `m.values()` | a vector of them, in order |
+| `m.items()` | a vector of the entries, in order, with fields `first` and `second` |
+
+- `for (auto e : m)` goes over the entries as they were when the loop started, so the body can change the map.
+- `==` is true for the same entries in any order. A map prints as `{"a": 1, "b": 2}`.
+- A method of a value in a map, `m[key].go()`, works on it in place, and stops the program if its body adds to or
+  otherwise changes the map through a pointer, as with [a vector](#vectors).
+- The hash depends on a number chosen each time the program starts, so that input cannot be made to collide on
+  purpose. Nothing else depends on it.
+- Not yet: `find` and other iterators, `reserve`, sorted maps and sets. `m.find(k)` has an error that says what to write.
 
 ### Pointers
 
@@ -1354,7 +1408,7 @@ Strings, vectors, chars and `void` values are not conditions. For a vector, writ
 
 `for (T x : v)` runs the body once for each element of the vector or array `v`, in order, as in
 C++. The variable can be `auto`, `const`, or of a type the elements convert to, as in
-`for (long x : ints)`.
+`for (long x : ints)`. Over a [hashmap](#hash-maps), each element is an entry, with fields `first` and `second`.
 
 ```cpp
 for (auto name : names) println("hi {}", name);
@@ -1928,7 +1982,8 @@ error: 'Point' cannot be used for 'T' of 'largest', which must be 'Comparable'
 The name is one of:
 
 - **Built in.** `Comparable` has `<`: numbers, `char`, strings and pointers. `Number` is `int`, `long`, `float` or
-  `double`. `Integer` is `int` or `long`, and `Floating` is `float` or `double`.
+  `double`. `Integer` is `int` or `long`, and `Floating` is `float` or `double`. `Hashable` can be a key of a
+  [hashmap](#hash-maps).
 - **An interface or a class.** The type must derive from it, holding it once:
   `template<Speaker T> string talk(T s) { return s.speak(); }`.
 - **Your own**, written as in C++20. Each line is an expression that must compile for the type:
@@ -2006,8 +2061,10 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Format options for width, alignment and `{:x}`; math constants | planned |
 | Function overloading | planned |
 | Strings: `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
-| `hashmap<K, V>`; vector `insert`, `erase`, iterators | planned |
+| `hashmap<K, V>` | implemented |
+| Vector `insert`, `erase`, iterators; `find` on a hashmap, sorted maps, sets | planned |
 | References (`T&`), including `for (auto& x : v)` | planned |
+| Structured bindings, `for (auto [k, v] : m)` | planned |
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |
 | `final`, covariant return types, private and protected base classes | planned |

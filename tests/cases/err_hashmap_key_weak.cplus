@@ -1,0 +1,6 @@
+class Node {};
+int main() {
+    hashmap<weak<Node>, int> m;
+    return 0;
+}
+// error: 'weak<Node>' cannot be used for 'K' of 'hashmap', which must be 'Hashable'

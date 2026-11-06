@@ -1,0 +1,137 @@
+// What can be a value.
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+struct Made {
+    int n = 0;
+    Made() : n(5) {}
+    void bump() { n++; }
+};
+struct NeedsArgs {
+    int n;
+    NeedsArgs(int a) : n(a) {}
+};
+class Node {
+public:
+    string name;
+    Node(string n) : name(n) {}
+    string hello() const { return "hi " + name; }
+};
+interface Speaker {
+    string speak() const;
+};
+class Dog : public Speaker {
+public:
+    string speak() const override { return "woof"; }
+};
+
+int main() {
+    hashmap<string, double> doubles;
+    doubles["a"] += 1.5;
+    hashmap<string, float> floats;
+    floats["a"] = 0.5;
+    hashmap<string, char> chars;
+    chars["a"] = 'x';
+    hashmap<string, bool> bools;
+    bools["a"] = !bools["a"];
+    hashmap<string, long> longs;
+    longs["a"]--;
+    hashmap<string, string> strings;
+    strings["a"] += "text";
+    strings["a"] += "!";
+    println("{} {} {} {} {} {}", doubles, floats, chars, bools, longs, strings);
+
+    hashmap<string, Point> points;
+    points["a"].x = 3;
+    points["b"] = {1, 2};
+    println("{} {}", points, points.at("a").x);
+    Point copy = points["a"];
+    copy.x = 100;
+    println("{}", points["a"].x);
+
+    // A default value is made with the constructor without parameters.
+    hashmap<string, Made> mades;
+    println("{}", mades["a"].n);
+    mades["a"].bump();
+    println("{}", mades);
+
+    // With no default value, `[ ]` can only reach what is there, and `=` can add it.
+    hashmap<string, NeedsArgs> needs;
+    needs["a"] = NeedsArgs(1);
+    needs["a"].n = 2;
+    needs["a"] = NeedsArgs(needs["a"].n + 1);
+    println("{}", needs);
+    println("{}", needs.insert({"b", NeedsArgs(9)}));
+
+    hashmap<string, Node> nodes;
+    nodes["a"] = Node("Ada");
+    nodes["a"].name = "Ida";
+    println("{} {}", nodes["a"].hello(), nodes.get("a")?.name ?? "none");
+    println("{}", nodes.get("b")?.name ?? "none");
+    Node n = nodes["a"];
+    n.name = "shared";
+    println("{}", nodes);
+
+    hashmap<string, Speaker> speakers;
+    speakers["d"] = Dog();
+    println("{}", speakers["d"].speak());
+
+    hashmap<string, vector<int>> vectors;
+    vectors["a"].push_back(1);
+    vectors["a"].push_back(2);
+    vectors["b"] = {3};
+    vectors["a"][0] = 9;
+    println("{} {}", vectors, vectors["a"].size());
+
+    hashmap<string, array<int, 2>> arrays;
+    arrays["a"][1] = 7;
+    arrays["b"] = {1, 2};
+    println("{}", arrays);
+    println("{}", arrays.get("a"));
+    println("{}", arrays.get("none"));
+
+    // A value that can itself be null: `get` is null either way, and contains tells them apart.
+    hashmap<string, int?> optionals;
+    optionals["a"] = 1;
+    optionals["b"] = null;
+    println("{} {} {}", optionals, optionals["c"], optionals.get("a"));
+    println("{} {} {}", optionals.get("b"), optionals.contains("b"), optionals.get("z") == null);
+
+    int x = 5;
+    hashmap<string, int*> pointers;
+    pointers["a"] = &x;
+    println("{} {} {}", *pointers["a"], pointers["b"] == null, pointers.get("z") == null);
+    *pointers["a"] = 6;
+    println("{}", x);
+
+    Node kept = Node("kept");
+    hashmap<string, weak<Node>> weaks;
+    weaks["a"] = kept;
+    println("{}", weaks["a"].lock()?.name ?? "gone");
+    println("{}", weaks["none"].expired());
+    println("{}", weaks.at("a").expired());
+    return 0;
+}
+// expect: {"a": 1.5} {"a": 0.5} {"a": 'x'} {"a": true} {"a": -1} {"a": "text!"}
+// expect: {"a": {x: 3, y: 0}, "b": {x: 1, y: 2}} 3
+// expect: 3
+// expect: 5
+// expect: {"a": {n: 6}}
+// expect: {"a": {n: 3}}
+// expect: true
+// expect: hi Ida Ida
+// expect: none
+// expect: {"a": Node {name: "shared"}}
+// expect: woof
+// expect: {"a": [9, 2], "b": [3]} 2
+// expect: {"a": [0, 7], "b": [1, 2]}
+// expect: [0, 7]
+// expect: null
+// expect: {"a": 1, "b": null} null 1
+// expect: null true true
+// expect: 5 true true
+// expect: 6
+// expect: kept
+// expect: true
+// expect: false

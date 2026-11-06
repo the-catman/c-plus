@@ -639,6 +639,7 @@ void Sema::checkNewStructs() {
         if (sd.templateOf) diags_.pushContext(sd.usedAt, "in " + q(sd.name) + ", which is used here");
         checkMembers(sd);
         if (sd.templateOf) diags_.popContext();
+        if (isHashmap(&sd.type)) mapMethod(&sd.type, "__same");  // for ==, wherever it is hidden in other types
         // A generic class's other methods wait until they are used, as in C++, so that it
         // can have methods that not all of its arguments allow.
         for (auto& m : sd.methods)
@@ -646,7 +647,7 @@ void Sema::checkNewStructs() {
     }
 }
 
-static const char* const kBuiltinConstraints[] = {"Comparable", "Number", "Integer", "Floating"};
+static const char* const kBuiltinConstraints[] = {"Comparable", "Number", "Integer", "Floating", "Hashable", "__Hashable"};
 
 // Each generic's name must be free, and each of its constraints must exist.
 void Sema::checkTemplateNames(Program& program) {
@@ -673,7 +674,7 @@ void Sema::checkTemplateNames(Program& program) {
             known = known || (other && other->kind == TemplateDecl::Kind::Concept);
             if (!known)
                 diags_.error(p.constraintLoc, "there is no constraint named " + q(p.constraint),
-                             "the built-in ones are Comparable, Number, Integer and Floating. An interface or class also "
+                             "the built-in ones are Comparable, Number, Integer, Floating and Hashable. An interface or class also "
                              "works, as does your own: `template<typename T> concept " + p.constraint +
                                  " = requires(T a) { ... };`. For any type, write `typename " + p.name + "`",
                              spec::Constraints);
@@ -809,6 +810,11 @@ bool Sema::canAccess(const StructDecl& sd, Access access, const StructDecl* thro
 
 void Sema::reportAccess(const StructDecl& sd, const std::string& member, bool isMethod, Access access, Loc loc) {
     std::string what = isMethod ? "method" : "field";
+    if (isHashmap(&sd.type)) {
+        diags_.error(loc, q(member) + " is private in " + q(sd.name),
+                     "it is part of how a hashmap works inside. Use `[ ]` and its methods, such as `size`, `get` and `keys`", spec::HashMaps);
+        return;
+    }
     if (access == Access::Protected)
         diags_.error(loc, q(member) + " is protected in " + q(sd.name),
                      "it can only be used inside the methods of " + q(sd.name) + " and of classes that derive from it, on "
@@ -1267,6 +1273,19 @@ void Sema::foldConstexpr(VarDecl& v) {
         return;
     }
     putLiteral(v, value);
+}
+
+// Whether a value of type `t` can be made without being given one: what `vector<T>(n)`
+// fills its elements with.
+static bool hasDefault(const Type* t) {
+    if (t->isStruct()) return !needsValue(t) && (!t->decl->constructor || t->decl->constructor->params.empty());
+    return !t->isClass() && !needsValue(t);
+}
+
+FuncDecl* Sema::mapMethod(const Type* map, const std::string& name) {
+    FuncDecl* m = map->decl->ownMethod(name);
+    if (m) requestMethod(m);
+    return m;
 }
 
 bool Sema::fieldHides(const std::string& name) const {
@@ -1851,13 +1870,28 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
 void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
     const Type* rangeType = checkExpr(*st.range, flow);
     const Type* elem = Type::error();
+    if (isHashmap(rangeType)) {  // its entries, as they are when the loop starts
+        const Type* value = rangeType->decl->templateArgs[1].type;
+        if (!isCopyable(value)) {
+            diags_.error(st.range->loc, "a range-based for loop copies each entry, but a " + q(value) + " cannot be copied",
+                         "loop over the keys: `for (auto key : m.keys()) ... m[key] ...`", spec::Unique);
+            rangeType = Type::error();
+        } else {
+            Loc loc = st.range->loc;
+            auto items = std::make_unique<MethodCallExpr>(loc, std::move(st.range), "items", std::vector<ExprPtr>{});
+            items->method = mapMethod(rangeType, "items");
+            items->path = BasePath{rangeType->decl};
+            items->type = rangeType = items->method->retType;
+            st.range = std::move(items);
+        }
+    }
     if (rangeType->isVector() || rangeType->isArray()) {
         elem = rangeType->elem;
     } else if (rangeType->is(K::String)) {
         elem = Type::charTy();  // its bytes, as in C++
     } else if (!rangeType->isError()) {
         std::string n = spelled(*st.range, "items");
-        diags_.error(st.range->loc, "a range-based for loop goes over a vector, an array or a string, but this is " + q(rangeType),
+        diags_.error(st.range->loc, "a range-based for loop goes over a vector, an array, a hashmap or a string, but this is " + q(rangeType),
                      rangeType->isOptional() ? "it may be null; unwrap it first: `if (auto v = " + n +
                                                    ") for (auto x : v) ...`"
                                              : "write the vector, array or string to loop over after the ':'",
@@ -1935,6 +1969,8 @@ void Sema::rejectCopy(const Expr& e) {
     const Expr* x = &e;
     while (x->kind == Expr::Kind::Try) x = static_cast<const TryExpr*>(x)->operand.get();
     if (x->kind == Expr::Kind::Assign) x = static_cast<const AssignExpr*>(x)->target.get();  // `b = (a = make())` would leave two
+    if (x->kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr*>(x)->lowered)
+        x = static_cast<const MethodCallExpr*>(x)->lowered.get();  // `m.at(key)` reads what is in the map
     if (!isPlaceKind(*x) && x->kind != Expr::Kind::OptValue) return;
     std::string n = spelled(*x, "x");
     diags_.error(x->loc, q(n) + " cannot be copied, since a " + q(e.type) +
@@ -2035,6 +2071,20 @@ void Sema::checkLooseValue(Expr& e, Flow& flow) {
 
 void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
     list.type = type;
+    if (isHashmap(type) && !list.elements.empty()) {  // its entries, as `{key, value}`
+        const Type* entry = type->decl->fields[0].type->elem;
+        for (auto& el : list.elements) {
+            if (!el.designator.empty()) {
+                diags_.error(el.loc, "a hashmap's { } list holds its entries, not named fields",
+                             "write each entry as `{key, value}`, e.g. `{{\"a\", 1}, {\"b\", 2}}`", spec::HashMaps);
+                checkLooseValue(*el.value, flow);
+                continue;
+            }
+            checkValue(*el.value, flow, entry, "as an entry of " + q(type));
+        }
+        list.mapFill = mapMethod(type, "__fill");
+        return;
+    }
     if (type->isVector()) {  // the elements, in order
         for (auto& el : list.elements) {
             if (!el.designator.empty()) {
@@ -2252,6 +2302,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         if (var && !baseType->isError()) requireAssigned(flow, var, path, baseType, ix.base->loc);
         var = nullptr;
         path.clear();
+        if (isHashmap(baseType)) return e.type = checkMapIndex(ix, flow, baseType);
         const Type* indexType = checkExpr(*ix.index, flow);
         e.type = Type::error();
         if (baseType->isError()) return e.type;
@@ -2506,6 +2557,37 @@ const VarDecl* Sema::rootVariable(const Expr& root) {
     return n.implicitField >= 0 ? thisVar() : n.decl;
 }
 
+// `m[key]`. It finds the entry, as `v[i]` finds an element, so it can be read, assigned to and changed in place.
+// As in C++, a key that is missing gets an entry with a default value, unless this is the target of `=`, which
+// gives the value itself. A type with no default value has nothing to put there, so then the program stops.
+const Type* Sema::checkMapIndex(IndexExpr& ix, Flow& flow, const Type* map) {
+    const Type* value = map->decl->templateArgs[1].type;
+    checkValue(*ix.index, flow, map->decl->templateArgs[0].type, "as a key of " + q(map));
+    if (ix.mapAssign) {
+        ix.mapSlot = mapMethod(map, "__place_to_assign");
+        return value;
+    }
+    bool adds = isPlaceKind(*ix.base) && hasDefault(value);
+    if (adds && !ix.mapTarget) {
+        const Expr* root = nullptr;
+        if (storageOf(*ix.base, root) == Storage::Variable) {
+            const VarDecl* rootVar = rootVariable(*root);
+            bool inConstMethod = rootVar == thisVar() && fn_->isConst;
+            if (rootVar && (inConstMethod || rootVar->isConst)) {
+                std::string n = spelled(*ix.base, "m");
+                diags_.error(ix.loc, "'[ ]' adds a key that is missing, so it cannot be used on " +
+                                         (inConstMethod ? q(n) + " inside const method " + q(fn_->name) : "the const " + q(n)),
+                             "to only read, write `" + n + ".at(key)`, which stops the program if the key is missing, or `" + n +
+                                 ".get(key)`, which gives null",
+                             spec::HashMaps);
+                constMapReported_ = rootVar;
+            }
+        }
+    }
+    ix.mapSlot = mapMethod(map, adds ? "__place" : "__existing");
+    return value;
+}
+
 bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path) {
     const Expr* root = nullptr;
     switch (storageOf(target, root)) {
@@ -2532,6 +2614,7 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
     }
     const VarDecl* rootVar = rootVariable(*root);
     if (!rootVar) return false;  // an unknown name, already reported
+    if (rootVar == constMapReported_) return false;
     bool element = containsIndex(target);
     bool inString = target.kind == Expr::Kind::Index && static_cast<const IndexExpr&>(target).base->type &&
                     static_cast<const IndexExpr&>(target).base->type->is(K::String);
@@ -3083,6 +3166,10 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             auto& a = static_cast<AssignExpr&>(e);
             const VarDecl* var = nullptr;
             std::string path;
+            if (a.target->kind == Expr::Kind::Index) {
+                static_cast<IndexExpr&>(*a.target).mapTarget = true;
+                static_cast<IndexExpr&>(*a.target).mapAssign = !a.op;
+            }
             bool ok = checkAssignable(*a.target, flow, a.op ? "changed" : "assigned to", var, path);
             const Type* t = a.target->type ? a.target->type : Type::error();
             std::string name = var                                 ? q(placeName(var, path))
@@ -3385,6 +3472,15 @@ const Type* Sema::checkMath(CallExpr& call, Flow& flow) {
 }
 
 const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
+    if (call.loc.line == 0 && call.callee == "__hash") {  // see Builtins.h
+        checkExpr(*call.args[0], flow);
+        call.builtin = Builtin::Hash;
+        return Type::longTy();
+    }
+    if (call.loc.line == 0 && call.callee == "__move") {
+        call.builtin = Builtin::Move;
+        call.clears = true;
+    }
     if (call.builtin == Builtin::Move) return checkMove(call, flow);
     if (call.uniqueType) {  // `unique<Node>(args)` builds a new Node
         call.constructs = call.uniqueType->decl;
@@ -3649,10 +3745,11 @@ bool Sema::checkConstraints(TemplateDecl& t, const std::vector<TemplateArg>& arg
         std::string problem = constraintProblem(p.constraint, args[i].type, where);
         if (problem.empty()) continue;
         ok = false;
-        diags_.error(usedAt, q(args[i].type) + " cannot be used for " + q(p.name) + " of " + q(t.name) + ", which must be " + q(p.constraint),
-                     problem, spec::Constraints);
+        std::string shown = p.constraint == "__Hashable" ? "Hashable" : p.constraint;
+        diags_.error(usedAt, q(args[i].type) + " cannot be used for " + q(p.name) + " of " + q(t.name) + ", which must be " + q(shown),
+                     problem, t.nameLoc.line ? spec::Constraints : spec::HashMaps);
         if (where.line) diags_.note(where, q(p.constraint) + " requires this, which does not work for " + q(args[i].type));
-        else diags_.note(p.constraintLoc, "the constraint is written here");
+        else if (p.constraintLoc.line) diags_.note(p.constraintLoc, "the constraint is written here");
     }
     return ok;
 }
@@ -3708,6 +3805,10 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
     if (constraint == "Number") return t->isNumber() ? "" : q(t) + " is not int, long, float or double";
     if (constraint == "Integer") return t->isInteger() ? "" : q(t) + " is not int or long";
     if (constraint == "Floating") return t->isFloating() ? "" : q(t) + " is not float or double";
+    if (constraint == "Hashable" || constraint == "__Hashable")
+        return isHashable(t) ? ""
+                             : q(t) + " cannot be a key. Numbers, chars, bools, strings, pointers and class references can, and so can "
+                                      "optionals, vectors, arrays and structs of those. A unique or weak reference or a hashmap cannot";
     return "";  // unknown, which was reported at the generic
 }
 
@@ -3821,6 +3922,38 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         return Type::error();
     }
     const StructDecl& sd = *t->decl;
+    if (isHashmap(t)) {
+        const Type* value = sd.templateArgs[1].type;
+        if (call.name == "at" && call.args.size() != 1) {
+            for (auto& a : call.args) checkLooseValue(*a, flow);
+            diags_.error(call.loc, "'at' takes the key to look for, but this gives it " + std::to_string(call.args.size()) + " arguments",
+                         "write `" + spelled(recv, "m") + ".at(key)`", spec::HashMaps);
+            return Type::error();
+        }
+        if (call.name == "at") {  // `m[key]`, but only for a key that is there
+            auto ix = std::make_unique<IndexExpr>(call.loc, std::move(call.receiver), std::move(call.args[0]));
+            call.args.clear();
+            checkValue(*ix->index, flow, sd.templateArgs[0].type, "as a key of " + q(t));
+            ix->mapSlot = mapMethod(t, "__existing");
+            ix->type = value;
+            call.lowered = std::move(ix);
+            return value;
+        }
+        if ((call.name == "get" || call.name == "values" || call.name == "items") && !isCopyable(value)) {
+            for (auto& a : call.args) checkLooseValue(*a, flow);
+            std::string n = spelled(recv, "m");
+            diags_.error(call.loc, q(call.name) + " would copy the values, but a " + q(value) + " cannot be copied",
+                         "reach a value where it is, with `" + n + "[key]`, and check for it with `" + n + ".contains(key)`", spec::Unique);
+            return Type::error();
+        }
+        if (call.name == "get" && value->isWeak()) {
+            for (auto& a : call.args) checkLooseValue(*a, flow);
+            std::string n = spelled(recv, "m");
+            diags_.error(call.loc, "'get' gives null for a missing key, but a " + q(value) + " cannot be null",
+                         "check with `" + n + ".contains(key)`, then use `" + n + ".at(key)`", spec::HashMaps);
+            return Type::error();
+        }
+    }
     BasePath toStart{&sd};
     if (!call.qualifier.empty()) {
         toStart = findQualifier(call.qualifier, sd, call.loc);
@@ -3835,6 +3968,14 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         std::string help;
         if (sd.fieldOwner(call.name)) help = q(call.name) + " is a field; read it without parentheses";
+        else if (isHashmap(t) && call.name == "find")
+            help = "there are no iterators yet: `m.contains(key)` says whether it is there, and `m.get(key)` gives the value or null";
+        else if (isHashmap(t) && (call.name == "emplace" || call.name == "try_emplace"))
+            help = "write `m.insert({key, value})`, which also keeps the value that is there";
+        else if (isHashmap(t) && call.name == "insert_or_assign")
+            help = "write `m[key] = value`";
+        else if (isHashmap(t) && (call.name == "begin" || call.name == "end"))
+            help = "there are no iterators yet: `for (auto e : m)` goes over the entries, as `e.first` and `e.second`";
         else {
             std::vector<std::string> names;
             std::function<void(const StructDecl&)> collect = [&](const StructDecl& d) {
@@ -3870,18 +4011,20 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         Storage storage = isPlace ? storageOf(recv, root) : Storage::Temporary;
         if (t->isStruct() && storage == Storage::Variable) holder = rootVariable(*root);
         else if (var && var == thisVar() && path.empty()) holder = var;  // `this` of a class
+        std::string markConst = isHashmap(t) ? q(m->name) + " changes the hashmap, and only `size`, `empty`, `contains`, `count`, `get`, "
+                                                            "`at`, `items`, `keys` and `values` do not"
+                                             : "mark " + q(m->name) + " as `const` if it does not change any field";
         if (t->isStruct() && storage == Storage::Pointer && followedPointer(*root).type->constElem)
             diags_.error(call.loc, "cannot call " + q(m->name) + " through a " + q(followedPointer(*root).type) +
                                        ", because it may change fields",
-                         "mark " + q(m->name) + " as `const` if it does not change any field, or use a pointer that is "
-                         "not const",
+                         markConst + ", or use a pointer that is not const",
                          spec::Pointers);
         else if (holder && holder == thisVar() && fn_->isConst)
             diags_.error(call.loc, "const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
-                         "mark " + q(m->name) + " as `const` if it does not change any field", spec::Methods);
+                         markConst, spec::Methods);
         else if (t->isStruct() && holder && holder->isConst)
             diags_.error(call.loc, "cannot call " + q(m->name) + " on const " + q(holder->name) + ", because it may change fields",
-                         "mark " + q(m->name) + " as `const` if it does not change any field", spec::Methods);
+                         markConst, spec::Methods);
     }
     checkArgs(call.args, *m, flow, call.loc, q(m->name));
     return m->retType;
@@ -4060,12 +4203,6 @@ const Type* Sema::checkArrayMethod(MethodCallExpr& call, Flow& flow, const Type*
     }
 }
 
-// Whether a value of type `t` can be made without being given one: what `vector<T>(n)`
-// fills its elements with.
-static bool hasDefault(const Type* t) {
-    if (t->isStruct()) return !needsValue(t) && (!t->decl->constructor || t->decl->constructor->params.empty());
-    return !t->isClass() && !needsValue(t);
-}
 
 // `vector<T>()`, `vector<T>(n)` or `vector<T>(n, value)`.
 const Type* Sema::checkVectorConstruction(CallExpr& call, Flow& flow) {

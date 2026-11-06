@@ -1,0 +1,5 @@
+int main() {
+    hashmap<string, int> m = {.first = "a"};
+    return 0;
+}
+// error: a hashmap's { } list holds its entries, not named fields

@@ -1,0 +1,5 @@
+int main() {
+    hashmap<hashmap<int, int>, int> m;
+    return 0;
+}
+// error: 'hashmap<int, int>' cannot be used for 'K' of 'hashmap', which must be 'Hashable'

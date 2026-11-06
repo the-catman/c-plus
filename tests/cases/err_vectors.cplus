@@ -79,7 +79,7 @@ int main() {
 // error: 'c' is const and cannot be changed
 // error: 'c' is const, so its elements cannot be assigned to
 // error: push_back() changes the vector, so it must be called on a variable or a field
-// error: a range-based for loop goes over a vector, an array or a string, but this is 'int'
+// error: a range-based for loop goes over a vector, an array, a hashmap or a string, but this is 'int'
 // error: the elements of 'vector<string>' are 'string', which cannot be stored in 'int' 's'
 // error: vector<User>(n) cannot make its elements on its own, because a 'User' reference cannot be empty
 // error: because the constructor of 'Range' needs arguments

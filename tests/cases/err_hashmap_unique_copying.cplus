@@ -1,0 +1,12 @@
+class Node {};
+int main() {
+    hashmap<string, unique<Node>> m;
+    println("{}", m.get("a"));
+    println("{}", m.values());
+    for (auto e : m) println("{}", e.first);
+    return 0;
+}
+// error: 'get' would copy the values, but a 'unique<Node>' cannot be copied
+// error: 'values' would copy the values, but a 'unique<Node>' cannot be copied
+// error: a range-based for loop copies each entry, but a 'unique<Node>' cannot be copied
+// error: loop over the keys: `for (auto key : m.keys()) ... m[key] ...`

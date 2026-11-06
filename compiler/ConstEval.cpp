@@ -72,8 +72,8 @@ const char* ConstValue::typeName() const {
 }
 
 bool isBuiltinConstraintName(const std::string& name) {
-    return name == "Comparable" || name == "Number" || name == "Integer" || name == "Floating" || name == "same_as" ||
-           name == "derived_from";
+    return name == "Comparable" || name == "Number" || name == "Integer" || name == "Floating" || name == "Hashable" ||
+           name == "__Hashable" || name == "same_as" || name == "derived_from";
 }
 
 std::optional<bool> builtinConstraint(const std::string& name, const Type* first, const Type* second) {
@@ -81,6 +81,7 @@ std::optional<bool> builtinConstraint(const std::string& name, const Type* first
     if (name == "Number") return first->isNumber();
     if (name == "Integer") return first->isInteger();
     if (name == "Floating") return first->isFloating();
+    if (name == "Hashable" || name == "__Hashable") return isHashable(first);
     if (name == "same_as") return first == second;
     if (name == "derived_from") return first->isClass() && second->isClass() && first->decl->derivesFrom(second->decl);
     return std::nullopt;
@@ -425,6 +426,7 @@ ConstValue ConstEval::callFunction(const FuncDecl& f, std::vector<ConstValue> ar
 }
 
 ConstValue ConstEval::evalMethodCall(const MethodCallExpr& c) {
+    if (c.lowered) throw ConstError{c.loc, "a hashmap cannot be used while compiling"};
     if (c.receiver->kind == Expr::Kind::This) throw ConstError{c.loc, "methods cannot run while compiling"};
     ConstValue recv = eval(*c.receiver);
     if (recv.kind == VK::String && c.args.empty()) {

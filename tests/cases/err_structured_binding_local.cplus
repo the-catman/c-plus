@@ -1,0 +1,9 @@
+struct P {
+    int x = 0;
+    int y = 0;
+};
+int main() {
+    auto [a, b] = P{1, 2};
+    return 0;
+}
+// error: this compiler does not support structured bindings yet

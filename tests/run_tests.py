@@ -156,6 +156,14 @@ int main() {
         "unique<Node> b = (a2 = a);", "unique<Node> b = (a2 = make());", "Node n = yes ? a : a2;",
         "unique<Node>* p = &a; take(*p);", "weak<Node> w = a;", "unique<Dog> d = unique<Dog>(); unique<Node> up = d;",
         "unique<Node> b = none() ?? a;", "auto b = none() ?? a;", "Family f; Family g = f;", "Family f; auto k = f.kids;",
+        "hashmap<int, unique<Node>> m; auto c = m;", "hashmap<int, unique<Node>> m; auto b = m[1];",
+        "hashmap<int, unique<Node>> m; auto b = m.at(1);", "hashmap<int, unique<Node>> m; unique<Node> b = m[1];",
+        "hashmap<int, unique<Node>> m; take(m[1]);", "hashmap<int, unique<Node>> m; take(m.at(1));",
+        "hashmap<int, unique<Node>> m; m[1] = a;", "hashmap<int, unique<Node>> m; m.insert({1, a});",
+        "hashmap<int, unique<Node>> m; m[2] = m[1];", "hashmap<int, unique<Node>> m; auto x = m.get(1);",
+        "hashmap<int, unique<Node>> m; auto x = m.items();", "hashmap<int, unique<Node>> m; auto x = m.values();",
+        "hashmap<int, unique<Node>> m; for (auto e : m) {}", "hashmap<int, unique<Node>> m; noReturn(m);",
+        "hashmap<int, unique<Node>> m; hashmap<int, unique<Node>> c = hashmap<int, unique<Node>>(m);",
     ]
     ok = True
     source = workdir / "copies.cplus"

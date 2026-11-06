@@ -1,0 +1,87 @@
+// A value goes away when it leaves the map, and a destructor can use the map while that happens.
+class Noisy {
+public:
+    string name;
+    Noisy(string n) : name(n) {}
+    ~Noisy() { println("bye {}", name); }
+};
+
+class Box {
+public:
+    hashmap<string, Item> items;
+};
+
+class Item {
+public:
+    string name;
+    Box* owner;
+    Item(string n, Box* o) : name(n), owner(o) {}
+    ~Item() {
+        println("gone {} with {} left", name, owner->items.size());
+        if (name == "a") {
+            owner->items.erase("b");
+            owner->items["from destructor"] = Item("c", owner);
+        }
+    }
+};
+
+int main() {
+    hashmap<string, Noisy> m;
+    m["a"] = Noisy("a");
+    m["b"] = Noisy("b");
+    m["c"] = Noisy("c");
+    println("erase");
+    m.erase("a");
+    println("overwrite");
+    m["b"] = Noisy("b2");
+    println("insert that keeps");
+    m.insert({"b", Noisy("not kept")});
+    println("copy");
+    {
+        auto copy = m;
+        copy.clear();
+        println("the copy is empty");
+    }
+    println("clear");
+    m.clear();
+    println("empty");
+
+    // All the rest go when the map does.
+    {
+        hashmap<int, Noisy> last;
+        last[1] = Noisy("first");
+        last[2] = Noisy("second");
+        println("leaving");
+    }
+
+    Box box = Box();
+    box.items["a"] = Item("a", &box);
+    box.items["b"] = Item("b", &box);
+    println("{}", box.items.size());
+    box.items.erase("a");
+    println("{}", box.items.keys());
+    box.items.clear();
+    println("{}", box.items.size());
+    return 0;
+}
+// expect: erase
+// expect: bye a
+// expect: overwrite
+// expect: bye b
+// expect: insert that keeps
+// expect: bye not kept
+// expect: copy
+// expect: the copy is empty
+// expect: clear
+// expect: bye b2
+// expect: bye c
+// expect: empty
+// expect: leaving
+// expect: bye first
+// expect: bye second
+// expect: 2
+// expect: gone a with 1 left
+// expect: gone b with 0 left
+// expect: ["from destructor"]
+// expect: gone c with 0 left
+// expect: 0

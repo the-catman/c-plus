@@ -1,0 +1,15 @@
+// A program can have a type of its own with this name, which then is the one that is meant.
+template<typename A, typename B> class hashmap {
+public:
+    A first;
+    B second;
+    hashmap(A a, B b) : first(a), second(b) {}
+    int size() const { return 42; }
+};
+
+int main() {
+    hashmap<string, int> mine = hashmap<string, int>("a", 1);
+    println("{} {} {}", mine.first, mine.second, mine.size());
+    return 0;
+}
+// expect: a 1 42

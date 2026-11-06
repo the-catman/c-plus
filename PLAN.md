@@ -480,6 +480,23 @@ Decided 2026-11-05.
   memory copies. LLVM needed 95 seconds at -O0 to compile one load and store of
   `[65536 x i32]` as a single value, while memory copies take no time.
 
+### 2.24 Hash maps — DECIDED
+`hashmap<K, V>`, used like `std::unordered_map`. Decided 2026-11-06.
+- A value, copied like a vector, and as cheaply.
+- It goes over its entries in the order they were added, as a `Map` does in JavaScript and a `dict` in Python. C++
+  leaves the order open, which makes output change between runs and programs depend on it by accident.
+- `m[key]` adds a missing key with a default value, as in C++, and so cannot be used on a const map. If the type has
+  no default value, where C++ gives a compile error, a missing key stops the program, since `users[id].name` is
+  how a map of class references is used. `m[key] = value` always works, with any type.
+- No iterators yet. `m.contains(k)` and `m.get(k)`, which gives a `V?`, take the place of `m.find(k)`.
+- Any type with `==` can be a key, if that `==` looks at what can be hashed, with no hash to write. A hash function of
+  your own waits for function overloading.
+- Strings hash with SipHash-1-3 and a seed chosen at each start, as HTTP brings input from anyone. Since the order does not
+  come from the hash, the seed cannot change what a program does.
+- It is written in C+, on top of `vector`, in `compiler/Builtins.h`, and only added to programs that use it. Copies,
+  releases, leak checks and `unique` then work as for any struct. The compiler adds what C+ cannot say yet: `m[key]` as a
+  place, `for`, `{ }` lists, printing, `==` and hashing.
+
 ## 3. Compiler architecture
 
 ```
@@ -523,7 +540,7 @@ a debug build with ASan, stack traces and a leak report. Every item of Phase 1 i
 criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
 `dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, generics with
 constraints, errors, `constexpr` with `if constexpr`, and `unique<T>` with `move`, which is every item of Phase 2.
-The leak report came with Phase 1.
+The leak report came with Phase 1. Phase 3 is in progress: `hashmap` works.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

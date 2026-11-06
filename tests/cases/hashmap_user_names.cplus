@@ -1,0 +1,23 @@
+// A program's own names cannot get in the way of what a hashmap uses inside.
+const int K = 1;
+const int V = 2;
+const int live_ = 3;
+const int hash = 4;
+struct mask { int x = 0; };
+int place() { return 5; }
+int move(int a) { return a + 100; }
+template<typename T> concept Hashable = requires(T a) { a.nothingHasThis(); };
+
+int __find() { return 6; }
+
+int main() {
+    hashmap<string, int> m;
+    m["a"] = 1;
+    m.erase("a");
+    m["b"] = move(1);
+    for (auto e : m) println("{} {}", e.first, e.second);
+    println("{} {} {} {} {} {} {}", K, V, live_, hash, mask{}, place(), __find());
+    return 0;
+}
+// expect: b 101
+// expect: 1 2 3 4 {x: 0} 5 6

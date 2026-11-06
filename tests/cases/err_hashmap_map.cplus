@@ -1,0 +1,6 @@
+int main() {
+    map<string, int> m;
+    return 0;
+}
+// error: unknown type 'map'
+// error: write `hashmap<K, V>`

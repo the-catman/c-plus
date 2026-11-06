@@ -1,0 +1,15 @@
+class Node {
+public:
+    int n = 1;
+};
+
+int main() {
+    hashmap<string, unique<Node>> m;
+    m["a"] = unique<Node>();
+    unique<Node> taken = move(m["a"]);
+    println("{}", taken.n);
+    println("{}", m["a"].n);
+    return 0;
+}
+// expect: 1
+// trap: this 'unique<Node>' has been moved away

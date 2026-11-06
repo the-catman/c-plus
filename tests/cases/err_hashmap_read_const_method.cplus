@@ -1,0 +1,10 @@
+struct S {
+    hashmap<string, int> counts;
+    int read(string k) const { return counts[k]; }
+};
+int main() {
+    S s;
+    println("{}", s.read("a"));
+    return 0;
+}
+// error: '[ ]' adds a key that is missing, so it cannot be used on 'counts' inside const method 'read'

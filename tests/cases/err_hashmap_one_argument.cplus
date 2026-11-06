@@ -1,0 +1,6 @@
+int main() {
+    hashmap<string> m;
+    return 0;
+}
+// error: 'hashmap' takes 2 template arguments, but 1 was given
+// error: write e.g. `hashmap<string, int>`

@@ -1,0 +1,11 @@
+int main() {
+    const hashmap<string, int> m = {{"a", 1}};
+    println("{}", m.size());
+    println("{}", m.at("a"));
+    println("{}", m.get("a"));
+    m.erase("a");
+    return 0;
+}
+// error: cannot call 'erase' on const 'm', because it may change fields
+// error: 'erase' changes the hashmap, and only `size`, `empty`, `contains`, `count`, `get`, `at`, `items`, `keys` and `values` do not
+// not-error: mark 'erase' as `const`

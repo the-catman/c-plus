@@ -1,0 +1,59 @@
+// A hashmap works in generics like any other generic type.
+template<typename K, typename V> V lookup(hashmap<K, V> m, K key, V fallback) {
+    return m.get(key) ?? fallback;
+}
+
+template<Hashable T> hashmap<T, int> tally(vector<T> items) {
+    hashmap<T, int> out;
+    for (auto x : items) out[x]++;
+    return out;
+}
+
+template<typename K, typename V> class Cache {
+public:
+    hashmap<K, V> stored;
+    int misses = 0;
+    V get(K key, V made) {
+        if (auto found = stored.get(key)) return found;
+        misses++;
+        stored[key] = made;
+        return made;
+    }
+};
+
+template<typename T> bool canBeKey() {
+    if constexpr (Hashable<T>) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+struct Key {
+    string name;
+    int n = 0;
+};
+struct NoKey {
+    weak<Holder> w;
+};
+class Holder {};
+
+int main() {
+    hashmap<string, int> m = {{"a", 1}};
+    println("{} {}", lookup(m, "a", -1), lookup(m, "b", -1));
+    println("{}", tally<string>({"x", "y", "x"}));
+    println("{}", tally<int>({1, 1, 1}));
+    Cache<string, int> cache = Cache<string, int>();
+    println("{} {} {}", cache.get("a", 1), cache.get("a", 2), cache.misses);
+    println("{} {} {} {}", canBeKey<int>(), canBeKey<Key>(), canBeKey<NoKey>(), canBeKey<hashmap<int, int>>());
+    println("{}", canBeKey<unique<Holder>>());
+    println("{}", sizeof(hashmap<int, int>) > 0);
+    return 0;
+}
+// expect: 1 -1
+// expect: {"x": 2, "y": 1}
+// expect: {1: 3}
+// expect: 1 1 1
+// expect: true true false false
+// expect: false
+// expect: true

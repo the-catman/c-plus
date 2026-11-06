@@ -1,0 +1,133 @@
+// `m[key]` can add an entry, which can move all of them. Nothing that was read from the map earlier in
+// the same expression may be left pointing at the old place. A debug build finds any that is.
+struct Big {
+    string name;
+    array<int, 8> numbers;
+    void add(int n) { numbers[0] += n; }
+};
+
+struct Plain {
+    int x = 0;
+    int y = 0;
+    void add(int n) { x += n; }
+};
+
+// Enough new keys that the entries move, in one call.
+int grow(hashmap<string, Big>* m, string prefix) {
+    for (int i = 0; i < 40; i++) (*m)[prefix + to_string(i)].name = prefix;
+    return 7;
+}
+int growPlain(hashmap<string, Plain>* m, string prefix) {
+    for (int i = 0; i < 40; i++) (*m)[prefix + to_string(i)].x = 1;
+    return 7;
+}
+
+string numbered(hashmap<int, string> m, int n) { return m[n]; }
+
+int main() {
+    hashmap<string, Big> bigs;
+    bigs["a"].name = "first";
+    bigs["a"].numbers[1] = 5;
+
+    // Two reads, the second of which adds a key, in a loop, so that sooner or later it moves what the first read.
+    int same = 0;
+    long printed = 0;
+    for (int i = 0; i < 64; i++) {
+        // A key that is only a variable does not look like code that could move anything.
+        string sameKey = "same" + to_string(i);
+        string printedKey = "printed" + to_string(i);
+        if (bigs["a"] == bigs[sameKey]) same++;
+        printed += format("{} {}", bigs["a"], bigs[printedKey].name).size();
+    }
+    println("{} {}", same, printed);
+    Big copied = bigs["a"];
+    println("{} {}", copied.numbers[1], bigs["a"].numbers[1] + grow(&bigs, "b"));
+    println("{} {}", bigs["a"].name, grow(&bigs, "c"));
+
+    // A value given to a place in the map, computed by code that moves the map.
+    bigs["z"] = bigs["a"];
+    println("{}", bigs["z"].numbers[1]);
+    bigs["y"].numbers[0] = grow(&bigs, "d");
+    println("{}", bigs["y"].numbers[0]);
+    bigs["w"].add(grow(&bigs, "e"));
+    println("{}", bigs["w"].numbers[0]);
+    bigs["v"] = Big{"new", {grow(&bigs, "f")}};
+    println("{} {}", bigs["v"].name, bigs["v"].numbers[0]);
+
+    // The same for values that are not kept in memory by the compiler.
+    hashmap<string, Plain> plains;
+    plains["a"].y = 2;
+    int samePlain = 0;
+    long printedPlain = 0;
+    for (int i = 0; i < 64; i++) {
+        string sameKey = "same" + to_string(i);
+        string printedKey = "printed" + to_string(i);
+        if (plains["a"] == plains[sameKey]) samePlain++;
+        printedPlain += format("{} {}", plains["a"], plains[printedKey]).size();
+    }
+    println("{} {}", samePlain, printedPlain);
+    plains["b"].x = growPlain(&plains, "g");
+    println("{}", plains["b"].x);
+    plains["c"].add(growPlain(&plains, "h"));
+    println("{}", plains["c"].x);
+    plains["d"] = plains["a"];
+    println("{}", plains["d"]);
+
+    // A key that is itself read from the map.
+    hashmap<string, string> names;
+    names["a"] = "b";
+    names["b"] = "c";
+    names["c"] = "end";
+    println("{}", names[names[names["a"]]]);
+    names[names["a"]] = "changed";
+    println("{}", names["b"]);
+    names[names["none"]] = "under the empty key";
+    println("{}", names[""]);
+
+    hashmap<int, int> n;
+    n[n[1]] = 5;
+    println("{}", n);
+    n[2] = n[3] + n[4];
+    println("{}", n);
+    n[5] = n[5] + 1;
+    n[5] += n[5] + 1;
+    println("{}", n[5]);
+    int i = 0;
+    n[i++] = i;  // the right side comes first, as in C++17
+    println("{} {}", n[0], i);
+
+    // A key whose code changes the variable it came from.
+    string key = "before";
+    hashmap<string, vector<int>> lists;
+    lists[key].push_back(1);
+    string* where = &key;
+    lists[key].push_back(rename(where));
+    println("{} {}", lists, key);
+    println("{}", numbered({{1, "one"}}, 1));
+    return 0;
+}
+
+int rename(string* s) {
+    *s = "after";
+    return 2;
+}
+// expect: 0 3264
+// expect: 5 12
+// expect: first 7
+// expect: 5
+// expect: 7
+// expect: 7
+// expect: new 7
+// expect: 0 1600
+// expect: 7
+// expect: 7
+// expect: {x: 0, y: 2}
+// expect: end
+// expect: changed
+// expect: under the empty key
+// expect: {1: 0, 0: 5}
+// expect: {1: 0, 0: 5, 3: 0, 4: 0, 2: 0}
+// expect: 3
+// expect: 0 1
+// expect: {"before": [1, 2]} after
+// expect: one

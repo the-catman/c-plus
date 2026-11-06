@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
 #include <unistd.h>
 
 // This file is built twice. Programs built with --debug link the copy built with
@@ -137,8 +138,51 @@ static void on_crash(int signal_number, siginfo_t* info, void* context) {
 }
 #endif
 
+// Hashing. What a hash is depends on the seed each run of the program starts with, so that input cannot be
+// made to collide in a hashmap on purpose, and nothing can come to depend on it: a hashmap goes over its
+// entries in the order they were added. Strings are hashed with SipHash-1-3.
+int64_t cplus_hash_seed = 0x2d358dccaa6c78a5;
+static uint64_t hash_seed2 = 0x8bb84b93962eacc9;
+
+static uint64_t rotate_left(uint64_t x, int n) { return (x << n) | (x >> (64 - n)); }
+
+static void sip_round(uint64_t* v) {
+    v[0] += v[1]; v[1] = rotate_left(v[1], 13); v[1] ^= v[0]; v[0] = rotate_left(v[0], 32);
+    v[2] += v[3]; v[3] = rotate_left(v[3], 16); v[3] ^= v[2];
+    v[0] += v[3]; v[3] = rotate_left(v[3], 21); v[3] ^= v[0];
+    v[2] += v[1]; v[1] = rotate_left(v[1], 17); v[1] ^= v[2]; v[2] = rotate_left(v[2], 32);
+}
+
+int64_t cplus_hash_bytes(const char* data, int64_t size) {
+    uint64_t k0 = (uint64_t)cplus_hash_seed, k1 = hash_seed2;
+    uint64_t v[4] = {k0 ^ 0x736f6d6570736575ULL, k1 ^ 0x646f72616e646f6dULL, k0 ^ 0x6c7967656e657261ULL, k1 ^ 0x7465646279746573ULL};
+    int64_t whole = size - size % 8;
+    for (int64_t i = 0; i < whole; i += 8) {
+        uint64_t word;
+        memcpy(&word, data + i, 8);
+        v[3] ^= word;
+        sip_round(v);
+        v[0] ^= word;
+    }
+    uint64_t last = (uint64_t)size << 56;
+    for (int64_t i = whole; i < size; i++) last |= (uint64_t)(unsigned char)data[i] << (8 * (i - whole));
+    v[3] ^= last;
+    sip_round(v);
+    v[0] ^= last;
+    v[2] ^= 0xff;
+    sip_round(v);
+    sip_round(v);
+    sip_round(v);
+    return (int64_t)(v[0] ^ v[1] ^ v[2] ^ v[3]);
+}
+
 // Called as the program starts.
 void cplus_start(void) {
+    uint64_t seeds[2];
+    if (getentropy(seeds, sizeof seeds) == 0) {  // otherwise the fixed ones stay, which still work
+        cplus_hash_seed = (int64_t)seeds[0];
+        hash_seed2 = seeds[1];
+    }
 #ifdef CPLUS_DEBUG_RUNTIME
     // Some systems, such as Ubuntu, set this by default. It has llvm-symbolizer ask a server
     // on the internet about the program during a stack trace, which takes seconds and has no
@@ -165,6 +209,13 @@ void cplus_start(void) {
 _Noreturn void cplus_trap(const char* message, const char* file, int32_t line, int32_t column) {
     fflush(stdout);
     fprintf(stderr, "fatal error: %s\n  --> %s:%" PRId32 ":%" PRId32 "\n", message, file, line, column);
+    stop_program();
+}
+
+// The same, for a message that was worked out and may hold anything.
+_Noreturn void cplus_trap_text(const char* message, int64_t size, const char* file, int32_t line, int32_t column) {
+    fflush(stdout);
+    fprintf(stderr, "fatal error: %.*s\n  --> %s:%" PRId32 ":%" PRId32 "\n", (int)size, message, file, line, column);
     stop_program();
 }
 

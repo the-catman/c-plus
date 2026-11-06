@@ -1,0 +1,8 @@
+int main() {
+    const hashmap<string, int> m = {{"a", 1}};
+    println("{}", m["a"]);
+    return 0;
+}
+// error: '[ ]' adds a key that is missing, so it cannot be used on the const 'm'
+// error: to only read, write `m.at(key)`, which stops the program if the key is missing, or `m.get(key)`, which gives null
+// error: spec: docs/SPEC.md#hash-maps

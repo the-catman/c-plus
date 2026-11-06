@@ -1,0 +1,8 @@
+class Node {};
+int main() {
+    hashmap<unique<Node>, int> m;
+    return 0;
+}
+// error: 'unique<Node>' cannot be used for 'K' of 'hashmap', which must be 'Hashable'
+// error: 'unique<Node>' cannot be a key. Numbers, chars, bools, strings, pointers and class references can
+// error: spec: docs/SPEC.md#hash-maps

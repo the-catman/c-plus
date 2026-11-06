@@ -1,0 +1,122 @@
+// A hashmap is a value, copied like a vector: copies never see each other's changes.
+struct Stats {
+    hashmap<string, int> counts;
+    int total = 0;
+    void add(string k) {
+        counts[k]++;
+        total++;
+    }
+    int read(string k) const { return counts.get(k) ?? 0; }
+};
+
+class Holder {
+public:
+    hashmap<int, string> names;
+};
+
+void change(hashmap<string, int> m) {
+    m["inside"] = 1;
+    m.erase("a");
+}
+
+hashmap<string, int> make() {
+    hashmap<string, int> m;
+    m["made"] = 1;
+    return m;
+}
+
+int main() {
+    hashmap<string, int> a = {{"a", 1}, {"b", 2}};
+    auto b = a;
+    b["a"] = 100;
+    b["c"] = 3;
+    b.erase("b");
+    println("{} {}", a, b);
+
+    change(a);
+    println("{}", a);
+    println("{}", make());
+    println("{}", make()["made"]);
+    println("{}", make().at("made"));
+    println("{}", make().size());
+
+    // Equal means the same entries, in any order.
+    hashmap<string, int> x = {{"p", 1}, {"q", 2}};
+    hashmap<string, int> y = {{"q", 2}, {"p", 1}};
+    hashmap<string, int> z = {{"q", 2}, {"p", 3}};
+    hashmap<string, int> w = {{"q", 2}, {"r", 1}};
+    println("{} {} {} {}", x == y, x != y, x == z, x == w);
+    y["s"] = 1;
+    println("{}", x == y);
+    y.erase("s");
+    println("{}", x == y);
+    println("{}", hashmap<string, int>() == hashmap<string, int>());
+
+    // Inside other things.
+    Stats s;
+    s.add("a");
+    s.add("a");
+    s.add("b");
+    Stats t = s;
+    t.add("c");
+    println("{} {} {}", s, s.read("a"), s.read("none"));
+    println("{} {}", t, s == t);
+    Stats u = s;
+    println("{}", s == u);
+
+    Holder h = Holder();
+    h.names[1] = "one";
+    Holder same = h;
+    same.names[2] = "two";
+    println("{}", h);
+
+    vector<hashmap<string, int>> list;
+    list.push_back(a);
+    list.push_back(x);
+    list[0]["more"] = 1;
+    println("{} {}", list, a.contains("more"));
+    println("{}", list[1] == x);
+    auto list2 = list;
+    list2[1]["p"] = 50;
+    println("{} {}", list[1]["p"], list2[1]["p"]);
+
+    array<hashmap<int, int>, 2> two;
+    two[1][5] = 6;
+    println("{}", two);
+
+    hashmap<string, int>? maybe = x;
+    if (auto got = maybe) println("{}", got["p"]);
+    println("{}", maybe);
+
+    hashmap<string, hashmap<string, int>> nested;
+    nested["a"]["b"] = 1;
+    nested["a"]["c"] = 2;
+    nested["d"]["e"] = 3;
+    println("{}", nested);
+    auto inner = nested["a"];
+    inner["b"] = 9;
+    println("{} {}", nested["a"]["b"], inner["b"]);
+    return 0;
+}
+// expect: {"a": 1, "b": 2} {"a": 100, "c": 3}
+// expect: {"a": 1, "b": 2}
+// expect: {"made": 1}
+// expect: 1
+// expect: 1
+// expect: 1
+// expect: true false false false
+// expect: false
+// expect: true
+// expect: true
+// expect: {counts: {"a": 2, "b": 1}, total: 3} 2 0
+// expect: {counts: {"a": 2, "b": 1, "c": 1}, total: 4} false
+// expect: true
+// expect: Holder {names: {1: "one", 2: "two"}}
+// expect: [{"a": 1, "b": 2, "more": 1}, {"p": 1, "q": 2}] false
+// expect: true
+// expect: 1 50
+// expect: [{}, {5: 6}]
+// expect: 1
+// expect: {"p": 1, "q": 2}
+// expect: {"a": {"b": 1, "c": 2}, "d": {"e": 3}}
+// expect: 1 9

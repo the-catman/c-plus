@@ -1,0 +1,6 @@
+int main() {
+    hashmap<string, int> m;
+    int* p = &m["a"];
+    return 0;
+}
+// error: this compiler does not support pointers into vectors and strings yet

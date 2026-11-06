@@ -1,0 +1,92 @@
+// The methods of a hashmap. It goes over its entries in the order they were added.
+int main() {
+    hashmap<string, int> ages;
+    println("{} {} {}", ages, ages.size(), ages.empty());
+
+    ages["ada"] = 36;
+    ages["bob"] = 25;
+    ages["cid"] = 40;
+    println("{} {} {}", ages, ages.size(), ages.empty());
+
+    // `[ ]` reads, changes, and adds a missing key with a default value, as in C++.
+    ages["ada"] += 1;
+    ages["bob"]++;
+    println("{} {}", ages["ada"], ages["bob"]);
+    println("{}", ages["new"]);
+    println("{}", ages);
+
+    // Assigning to one that is there keeps its place.
+    ages["ada"] = 1;
+    println("{}", ages);
+
+    println("{} {}", ages.contains("bob"), ages.contains("zed"));
+    println("{} {}", ages.count("bob"), ages.count("zed"));
+    println("{} {}", ages.get("bob") ?? -1, ages.get("zed") ?? -1);
+    if (auto cid = ages.get("cid")) println("{}", cid);
+    println("{}", ages.at("cid"));
+
+    // insert keeps what is there, and says whether it added anything.
+    println("{} {}", ages.insert({"dee", 7}), ages.insert({"dee", 8}));
+    println("{}", ages["dee"]);
+
+    println("{} {}", ages.erase("bob"), ages.erase("bob"));
+    println("{} {}", ages, ages.contains("bob"));
+
+    // What is erased and added again goes last.
+    ages["bob"] = 2;
+    println("{}", ages);
+
+    println("{}", ages.keys());
+    println("{}", ages.values());
+    for (auto e : ages) print("{}={} ", e.first, e.second);
+    println();
+    for (auto k : ages.keys()) print("{} ", k);
+    println();
+    println("{}", ages.items()[0]);
+
+    // A loop goes over the map as it was when it started, so the body can change it.
+    for (auto e : ages) {
+        ages.erase(e.first);
+        ages[e.first + "!"] = e.second;
+    }
+    println("{}", ages);
+
+    ages.clear();
+    println("{} {} {}", ages, ages.size(), ages.contains("ada!"));
+    ages["again"] = 1;
+    println("{}", ages);
+
+    // The ways to make one.
+    hashmap<string, int> a = {};
+    hashmap<string, int> b = {{"x", 1}, {"y", 2}};
+    auto c = hashmap<string, int>();
+    auto d = hashmap<string, int>{{"x", 1}};
+    hashmap<string, int> first = {{"same", 1}, {"same", 2}};
+    println("{} {} {} {} {}", a, b, c, d, first);
+    return 0;
+}
+// expect: {} 0 true
+// expect: {"ada": 36, "bob": 25, "cid": 40} 3 false
+// expect: 37 26
+// expect: 0
+// expect: {"ada": 37, "bob": 26, "cid": 40, "new": 0}
+// expect: {"ada": 1, "bob": 26, "cid": 40, "new": 0}
+// expect: true false
+// expect: 1 0
+// expect: 26 -1
+// expect: 40
+// expect: 40
+// expect: true false
+// expect: 7
+// expect: 1 0
+// expect: {"ada": 1, "cid": 40, "new": 0, "dee": 7} false
+// expect: {"ada": 1, "cid": 40, "new": 0, "dee": 7, "bob": 2}
+// expect: ["ada", "cid", "new", "dee", "bob"]
+// expect: [1, 40, 0, 7, 2]
+// expect: ada=1 cid=40 new=0 dee=7 bob=2 
+// expect: ada cid new dee bob 
+// expect: {first: "ada", second: 1}
+// expect: {"ada!": 1, "cid!": 40, "new!": 0, "dee!": 7, "bob!": 2}
+// expect: {} 0 false
+// expect: {"again": 1}
+// expect: {} {"x": 1, "y": 2} {} {"x": 1} {"same": 1}

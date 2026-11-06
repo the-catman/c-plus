@@ -1,0 +1,7 @@
+int main() {
+    hashmap<string, int> m;
+    println("{}", m.at());
+    return 0;
+}
+// error: 'at' takes the key to look for, but this gives it 0 arguments
+// error: write `m.at(key)`

@@ -1,0 +1,15 @@
+// A class reference has no default value to put in for a key that is missing.
+class User {
+public:
+    string name = "a";
+};
+
+int main() {
+    hashmap<int, User> users;
+    users[1] = User();
+    println("{}", users[1].name);
+    println("{}", users[2].name);
+    return 0;
+}
+// expect: a
+// trap: the key 2 is not in this hashmap

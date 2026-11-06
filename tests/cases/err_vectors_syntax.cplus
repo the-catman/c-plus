@@ -10,7 +10,6 @@ int main() {
     int arr[5];
     println("{}", items[]);
     println("{}", items[1, 2]);
-    hashmap<string, int> ages;
     auto w = vector<int>;
     int x : items;
     return 0;
@@ -30,7 +29,6 @@ int main() {
 // error: write `array<int, 5> arr`
 // error: expected an index inside [ ]
 // error: an element is picked with one index
-// error: this compiler does not support hash maps (hashmap<K, V>) yet
 // error: expected '{' or '(' after 'vector<int>'
 // error: a range-based for loop is written inside 'for ( )'
 // error: spec: docs/SPEC.md#vectors

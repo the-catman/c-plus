@@ -1,0 +1,6 @@
+int main() {
+    std::unordered_map<string, int> m;
+    return 0;
+}
+// error: C+ has no std:: namespace
+// error: write `hashmap<K, V>`, used like std::unordered_map

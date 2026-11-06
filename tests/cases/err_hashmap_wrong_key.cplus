@@ -1,0 +1,9 @@
+int main() {
+    hashmap<string, int> m;
+    m[1] = 2;
+    println("{}", m.at(5));
+    println("{}", m.contains(2.5));
+    return 0;
+}
+// error: expected 'string' as a key of 'hashmap<string, int>', but this is 'int'
+// error: expected 'string' for parameter 'key' of 'contains', but this is 'double'

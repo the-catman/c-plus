@@ -334,7 +334,7 @@ struct IncDecExpr : Expr {
         : Expr(Kind::IncDec, l), increment(inc), prefix(pre), target(std::move(t)) {}
 };
 
-enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill, Move };
+enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill, Move, Hash };
 
 // The math functions of C++'s <cmath>, and abs, min and max.
 enum class MathFn {
@@ -373,6 +373,7 @@ struct CallExpr : Expr {
     std::vector<TemplateArg> templateArgs;   // `max<long>(a, b)`
     const StructDecl* constructs = nullptr;  // set by Sema for `TypeName(...)`
     bool copies = false;                     // set by Sema for `Point(p)` where `p` is a Point
+    bool clears = false;                     // `__move(x)`, which always leaves x empty
     const Type* uniqueType = nullptr;        // `unique<Node>(args)`, which builds a new Node
     Builtin builtin = Builtin::None;       // set by Sema for built-ins
     const Type* vectorType = nullptr;      // `vector<int>(n)` or `vector<int>(n, value)`
@@ -407,6 +408,7 @@ struct MethodCallExpr : Expr {
     WeakMethod weakMethod = WeakMethod::None;  // set by Sema for a method of a weak reference
     bool uniqueGet = false;                    // set by Sema for `u.get()` on a unique reference
     std::string qualifier;                    // `d.Animal::speak()`: that class's own version, without dispatch
+    ExprPtr lowered;                          // set by Sema when this call really is that expression, which then owns the receiver
     BasePath path;                            // set with method: from the receiver's type to the one declaring it
     MethodCallExpr(Loc nameLoc, ExprPtr r, std::string n, std::vector<ExprPtr> a)
         : Expr(Kind::MethodCall, nameLoc), receiver(std::move(r)), name(std::move(n)), args(std::move(a)) {}
@@ -426,6 +428,9 @@ struct MemberExpr : Expr {
 // `base[index]`, an element of a vector or an array, or a char of a string.
 struct IndexExpr : Expr {
     ExprPtr base, index;
+    FuncDecl* mapSlot = nullptr;  // set by Sema for `m[key]` on a hashmap: finds the entry, adding it if it should
+    bool mapAssign = false;       // the target of `m[key] = value`, which needs no value to start with
+    bool mapTarget = false;       // the target of any assignment, which checks by itself that `m` can change
     IndexExpr(Loc bracketLoc, ExprPtr b, ExprPtr i) : Expr(Kind::Index, bracketLoc), base(std::move(b)), index(std::move(i)) {}
 };
 
@@ -439,6 +444,7 @@ struct InitListExpr : Expr {
         int fieldIndex = -1;  // set by Sema
     };
     const Type* explicitType = nullptr;  // `Point{...}`, `vector<int>{...}` or `array<int, 3>{...}`
+    FuncDecl* mapFill = nullptr;         // set by Sema for `{{"a", 1}}` as a hashmap: puts the entries in it
     std::vector<Element> elements;
     explicit InitListExpr(Loc l) : Expr(Kind::InitList, l) {}
 };
@@ -841,6 +847,29 @@ inline bool holdsUnique(const Type* t, std::vector<const StructDecl*>& seen) {
 inline bool holdsUnique(const Type* t) {
     std::vector<const StructDecl*> seen;
     return holdsUnique(t, seen);
+}
+
+// Whether this is the language's `hashmap<K, V>`, and not one that a program wrote. See Builtins.h.
+inline bool isHashmap(const Type* t) {
+    return t->isStruct() && t->decl->templateOf && t->decl->templateOf->nameLoc.line == 0 && t->decl->templateOf->name == "hashmap";
+}
+
+// Whether a value of this type can be the key of a hashmap: whether `==` on it looks only at things that can
+// be hashed, and it can be copied. `seen` stops at a struct already looked at.
+inline bool isHashable(const Type* t, std::vector<const StructDecl*>& seen) {
+    if (t->isOptional() || t->isVector() || t->isArray()) return isHashable(t->elem, seen);
+    if (t->isNumber() || t->is(Type::Kind::Bool) || t->is(Type::Kind::Char) || t->is(Type::Kind::String) || t->isPointer() || t->isClass()) return true;
+    if (!t->isStruct() || isHashmap(t)) return false;
+    for (const StructDecl* d : seen)
+        if (d == t->decl) return true;
+    seen.push_back(t->decl);
+    for (auto& f : t->decl->fields)
+        if (!isHashable(f.type, seen)) return false;
+    return true;
+}
+inline bool isHashable(const Type* t) {
+    std::vector<const StructDecl*> seen;
+    return isHashable(t, seen);
 }
 
 struct ImportDecl {

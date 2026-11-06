@@ -1,0 +1,7 @@
+int main() {
+    hashmap<string, int> m;
+    for (const auto& [k, v] : m) println("{}", k);
+    return 0;
+}
+// error: this compiler does not support structured bindings yet
+// not-error: references

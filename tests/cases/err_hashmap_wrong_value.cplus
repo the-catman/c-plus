@@ -1,0 +1,7 @@
+int main() {
+    hashmap<string, int> m;
+    m["a"] = "text";
+    return 0;
+}
+// error: 'string'
+// error: 'int'

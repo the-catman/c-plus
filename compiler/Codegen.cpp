@@ -45,7 +45,8 @@ struct Codegen::Impl {
     // `owner` is the reference-counted buffer holding the bytes, or null for a literal.
     llvm::StructType* stringTy = nullptr;
     llvm::FunctionCallee rtPrintStr, rtPrintQuoted, rtPrintI32, rtPrintI64, rtPrintBool, rtPrintNewline, rtTrap;
-    llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq;
+    llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq, rtHashBytes, rtTrapText;
+    llvm::GlobalVariable* hashSeed = nullptr;
     llvm::FunctionCallee rtTrapIndex, rtTrapArrayIndex, rtVecNew, rtVecRelease, rtVecReserve;
     llvm::FunctionCallee rtStrRelease, rtStrCompare, rtStrConcat, rtStrAppend, rtStrSubstr, rtStrFind;
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars;
@@ -108,6 +109,7 @@ struct Codegen::Impl {
     llvm::Function* objectRelease = nullptr;  // void(ptr object), for every class
     std::map<std::pair<const FuncDecl*, uint64_t>, llvm::Function*> thunks;  // see vtableMethod
     std::unordered_map<const VarDecl*, llvm::Function*> constantFunctions;
+    std::unordered_map<const Type*, llvm::Function*> hashFunctions;
 
     // A vector is a pointer to a buffer laid out as the runtime's cplus_vec: a header of
     // count, size and capacity, then the elements. Null is an empty vector.
@@ -210,7 +212,8 @@ struct Codegen::Impl {
 
     // Code generated from here on belongs to `loc`, in a stack trace.
     void setLine(Loc loc) {
-        if (diFunction && loc.line) b.SetCurrentDebugLocation(llvm::DILocation::get(ctx, loc.line, loc.col, diFunction));
+        // Line 0 is what LLVM calls no line: code written in C+ that comes with the language. See Builtins.h.
+        if (diFunction) b.SetCurrentDebugLocation(llvm::DILocation::get(ctx, loc.line, loc.col, diFunction));
     }
 
     // The same, until the end of a scope: an expression's operands have their own places,
@@ -265,6 +268,9 @@ struct Codegen::Impl {
         rtPrintEnter = decl("cplus_print_enter", i32, {ptrTy});
         rtPrintLeave = decl("cplus_print_leave", voidTy, {});
         rtStrEq = decl("cplus_str_eq", i32, {ptrTy, i64, ptrTy, i64});
+        rtHashBytes = decl("cplus_hash_bytes", i64, {ptrTy, i64});
+        rtTrapText = decl("cplus_trap_text", voidTy, {ptrTy, i64, ptrTy, i32, i32});
+        hashSeed = new llvm::GlobalVariable(*mod, i64, false, llvm::GlobalValue::ExternalLinkage, nullptr, "cplus_hash_seed");
         rtStrRelease = decl("cplus_str_release", voidTy, {ptrTy});
         rtStrCompare = decl("cplus_str_compare", i32, {ptrTy, i64, ptrTy, i64});
         rtStrConcat = decl("cplus_str_concat", voidTy, {ptrTy, ptrTy, i64});
@@ -1516,6 +1522,13 @@ struct Codegen::Impl {
 
     llvm::Value* genInitList(const InitListExpr& list, const Type* to) {
         const Type* type = list.explicitType ? list.explicitType : to;
+        if (list.mapFill) {  // a new map, and then the entries go in, so that the first of two with one key stays
+            llvm::Value* entries = genVectorList(list, list.mapFill->params[0]->type);
+            llvm::Value* map = entryAlloca(llvmType(type), "map");
+            fillDefault(map, type);
+            callFunction(*list.mapFill, {map, entries});
+            return inMemory(type) ? map : b.CreateLoad(llvmType(type), map, "map");
+        }
         if (type->isVector()) return genVectorList(list, type);
         if (type->isArray()) return genArrayList(list, type);
         const StructDecl& sd = *type->decl;
@@ -1582,7 +1595,7 @@ struct Codegen::Impl {
             case Expr::Kind::Member: return mayRunCode(*static_cast<const MemberExpr&>(e).base);
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
-                return mayRunCode(*ix.base) || mayRunCode(*ix.index);
+                return ix.mapSlot || mayRunCode(*ix.base) || mayRunCode(*ix.index);  // a map may have to add the key
             }
             case Expr::Kind::Unary: return mayRunCode(*static_cast<const UnaryExpr&>(e).operand);
             case Expr::Kind::Binary: {
@@ -1621,11 +1634,83 @@ struct Codegen::Impl {
                 auto& ix = static_cast<const IndexExpr&>(e);
                 if (ix.base->type->isPointer() || !isPlace(*ix.base)) freeze(*ix.base, gen(*ix.base));
                 else freezePlace(*ix.base, made);
-                freeze(*ix.index, genIndex(*ix.index));
+                freeze(*ix.index, ix.mapSlot ? heldKey(ix) : genIndex(*ix.index));
                 return;
             }
             default: return;  // a variable or `this`, which stay where they are
         }
+    }
+
+    // The key of `m[key]`, kept until the statement ends.
+    llvm::Value* heldKey(const IndexExpr& ix) {
+        const Type* keyType = ix.mapSlot->params[0]->type;
+        llvm::Value* key = genOwned(*ix.index, keyType);
+        if (isManaged(keyType)) temps.push_back({key, keyType, inMemory(keyType)});
+        return key;
+    }
+
+    // The address of the value of `m[key]`. What leads to the map comes first and then the key, as in C++, but the
+    // map is found after the key, whose code may move it. A method of the map finds the entry, and from then
+    // on it is an element of a vector, the map's entries, in all that that takes.
+    llvm::Value* mapValueAddress(const IndexExpr& ix, bool hold, bool write) {
+        const Type* mapType = ix.base->type;
+        const FuncDecl& find = *ix.mapSlot;
+        const Type* keyType = find.params[0]->type;
+        bool adds = !find.isConst;
+        llvm::Value* held = nullptr;  // a key to report if it is missing, which the method's own copy cannot be
+        llvm::Value* key = nullptr;
+        auto genKey = [&] {
+            held = frozenValue(*ix.index);
+            if (!held && adds) {
+                key = genOwned(*ix.index, keyType);
+                return;
+            }
+            if (!held) held = heldKey(ix);
+            retainValue(held, keyType);
+            key = held;
+        };
+        llvm::Value* self;
+        if (isPlace(*ix.base)) {
+            self = placeAfter(*ix.base, genKey, hold, write || adds);
+        } else {  // a temporary, kept until the statement ends
+            llvm::Value* value = baseOnce(*ix.base);
+            genKey();
+            self = value;
+            if (!inMemory(mapType)) {
+                self = entryAlloca(llvmType(mapType), "map");
+                b.CreateStore(value, self);
+            }
+        }
+        std::vector<llvm::Value*> args{self, key};
+        if (find.params.size() == 2) args.push_back(zeroValue(find.params[1]->type));  // see Builtins.h
+        llvm::Value* position = callFunction(find, std::move(args));
+        if (find.isConst) {
+            auto* missingBB = llvm::BasicBlock::Create(ctx, "missing", fn);
+            auto* foundBB = llvm::BasicBlock::Create(ctx, "found", fn);
+            b.CreateCondBr(b.CreateICmpSLT(position, b.getInt64(0)), missingBB, foundBB,
+                           llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
+            b.SetInsertPoint(missingBB);
+            llvm::Value* text = entryAlloca(stringTy, "text");
+            b.CreateStore(llvm::Constant::getNullValue(stringTy), text);
+            printText(text, "the key ");
+            printValue(text, held, keyType, true);
+            printText(text, " is not in this hashmap; check with `contains`, or use `get`, which gives null");
+            llvm::Value* message = b.CreateLoad(stringTy, text, "message");
+            auto* stop = b.CreateCall(rtTrapText, {strData(message), strLength(message), fileName, b.getInt32(ix.loc.line), b.getInt32(ix.loc.col)});
+            stop->setDoesNotReturn();
+            b.CreateUnreachable();
+            b.SetInsertPoint(foundBB);
+        }
+        const Type* entries = mapType->decl->fields[0].type;
+        llvm::Value* slot = fieldAddress(mapType, self, 0, "entries");
+        llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "entries");
+        if (write) buf = reserve(slot, buf, entries, b.getInt64(0));
+        if (hold) {
+            b.CreateCall(rtRetain, {buf});
+            temps.push_back({buf, entries, false});
+            if (write && heldBuffers) heldBuffers->push_back({slot, buf});
+        }
+        return fieldAddress(entries->elem, elementAt(buf, position, entries), 1, "value");
     }
 
     // The address of the place `recv`, about to change, found after `args` run: what leads
@@ -1687,6 +1772,7 @@ struct Codegen::Impl {
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
                 const Type* vt = ix.base->type;
+                if (ix.mapSlot) return mapValueAddress(ix, hold, write);
                 if (vt->is(K::String)) return charAddress(ix, hold, write);
                 if (vt->isPointer()) {  // `p[i]`: not bounds-checked, as in C++
                     llvm::Value* p = baseOnce(*ix.base);
@@ -1969,7 +2055,12 @@ struct Codegen::Impl {
                 return i.prefix ? updated : old;
             }
             case Expr::Kind::Call: owned = true; return genCall(static_cast<const CallExpr&>(e));
-            case Expr::Kind::MethodCall: owned = true; return genMethodCall(static_cast<const MethodCallExpr&>(e));
+            case Expr::Kind::MethodCall: {
+                auto& call = static_cast<const MethodCallExpr&>(e);
+                if (call.lowered) return genRaw(*call.lowered, owned);
+                owned = true;
+                return genMethodCall(call);
+            }
         }
         llvm_unreachable("unknown expression kind");
     }
@@ -2079,6 +2170,65 @@ struct Codegen::Impl {
 
     // Whether two values are equal: strings by contents, structs field by field, and
     // class references by identity.
+    // A number for a word, which depends on the seed each run of the program starts with: see cplus_start.
+    llvm::Value* hashWord(llvm::Value* word) {
+        llvm::Value* x = b.CreateXor(word, b.CreateLoad(b.getInt64Ty(), hashSeed, "seed"));
+        x = b.CreateXor(x, b.CreateLShr(x, 33));
+        x = b.CreateMul(x, b.getInt64(0xff51afd7ed558ccdULL));
+        x = b.CreateXor(x, b.CreateLShr(x, 33));
+        x = b.CreateMul(x, b.getInt64(0xc4ceb9fe1a85ec53ULL));
+        return b.CreateXor(x, b.CreateLShr(x, 33));
+    }
+
+    llvm::Value* hashCombine(llvm::Value* h, llvm::Value* x) {
+        llvm::Value* turned = b.CreateOr(b.CreateShl(h, 5), b.CreateLShr(h, 59));
+        return b.CreateMul(b.CreateXor(turned, x), b.getInt64(0x9e3779b97f4a7c15ULL));
+    }
+
+    // A number that is the same for two values that are `==`: see genEquals, which this follows. A struct, a
+    // vector and an array get a function each, as a struct can lead back to itself through a vector.
+    llvm::Value* hashValue(llvm::Value* v, const Type* t) {
+        switch (t->kind) {
+            case K::Bool: case K::Char: return hashWord(b.CreateZExt(v, b.getInt64Ty()));
+            case K::Int: return hashWord(b.CreateSExt(v, b.getInt64Ty()));
+            case K::Long: return hashWord(v);
+            case K::Class: case K::Pointer: return hashWord(b.CreatePtrToInt(v, b.getInt64Ty()));
+            case K::Float: v = b.CreateFPExt(v, b.getDoubleTy()); [[fallthrough]];
+            case K::Double:  // -0.0 == 0.0, and adding 0.0 makes them one value
+                return hashWord(b.CreateBitCast(b.CreateFAdd(v, llvm::ConstantFP::get(b.getDoubleTy(), 0.0)), b.getInt64Ty()));
+            case K::String: return b.CreateCall(rtHashBytes, {strData(v), strLength(v)});
+            case K::Struct: case K::Vector: case K::Array: return b.CreateCall(hashFunction(t), {v});
+            case K::Optional: {
+                if (t->elem->isObjectRef()) return hashWord(b.CreatePtrToInt(v, b.getInt64Ty()));
+                // An empty optional holds zero bytes, which are safe to look at, and have the one hash.
+                return b.CreateSelect(hasValue(v, t), hashValue(valueOf(v, t), t->elem), b.getInt64(0));
+            }
+            default: llvm_unreachable("Sema allowed a key that Codegen cannot hash");
+        }
+    }
+
+    llvm::Function* hashFunction(const Type* t) {
+        auto [it, inserted] = hashFunctions.try_emplace(t, nullptr);
+        if (!inserted) return it->second;
+        auto* f = internalFunction(std::string("cplus.") + t->name + "#hash", b.getInt64Ty(), {inMemory(t) ? b.getPtrTy() : llvmType(t)});
+        it->second = f;
+        SavedPoint saved(*this);
+        startHelper(f);
+        llvm::Value* v = f->getArg(0);
+        llvm::Value* total = entryAlloca(b.getInt64Ty(), "total");
+        b.CreateStore(b.getInt64(0x243f6a8885a308d3ULL), total);
+        auto add = [&](llvm::Value* part) { b.CreateStore(hashCombine(b.CreateLoad(b.getInt64Ty(), total), part), total); };
+        if (t->isStruct()) {
+            for (size_t i = 0; i < t->decl->fields.size(); ++i) add(hashValue(loadField(*t->decl, v, i), t->decl->fields[i].type));
+        } else if (t->isVector()) {
+            countedLoop(vecSize(v), [&](llvm::Value* i) { add(hashValue(peekValue(t->elem, elementAt(v, i, t)), t->elem)); });
+        } else {
+            countedLoop(b.getInt64(t->length), [&](llvm::Value* i) { add(hashValue(peekValue(t->elem, arrayElement(v, i, t)), t->elem)); });
+        }
+        b.CreateRet(b.CreateLoad(b.getInt64Ty(), total));
+        return f;
+    }
+
     llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
         switch (t->kind) {
             case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer: case K::Unique:
@@ -2451,7 +2601,7 @@ struct Codegen::Impl {
         const Expr& x = *call.args[0];
         const Type* t = x.type;
         bool variable = x.kind == Expr::Kind::Name && static_cast<const NameExpr&>(x).implicitField < 0;
-        if (!isPlace(x) || (!variable && !holdsUnique(t))) return genOwned(x, t);
+        if (!isPlace(x) || (!variable && !call.clears && !holdsUnique(t))) return genOwned(x, t);
         llvm::Value* place = addressOf(x, false, true);
         llvm::Value* value = loadValue(t, place, "moved");
         // A variable is known to hold it, and the rest could have been moved from already.
@@ -2463,6 +2613,10 @@ struct Codegen::Impl {
 
     llvm::Value* genCall(const CallExpr& call) {
         if (call.builtin == Builtin::Move) return genMove(call);
+        if (call.builtin == Builtin::Hash) {  // never negative: see Builtins.h
+            const Expr& x = *call.args[0];
+            return b.CreateAnd(hashValue(gen(x), x.type), b.getInt64(INT64_MAX));
+        }
         if (call.copies) return genOwned(*call.args[0], call.vectorType ? call.vectorType : &call.constructs->type);  // `Point(p)`
         if (call.vectorType) return genVectorConstruction(call);
         if (call.builtin == Builtin::Math) return genMath(call);
@@ -3511,6 +3665,68 @@ struct Codegen::Impl {
         for (size_t i = cls.bases.size(); i-- > 0;) collectParts(*cls.bases[i], offset + baseOffset(cls, *cls.bases[i]), out);
     }
 
+    // A hashmap prints as `{"a": 1, "b": 2}`, in order, and is equal to one with the same entries in any order.
+    // See Builtins.h for what it holds. The insertion point is at the start of the print helper.
+    void defineMapHelpers(const StructDecl& sd, TypeInfo& info) {
+        const Type* entries = sd.fields[0].type;
+        const Type* hashes = sd.fields[1].type;
+        const Type* entry = entries->elem;
+        const Type* keyType = sd.templateArgs[0].type;
+        const Type* valueType = sd.templateArgs[1].type;
+        llvm::Value* self = info.print->getArg(0);
+        llvm::Value* out = info.print->getArg(1);
+        llvm::Value* buf = loadField(sd, self, 0);
+        llvm::Value* hashBuf = loadField(sd, self, 1);
+        llvm::Value* any = entryAlloca(b.getInt1Ty(), "any");
+        b.CreateStore(b.getInt1(false), any);
+        printText(out, "{");
+        countedLoop(vecSize(buf), [&](llvm::Value* i) {
+            auto* entryBB = llvm::BasicBlock::Create(ctx, "entry", fn);
+            auto* sepBB = llvm::BasicBlock::Create(ctx, "sep", fn);
+            auto* showBB = llvm::BasicBlock::Create(ctx, "show", fn);
+            auto* nextBB = llvm::BasicBlock::Create(ctx, "next", fn);
+            llvm::Value* hash = b.CreateLoad(b.getInt64Ty(), elementAt(hashBuf, i, hashes), "hash");
+            b.CreateCondBr(b.CreateICmpSLT(hash, b.getInt64(0)), nextBB, entryBB);
+            b.SetInsertPoint(entryBB);
+            b.CreateCondBr(b.CreateLoad(b.getInt1Ty(), any), sepBB, showBB);
+            b.SetInsertPoint(sepBB);
+            printText(out, ", ");
+            b.CreateBr(showBB);
+            b.SetInsertPoint(showBB);
+            b.CreateStore(b.getInt1(true), any);
+            llvm::Value* at = elementAt(buf, i, entries);
+            printValue(out, peekValue(keyType, fieldAddress(entry, at, 0, "key")), keyType, true);
+            printText(out, ": ");
+            printValue(out, peekValue(valueType, fieldAddress(entry, at, 1, "value")), valueType, true);
+            b.CreateBr(nextBB);
+            b.SetInsertPoint(nextBB);
+        });
+        printText(out, "}");
+        b.CreateRetVoid();
+
+        startHelper(info.equals);
+        auto place = [&](llvm::Value* value) -> llvm::Value* {
+            if (inMemory(&sd.type)) return value;
+            llvm::Value* slot = entryAlloca(llvmType(&sd.type), "map");
+            b.CreateStore(value, slot);
+            return slot;
+        };
+        llvm::Value* left = place(info.equals->getArg(0));
+        llvm::Value* right = place(info.equals->getArg(1));
+        b.CreateRet(callFunction(*sd.ownMethod("__same"), {left, right}));
+
+        if (!info.retain) return;
+        for (auto [f, which] : {std::pair{info.retain, true}, std::pair{info.release, false}}) {
+            startHelper(f);
+            for (size_t i = sd.fields.size(); i-- > 0;) {
+                if (!isManaged(sd.fields[i].type)) continue;
+                llvm::Value* v = loadField(sd, f->getArg(0), i);
+                which ? retainValue(v, sd.fields[i].type) : releaseValue(v, sd.fields[i].type);
+            }
+            b.CreateRetVoid();
+        }
+    }
+
     void defineHelpers(const StructDecl& sd) {
         TypeInfo& info = types.at(&sd);
 
@@ -3518,6 +3734,10 @@ struct Codegen::Impl {
         startHelper(info.print);
         llvm::Value* self = info.print->getArg(0);
         llvm::Value* out = info.print->getArg(1);
+        if (isHashmap(&sd.type)) {
+            defineMapHelpers(sd, info);
+            return;
+        }
         if (sd.isClass) {
             auto* bodyBB = llvm::BasicBlock::Create(ctx, "print", fn);
             auto* againBB = llvm::BasicBlock::Create(ctx, "seen", fn);

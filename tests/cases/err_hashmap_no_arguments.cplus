@@ -1,0 +1,6 @@
+int main() {
+    hashmap m;
+    return 0;
+}
+// error: 'hashmap' is generic, so its template arguments must be written
+// error: write e.g. `hashmap<string, int>`

@@ -1,0 +1,134 @@
+// What can be a key. Two keys are the same when they are `==`.
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+struct Named {
+    string name;
+    Point at;
+    vector<int> tags;
+    int? extra;
+};
+struct Tree {
+    vector<Tree> kids;
+    int n = 0;
+};
+class Node {
+public:
+    int n = 0;
+};
+class Dog : public Node {};
+
+int main() {
+    hashmap<int, string> ints = {{1, "one"}, {-1, "minus"}};
+    println("{} {}", ints[1], ints[-1]);
+    hashmap<long, int> longs;
+    longs[5000000000] = 1;
+    longs[5] = 2;  // an int key is converted, as for any long
+    println("{} {} {}", longs[5000000000], longs.contains(5L), longs.at(5));
+    hashmap<char, int> chars;
+    for (char c : "hello") chars[c]++;
+    println("{}", chars);
+    hashmap<bool, int> bools = {{true, 1}, {false, 0}};
+    println("{}", bools[true] + bools[false]);
+
+    // -0.0 and 0.0 are ==, so they are one key. NaN is not == to itself, so it never is found, as in C++.
+    hashmap<double, string> doubles;
+    doubles[0.0] = "zero";
+    doubles[-0.0] = "still zero";
+    doubles[1.5] = "more";
+    println("{}", doubles);
+    double nan = sqrt(-1.0);
+    doubles[nan] = "a";
+    doubles[nan] = "b";
+    println("{} {}", doubles.size(), doubles.contains(nan));
+    hashmap<float, int> floats;
+    floats[0.5f] = 1;
+    floats[-0.0f] = 2;
+    println("{} {}", floats[0.5f], floats[0.0f]);
+
+    hashmap<Point, string> points;
+    points[{1, 2}] = "a";
+    points[Point{3, 4}] = "b";
+    Point p = {1, 2};
+    println("{} {} {}", points[p], points.contains({3, 4}), points.contains({4, 3}));
+    println("{}", points);
+
+    hashmap<array<int, 2>, int> arrays;
+    arrays[{1, 2}] = 5;
+    array<int, 2> key = {1, 2};
+    println("{} {}", arrays[key], arrays.size());
+
+    hashmap<vector<string>, int> vectors;
+    vectors[{"a", "b"}] = 1;
+    vectors[{"a"}] = 2;
+    vectors[{}] = 3;
+    vector<string> ab = {"a", "b"};
+    println("{} {} {}", vectors[ab], vectors[{"a"}], vectors[{}]);
+
+    hashmap<int?, string> optionals;
+    optionals[null] = "none";
+    optionals[0] = "zero";
+    int? nothing = null;
+    println("{} {} {}", optionals[nothing], optionals[0], optionals.size());
+    hashmap<string?, int> optStrings;
+    optStrings[null] = 1;
+    optStrings["a"] = 2;
+    optStrings[""] = 3;
+    println("{}", optStrings);
+
+    hashmap<Named, int> nameds;
+    Named one = {"a", {1, 2}, {1}, null};
+    Named two = {"a", {1, 2}, {1}, 7};
+    Named three = {"a", {1, 2}, {1}, null};
+    nameds[one] = 1;
+    nameds[two] = 2;
+    println("{} {}", nameds[three], nameds.size());
+
+    hashmap<Tree, int> trees;
+    Tree t = {{Tree{{}, 1}}, 2};
+    trees[t] = 1;
+    Tree same = {{Tree{{}, 1}}, 2};
+    Tree other = {{Tree{{}, 2}}, 2};
+    println("{} {}", trees[same], trees.contains(other));
+
+    // Objects are the same only if they are one object, as with ==.
+    Node a = Node();
+    Node b = Node();
+    hashmap<Node, string> objects;
+    objects[a] = "a";
+    objects[b] = "b";
+    Node a2 = a;
+    println("{} {}", objects[a2], objects.size());
+    Dog d = Dog();
+    objects[d] = "d";
+    Node seenAsNode = d;
+    println("{}", objects[seenAsNode]);
+
+    int n = 0;
+    int m = 0;
+    hashmap<int*, string> pointers;
+    pointers[&n] = "n";
+    pointers[&m] = "m";
+    pointers[null] = "null";
+    println("{} {} {}", pointers[&n], pointers[&m], pointers[null]);
+    return 0;
+}
+// expect: one minus
+// expect: 1 true 2
+// expect: {'h': 1, 'e': 1, 'l': 2, 'o': 1}
+// expect: 1
+// expect: {0: "still zero", 1.5: "more"}
+// expect: 4 false
+// expect: 1 2
+// expect: a true false
+// expect: {{x: 1, y: 2}: "a", {x: 3, y: 4}: "b"}
+// expect: 5 1
+// expect: 1 2 3
+// expect: none zero 2
+// expect: {null: 1, "a": 2, "": 3}
+// expect: 1 2
+// expect: 1 false
+// expect: a 2
+// expect: d
+// expect: n m null

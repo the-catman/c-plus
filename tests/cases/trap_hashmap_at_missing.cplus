@@ -1,0 +1,9 @@
+int main() {
+    hashmap<string, int> ages = {{"ada", 36}};
+    println("{}", ages.at("ada"));
+    println("{}", ages.at("zed"));
+    return 0;
+}
+// expect: 36
+// trap: the key "zed" is not in this hashmap; check with `contains`, or use `get`, which gives null
+// trap: tests/cases/trap_hashmap_at_missing.cplus:4

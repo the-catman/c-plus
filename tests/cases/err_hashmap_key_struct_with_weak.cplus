@@ -1,0 +1,12 @@
+class Node {};
+struct Inside {
+    vector<weak<Node>> list;
+};
+struct Outer {
+    Inside? inside;
+};
+int main() {
+    hashmap<Outer, int> m;
+    return 0;
+}
+// error: 'Outer' cannot be used for 'K' of 'hashmap', which must be 'Hashable'

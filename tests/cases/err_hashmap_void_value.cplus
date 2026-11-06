@@ -1,0 +1,7 @@
+int main() {
+    hashmap<string, void> m;
+    return 0;
+}
+// error: a hashmap cannot hold 'void' values
+// error: spec: docs/SPEC.md#hash-maps
+// not-error: a field cannot have type void

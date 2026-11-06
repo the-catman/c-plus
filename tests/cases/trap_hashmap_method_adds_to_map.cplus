@@ -1,0 +1,16 @@
+// A method of a value in the map, which adds to the map while it runs, would lose what it does to the value.
+struct Counter {
+    int n = 0;
+    void addTo(hashmap<int, Counter>* m) {
+        n = 1;
+        for (int i = 0; i < 100; i++) (*m)[i + 10].n = i;
+    }
+};
+
+int main() {
+    hashmap<int, Counter> m;
+    m[1].addTo(&m);
+    println("not reached");
+    return 0;
+}
+// trap: a vector was changed, copied or freed while a method of one of its elements was running

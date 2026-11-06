@@ -1,0 +1,7 @@
+int main() {
+    hashmap<string, int> m;
+    if (m.find("a") != m.end()) println("yes");
+    return 0;
+}
+// error: there are no iterators yet: `m.contains(key)` says whether it is there, and `m.get(key)` gives the value or null
+// error: there are no iterators yet: `for (auto e : m)` goes over the entries
