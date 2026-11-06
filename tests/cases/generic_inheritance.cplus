@@ -1,0 +1,143 @@
+// A generic class can have base classes, generic or not, and be one.
+template<typename T>
+interface Source {
+    T next();
+    bool done() const;
+};
+
+class Counter : public Source<int> {
+public:
+    int at = 0;
+    int limit;
+    Counter(int l) : limit(l) {}
+    int next() override { return at++; }
+    bool done() const override { return at >= limit; }
+};
+
+template<typename T>
+class Repeat : public Source<T> {
+public:
+    T value;
+    int left;
+    Repeat(T v, int n) : value(v), left(n) {}
+    T next() override { left--; return value; }
+    bool done() const override { return left <= 0; }
+};
+
+template<typename T>
+vector<T> drain(Source<T> source) {
+    vector<T> out;
+    while (!source.done()) out.push_back(source.next());
+    return out;
+}
+
+template<typename T>
+class Base {
+public:
+    T shared;
+    Base(T s) : shared(s) {}
+    virtual string describe() const { return format("base {}", shared); }
+    T read() const { return shared; }
+};
+
+template<typename T>
+class Derived : public Base<T> {
+public:
+    int extra = 1;
+    Derived(T s) : Base<T>(s) {}
+    string describe() const override { return "derived, " + Base<T>::describe(); }
+};
+
+template<typename T>
+class ShortName : public Base<T> {
+public:
+    ShortName(T s) : Base(s) {}
+    string describe() const override { return "short, " + Base::describe(); }
+};
+
+class Plain : public Base<string> {
+public:
+    Plain() : Base<string>("plain") {}
+};
+
+class Animal {
+public:
+    virtual string sound() const { return "..."; }
+};
+template<typename T>
+class Pet : public Animal {
+public:
+    T tag;
+    Pet(T t) : tag(t) {}
+    string sound() const override { return format("tag {}", tag); }
+};
+
+// A type parameter as the base class.
+template<typename T>
+class Logged : public T {
+public:
+    int calls = 0;
+};
+class Thing {
+public:
+    int n = 7;
+};
+
+// A class passed to its own base class.
+template<typename T>
+class Self {
+public:
+    T? other;
+};
+class Linked : public Self<Linked> {
+public:
+    int n = 1;
+};
+
+int main() {
+    Source<int> c = Counter(3);
+    println("{}", drain(c));
+    println("{}", drain(Counter(2)));
+    println("{}", drain(Repeat<string>("x", 2)));
+    Source<string> r = Repeat<string>("y", 1);
+    println("{}", drain(r));
+
+    Base<int> b = Derived<int>(3);
+    println("{} {}", b.describe(), b.read());
+    println("{}", b);
+    println("{}", dynamic_cast<Derived<int>>(b).extra);
+    println("{}", dynamic_cast<ShortName<int>?>(b) == null);
+    println("{}", ShortName<double>(1.5).describe());
+    Base<string> p = Plain();
+    println("{}", p.describe());
+
+    Animal a = Pet<int>(5);
+    println("{}", a.sound());
+    println("{}", a);
+
+    Logged<Thing> logged = Logged<Thing>();
+    println("{} {}", logged.n, logged.calls);
+    Thing t = logged;
+    println("{}", t);
+
+    Linked l = Linked();
+    l.other = l;
+    println("{}", l);
+    l.other = null;
+    return 0;
+}
+// expect: [0, 1, 2]
+// expect: [0, 1]
+// expect: ["x", "x"]
+// expect: ["y"]
+// expect: derived, base 3 3
+// expect: Derived<int> {shared: 3, extra: 1}
+// expect: 1
+// expect: true
+// expect: short, base 1.5
+// expect: base plain
+// expect: tag 5
+// expect: Pet<int> {tag: 5}
+// expect: 7 0
+// expect: Logged<Thing> {n: 7, calls: 0}
+// expect: Linked {other: Linked {...}, n: 1}

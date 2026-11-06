@@ -1,0 +1,71 @@
+// Errors inside a generic say which types were used, and where.
+struct Point {
+    int x;
+};
+template<typename T>
+T largest(T a, T b) {
+    return a < b ? b : a;
+}
+template<typename T>
+class Box {
+public:
+    T value;
+    Box(T v) : value(v) {}
+    bool less(Box<T> other) const { return value < other.value; }
+    virtual int size() const { return value.size(); }
+};
+template<typename T>
+struct OptionalOf {
+    T? held;
+};
+template<typename T>
+struct PointerOptional {
+    T*? held;
+};
+template<typename T>
+struct WeakOf {
+    weak<T> held;
+};
+template<typename T>
+class VoidField {
+    T value;
+};
+// Never ends: each one needs a larger one.
+template<typename T>
+void endless(T x) {
+    endless(vector<T>{x});
+}
+template<typename T>
+class Endless {
+    Endless<vector<T>>? next;
+};
+template<typename T>
+struct Doubling {
+    Doubling<array<T, 2>>? next;
+};
+template<typename T>
+struct Contains {
+    Contains<T> self;
+};
+int main() {
+    println("{}", largest(Point{1}, Point{2}));
+    Box<int> b = Box<int>(1);
+    OptionalOf<int?> o;
+    WeakOf<int> w;
+    VoidField<void>* v = null;
+    endless(1);
+    Endless<int>? e = null;
+    Contains<int>* c = null;
+    return 0;
+}
+// error: '<' cannot be used with 'Point'
+// error: in 'largest<Point>', which is used here
+// error: 'int' has no methods, so '.size()' cannot be used
+// error: in 'Box<int>', which is used here
+// error: an optional cannot hold another optional
+// error: in 'OptionalOf<int?>', which is used here
+// error: a weak reference refers to a class object, but 'int' is not a class
+// error: a field cannot have type void
+// error: the generic function 'endless' keeps needing larger versions of itself, which would never end
+// error: the generic type 'Endless' keeps needing larger versions of itself, which would never end
+// error: struct 'Contains<int>' contains itself through field 'self'

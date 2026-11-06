@@ -1,0 +1,69 @@
+struct Point {
+    int x;
+};
+interface Speaker {
+    string speak() const;
+};
+class Dog : public Speaker {
+public:
+    string speak() const override { return "woof"; }
+};
+class Cat {};
+template<Comparable T>
+T largest(T a, T b) {
+    return a < b ? b : a;
+}
+template<Number T>
+T twice(T x) {
+    return x + x;
+}
+template<Integer T>
+T half(T x) {
+    return x / 2;
+}
+template<Floating T>
+T third(T x) {
+    return x / 3;
+}
+template<Speaker T>
+string talk(T s) {
+    return s.speak();
+}
+template<typename T>
+concept Addable = requires(T a, T b) {
+    a + b;
+};
+template<Addable T>
+T sum(T a, T b) {
+    return a + b;
+}
+template<Comparable K, typename V>
+struct Sorted {
+    K key;
+    V value;
+    bool before(Sorted<K, V> other) const { return key < other.key; }
+};
+int main() {
+    println("{}", largest(Point{1}, Point{2}));
+    println("{}", twice("a"));
+    println("{}", half(1.5));
+    println("{}", third(1));
+    println("{}", talk(Cat()));
+    println("{}", talk(3));
+    println("{}", sum(Point{1}, Point{2}));
+    Sorted<Point, int> s = {{1}, 2};
+    println("{}", s.before(s));
+    return 0;
+}
+// error: 'Point' cannot be used for 'T' of 'largest', which must be 'Comparable'
+// error: 'Point' has no `<`. Only numbers, chars, strings and pointers do
+// error: 'string' cannot be used for 'T' of 'twice', which must be 'Number'
+// error: 'double' cannot be used for 'T' of 'half', which must be 'Integer'
+// error: 'int' cannot be used for 'T' of 'third', which must be 'Floating'
+// error: 'Cat' cannot be used for 'T' of 'talk', which must be 'Speaker'
+// error: 'Cat' does not derive from 'Speaker'. Write `public Speaker` in its definition
+// error: 'int' is not a class, so it cannot derive from 'Speaker'
+// error: 'Point' cannot be used for 'T' of 'sum', which must be 'Addable'
+// error: what 'Addable' requires does not work for 'Point'
+// error: 'Addable' requires this, which does not work for 'Point'
+// error: 'Point' cannot be used for 'K' of 'Sorted', which must be 'Comparable'

@@ -14,16 +14,20 @@
 namespace cplus {
 
 struct StructDecl;
+struct TemplatePattern;
 
 struct Type {
     enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, Struct, Class, Vector, Optional, Null,
-                      Pointer, Opaque, Array, Weak };
+                      Pointer, Opaque, Array, Weak,
+                      // Only while a generic definition is read, to learn its shape; never in checked code.
+                      TypeParam, Dependent };
     Kind kind;
     const char* name;
     const StructDecl* decl = nullptr;  // for Kind::Struct, Kind::Class and Kind::Opaque
     const Type* elem = nullptr;        // for Kind::Vector and Kind::Array, the value type of Kind::Optional, what a Kind::Pointer points to, the class of Kind::Weak
     bool constElem = false;            // for Kind::Pointer: `const int*`, which only reads what it points to
-    int64_t length = 0;                // for Kind::Array: the N of `array<T, N>`
+    int64_t length = 0;                // for Kind::Array: the N of `array<T, N>`; for Kind::TypeParam: which parameter it is
+    const TemplatePattern* pattern = nullptr;  // for Kind::Dependent: `Box<T>`
 
     bool is(Kind k) const { return kind == k; }
     bool isVector() const { return kind == Kind::Vector; }
@@ -83,7 +87,8 @@ struct Type {
         static std::map<std::pair<const Type*, int64_t>, std::pair<std::string, Type>> made;
         auto [it, inserted] = made.try_emplace({elem, length});
         if (inserted) {
-            it->second.first = "array<" + std::string(elem->name) + ", " + std::to_string(length) + ">";
+            // A negative length only comes from reading a generic definition, whose parameter gives it.
+            it->second.first = "array<" + std::string(elem->name) + ", " + (length < 0 ? "..." : std::to_string(length)) + ">";
             it->second.second = Type{Kind::Array, it->second.first.c_str(), nullptr, elem, false, length};
         }
         return &it->second.second;
@@ -129,6 +134,22 @@ struct Type {
 
 struct VarDecl;
 struct FuncDecl;
+struct TemplateDecl;
+
+// What is given for a parameter of a generic: a type, or a value such as the 16 of `array<T, 16>`.
+struct TemplateArg {
+    const Type* type = nullptr;  // null for a value
+    int64_t value = 0;
+    int valueParam = -1;  // while a generic definition is read: the parameter that gives the value
+};
+
+// `Box<T>`, as it is written in a generic definition, before T is known.
+struct TemplatePattern {
+    TemplateDecl* tmpl;
+    std::vector<TemplateArg> args;
+    std::string name;
+    Type type;
+};
 
 // ---- Expressions -----------------------------------------------------------
 
@@ -167,7 +188,7 @@ struct CharLitExpr : Expr {
 // char and bool, between pointer types, or from a class to its base class.
 struct CastExpr : Expr {
     const Type* target;
-    ExprPtr operand;
+    ExprPtr operand;           // null for `T()`, the default value of a type parameter
     bool reinterpret = false;  // written `reinterpret_cast`, the one cast between numbers and pointers
     bool dynamic = false;      // written `dynamic_cast`, which looks at what the object really is
     CastExpr(Loc l, const Type* t, ExprPtr e) : Expr(Kind::Cast, l), target(t), operand(std::move(e)) {}
@@ -312,7 +333,9 @@ struct CallExpr : Expr {
     FuncDecl* target = nullptr;              // set by Sema for user functions
     FuncDecl* method = nullptr;              // set by Sema for `name(...)` meaning `this.name(...)`
     BasePath path;                           // set with method: from the class of `this` to the one declaring it
+    std::vector<TemplateArg> templateArgs;   // `max<long>(a, b)`
     const StructDecl* constructs = nullptr;  // set by Sema for `TypeName(...)`
+    bool copies = false;                     // set by Sema for `Point(p)` where `p` is a Point
     Builtin builtin = Builtin::None;       // set by Sema for built-ins
     const Type* vectorType = nullptr;      // `vector<int>(n)` or `vector<int>(n, value)`
     std::vector<std::string> formatPieces;  // print, println, format, to_string: literal text around each {}
@@ -540,6 +563,9 @@ struct FuncDecl {
     bool isVirtual = false;       // marked `virtual`, or overriding a virtual method
     bool isOverride = false;      // marked `override`
     bool isPure = false;          // `virtual int f() = 0;`, which has no body
+    bool requested = false;       // it will be checked and generated; a generic class's methods wait for their first use
+    Loc usedAt;                   // for a function made from a generic: where it was first needed
+    int genericDepth = 0;         // for a function made from a generic: how many others led to it
     int vtableSlot = -1;          // set by Sema for a virtual method
     Access access = Access::Public;
     std::vector<MemberInit> memberInits;
@@ -572,6 +598,11 @@ struct StructDecl {
     bool opaque = false;   // `extern "C" struct sqlite3;`: a C type known only by name
     bool externC = false;  // defined inside `extern "C"`: every field must be a C type
     bool isInterface = false;  // `interface Speaker { ... }`: a class with only methods that have no body
+    const TemplateDecl* templateOf = nullptr;  // for `Box<int>`: the generic it is made from
+    std::vector<TemplateArg> templateArgs;
+    std::string templateName;   // for `Box<int>`: `Box`, the name its constructor has
+    Loc usedAt;                 // for `Box<int>`: where it was first needed
+    bool constraintFailed = false;  // for `Box<int>`: int does not fit, which was reported
     struct BaseName {
         std::string name;
         Loc loc;
@@ -688,6 +719,31 @@ struct StructDecl {
     }
 };
 
+// `template<typename T, int N> ...`: a function, a type or a constraint, which the compiler reads
+// again from its tokens for each set of arguments, with the parameters standing for them.
+struct TemplateParam {
+    std::string name;
+    Loc loc;
+    const Type* valueType = nullptr;  // `int N`; null for a type parameter
+    std::string constraint;           // `Comparable T`; empty for `typename T`
+    Loc constraintLoc;
+    const Type* placeholder = nullptr;  // stands for a type parameter while the definition is read
+};
+
+struct TemplateDecl {
+    enum class Kind { Function, Record, Concept };
+    Kind kind = Kind::Function;
+    std::string name;
+    Loc nameLoc;
+    std::vector<TemplateParam> params;
+    size_t start = 0, end = 0;   // the tokens of the declaration, after the `template<...>`
+    bool failed = false;         // it has a syntax error, so nothing is made from it
+    bool allowNewDelete = false;  // `[[allow(new_delete)]]` is written before it
+    std::unique_ptr<FuncDecl> pattern;  // a function, with its parameter types as they are written
+    std::map<std::string, StructDecl*> records;  // what has been made, by name
+    std::map<std::string, FuncDecl*> functions;
+};
+
 struct ImportDecl {
     std::string path;  // dotted, e.g. "net.server"
     Loc loc;
@@ -698,11 +754,17 @@ struct Program {
     std::vector<std::unique_ptr<StructDecl>> structs;
     std::vector<std::unique_ptr<FuncDecl>> funcs;
     std::vector<std::unique_ptr<VarDecl>> constants;
+    std::vector<std::unique_ptr<TemplateDecl>> templates;
     bool allowNewDelete = false;  // `[[allow(new_delete)]];` at the top of the file
 
     StructDecl* findStruct(const std::string& name) const {
         for (auto& s : structs)
             if (s->name == name) return s.get();
+        return nullptr;
+    }
+    TemplateDecl* findTemplate(const std::string& name) const {
+        for (auto& t : templates)
+            if (t->name == name) return t.get();
         return nullptr;
     }
 };

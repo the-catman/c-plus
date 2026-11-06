@@ -78,9 +78,9 @@ static int runProcess(const std::vector<std::string>& argv) {
 static bool frontEnd(const SourceFile& file, Diagnostics& diags, Program& program, bool warnNewDelete) {
     Lexer lexer(file, diags);
     Parser parser(lexer.lexAll(), diags);
-    program = parser.parseProgram();
+    parser.parseProgram(program);
     if (!parser.gaveUp()) {  // otherwise what was read is too little to check
-        Sema sema(diags, warnNewDelete);
+        Sema sema(diags, parser, warnNewDelete);
         sema.check(program);
     }
     if (diags.hasErrors()) {

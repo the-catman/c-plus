@@ -3,6 +3,8 @@
 // every path of a non-void function returns, and checked print format strings.
 #pragma once
 
+#include <deque>
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -13,10 +15,13 @@
 
 namespace cplus {
 
+class Parser;
+
 class Sema {
 public:
-    // `warnNewDelete` is false with -Wno-new-delete.
-    explicit Sema(Diagnostics& diags, bool warnNewDelete = true) : diags_(diags), warnNewDelete_(warnNewDelete) {}
+    // `warnNewDelete` is false with -Wno-new-delete. The parser makes what generics are used for.
+    Sema(Diagnostics& diags, Parser& parser, bool warnNewDelete = true)
+        : diags_(diags), parser_(parser), warnNewDelete_(warnNewDelete) {}
     void check(Program& program);
 
 private:
@@ -45,7 +50,18 @@ private:
     void requireFullyBuilt(Flow& flow, Loc loc);  // at the end of a constructor
     void requireAssigned(Flow& flow, const VarDecl* var, const std::string& path, const Type* type, Loc loc);
 
-    void checkBases(Program& program);
+    // New types can appear while checking, whenever a generic is used. adoptTypes makes them known
+    // at once; checkNewStructs checks them when no function is being checked.
+    void adoptTypes();
+    void checkNewStructs();
+    void requestMethod(FuncDecl* m);  // a method of a generic class is checked once it is used
+    void checkTemplateNames(Program& program);
+    const Type* checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow);
+    bool checkConstraints(TemplateDecl& t, const std::vector<TemplateArg>& args, Loc usedAt);
+    // Why `t` does not fit a constraint, as a help text; empty if it does. `where` gets a
+    // requirement that is not met.
+    std::string constraintProblem(const std::string& constraint, const Type* t, Loc& where);
+    void checkBases(size_t first);
     void checkOverrides(StructDecl& sd);
     // Reports what stops the base class `base` of `sd` from being built with no values.
     void checkBaseWithoutValues(const StructDecl& sd, const StructDecl& base, Loc loc);
@@ -56,7 +72,7 @@ private:
     // name when it does not say which member is meant, and then gives the first.
     BasePath findMember(const StructDecl& from, const std::string& name, Loc loc);
     const Type* checkDynamicCast(CastExpr& c, const Type* from, const Type* to);
-    void checkStructs(Program& program);
+    void checkStructs(size_t first);
     void checkConstants(Program& program);
     void checkConstant(VarDecl& constant);
     const Type* checkReinterpretCast(CastExpr& c, const Type* from, const Type* to);
@@ -114,6 +130,7 @@ private:
         Loc loc;
         Expr* value;
         int* fieldIndex;  // where to record the field it fills, or null
+        bool checked = false;  // its type is already known
     };
     // `asBase` when a constructor is building its base class, not a new object.
     void checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc, bool asBase = false);
@@ -140,8 +157,14 @@ private:
     std::string suggestName(const std::string& name);
 
     Diagnostics& diags_;
+    Parser& parser_;
     bool warnNewDelete_;
-    const Program* program_ = nullptr;
+    Program* program_ = nullptr;
+    size_t typesAdopted_ = 0, structsChecked_ = 0;
+    std::set<const StructDecl*> basesWalked_, overridesDone_;
+    std::unordered_map<const StructDecl*, int> structState_;  // 1 = being visited, 2 = done
+    std::deque<FuncDecl*> pendingMethods_;
+    std::map<std::pair<std::string, const Type*>, std::pair<std::string, Loc>> constraintResults_;
     std::unordered_map<std::string, FuncDecl*> funcs_;
     std::unordered_map<std::string, StructDecl*> structs_;
     std::vector<std::unordered_map<std::string, VarDecl*>> scopes_;

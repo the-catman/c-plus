@@ -1,0 +1,262 @@
+// Generics together with everything else.
+class Animal {
+public:
+    string name = "any";
+    virtual string sound() const { return "..."; }
+};
+class Dog : public Animal {
+public:
+    string sound() const override { return "woof"; }
+};
+struct Point {
+    int x = 1;
+    int y = 2;
+};
+
+// weak, optionals, pointers in generics
+template<typename T>
+class Tree {
+public:
+    T value;
+    weak<Tree<T>> parent;
+    vector<Tree<T>> kids;
+    Tree(T v) : value(v) {}
+    void add(Tree child) { child.parent = this; kids.push_back(child); }
+    int depth() const {
+        if (auto p = parent.lock()) return p.depth() + 1;
+        return 0;
+    }
+};
+
+// A struct holding a vector of itself, and types that use each other
+template<typename T>
+struct Nest {
+    T v;
+    vector<Nest<T>> kids;
+};
+template<typename T>
+class A {
+public:
+    T v;
+    B<T>? other;
+    A(T x) : v(x) {}
+};
+template<typename T>
+class B {
+public:
+    T v;
+    weak<A<T>> other;
+    B(T x) : v(x) {}
+};
+class UsesGenericOfItself {
+public:
+    vector<Holder<UsesGenericOfItself>> items;
+};
+template<typename T>
+struct Holder {
+    T? value;
+};
+
+// casts on a type parameter
+template<typename T>
+T? asType(Animal a) { return dynamic_cast<T?>(a); }
+template<typename To, typename From>
+To castTo(From x) { return static_cast<To>(x); }
+template<typename T>
+long sizeOfType() { return sizeof(T); }
+
+// new and delete
+[[allow(new_delete)]]
+template<typename T>
+int makeAndFree(T value) {
+    T* p = new T(value);
+    T got = *p;
+    delete p;
+    T* many = new T[3];
+    many[1] = got;
+    bool same = many[1] == got;
+    delete[] many;
+    return same ? 1 : 0;
+}
+
+// multiple inheritance through generics
+template<typename T>
+interface Reader {
+    T read();
+};
+template<typename T>
+interface Writer {
+    void write(T x);
+};
+template<typename T>
+class Pipe : public Reader<T>, public Writer<T> {
+public:
+    vector<T> items;
+    T read() override { T x = items.back(); items.pop_back(); return x; }
+    void write(T x) override { items.push_back(x); }
+};
+template<typename T>
+void pump(Reader<T> from, Writer<T> to) { to.write(from.read()); }
+
+// arrays by value, and values of all parameter kinds
+template<typename T, long N, bool FLAG, char C>
+struct Kinds {
+    array<T, N> items;
+    long size() const { return N; }
+    bool flag() const { return FLAG; }
+    char letter() const { return C; }
+    array<T, N> copy() { return items; }
+};
+template<typename T>
+struct Big {
+    array<T, 3> items;
+    T first() const { return items[0]; }
+    Big<T> with(T x) const { Big<T> b = this; b.items[0] = x; return b; }
+};
+
+// statements and expressions with T
+template<typename T>
+vector<T> filled(T value, int n) {
+    auto out = vector<T>(n, value);
+    T other;
+    other = value;
+    out.push_back(other);
+    const T fixed = value;
+    out.push_back(fixed);
+    return out;
+}
+template<typename T>
+T fromList() { return T{1, 2}; }
+template<typename T>
+class WithInit {
+public:
+    T a;
+    T b = T();
+    WithInit(T x) : a(T(x)) {}
+};
+template<typename T>
+class Base {
+public:
+    T seen = T();
+    void set(T x) { seen = x; }
+};
+template<typename T>
+class Sub : public Base<T> {
+public:
+    void both(T x) {
+        Base<T>::set(x);
+        Base::set(x);
+        set(x);
+        this.set(x);
+    }
+};
+
+// used from a default and from a method of an ordinary class
+template<typename T>
+T identity(T x) { return x; }
+class Ordinary {
+public:
+    int n = identity(5);
+    string s = identity<string>("s");
+    int twice() const { return identity(n) * 2; }
+};
+
+// a name that is also a variable
+template<typename T>
+struct Box2 {
+    T v;
+};
+template<typename T>
+T Wrap(T x) { return x; }
+
+int main() {
+    Tree<string> root = Tree<string>("root");
+    Tree<string> leaf = Tree<string>("leaf");
+    root.add(leaf);
+    println("{} {}", leaf.depth(), root.kids.size());
+
+    Nest<int> n = {1, {{2, {}}, {3, {}}}};
+    println("{}", n);
+
+    A<int> a = A<int>(1);
+    B<int> b = B<int>(2);
+    a.other = b;
+    b.other = a;
+    println("{}", a.other?.v ?? 0);
+    println("{}", b.other.lock()?.v ?? 0);
+
+    UsesGenericOfItself u = UsesGenericOfItself();
+    u.items.push_back(Holder<UsesGenericOfItself>{null});
+    println("{}", u);
+
+    Animal d = Dog();
+    println("{} {}", asType<Dog>(d)?.sound() ?? "no", asType<Dog>(Animal())?.sound() ?? "no");
+    println("{} {}", castTo<int>(2.5), castTo<Animal>(Dog()).sound());
+    println("{} {} {}", sizeOfType<int>(), sizeOfType<Point>(), sizeOfType<Animal>());
+
+    println("{} {} {}", makeAndFree(3), makeAndFree("text"), makeAndFree(Point{}));
+
+    Pipe<string> p = Pipe<string>();
+    Pipe<string> q = Pipe<string>();
+    p.write("x");
+    pump(p, q);
+    println("{} {}", p.items.size(), q.read());
+    Writer<string> w = q;
+    w.write("y");
+    println("{}", q);
+
+    Kinds<int, 2L, true, 'z'> k;
+    k.items[1] = 4;
+    println("{} {} {} {}", k.size(), k.flag(), k.letter(), k.copy());
+    println("{}", k);
+    Big<string> big;
+    println("{}", big.with("a").first());
+    Big<Big<int>> bigger;
+    println("{}", bigger.items[2].items[0]);
+
+    println("{}", filled("a", 2));
+    println("{}", filled(Point{}, 1).size());
+    println("{}", fromList<Point>());
+    println("{}", fromList<vector<int>>());
+    println("{}", fromList<array<int, 2>>());
+    println("{}", WithInit<int>(3));
+    println("{}", WithInit<string>("s"));
+    Sub<int> sub = Sub<int>();
+    sub.both(9);
+    println("{}", sub.seen);
+
+    Ordinary o = Ordinary();
+    println("{} {} {}", o.n, o.s, o.twice());
+
+    int Box2 = 1;
+    println("{} {}", Box2 + 1, Box2 < 3);
+    int Wrap = 2;
+    println("{} {}", Wrap + 1, Wrap < 3);
+    return 0;
+}
+// expect: 1 1
+// expect: {v: 1, kids: [{v: 2, kids: []}, {v: 3, kids: []}]}
+// expect: 2
+// expect: 1
+// expect: UsesGenericOfItself {items: [{value: null}]}
+// expect: woof no
+// expect: 2 woof
+// expect: 4 8 8
+// expect: 1 1 1
+// expect: 0 x
+// expect: Pipe<string> {items: ["y"]}
+// expect: 2 true z [0, 4]
+// expect: {items: [0, 4]}
+// expect: a
+// expect: 0
+// expect: ["a", "a", "a", "a"]
+// expect: 3
+// expect: {x: 1, y: 2}
+// expect: [1, 2]
+// expect: [1, 2]
+// expect: WithInit<int> {a: 3, b: 0}
+// expect: WithInit<string> {a: "s", b: ""}
+// expect: 9
+// expect: 5 s 10
+// expect: 2 true
+// expect: 3 true

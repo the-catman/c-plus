@@ -1,0 +1,44 @@
+template<> class Special {};
+template<typename... Ts> void many() {}
+template<typename T = int> class Defaulted {};
+template<typename T> requires Comparable<T> T f(T x) { return x; }
+template<typename T, typename T> void twice() {}
+template<3> void wrong() {}
+template<typename T> template<typename U> void nested() {}
+template<typename T> class Broken { int x };
+template<typename T> void syntax() { int = 3; }
+template<typename T> class Used { int; };
+template T notAngle();
+void useBroken() {
+    Used<int> a;
+    Used<string> b;
+    Broken<int> c;
+    syntax<int>();
+}
+template<typename T> concept NotRequires = true;
+template<typename T> concept Nested = requires(T a) { { a } -> int; };
+template<typename T> class Duplicate {};
+template<typename T> class Duplicate {};
+class TakenByClass {};
+template<typename T> class TakenByClass {};
+void takenByFunction() {}
+template<typename T> void takenByFunction() {}
+template<typename T> void println(T x) {}
+template<Unknown T> void unknownConstraint(T x) {}
+int main() { return 0; }
+// error: C+ has no template specialization
+// error: C+ has no templates with any number of parameters
+// error: this compiler does not support default template arguments yet
+// error: this compiler does not support requires clauses yet
+// error: the template parameter 'T' is written twice
+// error: expected a template parameter, found
+// error: a generic has one `template<...>`
+// error: expected '<' after 'template'
+// error: this compiler does not support constraints that are not a `requires` expression yet
+// error: this compiler does not support requirements other than an expression yet
+// error: the name 'Duplicate' is already used by another generic
+// error: the name 'TakenByClass' is already used by a class
+// error: a function named 'takenByFunction' is already defined
+// error: 'println' is a built-in function and cannot be redefined
+// error: there is no constraint named 'Unknown'
+// error: For any type, write `typename T`

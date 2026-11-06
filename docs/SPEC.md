@@ -634,6 +634,8 @@ println("{}", r.area());    // 24
   a pointer to it, so `this->w` and `&this` are errors.
 - A `const` method cannot assign fields or call methods that are not `const`. A method
   that is not `const` cannot be called on a `const` struct variable.
+- `Point(p)`, with `p` a `Point`, copies it, as in C++. On a class, `Animal(a)` is the same object, since a
+  class is shared when copied. If the type's constructor or first field can take the value, that comes first.
 - A struct method works on the struct in place: `r.scale(2)` changes `r`. Called on a
   temporary, as in `makeRect().scale(2)`, it changes a copy that is then dropped.
 - A method cannot share its name with a field. Two methods cannot share a name until
@@ -1651,9 +1653,121 @@ traces name the C+ functions but not their lines.
 
 ## Generics
 
-Planned. C++20 syntax: `template<typename T>` and constrained `template<Comparable T>`,
-monomorphized. `constexpr` and `if constexpr` cover compile-time work. There is no
-template specialization and no SFINAE.
+A generic function or type is written once with C++20's syntax, and the compiler makes a separate
+copy for each set of types it is used with. There is no cost when the program runs, as with C++
+templates.
+
+```cpp
+template<typename T>
+T largest(T a, T b) {
+    return a < b ? b : a;
+}
+
+template<typename T>
+class Stack {
+    vector<T> items;
+public:
+    void push(T x) { items.push_back(x); }
+    T pop() {
+        T top = items.back();
+        items.pop_back();
+        return top;
+    }
+    long size() const { return items.size(); }
+};
+
+println("{}", largest(1, 2));           // T is int
+println("{}", largest<double>(1, 2.5)); // T is written
+Stack<string> s = Stack<string>();
+s.push("a");
+println("{}", s);                       // Stack<string> {items: ["a"]}
+```
+
+- `typename` and `class` mean the same in the parameter list. A parameter can also be a value of type
+  `int`, `long`, `bool` or `char`: `template<typename T, int N> struct Buffer { array<T, N> items; };`, used as
+  `Buffer<string, 16>`. Inside, `N` is that value, and it can be an array size.
+- **Calling a generic function** works out its parameters from the arguments, also through what a
+  parameter is written as, such as `vector<T>`, `T?`, `T*`, `array<T, N>`, `weak<T>` or `Box<T>`, including a
+  base class of the argument. Arguments must agree: `largest(1, 2.5)` is an error, since T cannot be both, so write
+  `largest<double>(1, 2.5)`. Written ones come first, and what is not written is worked out. Values
+  convert to a written type as they do for any function. A `{ }` list or `null` says nothing about T.
+- **A generic type** is always written with its arguments, `Stack<int>`, also when building one. C++ can work
+  them out in `Stack(1)`, which is planned here. Inside its own definition, `Stack` alone means the type being made.
+- Inside, T is used as any type's name: `T x = ...;`, `vector<T>`, `T*`, `T?`, `sizeof(T)`, `static_cast<T>(x)`. `T(x)` converts
+  to it or calls its constructor. `T()` is the default value: zero, `false`, an empty string or vector, null. On
+  a struct or class it calls the constructor, as `Point()` does. `T{1, 2}` builds a struct, class, vector or array.
+- A generic type can derive from anything, and be derived from: `class Repeat : public Source<T>`,
+  `class Counter : public Source<int>`, `template<typename T> interface Source { ... };`, `class Logged : public T`. A
+  base class is built with `: Base<T>(x)` or `: Base(x)`, and reached with `Base<T>::f()` or `Base::f()`.
+- Function and type names show the arguments in errors, printing and stack traces: `Stack<int>`, `largest<double>`.
+
+**What is checked when.** Syntax is checked where a generic is written. Everything else is checked when it is
+used, separately for each set of types, and an error says which types and where they came from.
+
+```
+error: '<' cannot be used with 'Point'
+ --> shapes.cplus:7:12
+  |
+7 |     return a < b ? b : a;
+  |            ^
+
+note: in 'largest<Point>', which is used here
+  --> shapes.cplus:51:19
+   |
+51 |     println("{}", largest(Point{1}, Point{2}));
+   |                   ^~~~~~~
+```
+
+As in C++, a method of a generic class is only checked once it is used, so `Box<Point>` is fine if nothing
+calls the `less` that needs `<`. Virtual methods, constructors and destructors are always checked, since they may
+run without being named. So is every field. A generic that is never used is checked only for syntax, so an
+undeclared name in one goes unnoticed until it is used. A generic that keeps needing larger versions of itself,
+such as `f<T>` calling `f<vector<T>>`, is an error rather than a compiler that never ends.
+
+Left out on purpose: template specialization, SFINAE and templates with any number of parameters. Not yet:
+default template arguments, `requires` clauses, generic methods, working out a type's arguments, and values worked
+out at compile time as arguments. `constexpr` and `if constexpr` are planned for compile-time work.
+
+### Constraints
+
+Writing a name in place of `typename` says what the type must be able to do, as with C++20's concepts. It is
+checked where the generic is used, so the error is about your type, instead of about code you did not write.
+
+```cpp
+template<Comparable T>
+T largest(T a, T b) {
+    return a < b ? b : a;
+}
+
+largest(Point{1}, Point{2});
+```
+
+```
+error: 'Point' cannot be used for 'T' of 'largest', which must be 'Comparable'
+  = help: 'Point' has no `<`. Only numbers, chars, strings and pointers do, until operators can be overloaded
+```
+
+The name is one of:
+
+- **Built in.** `Comparable` has `<`: numbers, `char`, strings and pointers. `Number` is `int`, `long`, `float` or
+  `double`. `Integer` is `int` or `long`, and `Floating` is `float` or `double`.
+- **An interface or a class.** The type must derive from it, holding it once:
+  `template<Speaker T> string talk(T s) { return s.speak(); }`.
+- **Your own**, written as in C++20. Each line is an expression that must compile for the type:
+
+```cpp
+template<typename T>
+concept Addable = requires(T a, T b) {
+    a + b;
+};
+
+template<Addable T>
+T sum(vector<T> items) { ... }
+```
+
+A constraint is only a check on what is passed in. The generic's body is still checked for each type, and it may
+do things the constraint does not mention. A name written in the program takes the place of a built-in one
+with the same name.
 
 ## Concurrency
 
@@ -1721,7 +1835,9 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Destructors for structs, static members | planned |
 | `weak<T>` references: `lock`, `expired`, `reset` | implemented |
 | Errors (`throws`, `try`, `catch`) | planned |
-| Generics | planned |
+| Generics: functions, structs, classes and interfaces, type and value parameters, working out arguments in calls | implemented |
+| Constraints: `Comparable`, `Number`, `Integer`, `Floating`, interfaces and classes, `concept ... = requires` | implemented |
+| Default template arguments, `requires` clauses, generic methods, working out a generic type's arguments | planned |
 | Pointers into vectors and strings | planned |
 | C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; reading C headers | planned |
 | Reflection, JSON, HTTP | planned |

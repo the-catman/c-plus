@@ -1,0 +1,112 @@
+// `Point(p)` copies a struct, as in C++, and a class object is shared. Generic code relies on
+// it, since `T(x)` must work for any T. What the type can take comes first.
+struct Point {
+    int x;
+    int y;
+};
+struct Wrapped {
+    int n;
+    Wrapped(int v) : n(v) {}
+};
+class Plain {
+public:
+    int v = 1;
+};
+class Animal {
+public:
+    string name = "any";
+};
+class Dog : public Animal {};
+class Node {
+public:
+    Node? next;
+    int v = 0;
+};
+class TakesItself {
+public:
+    int depth = 0;
+    TakesItself(TakesItself? other) { depth = (other?.depth ?? 0) + 1; }
+};
+class TakesDog {
+public:
+    string from;
+    TakesDog(Dog d) : from(d.name) {}
+};
+
+template<typename T>
+T copied(T x) {
+    return T(x);
+}
+
+int main() {
+    Point a = {1, 2};
+    Point b = Point(a);
+    b.x = 9;
+    println("{} {}", a, b);
+    println("{}", Point(Point(a)));
+    Wrapped w = Wrapped(3);
+    Wrapped u = Wrapped(w);
+    u.n = 4;
+    println("{} {}", w.n, u.n);
+
+    Plain p = Plain();
+    Plain q = Plain(p);
+    println("{}", p == q);
+    Dog d = Dog();
+    Animal seen = Animal(d);
+    println("{}", seen == d);
+
+    // The first field takes a Node, so this is a new one that refers to it.
+    Node first = Node();
+    Node second = Node(first);
+    println("{} {}", second == first, second.next == first);
+    // The constructor takes it, and it calls its own.
+    TakesItself one = TakesItself(null);
+    TakesItself two = TakesItself(one);
+    println("{} {}", two == one, two.depth);
+    println("{}", TakesDog(d).from);
+
+    // Nesting does not take the compiler long.
+    Node deep = Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(
+        Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(Node(
+        Node()))))))))))))))))))))))))))))))))))))))));
+    println("{}", deep.v);
+
+    println("{} {} {}", copied(1), copied("s"), copied(a));
+    println("{}", copied(p) == p);
+    println("{}", copied(vector<int>{1}));
+    println("{}", copied(array<int, 2>{1, 2}));
+    println("{}", copied(vector<vector<int>>{{3}}));
+    int? none = null;
+    println("{}", copied(none));
+    int number = 1;
+    println("{}", copied(&number) == &number);
+    vector<int> v = {1, 2};
+    vector<int> other = vector<int>(v);
+    other.push_back(3);
+    println("{} {}", v, other);
+    println("{}", vector<int>(2));
+    println("{}", vector<int>(2, 7));
+    println("{}", vector<vector<int>>(1));
+    return 0;
+}
+// expect: {x: 1, y: 2} {x: 9, y: 2}
+// expect: {x: 1, y: 2}
+// expect: 3 4
+// expect: true
+// expect: true
+// expect: false true
+// expect: false 2
+// expect: any
+// expect: 0
+// expect: 1 s {x: 1, y: 2}
+// expect: true
+// expect: [1]
+// expect: [1, 2]
+// expect: [[3]]
+// expect: null
+// expect: true
+// expect: [1, 2] [1, 2, 3]
+// expect: [0, 0]
+// expect: [7, 7]
+// expect: [[]]

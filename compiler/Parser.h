@@ -1,5 +1,7 @@
 #pragma once
 
+#include <deque>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -11,8 +13,18 @@ namespace cplus {
 class Parser {
 public:
     Parser(std::vector<Token> tokens, Diagnostics& diags);
-    Program parseProgram();
+    void parseProgram(Program& prog);
     bool gaveUp() const { return gaveUp_; }  // the program was too deeply nested to read to its end
+
+    // Reads a generic again with its parameters standing for `args`, which makes an ordinary
+    // function. The same arguments give the same one. Null after reporting an error.
+    FuncDecl* instantiateFunction(TemplateDecl& t, const std::vector<TemplateArg>& args, Loc usedAt, int depth);
+    // The same for a constraint: `concept Addable = requires(T a, T b) { a + b; };`.
+    struct ConceptBody {
+        std::unique_ptr<FuncDecl> params;
+        std::vector<ExprPtr> requirements;
+    };
+    bool instantiateConcept(TemplateDecl& t, const TemplateArg& arg, ConceptBody& out);
 
 private:
     struct ParseError {};  // thrown after reporting, caught at a recovery point
@@ -58,7 +70,43 @@ private:
     Loc parseAttribute();
     bool atAttribute() const { return check(Tok::LBracket) && peek(1).kind == Tok::LBracket; }
     ExprPtr parseNew();
-    void parseRecord();  // struct or class
+    void parseRecord(StructDecl* into = nullptr);  // struct or class; `into` when the type is made from a generic
+    // Generics
+    struct TemplateBinding {
+        const Type* type = nullptr;  // a type parameter; null for a value parameter
+        TemplateArg value;
+        const Type* valueType = nullptr;
+    };
+    // While one generic is read: the old state comes back at the end.
+    struct GenericScope {
+        Parser& p;
+        size_t pos;
+        std::unordered_map<std::string, TemplateBinding> bindings;
+        const TemplateDecl* current;
+        const Type* injected;
+        bool dryRun;
+        size_t splitShr;
+        explicit GenericScope(Parser& parser);
+        ~GenericScope();
+    };
+    void scanDeclarations(Program& prog);
+    void scanTemplate(Program& prog, size_t& i);
+    void parseTemplateHeader(TemplateDecl& t);
+    size_t afterBraces(size_t i) const;  // from a '{': the token after the one that closes it
+    void readTemplate(TemplateDecl& t);  // once, to report syntax errors and learn the shape of a function's parameters
+    void bindTemplate(const TemplateDecl& t, const std::vector<TemplateArg>& args);
+    void parseConcept(ConceptBody& out);
+    std::string instanceName(const TemplateDecl& t, const std::vector<TemplateArg>& args) const;
+    TemplateDecl* classTemplate(const std::string& name) const;
+    TemplateDecl* functionTemplate(const std::string& name) const;
+    const Type* boundType(const Token& t) const;  // a type parameter, or a generic class's own name inside it
+    // At the '<' after a generic's name. `partial` when the rest can be worked out from a call.
+    std::vector<TemplateArg> parseTemplateArgs(const TemplateDecl& t, Loc nameLoc, bool partial);
+    TemplateArg parseTemplateValue(const TemplateParam& p);
+    const Type* genericRecord(TemplateDecl& t, Loc nameLoc);  // at the '<': `Box<int>`
+    const Type* instantiateRecord(TemplateDecl& t, const std::vector<TemplateArg>& args, Loc usedAt);
+    ExprPtr parseBoundValue(const Token& t, const Type* bound);  // `T(x)`, `T{...}`, `T()`
+    void rejectTemplateParamName(const Token& name);
     void parseExtern(Program& prog);
     void parseExternItem(Program& prog);  // a C function, or `struct sqlite3;`
     void parseOpaqueStruct();
@@ -67,7 +115,7 @@ private:
     void parseMember(StructDecl& sd, Access& access);
     void parseParams(FuncDecl& fn);
     void parseMemberInits(FuncDecl& ctor);
-    bool isTypeName(const Token& t) const { return t.kind == Tok::Ident && typeNames_.count(t.text); }
+    bool isTypeName(const Token& t) const;
     bool isTypeStart(size_t ahead = 0) const;
     bool isTypeAt(size_t ahead) const;  // whether a type, rather than an expression, starts there
     // A type, including pointers: `const char*`, `int**`. `isConst` receives a `const`
@@ -108,6 +156,18 @@ private:
     // Struct names found by a scan before parsing, so types can be used before
     // their definition (there are no headers or forward declarations).
     std::unordered_set<std::string> typeNames_;
+    std::unordered_map<size_t, TemplateDecl*> templateAt_;  // by the position of `template`
+    std::unordered_map<size_t, size_t> skipTemplate_;       // the same for one with a bad header: where it ends
+    std::deque<std::string> names_;                         // what the placeholders' names point to
+    std::unordered_map<std::string, TemplateBinding> bindings_;  // the parameters of the generic being read
+    const TemplateDecl* currentTemplate_ = nullptr;
+    const Type* injected_ = nullptr;  // inside `Box<T>`: what `Box` alone means
+    bool dryRun_ = false;  // reading a definition with parameters not yet known
+    std::deque<Type> placeholders_;
+    std::deque<TemplatePattern> patterns_;
+    int genericDepth_ = 0;
+    int instanceCount_ = 0;
+    size_t splitShr_ = SIZE_MAX;  // the `>>` whose first half closed an angle bracket
     bool declSeen_ = false;  // a declaration came before; `[[allow(new_delete)]];` must be first
     bool fileAttr_ = false;  // the item just parsed was `[[allow(new_delete)]];`
 };

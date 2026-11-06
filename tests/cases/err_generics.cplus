@@ -1,0 +1,85 @@
+template<typename T>
+class Box {
+public:
+    T value;
+    Box(T v) : value(v) {}
+};
+template<typename K, typename V>
+struct Pair {
+    K key;
+    V value;
+};
+template<typename T, int N>
+struct Sized {
+    array<T, N> items;
+};
+template<typename T>
+T same(T x) {
+    return x;
+}
+template<typename T>
+T nothing() {
+    return T();
+}
+template<typename T>
+T two(T a, T b) {
+    return a;
+}
+template<typename T, int N>
+int lengthOf(array<T, N> a) {
+    return N;
+}
+class Plain {
+public:
+    template<typename T> T member(T x) { return x; }
+};
+Box notGeneric(int n);
+template<typename T> void f() {
+    int T = 1;
+}
+int main() {
+    Box a = Box<int>(1);
+    auto b = Box(1);
+    auto c = Box{1};
+    Box<int, int> d = Box<int>(1);
+    Pair<int> e;
+    Box<> g = Box<int>(1);
+    Box<auto> h;
+    Sized<int, "x"> i;
+    Sized<int, 2.5> j;
+    Sized<int, big> k;
+    Sized<int, -1> l;
+    int m = nothing();
+    int n = two(1, 2.5);
+    int o = same();
+    int p = same(1, 2);
+    string q = same<string>(1);
+    int r = same<int, int>(1);
+    int s = lengthOf<int, 2>(array<int, 3>{1, 2, 3});
+    int t = same(println("x"));
+    auto u = same;
+    return 0;
+}
+// error: this compiler does not support generic methods yet
+// error: 'Box' is generic, so its template arguments must be written
+// error: write e.g. `Box<int>(...)`. Working them out from the values is planned
+// error: 'Box' takes 1 template argument, but more were given
+// error: 'Pair' takes 2 template arguments, but 1 was given
+// error: 'Box' takes 1 template argument, but 0 were given
+// error: 'auto' cannot be given for a template parameter
+// error: expected a value of type 'int' for the template parameter 'N', found
+// error: this compiler does not support names as template values, other than a template parameter yet
+// error: the size of an array cannot be negative, but 'N' is -1
+// error: in 'Sized<int, -1>', which is used here
+// error: cannot work out 'T' of 'nothing' from the arguments
+// error: write it: `nothing<int>(...)`
+// error: the arguments of 'two' do not agree: 'T' cannot be both 'int' and 'double'
+// error: 'same' takes 1 argument but 0 were given
+// error: 'same' takes 1 argument but 2 were given
+// error: expected 'string' for parameter 'x' of 'same<string>', but this is 'int'
+// error: 'same' takes 1 template argument, but more were given
+// error: expected 'array<int, 2>' for parameter 'a' of 'lengthOf<int, 2>', but this is 'array<int, 3>'
+// error: this argument has no value
+// error: 'same' is not declared
+// error: functions can only be called for now
+// error: 'T' is a template parameter here, so it cannot also be a variable

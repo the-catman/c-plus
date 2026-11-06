@@ -1,0 +1,105 @@
+// A constraint says what a type parameter must be able to do, which is checked where it is used.
+template<Comparable T>
+T largest(T a, T b) {
+    return a < b ? b : a;
+}
+
+template<Number T>
+T twice(T x) {
+    return x + x;
+}
+
+template<Integer T>
+T half(T x) {
+    return x / 2;
+}
+
+template<Floating T>
+T third(T x) {
+    return x / 3;
+}
+
+// An interface or a class: the type must derive from it.
+interface Speaker {
+    string speak() const;
+};
+class Dog : public Speaker {
+public:
+    string speak() const override { return "woof"; }
+};
+class Puppy : public Dog {};
+
+template<Speaker T>
+string loud(T s) {
+    return s.speak() + "!";
+}
+
+// Your own, written as in C++20.
+template<typename T>
+concept Addable = requires(T a, T b) {
+    a + b;
+};
+template<typename T>
+concept HasSize = requires(T x) {
+    x.size();
+    x.empty();
+};
+template<typename T>
+concept Reads = requires(T x) {
+    x.value;
+    x.read() + 1;
+};
+
+template<Addable T>
+T sum(vector<T> items) {
+    T total = items[0];
+    for (int i = 1; i < items.size(); i++) total = total + items[i];
+    return total;
+}
+
+template<HasSize T>
+long sizeOf(T x) {
+    return x.size();
+}
+
+template<Reads T>
+int use(T x) {
+    return x.read() + x.value;
+}
+
+struct Reader {
+    int value = 1;
+    int read() const { return value + 1; }
+};
+
+// On a generic type too, and with several parameters.
+template<Comparable K, typename V>
+struct Sorted {
+    K key;
+    V value;
+    bool before(Sorted<K, V> other) const { return key < other.key; }
+};
+
+int main() {
+    println("{} {} {}", largest(1, 2), largest("a", "b"), largest('a', 'b'));
+    println("{} {}", twice(2), twice(1.5));
+    println("{} {}", half(7), third(1.5));
+    println("{} {}", loud(Dog()), loud(Puppy()));
+    Speaker s = Dog();
+    println("{}", loud(s));
+    println("{} {}", sum(vector<int>{1, 2}), sum(vector<string>{"a", "b"}));
+    println("{} {}", sizeOf(vector<int>{1}), sizeOf("abc"));
+    println("{}", use(Reader()));
+    Sorted<int, string> a = {1, "one"};
+    println("{}", a.before(Sorted<int, string>{2, "two"}));
+    return 0;
+}
+// expect: 2 b b
+// expect: 4 3
+// expect: 3 0.5
+// expect: woof! woof!
+// expect: woof!
+// expect: 3 ab
+// expect: 1 3
+// expect: 3
+// expect: true

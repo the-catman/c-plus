@@ -1,0 +1,42 @@
+// A generic class's methods are only checked when they are used, as in C++. So a class can
+// have methods that not every type allows.
+struct Point {
+    int x;
+};
+template<typename T>
+class Box {
+public:
+    T value;
+    Box(T v) : value(v) {}
+    T get() const { return value; }
+    bool less(Box<T> other) const { return value < other.value; }
+    T doubled() const { return value + value; }
+    int neverUsed() { return value.nothing.at.all; }
+};
+template<typename T>
+struct Holder {
+    T value;
+    long lengthOf() const { return value.size(); }
+};
+// A generic that is never used is not looked at past its syntax.
+template<typename T>
+T neverCalled(T x) {
+    return x.nothing.at.all + undeclared;
+}
+int main() {
+    Box<Point> p = Box<Point>(Point{1});
+    println("{}", p.get());
+    Box<int> i = Box<int>(2);
+    println("{} {}", i.less(i), i.doubled());
+    Box<string> s = Box<string>("a");
+    println("{} {}", s.less(s), s.doubled());
+    Holder<int> h = {3};
+    println("{}", h);
+    println("{}", Holder<string>{"abc"}.lengthOf());
+    return 0;
+}
+// expect: {x: 1}
+// expect: false 4
+// expect: false aa
+// expect: {value: 3}
+// expect: 3

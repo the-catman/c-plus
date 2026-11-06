@@ -27,6 +27,10 @@ static constexpr int kMaxErrors = 50;
 
 void Diagnostics::error(Loc loc, const std::string& message, const std::string& help,
                         const std::string& spec) {
+    if (muted_) {
+        ++mutedErrors_;
+        return;
+    }
     ++errorCount_;
     if (errorCount_ > kMaxErrors) {
         if (!suppressed_) std::fprintf(stderr, "error: too many errors, stopping here\n");
@@ -34,16 +38,17 @@ void Diagnostics::error(Loc loc, const std::string& message, const std::string& 
         return;
     }
     report("error", "\x1b[1;31m", loc, message, help, spec);
+    if (!contexts_.empty()) report("note", "\x1b[1;36m", contexts_.back().loc, contexts_.back().message, "", "");
 }
 
 void Diagnostics::warning(Loc loc, const std::string& message, const std::string& help,
                           const std::string& spec) {
-    if (suppressed_) return;
+    if (suppressed_ || muted_) return;
     report("warning", "\x1b[1;33m", loc, message, help, spec);
 }
 
 void Diagnostics::note(Loc loc, const std::string& message) {
-    if (suppressed_) return;
+    if (suppressed_ || muted_) return;
     report("note", "\x1b[1;36m", loc, message, "", "");
 }
 

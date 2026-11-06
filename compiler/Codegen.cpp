@@ -1539,7 +1539,10 @@ struct Codegen::Impl {
             case Expr::Kind::FloatLit: case Expr::Kind::CharLit: case Expr::Kind::Name: case Expr::Kind::This:
             case Expr::Kind::OptValue: case Expr::Kind::Sizeof:
                 return false;
-            case Expr::Kind::Cast: return mayRunCode(*static_cast<const CastExpr&>(e).operand);
+            case Expr::Kind::Cast: {
+                auto& c = static_cast<const CastExpr&>(e);
+                return c.operand && mayRunCode(*c.operand);
+            }
             case Expr::Kind::Member: return mayRunCode(*static_cast<const MemberExpr&>(e).base);
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
@@ -2181,6 +2184,7 @@ struct Codegen::Impl {
     // `int(x)` and the other conversions, as in C++, except that a value the new type
     // cannot hold stops the program instead of wrapping around or being undefined.
     llvm::Value* genCast(const CastExpr& c) {
+        if (!c.operand) return genDefault(c.target);  // `T()`
         const Type* from = c.operand->type;
         const Type* to = c.target;
         llvm::Value* v = gen(*c.operand);
@@ -2373,6 +2377,7 @@ struct Codegen::Impl {
     }
 
     llvm::Value* genCall(const CallExpr& call) {
+        if (call.copies) return genOwned(*call.args[0], call.vectorType ? call.vectorType : &call.constructs->type);  // `Point(p)`
         if (call.vectorType) return genVectorConstruction(call);
         if (call.builtin == Builtin::Math) return genMath(call);
         if (call.builtin == Builtin::CharFn) return genCharFn(call);
@@ -3508,7 +3513,8 @@ struct Codegen::Impl {
             return false;
         }
         for (const StructDecl* sd : structs) {
-            for (auto& m : sd->methods) declareFunction(*m);
+            for (auto& m : sd->methods)
+                if (m->requested) declareFunction(*m);  // a generic class's other methods were never used
             declareHelpers(*sd);
         }
         for (const StructDecl* sd : structs) {
@@ -3527,7 +3533,8 @@ struct Codegen::Impl {
         for (const StructDecl* sd : structs) defineHelpers(*sd);
         for (auto& f : program.funcs) defineFunction(*f);
         for (const StructDecl* sd : structs)
-            for (auto& m : sd->methods) defineFunction(*m);
+            for (auto& m : sd->methods)
+                if (m->requested) defineFunction(*m);
         if (userMain) defineEntryPoint(*userMain);
 
         // A large array on the stack must not step over the guard page below it into other

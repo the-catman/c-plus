@@ -81,26 +81,464 @@ void Parser::syncStatement() {
 
 // ---- Declarations ----------------------------------------------------------
 
-Program Parser::parseProgram() {
-    Program prog;
+void Parser::parseProgram(Program& prog) {
     prog_ = &prog;
-    for (size_t i = 0; i + 1 < toks_.size(); ++i) {
-        bool isRecord = toks_[i].kind == Tok::KwStruct || toks_[i].kind == Tok::KwClass || toks_[i].kind == Tok::KwInterface;
-        if (isRecord && toks_[i + 1].kind == Tok::Ident && typeNames_.insert(toks_[i + 1].text).second)
-            prog.structs.push_back(std::make_unique<StructDecl>(toks_[i + 1].text, toks_[i].kind != Tok::KwStruct));
+    try {
+        scanDeclarations(prog);
+        for (auto& t : prog.templates) readTemplate(*t);
+    } catch (TooDeep&) {
+        return;
     }
+    pos_ = 0;
     while (!check(Tok::Eof)) {
         fileAttr_ = false;
         try {
             parseTopLevel(prog);
         } catch (TooDeep&) {
-            return prog;
+            return;
         } catch (ParseError&) {
             syncTopLevel();
         }
         if (!fileAttr_) declSeen_ = true;
     }
-    return prog;
+}
+
+// Types and generics can be used before they are defined, since there are no headers or forward
+// declarations, so their names are found before anything else is read.
+void Parser::scanDeclarations(Program& prog) {
+    int depth = 0;
+    for (size_t i = 0; i + 1 < toks_.size();) {
+        Tok kind = toks_[i].kind;
+        if (kind == Tok::LBrace) ++depth;
+        else if (kind == Tok::RBrace) --depth;
+        if (kind == Tok::KwTemplate && depth == 0) {
+            scanTemplate(prog, i);
+            continue;
+        }
+        bool isRecord = kind == Tok::KwStruct || kind == Tok::KwClass || kind == Tok::KwInterface;
+        if (isRecord && toks_[i + 1].kind == Tok::Ident && typeNames_.insert(toks_[i + 1].text).second)
+            prog.structs.push_back(std::make_unique<StructDecl>(toks_[i + 1].text, kind != Tok::KwStruct));
+        ++i;
+    }
+}
+
+size_t Parser::afterBraces(size_t i) const {
+    int depth = 0;
+    for (; i < toks_.size(); ++i) {
+        if (toks_[i].kind == Tok::LBrace) ++depth;
+        else if (toks_[i].kind == Tok::RBrace && --depth == 0) return i + 1;
+    }
+    return toks_.size() - 1;
+}
+
+void Parser::scanTemplate(Program& prog, size_t& i) {
+    size_t first = i;
+    auto t = std::make_unique<TemplateDecl>();
+    t->allowNewDelete = i >= 2 && toks_[i - 1].kind == Tok::RBracket && toks_[i - 2].kind == Tok::RBracket;
+    pos_ = i;
+    try {
+        parseTemplateHeader(*t);
+    } catch (ParseError&) {
+        // Reported. The declaration is passed over where it is reached.
+        size_t end = pos_;
+        while (end + 1 < toks_.size() && toks_[end].kind != Tok::LBrace && toks_[end].kind != Tok::Semi) ++end;
+        if (toks_[end].kind == Tok::LBrace) end = afterBraces(end);
+        else if (end + 1 < toks_.size()) ++end;
+        if (end < toks_.size() && toks_[end].kind == Tok::Semi) ++end;
+        skipTemplate_[first] = end;
+        i = end;
+        return;
+    }
+    t->start = pos_;
+    const Token& head = peek();
+    size_t end = pos_;
+    if (head.kind == Tok::KwStruct || head.kind == Tok::KwClass || head.kind == Tok::KwInterface) {
+        t->kind = TemplateDecl::Kind::Record;
+        t->nameLoc = peek(1).loc;
+        t->name = peek(1).text;
+        while (end + 1 < toks_.size() && toks_[end].kind != Tok::LBrace && toks_[end].kind != Tok::Semi) ++end;
+        end = toks_[end].kind == Tok::LBrace ? afterBraces(end) : end;
+        if (end + 1 < toks_.size() && toks_[end].kind == Tok::Semi) ++end;
+    } else if (head.kind == Tok::Ident && head.text == "concept") {
+        t->kind = TemplateDecl::Kind::Concept;
+        t->nameLoc = peek(1).loc;
+        t->name = peek(1).text;
+        while (end + 1 < toks_.size() && toks_[end].kind != Tok::Semi) {
+            if (toks_[end].kind == Tok::LBrace) end = afterBraces(end);
+            else ++end;
+        }
+        if (end + 1 < toks_.size()) ++end;
+    } else {
+        t->kind = TemplateDecl::Kind::Function;
+        while (end + 1 < toks_.size() && toks_[end].kind != Tok::LParen && toks_[end].kind != Tok::LBrace &&
+               toks_[end].kind != Tok::Semi)
+            ++end;
+        if (end > pos_ && toks_[end].kind == Tok::LParen && toks_[end - 1].kind == Tok::Ident) {
+            t->nameLoc = toks_[end - 1].loc;
+            t->name = toks_[end - 1].text;
+        }
+        while (end + 1 < toks_.size() && toks_[end].kind != Tok::LBrace && toks_[end].kind != Tok::Semi) ++end;
+        end = toks_[end].kind == Tok::LBrace ? afterBraces(end) : (end + 1 < toks_.size() ? end + 1 : end);
+    }
+    t->end = end;
+    i = end;
+    if (TemplateDecl* other = prog.findTemplate(t->name); other && !t->name.empty()) {
+        diags_.error(t->nameLoc, "the name '" + t->name + "' is already used by another generic", "rename one of them",
+                     spec::Generics);
+        diags_.note(other->nameLoc, "the first definition is here");
+        skipTemplate_[first] = end;
+        return;
+    }
+    templateAt_[first] = t.get();
+    prog.templates.push_back(std::move(t));
+}
+
+// At `template`: reads `template<typename T, Comparable U, int N>`.
+void Parser::parseTemplateHeader(TemplateDecl& t) {
+    Loc start = advance().loc;
+    if (!check(Tok::Less))
+        fail(start, "expected '<' after 'template'", "write e.g. `template<typename T>`", spec::Generics);
+    advance();
+    if (check(Tok::Greater))
+        fail(start, "C+ has no template specialization",
+             "write one definition for every type. For a type that needs something different, use another name for it",
+             spec::Generics);
+    do {
+        TemplateParam p;
+        if (match(Tok::KwTypename) || match(Tok::KwClass)) {
+            // a type, which can be anything
+        } else if (check(Tok::KwInt) || check(Tok::KwLong) || check(Tok::KwBool) || check(Tok::KwChar)) {
+            Loc loc;
+            p.valueType = parseBaseType(loc);
+        } else if (check(Tok::Ident)) {
+            p.constraint = peek().text;
+            p.constraintLoc = advance().loc;
+        } else {
+            fail(peek().loc, "expected a template parameter, found " + describeToken(peek()),
+                 "write `typename T`, a constraint such as `Comparable T`, or a value such as `int N`", spec::Generics);
+        }
+        if (check(Tok::Dot))
+            fail(peek().loc, "C+ has no templates with any number of parameters",
+                 "write the parameters one by one, or pass a vector", spec::Generics);
+        const Token& name = expect(Tok::Ident, "for the name of the template parameter");
+        if (check(Tok::Assign)) notYet(peek().loc, "default template arguments", "give the arguments wherever it is used");
+        for (auto& other : t.params)
+            if (other.name == name.text)
+                fail(name.loc, "the template parameter '" + name.text + "' is written twice", "rename one of them", spec::Generics);
+        p.name = name.text;
+        p.loc = name.loc;
+        if (!p.valueType) {
+            Type placeholder{Type::Kind::TypeParam, nullptr};
+            placeholder.length = (int64_t)t.params.size();
+            placeholders_.push_back(placeholder);
+            names_.push_back(p.name);
+            placeholders_.back().name = names_.back().c_str();
+            p.placeholder = &placeholders_.back();
+        }
+        t.params.push_back(std::move(p));
+    } while (match(Tok::Comma));
+    if (!check(Tok::Greater))
+        fail(peek().loc, "expected '>' to close the template parameters, found " + describeToken(peek()), "", spec::Generics);
+    advance();
+    if (check(Tok::Ident) && peek().text == "requires")
+        notYet(peek().loc, "requires clauses", "write the constraint on the parameter: `template<Comparable T>`");
+    if (check(Tok::KwTemplate))
+        fail(peek().loc, "a generic has one `template<...>`", "put all of its parameters in one list", spec::Generics);
+}
+
+Parser::GenericScope::GenericScope(Parser& parser)
+    : p(parser), pos(parser.pos_), bindings(std::move(parser.bindings_)), current(parser.currentTemplate_),
+      injected(parser.injected_), dryRun(parser.dryRun_), splitShr(parser.splitShr_) {
+    p.bindings_.clear();
+    p.splitShr_ = SIZE_MAX;
+}
+
+Parser::GenericScope::~GenericScope() {
+    p.pos_ = pos;
+    p.bindings_ = std::move(bindings);
+    p.currentTemplate_ = current;
+    p.injected_ = injected;
+    p.dryRun_ = dryRun;
+    p.splitShr_ = splitShr;
+}
+
+// Reads a definition with its parameters unknown. Nothing is kept but a function's parameter
+// types, from which a call works out the arguments. Using the definition reads it again.
+void Parser::readTemplate(TemplateDecl& t) {
+    if (t.failed) return;
+    GenericScope scope(*this);
+    dryRun_ = true;
+    currentTemplate_ = &t;
+    pos_ = t.start;
+    std::vector<TemplateArg> args;
+    for (size_t i = 0; i < t.params.size(); ++i) {
+        TemplateBinding binding;
+        binding.type = t.params[i].placeholder;
+        binding.valueType = t.params[i].valueType;
+        binding.value.valueParam = (int)i;
+        bindings_[t.params[i].name] = binding;
+        TemplateArg arg;
+        arg.type = t.params[i].placeholder;
+        arg.valueParam = (int)i;
+        args.push_back(arg);
+    }
+    int errors = diags_.errorCount();
+    try {
+        if (t.kind == TemplateDecl::Kind::Record) {
+            patterns_.push_back({&t, args, instanceName(t, args), Type{Type::Kind::Dependent, nullptr}});
+            patterns_.back().type.name = patterns_.back().name.c_str();
+            patterns_.back().type.pattern = &patterns_.back();
+            injected_ = &patterns_.back().type;
+            StructDecl scratch(t.name, peek().kind != Tok::KwStruct);
+            parseRecord(&scratch);
+        } else if (t.kind == TemplateDecl::Kind::Concept) {
+            ConceptBody body;
+            parseConcept(body);
+        } else {
+            Loc retLoc;
+            bool isConst = false;
+            const Type* ret = parseType(retLoc, &isConst);
+            if (isConst) fail(retLoc, "a function cannot return a const value", "remove `const`", spec::Functions);
+            if (ret->is(Type::Kind::Auto)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `T`");
+            t.pattern = parseFunction(ret, retLoc);
+        }
+    } catch (ParseError&) {
+        if (diags_.errorCount() == errors) ++errors, diags_.error(t.nameLoc, "this generic could not be read");
+    }
+    t.failed = diags_.errorCount() != errors;
+}
+
+void Parser::bindTemplate(const TemplateDecl& t, const std::vector<TemplateArg>& args) {
+    currentTemplate_ = &t;
+    for (size_t i = 0; i < t.params.size(); ++i) {
+        TemplateBinding binding;
+        binding.type = t.params[i].valueType ? nullptr : args[i].type;
+        binding.value = args[i];
+        binding.valueType = t.params[i].valueType;
+        bindings_[t.params[i].name] = binding;
+    }
+}
+
+std::string Parser::instanceName(const TemplateDecl& t, const std::vector<TemplateArg>& args) const {
+    std::string name = t.name + "<";
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i) name += ", ";
+        const Type* valueType = t.params[i].valueType;
+        if (!valueType) name += args[i].type->name;
+        else if (args[i].valueParam >= 0) name += t.params[args[i].valueParam].name;
+        else if (valueType->is(Type::Kind::Bool)) name += args[i].value ? "true" : "false";
+        else if (valueType->is(Type::Kind::Char)) name += "'" + std::string(1, (char)args[i].value) + "'";
+        else name += std::to_string(args[i].value);
+    }
+    return name + ">";
+}
+
+TemplateDecl* Parser::classTemplate(const std::string& name) const {
+    TemplateDecl* t = prog_->findTemplate(name);
+    return t && t->kind == TemplateDecl::Kind::Record ? t : nullptr;
+}
+
+TemplateDecl* Parser::functionTemplate(const std::string& name) const {
+    TemplateDecl* t = prog_->findTemplate(name);
+    return t && t->kind == TemplateDecl::Kind::Function ? t : nullptr;
+}
+
+const Type* Parser::boundType(const Token& t) const {
+    if (t.kind != Tok::Ident) return nullptr;
+    if (auto it = bindings_.find(t.text); it != bindings_.end()) return it->second.type;
+    if (injected_ && currentTemplate_ && t.text == currentTemplate_->name) return injected_;
+    return nullptr;
+}
+
+bool Parser::isTypeName(const Token& t) const { return t.kind == Tok::Ident && (typeNames_.count(t.text) || boundType(t)); }
+
+void Parser::rejectTemplateParamName(const Token& name) {
+    if (bindings_.count(name.text))
+        fail(name.loc, "'" + name.text + "' is a template parameter here, so it cannot also be a variable",
+             "give the variable another name", spec::Generics);
+}
+
+TemplateArg Parser::parseTemplateValue(const TemplateParam& p) {
+    TemplateArg arg;
+    const Token& t = peek();
+    bool wantsBool = p.valueType->is(Type::Kind::Bool), wantsChar = p.valueType->is(Type::Kind::Char);
+    if (t.kind == Tok::Ident) {
+        auto it = bindings_.find(t.text);
+        if (it == bindings_.end() || it->second.type)
+            notYet(t.loc, "names as template values, other than a template parameter", "write the value itself, e.g. `16`");
+        advance();
+        return it->second.value;
+    }
+    if (wantsBool && (t.kind == Tok::KwTrue || t.kind == Tok::KwFalse)) {
+        advance();
+        arg.value = t.kind == Tok::KwTrue;
+        return arg;
+    }
+    if (wantsChar && t.kind == Tok::CharLit) {
+        advance();
+        arg.value = (int64_t)t.intValue;
+        return arg;
+    }
+    bool negative = match(Tok::Minus);
+    if (!wantsBool && !wantsChar && check(Tok::IntLit)) {
+        arg.value = (int64_t)advance().intValue;
+        if (negative) arg.value = -arg.value;
+        return arg;
+    }
+    fail(peek().loc, "expected a value of type '" + std::string(p.valueType->name) + "' for the template parameter '" + p.name +
+                         "', found " + describeToken(peek()),
+         "write the value itself. Working one out is planned, together with constexpr", spec::Generics);
+}
+
+std::vector<TemplateArg> Parser::parseTemplateArgs(const TemplateDecl& t, Loc nameLoc, bool partial) {
+    advance();  // the '<'
+    std::vector<TemplateArg> args;
+    if (!check(Tok::Greater) && !check(Tok::Shr)) {
+        do {
+            if (args.size() == t.params.size())
+                fail(peek().loc, "'" + t.name + "' takes " + std::to_string(t.params.size()) + " template argument" +
+                                     (t.params.size() == 1 ? "" : "s") + ", but more were given",
+                     "", spec::Generics);
+            const TemplateParam& p = t.params[args.size()];
+            if (p.valueType) {
+                args.push_back(parseTemplateValue(p));
+                continue;
+            }
+            Loc loc;
+            TemplateArg arg;
+            arg.type = parseType(loc);
+            if (arg.type->is(Type::Kind::Auto))
+                fail(loc, "'auto' cannot be given for a template parameter", "write the type", spec::Generics);
+            args.push_back(arg);
+        } while (match(Tok::Comma));
+    }
+    expectCloseAngle("to close the template arguments of '" + t.name + "'");
+    if (!partial && args.size() != t.params.size())
+        fail(nameLoc, "'" + t.name + "' takes " + std::to_string(t.params.size()) + " template argument" +
+                          (t.params.size() == 1 ? "" : "s") + ", but " + std::to_string(args.size()) +
+                          (args.size() == 1 ? " was" : " were") + " given",
+             "", spec::Generics);
+    return args;
+}
+
+const Type* Parser::genericRecord(TemplateDecl& t, Loc nameLoc) {
+    std::vector<TemplateArg> args = parseTemplateArgs(t, nameLoc, false);
+    if (!dryRun_) return instantiateRecord(t, args, nameLoc);
+    patterns_.push_back({&t, args, instanceName(t, args), Type{Type::Kind::Dependent, nullptr}});
+    patterns_.back().type.name = patterns_.back().name.c_str();
+    patterns_.back().type.pattern = &patterns_.back();
+    return &patterns_.back().type;
+}
+
+const Type* Parser::instantiateRecord(TemplateDecl& t, const std::vector<TemplateArg>& args, Loc usedAt) {
+    std::string name = instanceName(t, args);
+    if (auto it = t.records.find(name); it != t.records.end()) return &it->second->type;
+    if (t.failed) throw ParseError{};  // reported where it is defined
+    if (genericDepth_ >= 64 || name.size() > 2000 || instanceCount_ >= 20000)
+        fail(usedAt, "the generic type '" + t.name + "' keeps needing larger versions of itself, which would never end",
+             "check the types that its fields and methods use", spec::Generics);
+    bool isClass = toks_[t.start].kind != Tok::KwStruct;
+    prog_->structs.push_back(std::make_unique<StructDecl>(name, isClass));
+    StructDecl* sd = prog_->structs.back().get();
+    sd->templateOf = &t;
+    sd->templateArgs = args;
+    sd->templateName = t.name;
+    sd->usedAt = usedAt;
+    t.records[name] = sd;  // before its body, which can refer to it
+    ++instanceCount_;
+    GenericScope scope(*this);
+    dryRun_ = false;
+    bindTemplate(t, args);
+    injected_ = &sd->type;
+    pos_ = t.start;
+    ++genericDepth_;
+    diags_.pushContext(usedAt, "in '" + name + "', which is used here");
+    struct Leave {
+        Parser& p;
+        ~Leave() {
+            --p.genericDepth_;
+            p.diags_.popContext();
+        }
+    } leave{*this};
+    try {
+        parseRecord(sd);
+    } catch (ParseError&) {
+        sd->defined = true;  // reported; what was read is still a type
+    }
+    return &sd->type;
+}
+
+FuncDecl* Parser::instantiateFunction(TemplateDecl& t, const std::vector<TemplateArg>& args, Loc usedAt, int depth) {
+    std::string name = instanceName(t, args);
+    if (auto it = t.functions.find(name); it != t.functions.end()) return it->second;
+    if (t.failed) return nullptr;
+    t.functions[name] = nullptr;
+    GenericScope scope(*this);
+    dryRun_ = false;
+    injected_ = nullptr;
+    bindTemplate(t, args);
+    pos_ = t.start;
+    diags_.pushContext(usedAt, "in '" + name + "', which is used here");
+    struct Leave {
+        Parser& p;
+        ~Leave() { p.diags_.popContext(); }
+    } leave{*this};
+    try {
+        Loc retLoc;
+        bool isConst = false;
+        const Type* ret = parseType(retLoc, &isConst);
+        auto fn = parseFunction(ret, retLoc);
+        fn->name = name;
+        fn->allowNewDelete = t.allowNewDelete;
+        fn->usedAt = usedAt;
+        fn->genericDepth = depth;
+        fn->requested = true;
+        prog_->funcs.push_back(std::move(fn));
+        return t.functions[name] = prog_->funcs.back().get();
+    } catch (ParseError&) {
+        return nullptr;
+    } catch (TooDeep&) {
+        return nullptr;
+    }
+}
+
+// `concept Addable = requires(T a, T b) { a + b; };`
+void Parser::parseConcept(ConceptBody& out) {
+    advance();  // `concept`
+    const Token& name = expect(Tok::Ident, "for the name of the constraint");
+    expect(Tok::Assign, "after the name of the constraint");
+    if (!check(Tok::Ident) || peek().text != "requires")
+        notYet(peek().loc, "constraints that are not a `requires` expression", "write `concept " + name.text + " = requires(T a) { ... };`");
+    advance();
+    out.params = std::make_unique<FuncDecl>();
+    out.params->name = "requires";
+    if (check(Tok::LParen)) parseParams(*out.params);
+    expect(Tok::LBrace, "to start what the constraint requires");
+    while (!check(Tok::RBrace) && !check(Tok::Eof)) {
+        if (check(Tok::LBrace) || check(Tok::KwTypename) || (check(Tok::Ident) && peek().text == "requires"))
+            notYet(peek().loc, "requirements other than an expression", "write an expression that must be valid, e.g. `a + b;`");
+        out.requirements.push_back(parseExpr());
+        expect(Tok::Semi, "after the requirement");
+    }
+    expect(Tok::RBrace, "to close what the constraint requires");
+    expect(Tok::Semi, "after the constraint");
+}
+
+bool Parser::instantiateConcept(TemplateDecl& t, const TemplateArg& arg, ConceptBody& out) {
+    if (t.failed) return false;
+    GenericScope scope(*this);
+    dryRun_ = false;
+    injected_ = nullptr;
+    bindTemplate(t, {arg});
+    pos_ = t.start;
+    try {
+        parseConcept(out);
+        return true;
+    } catch (ParseError&) {
+        return false;
+    } catch (TooDeep&) {
+        return false;
+    }
 }
 
 // `[[allow(new_delete)]]`. C++'s own attributes, such as [[nodiscard]], are not part of C+.
@@ -182,7 +620,12 @@ void Parser::parseTopLevel(Program& prog) {
             if (prog.funcs.size() > before) prog.funcs.back()->allowNewDelete = true;
             return;
         }
-        case Tok::KwTemplate: notYet(t.loc, "templates (generics)");
+        case Tok::KwTemplate: {  // read when the file was first scanned
+            if (auto it = templateAt_.find(pos_); it != templateAt_.end()) pos_ = it->second->end;
+            else if (auto bad = skipTemplate_.find(pos_); bad != skipTemplate_.end()) pos_ = bad->second;
+            else throw ParseError{};
+            return;
+        }
         case Tok::KwEnum: notYet(t.loc, "enums");
         case Tok::KwConstexpr:
             notYet(t.loc, "constexpr", "for a number, a char, a bool or a string, write a constant: `const int MAX = 100;`");
@@ -460,8 +903,10 @@ bool Parser::isTypeStart(size_t ahead) const {
                     return isTypeAt(ahead + 2) || peek(ahead + 2).kind == Tok::KwAuto ||
                            peek(ahead + 2).kind == Tok::Greater ||
                            (peek(ahead + 2).kind == Tok::Ident && peek(ahead + 3).kind == Tok::Comma);
-                return peek(ahead).text == "vector" || peek(ahead).text == "hashmap";
+                return peek(ahead).text == "vector" || peek(ahead).text == "hashmap" || classTemplate(peek(ahead).text);
             }
+            // `Box b`: reports that its arguments are missing.
+            if (classTemplate(peek(ahead).text) && !boundType(peek(ahead)) && peek(ahead + 1).kind == Tok::Ident) return true;
             if (!isTypeName(peek(ahead))) return false;
             if (peek(ahead + 1).kind == Tok::Question || peek(ahead + 1).kind == Tok::QuestionQuestion) ++ahead;
             while (peek(ahead + 1).kind == Tok::Star || (peek(ahead + 1).kind == Tok::KwConst &&
@@ -492,7 +937,7 @@ bool Parser::isValueOfType() const {
             break;
         default: return false;
     }
-    return peek(after).kind == Tok::LParen || peek(after).kind == Tok::LBrace;
+    return peek(after).kind == Tok::LParen || peek(after).kind == Tok::LBrace || peek(after).kind == Tok::ColonColon;
 }
 
 bool Parser::isTypeAt(size_t ahead) const {
@@ -504,7 +949,7 @@ bool Parser::isTypeAt(size_t ahead) const {
         case Tok::Ident:
             if (isTypeName(t)) return true;
             if (peek(ahead + 1).kind != Tok::Less) return false;
-            return t.text == "vector" || (t.text == "array" && isTypeAt(ahead + 2));
+            return t.text == "vector" || (t.text == "array" && isTypeAt(ahead + 2)) || classTemplate(t.text);
         default: return false;
     }
 }
@@ -632,9 +1077,17 @@ const Type* Parser::parseType(Loc& loc, bool* isConst) {
                                          : "a function that may return nothing returns an optional of a real type, "
                                            "e.g. `User?`",
                  spec::Optionals);
-        if (check(Tok::Question))
-            fail(peek().loc, "an optional cannot hold another optional",
-                 "write one '?': `" + std::string(t->name) + "?` already means " + t->name + " or null", spec::Optionals);
+        if (check(Tok::Question) || t->isOptional())
+            fail(t->isOptional() ? q : peek().loc, "an optional cannot hold another optional",
+                 "write one '?': `" + std::string(t->isOptional() ? t->elem->name : t->name) + "?` already means " +
+                     (t->isOptional() ? t->elem->name : t->name) + " or null",
+                 spec::Optionals);
+        if (t->isPointer())
+            fail(q, "a pointer cannot be optional",
+                 "a pointer can already be null: write `" + std::string(t->name) + "` and compare it with null", spec::Pointers);
+        if (t->isWeak())
+            fail(q, "a weak reference cannot be optional",
+                 "it is already empty when nothing is there: write `" + std::string(t->name) + "`", spec::Weak);
         loc.len = q.col + 1 - loc.col;
         t = Type::optionalOf(t);
     }
@@ -689,7 +1142,7 @@ const Type* Parser::parseBaseType(Loc& loc) {
             Loc inner;
             const Type* target = parseType(inner);
             expectCloseAngle("to close weak<...>");
-            if (!target->isClass()) {
+            if (!target->isClass() && !dryRun_) {
                 std::string name = target->name;
                 fail(inner, "a weak reference refers to a class object, but '" + name + "' is not a class",
                      target->isOptional() && target->elem->isClass()
@@ -717,6 +1170,15 @@ const Type* Parser::parseBaseType(Loc& loc) {
         case Tok::KwFloat: return Type::floatTy();
         case Tok::KwChar: return Type::charTy();
         case Tok::Ident:
+            if (const Type* bound = boundType(t); bound && !check(Tok::Less)) return bound;
+            if (TemplateDecl* tmpl = classTemplate(t.text)) {
+                if (!check(Tok::Less))
+                    fail(t.loc, "'" + t.text + "' is generic, so its template arguments must be written",
+                         "write e.g. `" + t.text + "<int>`", spec::Generics);
+                const Type* made = genericRecord(*tmpl, t.loc);
+                loc.len = prev().loc.col + prev().loc.len - t.loc.col;
+                return made;
+            }
             if (isTypeName(t)) return &prog_->findStruct(t.text)->type;
             if (t.text == "vector" && check(Tok::Less)) {
                 Loc start = t.loc;
@@ -753,6 +1215,21 @@ const Type* Parser::parseBaseType(Loc& loc) {
                          spec::Arrays);
                 advance();
                 const Token& size = peek();
+                if (size.kind == Tok::Ident) {
+                    auto bound = bindings_.find(size.text);
+                    if (bound != bindings_.end() && bound->second.valueType && bound->second.valueType->isInteger()) {  // `array<T, N>`
+                        advance();
+                        expectCloseAngle("to close array<...>");
+                        loc = start;
+                        loc.len = prev().loc.col + prev().loc.len - start.col;
+                        const TemplateArg& value = bound->second.value;
+                        if (!dryRun_ && value.value < 0)
+                            fail(loc, "the size of an array cannot be negative, but '" + size.text + "' is " + std::to_string(value.value), "",
+                                 spec::Arrays);
+                        // While the definition is read, the length says which parameter gives it.
+                        return Type::arrayOf(elem, value.valueParam >= 0 ? -1 - value.valueParam : value.value);
+                    }
+                }
                 if (size.kind == Tok::Ident)
                     notYet(size.loc, "array sizes given by a name",
                            "write the number itself, e.g. `array<" + name + ", 5>`. For a size known only while the "
@@ -813,12 +1290,13 @@ void Parser::failCStyleArray(const Type* elem, const std::string& name) {
 // Expects the '>' that closes `vector<...>` or `array<..., N>`. In `vector<vector<int>>` the lexer sees
 // '>>', so the first '>' of it is taken and the token left as the second one.
 void Parser::expectCloseAngle(const std::string& context) {
-    if (check(Tok::Shr)) {
-        Token& t = toks_[pos_];
-        t.kind = Tok::Greater;
-        t.text = ">";
-        t.loc.col += 1;
-        t.loc.len = 1;
+    if (check(Tok::Shr)) {  // closes two brackets, and the tokens stay as they are, since a generic is read again
+        if (splitShr_ == pos_) {
+            splitShr_ = SIZE_MAX;
+            advance();
+        } else {
+            splitShr_ = pos_;
+        }
         return;
     }
     expect(Tok::Greater, context);
@@ -844,6 +1322,7 @@ void Parser::parseParams(FuncDecl& fn) {
                        "copied if one of the copies changes. To let the function change the caller's variable, "
                        "pass a pointer: `int* count`, called as `f(&n)`");
             const Token& pname = expect(Tok::Ident, "for the parameter name");
+            rejectTemplateParamName(pname);
             if (check(Tok::LBracket) && fn.name == "main")
                 fail(peek().loc, "C+ has no C-style arrays", "write `int main(int argc, char** argv)`", spec::MainFunction);
             if (check(Tok::LBracket)) failCStyleArray(ty, pname.text);
@@ -875,7 +1354,7 @@ std::unique_ptr<FuncDecl> Parser::parseFunction(const Type* retType, Loc retLoc)
 
 // ---- Structs and classes --------------------------------------------------
 
-void Parser::parseRecord() {
+void Parser::parseRecord(StructDecl* into) {
     Tok keyword = advance().kind;
     bool isClass = keyword != Tok::KwStruct;
     bool isInterface = keyword == Tok::KwInterface;
@@ -910,12 +1389,18 @@ void Parser::parseRecord() {
                                    base.text + "`",
                      "in C++ a class without it derives privately, which is not what it looks like, so C+ asks for it",
                      spec::Inheritance);
-            baseNames.push_back({base.text, base.loc});
+            std::string baseName = base.text;
+            if (classTemplate(base.text) || boundType(base)) {  // `public Source<T>`, or `public T`
+                --pos_;
+                Loc loc;
+                baseName = parseBaseType(loc)->name;
+            }
+            baseNames.push_back({baseName, base.loc});
         } while (match(Tok::Comma));
     }
-    StructDecl* sd = prog_->findStruct(name.text);  // created by the scan in parseProgram
+    StructDecl* sd = into ? into : prog_->findStruct(name.text);  // created by the scan in parseProgram
     std::unique_ptr<StructDecl> duplicate;
-    if (sd->defined || sd->opaque || sd->isClass != isClass) {
+    if (!into && (sd->defined || sd->opaque || sd->isClass != isClass)) {
         diags_.error(name.loc, "the name '" + name.text + "' is already used by another struct or class",
                      "rename one of them", spec::Structs);
         if (sd->defined || sd->opaque) diags_.note(sd->nameLoc, "the first definition is here");
@@ -945,10 +1430,16 @@ void Parser::parseRecord() {
 void Parser::parseMemberInits(FuncDecl& ctor) {
     do {
         const Token& field = expect(Tok::Ident, "for the field name in the initializer list");
-        bool isBase = false;
-        for (auto& base : ctor.owner->baseNames) isBase = isBase || base.name == field.text;
-        if (isBase) {  // `Animal(name, 3)`: what builds the base class
-            FuncDecl::BaseInit base{field.text, field.loc, {}};
+        std::string baseName;  // the whole name, also for `Source(x)` or `Source<int>(x)` when it is `Source<int>`
+        for (auto& base : ctor.owner->baseNames)
+            if (base.name == field.text || base.name.rfind(field.text + "<", 0) == 0) baseName = base.name;
+        if (classTemplate(field.text) && check(Tok::Less)) {
+            --pos_;
+            Loc loc;
+            baseName = parseBaseType(loc)->name;
+        }
+        if (!baseName.empty()) {  // `Animal(name, 3)`: what builds the base class
+            FuncDecl::BaseInit base{baseName, field.loc, {}};
             Tok close = match(Tok::LBrace) ? Tok::RBrace : Tok::RParen;
             if (close == Tok::RParen) expect(Tok::LParen, "after '" + field.text + "' in the initializer list");
             if (!check(close)) {
@@ -957,7 +1448,7 @@ void Parser::parseMemberInits(FuncDecl& ctor) {
             }
             expect(close, "to close the values for the base class '" + field.text + "'");
             for (auto& earlier : ctor.baseInits)
-                if (earlier.name == field.text)
+                if (earlier.name == baseName)
                     diags_.error(field.loc, "the base class " + field.text + " is built more than once", "", spec::Inheritance);
             ctor.baseInits.push_back(std::move(base));
             continue;
@@ -999,17 +1490,18 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
                          spec::NewDelete);
         return;
     }
+    const std::string& ownName = sd.templateName.empty() ? sd.name : sd.templateName;  // of its constructor
     bool isVirtual = check(Tok::KwVirtual);
     if (isVirtual) {
         Loc loc = advance().loc;
         if (!sd.isClass)
             fail(loc, "only a class can have virtual methods",
                  "a struct is a value, so its type is always known. Make it a class to derive from it", spec::Inheritance);
-        if (peek().kind == Tok::Ident && peek().text == sd.name && peek(1).kind == Tok::LParen)
+        if (peek().kind == Tok::Ident && peek().text == ownName && peek(1).kind == Tok::LParen)
             fail(loc, "a constructor cannot be virtual", "remove `virtual`", spec::Inheritance);
     }
     const Token& t = peek();
-    if (sd.isInterface && (t.kind == Tok::Tilde || (t.kind == Tok::Ident && t.text == sd.name && peek(1).kind == Tok::LParen)))
+    if (sd.isInterface && (t.kind == Tok::Tilde || (t.kind == Tok::Ident && t.text == ownName && peek(1).kind == Tok::LParen)))
         fail(t.loc, std::string("an interface cannot have a ") + (t.kind == Tok::Tilde ? "destructor" : "constructor"),
              "an interface only lists methods, and holds nothing to set up. Use a class for that", spec::Interfaces);
     switch (t.kind) {
@@ -1025,7 +1517,8 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
             notYet(t.loc, "nested type definitions", "define it at the top level instead");
         case Tok::KwStatic: notYet(t.loc, "static members");
         case Tok::KwOperator: notYet(t.loc, "operator overloading");
-        case Tok::KwTemplate: notYet(t.loc, "templates (generics)");
+        case Tok::KwTemplate:
+            notYet(t.loc, "generic methods", "make the whole type generic, or write a generic function outside it");
         default: break;
     }
 
@@ -1033,8 +1526,8 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
     if (t.kind == Tok::Tilde) {
         Loc tildeLoc = advance().loc;
         const Token& name = expect(Tok::Ident, "after '~'");
-        if (name.text != sd.name)
-            fail(name.loc, "a destructor is named after its type: '~" + sd.name + "'", "", spec::Classes);
+        if (name.text != ownName)
+            fail(name.loc, "a destructor is named after its type: '~" + ownName + "'", "", spec::Classes);
         if (!sd.isClass)
             notYet(tildeLoc, "struct destructors", "destructors work for classes; a struct is a plain value");
         auto dtor = std::make_unique<FuncDecl>();
@@ -1070,7 +1563,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
     }
 
     // Constructor: Name(params) : field(value), ... { ... }
-    if (t.kind == Tok::Ident && t.text == sd.name && peek(1).kind == Tok::LParen) {
+    if (t.kind == Tok::Ident && t.text == ownName && peek(1).kind == Tok::LParen) {
         auto ctor = std::make_unique<FuncDecl>();
         ctor->name = sd.name;
         ctor->nameLoc = advance().loc;
@@ -1269,6 +1762,7 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
                    "a variable holds its own value. To refer to another variable, use a pointer: `int* p = &x;`");
         const Token& name =
             expect(Tok::Ident, decls.empty() ? "for the variable name" : "for the next variable name after ','");
+        rejectTemplateParamName(name);
         auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
         var->isConst = isConst;
         if (match(Tok::Assign)) {
@@ -1913,11 +2407,53 @@ ExprPtr Parser::parsePrimary() {
                      spec::Casts);
             if (check(Tok::ColonColon)) {
                 if (t.text == "std") failStd(t.loc, peek(1));
-                if (isTypeName(t) && peek(1).kind == Tok::Ident) {  // `Animal::speak()`: a member of `this`
+                if ((isTypeName(t) || classTemplate(t.text)) && peek(1).kind == Tok::Ident) {  // `Animal::speak()`: a member of `this`
                     advance();
                     return parseMemberAccess(std::make_unique<ThisExpr>(t.loc), "::", t.text);
                 }
                 notYet(t.loc, "module members like '" + t.text + "::" + peek(1).text + "'");
+            }
+            if (auto bound = bindings_.find(t.text); bound != bindings_.end() && !bound->second.type) {  // `N`
+                const TemplateBinding& b = bound->second;
+                if (b.valueType->is(Type::Kind::Bool)) return std::make_unique<BoolLitExpr>(t.loc, b.value.value != 0);
+                if (b.valueType->is(Type::Kind::Char)) return std::make_unique<CharLitExpr>(t.loc, (uint8_t)b.value.value);
+                return std::make_unique<IntLitExpr>(t.loc, b.value.value, b.valueType->is(Type::Kind::Long));
+            }
+            if (const Type* bound = boundType(t); bound && (check(Tok::LParen) || check(Tok::LBrace)))
+                return parseBoundValue(t, bound);
+            TemplateDecl* tmpl = classTemplate(t.text);
+            if (tmpl && !boundType(t) && (check(Tok::LParen) || check(Tok::LBrace)))
+                fail(t.loc, "'" + t.text + "' is generic, so its template arguments must be written",
+                     "write e.g. `" + t.text + "<int>(...)`. Working them out from the values is planned", spec::Generics);
+            // A variable can have the same name: `Box < 3` is a comparison.
+            if (tmpl && !boundType(t) && check(Tok::Less) && (tmpl->params[0].valueType || isTypeAt(1))) {
+                --pos_;  // back to the name, to read the whole type
+                Loc loc;
+                const Type* ty = parseBaseType(loc);
+                if (match(Tok::ColonColon)) return parseMemberAccess(std::make_unique<ThisExpr>(t.loc), "::", ty->name);
+                if (match(Tok::LBrace)) return parseInitList(loc, ty);
+                expect(Tok::LParen, "or '{' after '" + std::string(ty->name) + "'");
+                std::vector<ExprPtr> args;
+                if (!check(Tok::RParen)) {
+                    do args.push_back(parseExpr());
+                    while (match(Tok::Comma));
+                }
+                expect(Tok::RParen, "to close the argument list of '" + std::string(ty->name) + "'");
+                return std::make_unique<CallExpr>(loc, ty->name, std::move(args));
+            }
+            if (TemplateDecl* tmpl = functionTemplate(t.text);
+                tmpl && check(Tok::Less) && afterAngles(0) && peek(afterAngles(0)).kind == Tok::LParen) {  // `max<long>(a, b)`
+                std::vector<TemplateArg> templateArgs = parseTemplateArgs(*tmpl, t.loc, true);
+                expect(Tok::LParen, "after the template arguments");
+                std::vector<ExprPtr> args;
+                if (!check(Tok::RParen)) {
+                    do args.push_back(parseExpr());
+                    while (match(Tok::Comma));
+                }
+                expect(Tok::RParen, "to close the argument list of '" + t.text + "'");
+                auto call = std::make_unique<CallExpr>(t.loc, t.text, std::move(args));
+                call->templateArgs = std::move(templateArgs);
+                return call;
             }
             if (isTypeName(t) && match(Tok::LBrace)) return parseInitList(t.loc, &prog_->findStruct(t.text)->type);
             if (t.text == "vector" && check(Tok::Less)) {
@@ -1979,6 +2515,42 @@ ExprPtr Parser::parsePrimary() {
         default:
             fail(t.loc, "expected an expression, found " + describeToken(t));
     }
+}
+
+// A type parameter used like a type's name: `T(x)`, `T()`, `T{1, 2}`, whatever it stands for.
+ExprPtr Parser::parseBoundValue(const Token& t, const Type* bound) {
+    bool buildsValue = bound->hasFields() || bound->isVector() || bound->isArray() || bound->is(Type::Kind::TypeParam) ||
+                       bound->is(Type::Kind::Dependent);
+    if (match(Tok::LBrace)) {
+        if (buildsValue) return parseInitList(t.loc, bound);
+        notYet(t.loc, "brace initializers for '" + std::string(bound->name) + "'", "write `" + t.text + "(value)`");
+    }
+    advance();  // the '('
+    std::vector<ExprPtr> args;
+    if (!check(Tok::RParen)) {
+        do args.push_back(parseExpr());
+        while (match(Tok::Comma));
+    }
+    expect(Tok::RParen, "to close the argument list of '" + t.text + "'");
+    if (bound->isVector()) {
+        auto call = std::make_unique<CallExpr>(t.loc, bound->name, std::move(args));
+        call->vectorType = bound;
+        return call;
+    }
+    if (bound->isArray() && args.empty()) {
+        auto list = std::make_unique<InitListExpr>(t.loc);
+        list->explicitType = bound;
+        return list;
+    }
+    if (bound->isArray()) {  // only a copy of one
+        if (args.size() > 1)
+            fail(t.loc, "'" + std::string(bound->name) + "(...)' takes no values", "use braces to list the elements", spec::Arrays);
+        return std::make_unique<CastExpr>(t.loc, bound, std::move(args[0]));
+    }
+    if (buildsValue) return std::make_unique<CallExpr>(t.loc, bound->name, std::move(args));
+    if (args.size() > 1)
+        fail(t.loc, "'" + std::string(bound->name) + "' takes one value, but " + std::to_string(args.size()) + " were given", "", spec::Generics);
+    return std::make_unique<CastExpr>(t.loc, bound, args.empty() ? nullptr : std::move(args[0]));
 }
 
 ExprPtr Parser::parseInitList(Loc start, const Type* explicitType) {

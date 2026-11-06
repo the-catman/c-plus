@@ -1,0 +1,161 @@
+// A generic function is written once and made for each set of types it is used with.
+template<typename T>
+T largest(T a, T b) {
+    return a < b ? b : a;
+}
+
+template<typename T, typename U>
+string pair(T a, U b) {
+    return format("{} and {}", a, b);
+}
+
+// Parameters can say what they are made of, and the types are worked out from there.
+template<typename T>
+T last(vector<T> items) {
+    return items.back();
+}
+
+template<typename T>
+int count(vector<T> items, T wanted) {
+    int n = 0;
+    for (T x : items) {
+        if (x == wanted) n++;
+    }
+    return n;
+}
+
+template<typename T>
+T valueOr(T? maybe, T fallback) {
+    return maybe ?? fallback;
+}
+
+template<typename T>
+void swapValues(T* a, T* b) {
+    T saved = *a;
+    *a = *b;
+    *b = saved;
+}
+
+// A value as a parameter.
+template<typename T, int N>
+T total(array<T, N> items) {
+    T sum = T();
+    for (int i = 0; i < N; i++) sum += items[i];
+    return sum;
+}
+
+template<int N>
+int timesTwo() {
+    return N * 2;
+}
+
+template<bool LOUD>
+string shout(string text) {
+    return LOUD ? text + "!" : text;
+}
+
+// Written arguments, including ones that cannot be worked out, and ones that convert.
+template<typename T>
+T zero() {
+    return T();
+}
+
+template<typename To, typename From>
+To convert(From value) {
+    return To(value);
+}
+
+// Calling itself, and calling another generic.
+template<typename T>
+T power(T base, int n) {
+    if (n == 0) return T(1);
+    return base * power(base, n - 1);
+}
+
+template<typename T>
+T biggestOf(vector<T> items) {
+    T best = items[0];
+    for (T x : items) best = largest(best, x);
+    return best;
+}
+
+struct Point {
+    int x;
+    int y;
+};
+class Dog {
+public:
+    string name = "Rex";
+};
+
+template<typename T>
+T same(T value) {
+    return value;
+}
+
+template<typename T>
+T built() {
+    return T{};
+}
+
+// A generic can use a type defined after it, and be used before it is defined.
+int main() {
+    println("{} {} {}", largest(1, 2), largest(2.5, 1.5), largest("a", "b"));
+    println("{}", largest('x', 'y'));
+    println("{}", largest<long>(1, 2));
+    println("{}", largest<double>(1, 2.5));
+    println("{}", pair(1, "two"));
+    println("{}", pair<string>("a", 2));
+    println("{}", last(vector<string>{"a", "b"}));
+    println("{}", count(vector<int>{1, 2, 1}, 1));
+    println("{} {}", valueOr<int>(null, 3), valueOr<int>(4, 3));
+    string? text = "here";
+    println("{}", valueOr(text, "none"));
+    int a = 1;
+    int b = 2;
+    swapValues(&a, &b);
+    println("{} {}", a, b);
+    array<int, 3> numbers = {1, 2, 3};
+    array<double, 2> doubles = {0.5, 0.25};
+    println("{} {}", total(numbers), total(doubles));
+    println("{}", timesTwo<21>());
+    println("{} {}", shout<true>("hi"), shout<false>("hi"));
+    println("{} {} {} {}", zero<int>(), zero<bool>(), zero<string>().empty(), zero<vector<int>>().size());
+    println("{} {}", convert<int>(2.5), convert<double, int>(2));
+    println("{} {}", power(2, 10), power(1.5, 2));
+    println("{}", biggestOf(vector<int>{1, 5, 3}));
+    println("{}", same(Point{1, 2}));
+    Dog dog = Dog();
+    println("{}", same(dog) == dog);
+    println("{}", same(same(same(3))));
+    println("{}", same(vector<int>{1, 2}));
+    println("{}", built<Point>());
+    println("{}", built<vector<int>>());
+    println("{}", built<array<int, 2>>());
+    return 0;
+}
+// expect: 2 2.5 b
+// expect: y
+// expect: 2
+// expect: 2.5
+// expect: 1 and two
+// expect: a and 2
+// expect: b
+// expect: 2
+// expect: 3 4
+// expect: here
+// expect: 2 1
+// expect: 6 0.75
+// expect: 42
+// expect: hi! hi
+// expect: 0 false true 0
+// expect: 2 2
+// expect: 1024 2.25
+// expect: 5
+// expect: {x: 1, y: 2}
+// expect: true
+// expect: 3
+// expect: [1, 2]
+// expect: {x: 0, y: 0}
+// expect: []
+// expect: [0, 0]

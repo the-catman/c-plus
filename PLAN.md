@@ -180,6 +180,17 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
   metaprogramming.
 - If more power is ever needed, copy Zig: types as compile-time values passed to ordinary
   functions.
+- A generic is kept as its tokens and read again for each set of arguments, with its parameters
+  standing for them, which gives an ordinary function or type. Decided 2026-11-06. So type checking and
+  code generation never see a type that is not known, and need no second set of rules. A definition is read
+  once to report syntax errors. As in C++, the rest is checked when used, and a generic class's
+  methods only when they are used. Checking a body before it is used, as Rust does, would need
+  every constraint to say everything the body does.
+- A constraint names a built-in (`Comparable`, `Number`, `Integer`, `Floating`), an interface or class the
+  type must derive from, or a C++20 `concept X = requires(T a) { ... };`, which is tried on the type. Decided
+  2026-11-06.
+- A generic type's arguments are always written for now: `Stack<int>(1)`. Working them out, as C++17 does,
+  is planned.
 
 ### 2.11 Classes — DECIDED
 - Classes with virtual dispatch via vtables, interfaces, destructors.
@@ -479,8 +490,8 @@ outside functions, and `main` can take `argc` and `argv`. `--debug` makes
 a debug build with ASan, stack traces and a leak report. Every item of Phase 1 is in, and
 `examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
 criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
-`dynamic_cast`, multiple inheritance and interfaces, and so do `weak<T>` references. The leak
-report came with Phase 1.
+`dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, and generics with
+constraints. The leak report came with Phase 1.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

@@ -37,6 +37,15 @@ public:
     // A note adds context to the diagnostic printed just before it.
     void note(Loc loc, const std::string& message);
 
+    // While a context is set, each error also says where the generic code it is in was used.
+    void pushContext(Loc loc, const std::string& message) { contexts_.push_back({loc, message}); }
+    void popContext() { contexts_.pop_back(); }
+
+    // While muted, nothing is printed and errors are only counted, for trying code out.
+    void mute() { ++muted_; }
+    void unmute() { --muted_; }
+    int mutedErrors() const { return mutedErrors_; }
+
     bool hasErrors() const { return errorCount_ > 0; }
     int errorCount() const { return errorCount_; }
 
@@ -48,6 +57,13 @@ private:
     bool color_ = false;
     int errorCount_ = 0;
     bool suppressed_ = false;
+    struct Context {
+        Loc loc;
+        std::string message;
+    };
+    std::vector<Context> contexts_;
+    int muted_ = 0;
+    int mutedErrors_ = 0;
 };
 
 }  // namespace cplus

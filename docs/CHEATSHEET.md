@@ -25,7 +25,7 @@ long square(long n) { return n * n; }
 | Casts | `int(x)`, `static_cast<int>(x)`, `(int)x` between numbers, `char` and `bool`. A fraction is dropped toward zero; a value that does not fit **stops the program**. `(int*)p`, `static_cast<int*>(p)` between pointer types. `reinterpret_cast<void*>(-1)`, `reinterpret_cast<long>(p)` between a pointer and a number |
 | Math | `sqrt`, `pow`, `sin`, `floor`, `round`, `fmod`, `isnan`, `abs`, `min`, `max` and the rest of `<cmath>`, with no `std::` |
 | Characters | `char c = 'a';`, escapes as in strings. `c + 1` and `c - '0'` are `int`s, as in C++; `char(n)` is checked. `c++`, `c += 2` stay chars. `isdigit`, `isalpha`, `isspace`, `toupper`, `tolower` and the rest of `<cctype>` (ASCII, return `bool` or `char`) |
-| Structs | `struct P { int x; int y = 0; };` is a **value** that is copied. Build with `{1, 2}`, `{.y = 2}`, `P{1, 2}`, `P(1, 2)`, `{}` |
+| Structs | `struct P { int x; int y = 0; };` is a **value** that is copied. Build with `{1, 2}`, `{.y = 2}`, `P{1, 2}`, `P(1, 2)`, `{}`. `P(p)` copies one |
 | Fields | `p.x`, `p.x += 1`. `Point p;` can be filled field by field before use |
 | Classes | `class U {...}; U u = U("a");` is a **reference-counted object**: `U v = u;` shares it. No `new`; freed when the last reference goes away |
 | Methods | written inside the type: `int area() const { return w * h; }`. Use fields by name or as `this.w` |
@@ -35,6 +35,8 @@ long square(long n) { return n * n; }
 | Interfaces | `interface Speaker { string speak() const; };`: methods only, no bodies or fields. `class Dog : public Speaker { string speak() const override { ... } };`, then `Speaker s = Dog();` |
 | Finding the real type | `if (auto d = dynamic_cast<Dog?>(a))` (null when it is not a `Dog`), `dynamic_cast<Dog>(a)` (**stops the program** when it is not) |
 | Weak references | `weak<Node> parent;` starts empty and does not keep the object alive, which breaks cycles. `parent = node;`, `if (auto p = parent.lock())`, `parent.lock()?.name`, `parent.expired()`, `parent.reset()`. As `std::weak_ptr` |
+| Generics | `template<typename T> T largest(T a, T b) { ... }`, called as `largest(1, 2)` or `largest<long>(1, 2)`. `template<typename T> class Stack { ... };`, used as `Stack<int>` with its arguments always written. `template<typename T, int N> struct Buffer { array<T, N> items; };`. `T()` is the default value of T |
+| Constraints | `template<Comparable T>`, `template<Number T>`, `template<Integer T>`, `template<Floating T>`, `template<Speaker T>` for an interface or class. Your own: `template<typename T> concept Addable = requires(T a, T b) { a + b; };` |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
 | Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` written as a number. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
@@ -78,6 +80,10 @@ long square(long n) { return n * n; }
 | `int i = someLong;`, `int i = 2.5;` | error: a conversion that can lose information needs a cast: `int(x)`, which stops the program if `x` does not fit |
 | `float f = someDouble;` | error: write `float(x)`. Only a double written as a number, `float f = 0.5;`, converts by itself |
 | `const_cast` | does not exist. `const` cannot be cast away |
+| `Stack s(1);`, `auto s = Stack(1);` on a generic class | write the arguments: `Stack<int> s = Stack<int>(1);` |
+| `template<>` specialization, SFINAE, `typename... Ts` | left out. One definition for every type; a vector for any number of values |
+| `template<typename T> requires Comparable<T>` | `template<Comparable T>` |
+| an error only from inside a generic that is used | a generic is only checked when used, once for each set of types. `cplus check` needs code that uses it |
 | `std::shared_ptr<Node>`, `std::make_shared<Node>()` | `Node n = Node();`: a class variable is already a counted reference |
 | `std::weak_ptr<Node>` | `weak<Node>`, with `lock()`, which gives a `Node?`, `expired()` and `reset()` |
 | `w == null`, `if (w)` on a `weak<Node>` | `w.expired()`, `if (auto n = w.lock())`. A weak reference is not a condition |
@@ -157,7 +163,7 @@ long square(long n) { return n * n; }
 | Classes | `final`, covariant return types, private and protected base classes |
 | Operators | operator overloading with C++ syntax, after function overloading |
 | Errors | `int f() throws`, `throw Error("..")`, `try f()`, `try { } catch (Error e) { }` |
-| Generics | `template<typename T>`, `template<Comparable T>`; no specialization or SFINAE |
+| Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments; `constexpr`, `if constexpr` |
 | Modules | `import net.server;`, `http::get(url)` |
 | Memory | `unique<T>`, `local<T>`; pointers into vectors and strings |
 | Types | enums, `const` fields, types nested in a type or a function, `short` and other small integers |

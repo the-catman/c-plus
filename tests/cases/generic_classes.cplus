@@ -1,0 +1,148 @@
+// A generic struct or class is made for each set of arguments, and works like one written by hand.
+template<typename T>
+class Stack {
+private:
+    vector<T> items;
+public:
+    int pushes = 0;
+    void push(T x) {
+        items.push_back(x);
+        pushes++;
+    }
+    T pop() {
+        T top = items.back();
+        items.pop_back();
+        return top;
+    }
+    long size() const { return items.size(); }
+    bool empty() const { return items.empty(); }
+    Stack copy() const {
+        Stack other = Stack();
+        other.items = items;
+        return other;
+    }
+    Stack<T> copyWritten() const { return copy(); }
+};
+
+template<typename K, typename V>
+struct Entry {
+    K key;
+    V value;
+    string text() const { return format("{}={}", key, value); }
+};
+
+template<typename T>
+struct Wrapper {
+    T value;
+    Wrapper(T v) : value(v) {}
+    T get() const { return value; }
+};
+
+template<typename T>
+class Node {
+public:
+    T value;
+    Node<T>? next;
+    Node(T v, Node<T>? n) : value(v), next(n) {}
+    ~Node() { println("~Node {}", value); }
+};
+
+template<typename T, int N>
+struct Buffer {
+    array<T, N> items;
+    int capacity() const { return N; }
+};
+
+template<typename T>
+T firstOf(Stack<T> s) {
+    return s.pop();
+}
+
+template<typename K, typename V>
+V valueOf(Entry<K, V> e) {
+    return e.value;
+}
+
+template<typename T, int N>
+int sizeOfBuffer(Buffer<T, N> b) {
+    return N;
+}
+
+template<typename T>
+Stack<T> stackOf(T x) {
+    Stack<T> s;
+    s = Stack<T>();
+    s.push(x);
+    return s;
+}
+
+int main() {
+    Stack<int> ints = Stack<int>();
+    ints.push(1);
+    ints.push(2);
+    println("{} {}", ints.size(), ints.pop());
+    println("{}", ints);
+    Stack<string> strings = Stack<string>{};
+    strings.push("a");
+    println("{}", strings.pop());
+    println("{}", ints.copy().size());
+    println("{}", ints.copyWritten().pushes);
+
+    Entry<string, int> e = {"one", 1};
+    println("{} {}", e.text(), e);
+    auto f = Entry<int, vector<string>>{1, {"x"}};
+    println("{}", f.text());
+    println("{}", valueOf(e));
+    println("{}", e == Entry<string, int>{"one", 1});
+
+    Wrapper<double> w = Wrapper<double>(1.5);
+    println("{} {}", w.get(), w);
+    println("{}", Wrapper<Wrapper<int>>(Wrapper<int>(3)).get().get());
+
+    {
+        Node<int> list = Node<int>(1, Node<int>(2, null));
+        println("{}", list.next?.value ?? 0);
+    }
+
+    Buffer<int, 3> b;
+    b.items[2] = 5;
+    println("{} {} {}", b.capacity(), b, sizeOfBuffer(b));
+    Buffer<string, 1> s;
+    println("{}", s);
+
+    Stack<vector<int>> nested = Stack<vector<int>>();
+    nested.push(vector<int>{1, 2});
+    println("{}", firstOf(nested));
+    println("{}", stackOf(3).size());
+    println("{}", stackOf("x").pop());
+    vector<Stack<int>> stacks;
+    stacks.push_back(ints);
+    println("{}", stacks.size());
+    Stack<int>? maybe = ints;
+    println("{}", maybe?.size() ?? 0);
+    Stack<int>* pointer = &ints;
+    println("{}", pointer->size());
+    return 0;
+}
+// expect: 2 2
+// expect: Stack<int> {items: [1], pushes: 2}
+// expect: a
+// expect: 1
+// expect: 0
+// expect: one=1 {key: "one", value: 1}
+// expect: 1=["x"]
+// expect: 1
+// expect: true
+// expect: 1.5 {value: 1.5}
+// expect: 3
+// expect: 2
+// expect: ~Node 1
+// expect: ~Node 2
+// expect: 3 {items: [0, 0, 5]} 3
+// expect: {items: [""]}
+// expect: [1, 2]
+// expect: 1
+// expect: x
+// expect: 1
+// expect: 1
+// expect: 1

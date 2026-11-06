@@ -7,6 +7,7 @@
 #include <functional>
 #include <set>
 
+#include "Parser.h"
 #include "SpecRefs.h"
 
 namespace cplus {
@@ -494,7 +495,8 @@ void Sema::reportUnknownName(const NameExpr& n) {
     if (auto s = structs_.find(n.name); s != structs_.end())
         help = q(n.name) + " is a " + s->second->keyword() + " type. To build one, write `" + n.name + "{...}` or `" +
                n.name + "(...)`";
-    else if (funcs_.count(n.name)) help = "functions can only be called for now, e.g. `" + n.name + "()`";
+    else if (funcs_.count(n.name) || (program_->findTemplate(n.name) && program_->findTemplate(n.name)->kind == TemplateDecl::Kind::Function))
+        help = "functions can only be called for now, e.g. `" + n.name + "()`";
     else if (n.name == "cout" || n.name == "endl" || n.name == "cerr") help = "C+ prints with `println(\"{}\", value);`";
     else if (n.name == "nullptr" || n.name == "NULL") help = "write `null`; only an optional, such as `User?`, can be null";
     else if (n.name == "M_PI" || n.name == "M_E" || n.name == "INFINITY" || n.name == "NAN")
@@ -516,8 +518,7 @@ void Sema::check(Program& program) {
         diags_.error(imp.loc, "this compiler does not support modules yet, so '" + imp.path + "' cannot be imported",
                      "remove the import for now; built-ins like println need no import", spec::Status);
 
-    for (auto& sd : program.structs)
-        if (sd->defined) structs_[sd->name] = sd.get();
+    adoptTypes();
 
     for (auto& fn : program.funcs) {
         if (isBuiltinFunction(fn->name)) {
@@ -566,15 +567,99 @@ void Sema::check(Program& program) {
                          spec::MainFunction);
     }
 
-    checkBases(program);
+    checkTemplateNames(program);
     checkConstants(program);
-    checkStructs(program);
-    for (auto& sd : program.structs)
-        if (sd->defined) checkMembers(*sd);
-    for (auto& fn : program.funcs) checkFunction(*fn);
-    for (auto& sd : program.structs)
-        if (sd->defined)
-            for (auto& m : sd->methods) checkFunction(*m);
+    // Checking one thing can make new ones, from generics, until nothing new is needed.
+    size_t funcsChecked = 0;
+    for (bool progress = true; progress;) {
+        progress = false;
+        if (structsChecked_ < program.structs.size()) {
+            checkNewStructs();
+            progress = true;
+        }
+        while (funcsChecked < program.funcs.size()) {
+            checkFunction(*program.funcs[funcsChecked++]);
+            progress = true;
+        }
+        while (!pendingMethods_.empty()) {
+            FuncDecl* m = pendingMethods_.front();
+            pendingMethods_.pop_front();
+            checkFunction(*m);
+            progress = true;
+        }
+    }
+}
+
+void Sema::adoptTypes() {
+    size_t first = typesAdopted_;
+    if (first == program_->structs.size()) return;
+    typesAdopted_ = program_->structs.size();
+    for (size_t i = first; i < typesAdopted_; ++i)
+        if (program_->structs[i]->defined) structs_[program_->structs[i]->name] = program_->structs[i].get();
+    checkBases(first);
+}
+
+void Sema::requestMethod(FuncDecl* m) {
+    if (m->requested || (m->owner && m->owner->constraintFailed)) return;
+    m->requested = true;
+    pendingMethods_.push_back(m);
+}
+
+void Sema::checkNewStructs() {
+    adoptTypes();
+    size_t first = structsChecked_;
+    structsChecked_ = program_->structs.size();
+    size_t end = structsChecked_;
+    for (size_t i = first; i < end; ++i)
+        if (StructDecl& sd = *program_->structs[i]; sd.defined && sd.templateOf)
+            sd.constraintFailed = !checkConstraints(const_cast<TemplateDecl&>(*sd.templateOf), sd.templateArgs, sd.usedAt);
+    checkStructs(first);
+    for (size_t i = first; i < end; ++i) {
+        StructDecl& sd = *program_->structs[i];
+        if (!sd.defined || sd.constraintFailed) continue;
+        if (sd.templateOf) diags_.pushContext(sd.usedAt, "in " + q(sd.name) + ", which is used here");
+        checkMembers(sd);
+        if (sd.templateOf) diags_.popContext();
+        // A generic class's other methods wait until they are used, as in C++, so that it
+        // can have methods that not all of its arguments allow.
+        for (auto& m : sd.methods)
+            if (!sd.templateOf || m->isVirtual || m->role != FuncDecl::Role::Method) requestMethod(m.get());
+    }
+}
+
+static const char* const kBuiltinConstraints[] = {"Comparable", "Number", "Integer", "Floating"};
+
+// Each generic's name must be free, and each of its constraints must exist.
+void Sema::checkTemplateNames(Program& program) {
+    for (auto& t : program.templates) {
+        if (t->name.empty()) continue;
+        if (t->kind == TemplateDecl::Kind::Function && isBuiltinFunction(t->name))
+            diags_.error(t->nameLoc, q(t->name) + " is a built-in function and cannot be redefined",
+                         "give your function a different name", spec::Printing);
+        if (auto f = funcs_.find(t->name); f != funcs_.end()) {
+            diags_.error(t->nameLoc, "a function named " + q(t->name) + " is already defined",
+                         "rename one of them; overloading is planned but not supported yet", spec::Functions);
+            diags_.note(f->second->nameLoc, "it is defined here");
+        }
+        if (auto s = structs_.find(t->name); s != structs_.end()) {
+            diags_.error(t->nameLoc, "the name " + q(t->name) + " is already used by a " + s->second->keyword(),
+                         "rename one of them", spec::Generics);
+            diags_.note(s->second->nameLoc, "it is defined here");
+        }
+        for (auto& p : t->params) {
+            if (p.constraint.empty()) continue;
+            bool known = structs_.count(p.constraint) > 0;
+            for (const char* builtin : kBuiltinConstraints) known = known || p.constraint == builtin;
+            TemplateDecl* other = program.findTemplate(p.constraint);
+            known = known || (other && other->kind == TemplateDecl::Kind::Concept);
+            if (!known)
+                diags_.error(p.constraintLoc, "there is no constraint named " + q(p.constraint),
+                             "the built-in ones are Comparable, Number, Integer and Floating. An interface or class also "
+                             "works, as does your own: `template<typename T> concept " + p.constraint +
+                                 " = requires(T a) { ... };`. For any type, write `typename " + p.name + "`",
+                             spec::Constraints);
+        }
+    }
 }
 
 // What in a constant's value cannot be worked out from literals and other constants, or
@@ -605,6 +690,7 @@ static const Expr* notConstant(const Expr& e) {
         }
         case Expr::Kind::Cast: {
             auto& c = static_cast<const CastExpr&>(e);
+            if (!c.operand) return nullptr;
             if (c.target->is(K::String) && c.operand->type->isPointer()) return &e;  // reads memory
             return notConstant(*c.operand);
         }
@@ -706,8 +792,11 @@ void Sema::reportAccess(const StructDecl& sd, const std::string& member, bool is
 }
 
 // Finds each class's base classes, before anything looks through them.
-void Sema::checkBases(Program& program) {
-    for (auto& sd : program.structs) {
+void Sema::checkBases(size_t first) {
+    Program& program = *program_;
+    size_t end = program.structs.size();
+    for (size_t i = first; i < end; ++i) {
+        StructDecl* sd = program.structs[i].get();
         if (!sd->defined) continue;
         std::set<const StructDecl*> seen;
         for (auto& name : sd->baseNames) {
@@ -736,35 +825,33 @@ void Sema::checkBases(Program& program) {
     }
     // A class cannot be its own ancestor. The link that closes a circle is cut, so that what
     // follows can walk up from any class.
-    std::function<void(StructDecl&, std::set<const StructDecl*>&, std::set<const StructDecl*>&)> walk =
-        [&](StructDecl& sd, std::set<const StructDecl*>& open, std::set<const StructDecl*>& done) {
-            if (done.count(&sd)) return;
-            open.insert(&sd);
-            for (size_t i = 0; i < sd.bases.size();) {
-                StructDecl* base = sd.bases[i];
-                if (open.count(base)) {
-                    diags_.error(sd.nameLoc, "class " + q(sd.name) + " would be its own base class, through " + q(base->name),
-                                 "a class can only derive from a class that does not derive from it", spec::Inheritance);
-                    sd.bases.erase(sd.bases.begin() + i);
-                    continue;
-                }
-                walk(*base, open, done);
-                ++i;
+    std::set<const StructDecl*> open;
+    std::function<void(StructDecl&)> walk = [&](StructDecl& sd) {
+        if (basesWalked_.count(&sd)) return;
+        open.insert(&sd);
+        for (size_t i = 0; i < sd.bases.size();) {
+            StructDecl* base = sd.bases[i];
+            if (open.count(base)) {
+                diags_.error(sd.nameLoc, "class " + q(sd.name) + " would be its own base class, through " + q(base->name),
+                             "a class can only derive from a class that does not derive from it", spec::Inheritance);
+                sd.bases.erase(sd.bases.begin() + i);
+                continue;
             }
-            open.erase(&sd);
-            done.insert(&sd);
-        };
-    std::set<const StructDecl*> open, done;
-    for (auto& sd : program.structs) walk(*sd, open, done);
+            walk(*base);
+            ++i;
+        }
+        open.erase(&sd);
+        basesWalked_.insert(&sd);
+    };
+    for (size_t i = first; i < end; ++i) walk(*program.structs[i]);
 
-    std::set<const StructDecl*> checked;
     std::function<void(StructDecl&)> visit = [&](StructDecl& sd) {
-        if (!checked.insert(&sd).second) return;
+        if (!overridesDone_.insert(&sd).second) return;
         for (StructDecl* base : sd.bases) visit(*base);
         checkOverrides(sd);
     };
-    for (auto& sd : program.structs)
-        if (sd->defined) visit(*sd);
+    for (size_t i = first; i < end; ++i)
+        if (program.structs[i]->defined) visit(*program.structs[i]);
 }
 
 // Works out the virtual methods of a class, whose base classes are already done, and checks
@@ -878,19 +965,27 @@ void Sema::checkBaseWithoutValues(const StructDecl& sd, const StructDecl& base, 
 
 BasePath Sema::findQualifier(const std::string& name, const StructDecl& sd, Loc loc) {
     auto s = structs_.find(name);
-    if (s == structs_.end() || !sd.derivesFrom(s->second)) {
+    const StructDecl* found = s == structs_.end() ? nullptr : s->second;
+    if (!found) {  // `Source::f()` for a base class that is `Source<int>`
+        std::function<void(const StructDecl&)> search = [&](const StructDecl& d) {
+            if (d.templateName == name) found = &d;
+            for (const StructDecl* base : d.bases) search(*base);
+        };
+        search(sd);
+    }
+    if (!found || !sd.derivesFrom(found)) {
         diags_.error(loc, q(name) + " is not " + q(sd.name) + " or a base class of it",
                      "`Base::name` reaches a member of a base class of the object. Members that belong to no object, such "
                      "as static ones, are planned",
                      spec::Inheritance);
         return {};
     }
-    if (sd.partsOf(s->second) > 1) {
+    if (sd.partsOf(found) > 1) {
         diags_.error(loc, q(sd.name) + " holds " + q(name) + " more than once, so this does not say which is meant",
                      "name the base class that leads to the one you mean, which holds it once", spec::Inheritance);
         return {};
     }
-    return sd.pathTo(s->second);
+    return sd.pathTo(found);
 }
 
 BasePath Sema::findMember(const StructDecl& from, const std::string& name, Loc loc) {
@@ -939,9 +1034,9 @@ static const char* kCTypesHelp =
     "`char*` field and read it with `string(x)`. To pass a C+ value through C without C looking inside, pass its "
     "address as a `void*`";
 
-void Sema::checkStructs(Program& program) {
+void Sema::checkStructs(size_t first) {
     // A struct cannot contain itself, directly or through other structs.
-    std::unordered_map<const StructDecl*, int> state;  // 1 = being visited, 2 = done
+    auto& state = structState_;
     std::function<void(const StructDecl*)> visit = [&](const StructDecl* sd) {
         state[sd] = 1;
         for (auto& f : sd->fields) {
@@ -963,19 +1058,31 @@ void Sema::checkStructs(Program& program) {
         }
         state[sd] = 2;
     };
-    for (auto& sd : program.structs)
-        if (sd->defined && state[sd.get()] == 0) visit(sd.get());
+    size_t end = program_->structs.size();
+    for (size_t i = first; i < end; ++i) {
+        StructDecl* sd = program_->structs[i].get();
+        if (sd->defined && state[sd] == 0) visit(sd);
+    }
 
     // Field defaults are checked with no local variables in scope.
-    for (auto& sd : program.structs) {
-        if (!sd->defined) continue;
-        if (state[sd.get()] == 2 && !sd->isClass) checkSize(&sd->type, sd->nameLoc);
+    for (size_t i = first; i < end; ++i) {
+        StructDecl* sd = program_->structs[i].get();
+        if (!sd->defined || sd->constraintFailed) continue;
+        if (state[sd] == 2 && !sd->isClass) checkSize(&sd->type, sd->nameLoc);
+        struct Context {
+            Diagnostics& diags;
+            bool used;
+            ~Context() {
+                if (used) diags.popContext();
+            }
+        } context{diags_, sd->templateOf != nullptr};
+        if (sd->templateOf) diags_.pushContext(sd->usedAt, "in " + q(sd->name) + ", which is used here");
         for (auto& f : sd->fields) {
             if (f.type->is(K::Void) || f.type->is(K::Auto))
                 diags_.error(f.typeLoc, "a field cannot have type " + q(f.type), "", spec::Structs);
             checkStorable(f.type, f.typeLoc);
             if (sd->externC) {
-                std::set<const StructDecl*> seen{sd.get()};
+                std::set<const StructDecl*> seen{sd};
                 std::string lacks = whatCLacks(f.type, seen);
                 if (!lacks.empty())
                     diags_.error(f.typeLoc, "a C struct cannot have a field of type " + q(f.type) +
@@ -985,7 +1092,7 @@ void Sema::checkStructs(Program& program) {
             if (!f.defaultValue) continue;
             scopes_.emplace_back();
             Flow flow;
-            defaultsOf_ = sd.get();
+            defaultsOf_ = sd;
             checkValue(*f.defaultValue, flow, f.type, "as the default for field " + q(f.name) + " of " + q(sd->name));
             defaultsOf_ = nullptr;
             scopes_.pop_back();
@@ -1054,6 +1161,17 @@ void Sema::checkExternFunction(FuncDecl& fn) {
 
 void Sema::checkFunction(FuncDecl& fn) {
     if (fn.isExtern) return checkExternFunction(fn);
+    bool generic = fn.owner ? fn.owner->templateOf != nullptr : fn.usedAt.line != 0;
+    struct Context {
+        Diagnostics& diags;
+        bool used;
+        ~Context() {
+            if (used) diags.popContext();
+        }
+    } context{diags_, generic};
+    if (generic)
+        diags_.pushContext(fn.owner ? fn.owner->usedAt : fn.usedAt,
+                           "in " + q(fn.owner ? fn.owner->name : fn.name) + ", which is used here");
     fn_ = &fn;
     Flow flow;
     bool isCtor = fn.role == FuncDecl::Role::Constructor;
@@ -1585,8 +1703,15 @@ void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
 }
 
 void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc, bool asBase) {
+    auto loose = [&](const ConstructArg& a) {
+        if (!a.checked) checkLooseValue(*a.value, flow);
+    };
+    auto value = [&](const ConstructArg& a, const Type* expected, const std::string& context) {
+        if (a.checked) requireConvertible(*a.value, expected, context);
+        else checkValue(*a.value, flow, expected, context);
+    };
     if (const FuncDecl* pure = sd.firstPure(); pure && !asBase) {
-        for (auto& a : args) checkLooseValue(*a.value, flow);
+        for (auto& a : args) loose(a);
         diags_.error(loc, "cannot create a " + q(sd.name) + " object, because its method " + q(pure->name) +
                               (pure->owner == &sd ? "" : " from " + q(pure->owner->name)) + " has no body",
                      "create an object of a class that derives from it and overrides " + q(pure->name), spec::Inheritance);
@@ -1603,7 +1728,7 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
                 break;
             }
         if (args.size() != ctor->params.size()) {
-            for (auto& a : args) checkLooseValue(*a.value, flow);
+            for (auto& a : args) loose(a);
             diags_.error(loc, "the constructor of " + q(sd.name) + " takes " + std::to_string(ctor->params.size()) +
                                   " argument" + (ctor->params.size() == 1 ? "" : "s") + " but " +
                                   std::to_string(args.size()) + (args.size() == 1 ? " was" : " were") + " given",
@@ -1612,14 +1737,14 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
         }
         for (size_t i = 0; i < args.size(); ++i) {
             if (args[i].fieldIndex) *args[i].fieldIndex = (int)i;
-            checkValue(*args[i].value, flow, ctor->params[i]->declType,
-                       "for parameter " + q(ctor->params[i]->name) + " of the " + q(sd.name) + " constructor");
+            value(args[i], ctor->params[i]->declType,
+                  "for parameter " + q(ctor->params[i]->name) + " of the " + q(sd.name) + " constructor");
         }
         return;
     }
 
     if (!sd.bases.empty() && !args.empty()) {
-        for (auto& a : args) checkLooseValue(*a.value, flow);
+        for (auto& a : args) loose(a);
         diags_.error(loc, q(sd.name) + " has a base class, so it needs a constructor to take values",
                      "write one: `" + sd.name + "(...) : " + sd.bases[0]->name + "(...) { }`", spec::Inheritance);
         return;
@@ -1664,9 +1789,9 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
             seen[idx] = true;
             const FieldDecl& f = sd.fields[idx];
             if (!canAccess(sd, f.access, asBase ? owner() : nullptr)) reportAccess(sd, f.name, false, f.access, a.loc);
-            checkValue(*a.value, flow, f.type, "for field " + q(f.name) + " of " + q(sd.name));
+            value(a, f.type, "for field " + q(f.name) + " of " + q(sd.name));
         } else {
-            checkLooseValue(*a.value, flow);
+            loose(a);
         }
     }
     if (anyNamed && anyPositional) return;
@@ -2853,6 +2978,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         if (FuncDecl* m = found.empty() ? nullptr : found.back()->ownMethod(call.callee)) {
             call.method = m;
             call.path = std::move(found);
+            requestMethod(m);
             if (!canAccess(*m->owner, m->access, o)) reportAccess(*m->owner, m->name, true, m->access, nameLoc);
             requireAssigned(flow, thisVar(), "", &o->type, call.loc);
             if (!m->isConst && fn_->isConst)
@@ -2867,12 +2993,29 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (auto s = structs_.find(call.callee); s != structs_.end()) {
         const StructDecl& sd = *s->second;
         call.constructs = &sd;
+        // `Point(p)` with a Point copies it, as in C++, and a class object is shared. What the
+        // type's constructor or first field can take comes first, so the type of the value is
+        // found out by trying it.
+        bool checked = false;
+        if (call.args.size() == 1 && call.args[0]->kind != Expr::Kind::InitList) {
+            const Type* given = checkExpr(*call.args[0], flow);
+            checked = true;
+            bool ctorTakes = sd.constructor && sd.constructor->params.size() == 1 &&
+                             canConvert(given, sd.constructor->params[0]->declType);
+            bool fieldTakes = !sd.constructor && sd.bases.empty() && !sd.fields.empty() && canConvert(given, sd.fields[0].type);
+            if (!given->isError() && !ctorTakes && !fieldTakes && canConvert(given, &sd.type)) {
+                call.copies = true;
+                return &sd.type;
+            }
+        }
         std::vector<ConstructArg> args;
-        for (auto& a : call.args) args.push_back({"", a->loc, a.get(), nullptr});
+        for (auto& a : call.args) args.push_back({"", a->loc, a.get(), nullptr, checked});
         checkConstruction(sd, std::move(args), flow, call.loc);
         return &sd.type;
     }
 
+    if (TemplateDecl* t = program_->findTemplate(call.callee); t && t->kind == TemplateDecl::Kind::Function)
+        return checkTemplateCall(call, *t, flow);
     auto it = funcs_.find(call.callee);
     if (it == funcs_.end() && findMath(call.callee)) return checkMath(call, flow);
     if (it == funcs_.end() && findCharFn(call.callee)) return checkCharFn(call, flow);
@@ -2902,6 +3045,243 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     call.target = fn;
     checkArgs(call.args, *fn, flow, call.loc, q(fn->name));
     return fn->retType;
+}
+
+namespace {
+// Works out template arguments by matching what a parameter is written as with the type of a value.
+struct Deduction {
+    const TemplateDecl& t;
+    std::vector<TemplateArg>& args;
+    std::vector<bool> known;
+    size_t given;  // that many were written, and values convert to them
+    std::string conflict;
+
+    void setType(int i, const Type* a) {
+        if ((size_t)i < given) return;
+        if (!known[i]) {
+            args[i].type = a;
+            known[i] = true;
+        } else if (args[i].type != a && conflict.empty()) {
+            conflict = "'" + t.params[i].name + "' cannot be both '" + args[i].type->name + "' and '" + a->name + "'";
+        }
+    }
+    void setValue(int i, int64_t value) {
+        if ((size_t)i < given) return;
+        if (!known[i]) {
+            args[i].value = value;
+            known[i] = true;
+        } else if (args[i].value != value && conflict.empty()) {
+            conflict = "'" + t.params[i].name + "' cannot be both " + std::to_string(args[i].value) + " and " + std::to_string(value);
+        }
+    }
+    void match(const Type* p, const Type* a) {
+        if (a->isNull() || a->isError()) return;
+        switch (p->kind) {
+            case K::TypeParam: setType((int)p->length, a); break;
+            case K::Vector:
+                if (a->isVector()) match(p->elem, a->elem);
+                break;
+            case K::Array:
+                if (!a->isArray()) break;
+                match(p->elem, a->elem);
+                if (p->length < 0) setValue((int)(-1 - p->length), a->length);
+                break;
+            case K::Optional: match(p->elem, a->isOptional() ? a->elem : a); break;
+            case K::Pointer:
+                if (a->isPointer()) match(p->elem, a->elem);
+                break;
+            case K::Weak: match(p->elem, a->isWeak() || a->isOptional() ? a->elem : a); break;
+            case K::Dependent: {
+                if (a->isOptional()) a = a->elem;
+                if (a->isWeak()) a = a->elem;
+                if (!a->hasFields()) break;
+                if (const StructDecl* made = findMade(*a->decl, p->pattern->tmpl))
+                    for (size_t i = 0; i < p->pattern->args.size(); ++i) {
+                        const TemplateArg& written = p->pattern->args[i];
+                        if (written.type) match(written.type, made->templateArgs[i].type);
+                        else if (written.valueParam >= 0) setValue(written.valueParam, made->templateArgs[i].value);
+                    }
+                break;
+            }
+            default: break;
+        }
+    }
+    // `d`, or a base class of it, made from generic `tmpl`, as C++ also looks in base classes.
+    static const StructDecl* findMade(const StructDecl& d, const TemplateDecl* tmpl) {
+        if (d.templateOf == tmpl) return &d;
+        for (const StructDecl* base : d.bases)
+            if (const StructDecl* found = findMade(*base, tmpl)) return found;
+        return nullptr;
+    }
+};
+}  // namespace
+
+const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow) {
+    Loc nameLoc = call.loc;
+    nameLoc.len = (uint32_t)call.callee.size();
+    if (t.failed || !t.pattern) {  // reported where it is defined
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        return Type::error();
+    }
+    const FuncDecl& pattern = *t.pattern;
+    if (call.args.size() != pattern.params.size()) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(nameLoc, q(t.name) + " takes " + std::to_string(pattern.params.size()) + " argument" +
+                                  (pattern.params.size() == 1 ? "" : "s") + " but " + std::to_string(call.args.size()) +
+                                  (call.args.size() == 1 ? " was" : " were") + " given",
+                     "its signature is `" + signature(pattern) + "`", spec::Functions);
+        diags_.note(t.nameLoc, q(t.name) + " is defined here");
+        return Type::error();
+    }
+    std::vector<TemplateArg> args(t.params.size());
+    for (size_t i = 0; i < call.templateArgs.size(); ++i) args[i] = call.templateArgs[i];
+    Deduction deduction{t, args, std::vector<bool>(t.params.size(), false), call.templateArgs.size(), ""};
+    for (size_t i = 0; i < call.templateArgs.size(); ++i) deduction.known[i] = true;
+    // `{ }` lists take their type from the parameter, so they wait until it is known.
+    bool bad = false;
+    for (size_t i = 0; i < call.args.size(); ++i) {
+        Expr& a = *call.args[i];
+        if (a.kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(a).explicitType) continue;
+        const Type* type = checkExpr(a, flow);
+        bad = bad || type->isError();
+        if (type->is(K::Void)) {
+            diags_.error(a.loc, "this argument has no value", "", spec::Functions);
+            bad = true;
+            continue;
+        }
+        deduction.match(pattern.params[i]->declType, type);
+    }
+    auto finishLists = [&](FuncDecl* fn) {
+        for (size_t i = 0; i < call.args.size(); ++i) {
+            Expr& a = *call.args[i];
+            if (a.kind != Expr::Kind::InitList || static_cast<InitListExpr&>(a).explicitType) continue;
+            if (fn) checkValue(a, flow, fn->params[i]->declType, "for parameter " + q(fn->params[i]->name) + " of " + q(fn->name));
+            else checkLooseValue(a, flow);
+        }
+    };
+    if (bad) {
+        finishLists(nullptr);
+        return Type::error();
+    }
+    if (!deduction.conflict.empty()) {
+        finishLists(nullptr);
+        diags_.error(nameLoc, "the arguments of " + q(t.name) + " do not agree: " + deduction.conflict,
+                     "say which you mean by writing it: `" + t.name + "<" + (t.params[0].valueType ? "..." : "long") + ">(...)`, or convert an argument",
+                     spec::Generics);
+        return Type::error();
+    }
+    for (size_t i = 0; i < t.params.size(); ++i) {
+        if (deduction.known[i]) continue;
+        finishLists(nullptr);
+        diags_.error(nameLoc, "cannot work out " + q(t.params[i].name) + " of " + q(t.name) + " from the arguments",
+                     "write it: `" + t.name + "<" + (t.params[i].valueType ? "16" : "int") + ">(...)`", spec::Generics);
+        return Type::error();
+    }
+    if (!checkConstraints(t, args, nameLoc)) {
+        finishLists(nullptr);
+        return Type::error();
+    }
+    int depth = fn_ ? fn_->genericDepth + 1 : 1;
+    if (depth > 64) {
+        finishLists(nullptr);
+        diags_.error(nameLoc, "the generic function " + q(t.name) + " keeps needing larger versions of itself, which would never end",
+                     "check the types it calls itself with", spec::Generics);
+        return Type::error();
+    }
+    FuncDecl* fn = parser_.instantiateFunction(t, args, call.loc, depth);
+    adoptTypes();
+    finishLists(fn);
+    if (!fn) return Type::error();
+    call.target = fn;
+    for (size_t i = 0; i < call.args.size(); ++i) {
+        Expr& a = *call.args[i];
+        if (a.kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(a).explicitType) continue;
+        requireConvertible(a, fn->params[i]->declType, "for parameter " + q(fn->params[i]->name) + " of " + q(fn->name));
+    }
+    return fn->retType;
+}
+
+bool Sema::checkConstraints(TemplateDecl& t, const std::vector<TemplateArg>& args, Loc usedAt) {
+    bool ok = true;
+    for (size_t i = 0; i < t.params.size(); ++i) {
+        const TemplateParam& p = t.params[i];
+        if (p.constraint.empty() || !args[i].type) continue;
+        Loc where;
+        std::string problem = constraintProblem(p.constraint, args[i].type, where);
+        if (problem.empty()) continue;
+        ok = false;
+        diags_.error(usedAt, q(args[i].type) + " cannot be used for " + q(p.name) + " of " + q(t.name) + ", which must be " + q(p.constraint),
+                     problem, spec::Constraints);
+        if (where.line) diags_.note(where, q(p.constraint) + " requires this, which does not work for " + q(args[i].type));
+        else diags_.note(p.constraintLoc, "the constraint is written here");
+    }
+    return ok;
+}
+
+std::string Sema::constraintProblem(const std::string& constraint, const Type* t, Loc& where) {
+    // One written in the program comes first, as it would with any other name.
+    if (auto s = structs_.find(constraint); s != structs_.end()) {  // an interface or a class
+        if (t->isClass() && t->decl->partsOf(s->second) == 1) return "";
+        return t->isClass() ? q(t) + " does not derive from " + q(constraint) + ". Write `public " + constraint + "` in its definition"
+                            : q(t) + " is not a class, so it cannot derive from " + q(constraint);
+    }
+    if (TemplateDecl* c = program_->findTemplate(constraint); c && c->kind == TemplateDecl::Kind::Concept) {
+        auto key = std::pair{constraint, t};
+        if (auto done = constraintResults_.find(key); done != constraintResults_.end()) {
+            where = done->second.second;
+            return done->second.first;
+        }
+        constraintResults_[key] = {"", Loc{}};  // while it is worked out, in case it asks about itself
+        TemplateArg arg;
+        arg.type = t;
+        Parser::ConceptBody body;
+        if (!parser_.instantiateConcept(*c, arg, body)) return "";  // reported where it is defined
+        // Whether the requirements would compile is found out by trying them, in a scope of their own.
+        auto* savedFn = fn_;
+        auto* savedInit = initField_;
+        auto* savedBase = buildingBase_;
+        auto* savedDefaults = defaultsOf_;
+        auto savedScopes = std::move(scopes_);
+        fn_ = nullptr;
+        initField_ = nullptr;
+        buildingBase_ = nullptr;
+        defaultsOf_ = nullptr;
+        scopes_.clear();
+        scopes_.emplace_back();
+        Flow flow;
+        diags_.mute();
+        for (auto& p : body.params->params) {
+            p->type = p->declType;
+            declare(*p);
+            markAssigned(flow, p.get(), "");
+        }
+        std::string problem;
+        for (auto& requirement : body.requirements) {
+            int before = diags_.mutedErrors();
+            checkExpr(*requirement, flow);
+            if (diags_.mutedErrors() == before) continue;
+            problem = "what " + q(constraint) + " requires does not work for " + q(t);
+            where = requirement->loc;
+            break;
+        }
+        diags_.unmute();
+        scopes_ = std::move(savedScopes);
+        fn_ = savedFn;
+        initField_ = savedInit;
+        buildingBase_ = savedBase;
+        defaultsOf_ = savedDefaults;
+        adoptTypes();
+        constraintResults_[key] = {problem, where};
+        return problem;
+    }
+    if (constraint == "Comparable")
+        return t->isArithmetic() || t->is(K::String) || t->isPointer()
+                   ? ""
+                   : q(t) + " has no `<`. Only numbers, chars, strings and pointers do, until operators can be overloaded";
+    if (constraint == "Number") return t->isNumber() ? "" : q(t) + " is not int, long, float or double";
+    if (constraint == "Integer") return t->isInteger() ? "" : q(t) + " is not int or long";
+    if (constraint == "Floating") return t->isFloating() ? "" : q(t) + " is not float or double";
+    return "";  // unknown, which was reported at the generic
 }
 
 const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
@@ -2970,6 +3350,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     call.method = m;
     call.path = toStart;
     call.path.insert(call.path.end(), found.begin() + 1, found.end());
+    requestMethod(m);
     if (!canAccess(*m->owner, m->access, &sd)) reportAccess(*m->owner, m->name, true, m->access, call.loc);
     if (!call.qualifier.empty() && m->isPure)
         diags_.error(call.loc, q(m->owner->name + "::" + m->name) + " has no body, so it cannot be called directly",
@@ -3189,7 +3570,16 @@ const Type* Sema::checkVectorConstruction(CallExpr& call, Flow& flow) {
                      "to list the elements, use braces: `" + name + "{1, 2, 3}`", spec::Vectors);
         return vt;
     }
-    if (!call.args.empty()) checkValue(*call.args[0], flow, Type::longTy(), "as the size of " + q(vt));
+    if (!call.args.empty() && call.args[0]->kind == Expr::Kind::InitList) {
+        checkValue(*call.args[0], flow, Type::longTy(), "as the size of " + q(vt));
+    } else if (!call.args.empty()) {
+        const Type* given = checkExpr(*call.args[0], flow);
+        if (given == vt && call.args.size() == 1) {  // `vector<int>(v)` copies it, as in C++
+            call.copies = true;
+            return vt;
+        }
+        requireConvertible(*call.args[0], Type::longTy(), "as the size of " + q(vt));
+    }
     if (call.args.size() == 2) {
         checkValue(*call.args[1], flow, vt->elem, "as the element value of " + q(vt));
     } else if (call.args.size() == 1 && !hasDefault(vt->elem)) {
@@ -3463,11 +3853,13 @@ const Type* Sema::checkDynamicCast(CastExpr& c, const Type* from, const Type* to
 }
 
 const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
+    if (!c.operand) return c.target;  // `T()` where T is not a struct or class: its default value
     const Type* from = checkExpr(*c.operand, flow);
     const Type* to = c.target;
     checkStorable(to, c.loc);
     if (c.reinterpret) return checkReinterpretCast(c, from, to);
     if (c.dynamic) return checkDynamicCast(c, from, to);
+    if (from == to) return to;  // a copy, which is what `T(x)` is when x is a T
     if (to->isWeak()) {  // `weak<Node>(object)`
         if (!canConvert(from, to))
             diags_.error(c.operand->loc, std::string(to->name) + "(x) refers to an object of class " + q(to->elem) + ", but this is " + q(from),
