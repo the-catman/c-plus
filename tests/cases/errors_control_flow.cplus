@@ -1,0 +1,188 @@
+// A try block works with everything around it, and definite assignment knows what a catch can rely on.
+class Noisy {
+public:
+    string name;
+    Noisy(string n) : name(n) {}
+    ~Noisy() { println("  free {}", name); }
+};
+int maybe(int n) throws {
+    if (n < 0) throw Error("negative");
+    return n * 10;
+}
+
+int inLoop() {
+    int total = 0;
+    for (int i = 0; i < 6; i++) {
+        Noisy each = Noisy("loop " + to_string(i));
+        try {
+            Noisy inner = Noisy("try " + to_string(i));
+            if (i == 1) continue;
+            if (i == 4) break;
+            total += maybe(i == 2 ? -1 : i);
+        } catch (Error e) {
+            Noisy handler = Noisy("catch");
+            if (i == 2) continue;
+            total += 1000;
+        }
+        total += 1;
+    }
+    return total;
+}
+
+int returning(int n) {
+    Noisy outer = Noisy("outer");
+    try {
+        Noisy inner = Noisy("inner");
+        return maybe(n);
+    } catch (Error e) {
+        Noisy handling = Noisy("handling");
+        return -1;
+    }
+}
+
+// What a catch knows, and what comes after.
+int assigned(int n) {
+    int x;
+    try {
+        x = maybe(n);
+    } catch (Error e) {
+        x = -5;
+    }
+    return x;
+}
+int assignedOrLeft(int n) {
+    int x;
+    try {
+        x = maybe(n);
+    } catch (Error e) {
+        return -7;
+    }
+    return x;
+}
+int everyPath(int n) {
+    try {
+        return maybe(n);
+    } catch (Error e) {
+        return 0;
+    }
+}
+int throwsOrReturns(int n) throws {
+    if (n > 5) return n;
+    throw Error("small");
+}
+
+// In conditions, loops and other expressions.
+bool isPositive(int n) throws {
+    if (n == 0) throw Error("zero");
+    return n > 0;
+}
+string? findName(int n) throws {
+    if (n < 0) throw Error("bad");
+    if (n == 0) return null;
+    return "name";
+}
+int conditions(int n) throws {
+    if (try isPositive(n)) return 1;
+    while (try isPositive(n)) return 2;
+    return 3;
+}
+string unwrap(int n) throws {
+    if (auto s = try findName(n)) return s;
+    return "none";
+}
+int inExpressions(int n) throws {
+    bool shortCircuit = n > 100 && try isPositive(0);
+    int chosen = n > 0 ? try maybe(n) : 0;
+    string name = (try findName(n)) ?? "fallback";
+    return chosen + int(name.size());
+}
+
+// Through values of every kind.
+struct Big {
+    array<int, 3> numbers;
+};
+Big big(int n) throws {
+    if (n < 0) throw Error("no big");
+    return {{n, n + 1, n + 2}};
+}
+array<string, 2> strings(int n) throws {
+    if (n < 0) throw Error("no strings");
+    return {"a", "b"};
+}
+vector<int> list(int n) throws {
+    if (n < 0) throw Error("no list");
+    return {n};
+}
+int sumBig(int n) throws {
+    Big b = try big(n);
+    return b.numbers[2] + (try big(n)).numbers[0];
+}
+void kinds(int n) throws {
+    println("{}", try big(n));
+    println("{}", try strings(n));
+    println("{}", try list(n));
+    println("{}", try sumBig(n));
+}
+
+int main() {
+    println("{}", inLoop());
+    println("{}", returning(1));
+    println("{}", returning(-1));
+    println("{} {}", assigned(1), assigned(-1));
+    println("{} {}", assignedOrLeft(2), assignedOrLeft(-1));
+    println("{} {}", everyPath(3), everyPath(-3));
+    try {
+        println("{}", throwsOrReturns(9));
+        println("{}", throwsOrReturns(1));
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    try {
+        println("{} {}", conditions(1), conditions(-1));
+        println("{} {}", unwrap(1), unwrap(0));
+        println("{}", inExpressions(1));
+        println("{}", conditions(0));
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    try {
+        kinds(1);
+        kinds(-1);
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    return 0;
+}
+// expect:   free try 0
+// expect:   free loop 0
+// expect:   free try 1
+// expect:   free loop 1
+// expect:   free try 2
+// expect:   free catch
+// expect:   free loop 2
+// expect:   free try 3
+// expect:   free loop 3
+// expect:   free try 4
+// expect:   free loop 4
+// expect: 32
+// expect:   free inner
+// expect:   free outer
+// expect: 10
+// expect:   free inner
+// expect:   free handling
+// expect:   free outer
+// expect: -1
+// expect: 10 -5
+// expect: 20 -7
+// expect: 30 0
+// expect: 9
+// expect: small
+// expect: 1 3
+// expect: name none
+// expect: 14
+// expect: zero
+// expect: {numbers: [1, 2, 3]}
+// expect: ["a", "b"]
+// expect: [1]
+// expect: 4
+// expect: no big

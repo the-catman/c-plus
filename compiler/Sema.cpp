@@ -916,14 +916,15 @@ void Sema::checkOverrides(StructDecl& sd) {
                 break;
             }
             bool same = m->retType == method->retType && m->params.size() == method->params.size() &&
-                        m->isConst == method->isConst;
+                        m->isConst == method->isConst && m->isThrows == method->isThrows;
             for (size_t i = 0; same && i < m->params.size(); ++i)
                 same = m->params[i]->declType == method->params[i]->declType;
             if (!same) {
-                diags_.error(m->nameLoc, q(m->name) + " must have the same parameters, return type and `const` as the method "
-                                             "it replaces",
+                diags_.error(m->nameLoc, q(m->name) + " must have the same parameters, return type, `const` and `throws` as the "
+                                             "method it replaces",
                              "the method in " + q(other->name) + " is `" + method->retType->name + " " +
-                                 signature(*method).substr(other->name.size() + 1) + (method->isConst ? " const" : "") + "`",
+                                 signature(*method).substr(other->name.size() + 1) + (method->isConst ? " const" : "") +
+                                 (method->isThrows ? " throws" : "") + "`",
                              spec::Inheritance);
                 diags_.note(method->nameLoc, "it is here");
                 fits = false;
@@ -1275,6 +1276,112 @@ void Sema::checkFunction(FuncDecl& fn) {
 
 // ---- Statements ------------------------------------------------------------
 
+const StructDecl* Sema::errorClass() {
+    auto it = structs_.find("Error");
+    return it != structs_.end() && it->second->isClass ? it->second : nullptr;
+}
+
+void Sema::checkCanFail(const FuncDecl& callee, Loc loc) {
+    if (!callee.isThrows) return;
+    ++failPoints_;
+    if (tryBlocks_ == 0 && tryPrefixes_ == 0) {
+        diags_.error(loc, q(callee.name) + " can fail, so its call must say what happens then",
+                     "write `try " + callee.name + "(...)`, which passes the error on, or put it in `try { ... } catch (Error e) { ... }`",
+                     spec::Errors);
+    } else if (tryBlocks_ == 0 && (!fn_ || !fn_->isThrows)) {
+        diags_.error(loc, "an error from " + q(callee.name) + " has nowhere to go, since " +
+                              (fn_ ? q(fn_->name) + " is not marked `throws`" : "this is not in a function"),
+                     fn_ ? "mark it: `... " + (fn_->name == "main" ? std::string("main()") : fn_->name + "(...)") +
+                               " throws { ... }`, or handle the error here with `try { ... } catch (Error e) { ... }`"
+                         : "call it from a function instead, where the error can be handled",
+                     spec::Errors);
+    }
+}
+
+void Sema::checkThrow(ThrowStmt& st, Flow& flow) {
+    if (st.value) {
+        const Type* t = checkExpr(*st.value, flow);
+        const StructDecl* error = errorClass();
+        if (!t->isError() && (!error || !canConvert(t, &error->type)))
+            diags_.error(st.value->loc, "only an object of `Error`, or of a class deriving from it, can be thrown, but this is " + q(t),
+                         t->is(K::String) ? "write `throw Error(" + spelled(*st.value, "text") + ");`"
+                         : t->isOptional() && error && canConvert(t->elem, &error->type)
+                             ? "it may be null. Write `throw " + spelled(*st.value, "e") + ".value();`"
+                             : "write `throw Error(\"what went wrong\");`, or derive a class from it: `class NotFound : public Error { ... };`",
+                         spec::Errors);
+    } else if (catches_.empty()) {
+        diags_.error(st.loc, "`throw;` passes on the error being handled, so it can only be inside a catch",
+                     "write `throw Error(\"what went wrong\");`", spec::Errors);
+    } else {
+        st.rethrows = catches_.back()->held.get();
+    }
+    ++failPoints_;
+    if (tryBlocks_ == 0 && !fn_->isThrows)
+        diags_.error(st.loc, q(fn_->name) + " is not marked `throws`, so an error has nowhere to go",
+                     "mark it: `... " + (fn_->name == "main" ? std::string("main()") : fn_->name + "(...)") +
+                         " throws { ... }`, or put this in `try { ... } catch (Error e) { ... }`",
+                     spec::Errors);
+    flow.reachable = false;
+}
+
+void Sema::checkTry(TryStmt& st, Flow& flow) {
+    // Any call inside can fail before anything else has happened, so a catch only knows what
+    // was known before the block.
+    Flow before = flow;
+    int failsBefore = failPoints_;
+    ++tryBlocks_;
+    checkStmt(*st.body, flow);
+    --tryBlocks_;
+    bool bodyCanFail = failPoints_ != failsBefore;
+    int failsInBody = failPoints_ - failsBefore;
+    const StructDecl* error = errorClass();
+    Flow result = flow;
+    bool takesEverything = false;
+    std::vector<const CatchClause*> earlier;
+    for (auto& c : st.catches) {
+        if (takesEverything)
+            diags_.error(c.loc, "this catch never runs, since the one before it takes every error",
+                         "move it before that one, or remove it", spec::Errors);
+        if (c.type) {
+            if (!c.type->isClass() || (error && !c.type->decl->isInterface && !c.type->decl->derivesFrom(error))) {
+                diags_.error(c.typeLoc, "only `Error` and classes deriving from it are thrown, so a catch cannot take " + q(c.type),
+                             "write `catch (Error e)`, or derive a class from it: `class NotFound : public Error { ... };`",
+                             spec::Errors);
+            } else {
+                for (const CatchClause* other : earlier)
+                    if (other->type && c.type->decl->derivesFrom(other->type->decl) && other->type->decl->partsOf(c.type->decl) <= 1 &&
+                        !takesEverything)
+                        diags_.error(c.typeLoc, "this catch never runs, since the one before it takes every " + q(other->type),
+                                     "put the more specific catch first", spec::Errors);
+            }
+        }
+        c.takesEverything = !c.type || (error && c.type->decl == error);
+        takesEverything = takesEverything || c.takesEverything;
+        earlier.push_back(&c);
+        if (error) {
+            c.held = std::make_unique<VarDecl>(c.loc, "error", &error->type, c.loc);
+            c.held->type = &error->type;
+        }
+        Flow branch = before;
+        scopes_.emplace_back();  // the variable and the body share one scope, as in C++
+        if (c.var) {
+            c.var->type = c.var->declType;
+            declare(*c.var);
+            markAssigned(branch, c.var.get(), "");
+        }
+        catches_.push_back(&c);
+        for (auto& s : c.body->stmts) checkStmt(*s, branch);
+        catches_.pop_back();
+        scopes_.pop_back();
+        result = merge(result, branch);
+    }
+    if (takesEverything) failPoints_ -= failsInBody;  // nothing from the body gets past here
+    if (bodyCanFail && !takesEverything && tryBlocks_ == 0 && !fn_->isThrows)
+        diags_.error(st.loc, "an error none of these catches takes has nowhere to go, since " + q(fn_->name) + " is not marked `throws`",
+                     "add `catch (Error e) { ... }` at the end, or mark " + q(fn_->name) + " `throws`", spec::Errors);
+    flow = result;
+}
+
 void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
     checkStorable(v.declType, v.typeLoc);
     if (v.init) {
@@ -1381,6 +1488,8 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
             scopes_.pop_back();
             return;
         }
+        case Stmt::Kind::Try: checkTry(static_cast<TryStmt&>(s), flow); return;
+        case Stmt::Kind::Throw: checkThrow(static_cast<ThrowStmt&>(s), flow); return;
         case Stmt::Kind::If: {
             auto& st = static_cast<IfStmt&>(s);
             if (st.decl) checkCondDecl(*st.decl, flow, "if");
@@ -2464,6 +2573,12 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             result = static_cast<FloatLitExpr&>(e).isFloat ? Type::floatTy() : Type::doubleTy();
             break;
         case Expr::Kind::Cast: result = checkCast(static_cast<CastExpr&>(e), flow); break;
+        case Expr::Kind::Try: {
+            ++tryPrefixes_;
+            result = checkExpr(*static_cast<TryExpr&>(e).operand, flow);
+            --tryPrefixes_;
+            break;
+        }
         case Expr::Kind::CharLit: result = Type::charTy(); break;
         case Expr::Kind::BoolLit: result = Type::boolTy(); break;
         case Expr::Kind::StringLit: result = Type::stringTy(); break;
@@ -2980,6 +3095,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             call.path = std::move(found);
             requestMethod(m);
             if (!canAccess(*m->owner, m->access, o)) reportAccess(*m->owner, m->name, true, m->access, nameLoc);
+            checkCanFail(*m, nameLoc);
             requireAssigned(flow, thisVar(), "", &o->type, call.loc);
             if (!m->isConst && fn_->isConst)
                 diags_.error(nameLoc, "const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
@@ -3043,6 +3159,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     }
     FuncDecl* fn = it->second;
     call.target = fn;
+    checkCanFail(*fn, nameLoc);
     checkArgs(call.args, *fn, flow, call.loc, q(fn->name));
     return fn->retType;
 }
@@ -3193,6 +3310,7 @@ const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow)
     finishLists(fn);
     if (!fn) return Type::error();
     call.target = fn;
+    checkCanFail(*fn, nameLoc);
     for (size_t i = 0; i < call.args.size(); ++i) {
         Expr& a = *call.args[i];
         if (a.kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(a).explicitType) continue;
@@ -3351,6 +3469,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     call.path = toStart;
     call.path.insert(call.path.end(), found.begin() + 1, found.end());
     requestMethod(m);
+    checkCanFail(*m, call.loc);
     if (!canAccess(*m->owner, m->access, &sd)) reportAccess(*m->owner, m->name, true, m->access, call.loc);
     if (!call.qualifier.empty() && m->isPure)
         diags_.error(call.loc, q(m->owner->name + "::" + m->name) + " has no body, so it cannot be called directly",

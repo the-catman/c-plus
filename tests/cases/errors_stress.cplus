@@ -1,0 +1,246 @@
+// Errors in every place an expression can be, and try blocks in every kind of function.
+class Noisy {
+public:
+    string name;
+    Noisy(string n) : name(n) {}
+    ~Noisy() { println("  free {}", name); }
+};
+int n(int v) throws {
+    if (v < 0) throw Error("n " + to_string(v));
+    return v;
+}
+bool yes(bool v, bool fail) throws {
+    if (fail) throw Error("yes");
+    return v;
+}
+string text(string s) throws {
+    if (s == "bad") throw Error("text");
+    return s;
+}
+Noisy noisy(string s) throws {
+    if (s == "bad") throw Error("noisy");
+    return Noisy(s);
+}
+string? maybeText(bool some) { return some ? "some" : null; }
+struct Big {
+    array<string, 2> parts;
+    string first() const { return parts[0]; }
+    int fails(bool f) const throws {
+        if (f) throw Error("in a struct");
+        return 1;
+    }
+    int changes(int by) throws {
+        if (by < 0) throw Error("change");
+        parts[0] += "!";
+        return by;
+    }
+};
+Big big(bool ok) throws {
+    if (!ok) throw Error("big");
+    return {{"a", "b"}};
+}
+Big passOn(bool ok) throws {
+    return try big(ok);
+}
+class Animal {
+public:
+    string name = "animal";
+    virtual string sound() const throws { return "..."; }
+};
+class Dog : public Animal {
+public:
+    string sound() const throws override { throw Error("no sound"); }
+};
+Dog makeDog() throws { return Dog(); }
+
+// In a constructor's body and a destructor.
+class Careful {
+public:
+    int value = 0;
+    Careful(int v) {
+        try {
+            value = n(v);
+        } catch (Error e) {
+            value = -1;
+        }
+    }
+    ~Careful() {
+        try {
+            n(-1);
+        } catch (Error e) {
+            println("  destructor caught {}", e.what());
+        }
+    }
+};
+// A method of a generic class, and an error from one deep in a chain.
+template<typename T>
+class Chain {
+public:
+    vector<T> items;
+    T at(int i) throws {
+        if (i >= items.size()) throw Error("out of the chain");
+        return items[i];
+    }
+    Chain<T> add(T x) throws {
+        items.push_back(x);
+        return this;
+    }
+};
+int recursive(int depth) throws {
+    Noisy* none = null;
+    if (depth == 0) throw Error("bottom");
+    string held = "held " + to_string(depth);
+    return try recursive(depth - 1) + int(held.size());
+}
+void loops() throws {
+    for (int i = try n(0); i < try n(2); i += try n(1)) print("{} ", i);
+    println();
+    int k = 0;
+    do {
+        k++;
+    } while (try yes(k < 2, false));
+    println("{}", k);
+    while (try yes(false, false)) {}
+    if (!try yes(false, false)) println("not");
+    int x = -try n(5);
+    int y = (try yes(true, false)) ? try n(1) : try n(2);
+    int z = 1;
+    z += try n(2);
+    string s = "s";
+    s += try text("t");
+    array<int, 2> a = {try n(1), try n(2)};
+    a[try n(1)] = try n(7);
+    a[0] += try n(1);
+    vector<string> v = {try text("v")};
+    v[0] += try text("w");
+    println("{} {} {} {} {} {}", x, y, z, s, a, v);
+    println("{}", maybeText(true) ?? try text("fallback"));
+    println("{}", maybeText(false) ?? try text("fallback"));
+    println("{}", (try big(true)).first());
+    println("{}", (try passOn(true)).parts[1]);
+    auto got = try text("auto");
+    const string fixed = try text("const");
+    string? opt = try text("optional");
+    println("{} {} {}", got, fixed, opt);
+    Animal a2 = try makeDog();
+    println("{}", a2.name);
+    println("{}", (try makeDog()).name);
+    println("{}", try makeDog().name);
+    println("{}", try text("chain").size());
+    println("{}", sizeof(try text("not run")));
+    println("{}", format("{}-{}", try text("x"), try n(1)));
+    Chain<int> c = Chain<int>();
+    println("{}", try c.add(1).add(2).at(1));
+}
+void expect(int which) throws {
+    if (which == 0) { Noisy a = Noisy("a"); println("{}", maybeText(false) ?? try text("bad")); }
+    if (which == 1) { println("{}", (try yes(true, false)) && try yes(true, true)); }
+    if (which == 2) { println("{}", (try yes(false, false)) || try yes(true, true)); }
+    if (which == 3) { Big b = try passOn(false); println("{}", b); }
+    if (which == 4) { vector<Big> v = {try big(true), try big(false)}; }
+    if (which == 5) { Big b = try big(true); try b.fails(true); }
+    if (which == 6) { vector<Big> v = {try big(true)}; try v[0].changes(-1); }
+    if (which == 7) { vector<Big> v = {try big(true)}; try v[0].changes(n(-1)); }
+    if (which == 8) { Animal a = Dog(); println("{}", try a.sound()); }
+    if (which == 9) { Noisy a = try noisy("kept"); Noisy b = try noisy("bad"); }
+    if (which == 10) { Noisy a = Noisy(try text("bad")); }
+    if (which == 11) { for (int i = 0; i < try n(-1); i++) {} }
+    if (which == 12) { int x = (try n(1)) + (try n(-12)); }
+    if (which == 13) { string s = try text("x") + try text("y") + try text("bad"); }
+    if (which == 14) { println("{} {}", try text("printed"), try text("bad")); }
+    if (which == 15) { Chain<string> c = Chain<string>(); println("{}", try c.add("a").at(5)); }
+    if (which == 16) { println("{}", try recursive(1000)); }
+    if (which == 17) { Noisy a = Noisy("in catch"); try { try n(-1); } catch (Error e) { Noisy b = Noisy("handler"); throw; } }
+    if (which == 18) { try { try n(-1); } catch (Error e) { try { throw Error("replacement"); } catch (Error f) { throw; } } }
+    if (which == 19) { for (int i = 0; i < 2; i++) { try { try n(-1); } catch (Error e) { if (i == 1) throw; } } }
+}
+int main() throws {
+    try loops();
+    Careful c = Careful(-1);
+    Careful d = Careful(2);
+    println("{} {}", c.value, d.value);
+    for (int i = 0; i < 20; i++) {
+        try {
+            println("{}:", i);
+            try expect(i);
+            println("no error");
+        } catch (Error e) {
+            println("caught {}", e.what());
+        }
+    }
+    // Many errors, one after another, leave nothing behind.
+    int caught = 0;
+    for (int i = 0; i < 100000; i++) {
+        try {
+            n(-1);
+        } catch (Error e) {
+            caught++;
+        }
+    }
+    println("{}", caught);
+    return 0;
+}
+// expect: 0 1 
+// expect: 2
+// expect: not
+// expect: -5 1 3 st [2, 7] ["vw"]
+// expect: some
+// expect: fallback
+// expect: a
+// expect: b
+// expect: auto const optional
+// expect: animal
+// expect: animal
+// expect: animal
+// expect: 5
+// expect: 24
+// expect: x-1
+// expect: 2
+// expect: -1 2
+// expect: 0:
+// expect:   free a
+// expect: caught text
+// expect: 1:
+// expect: caught yes
+// expect: 2:
+// expect: caught yes
+// expect: 3:
+// expect: caught big
+// expect: 4:
+// expect: caught big
+// expect: 5:
+// expect: caught in a struct
+// expect: 6:
+// expect: caught change
+// expect: 7:
+// expect: caught n -1
+// expect: 8:
+// expect: caught no sound
+// expect: 9:
+// expect:   free kept
+// expect: caught noisy
+// expect: 10:
+// expect: caught text
+// expect: 11:
+// expect: caught n -1
+// expect: 12:
+// expect: caught n -12
+// expect: 13:
+// expect: caught text
+// expect: 14:
+// expect: caught text
+// expect: 15:
+// expect: caught out of the chain
+// expect: 16:
+// expect: caught bottom
+// expect: 17:
+// expect:   free handler
+// expect:   free in catch
+// expect: caught n -1
+// expect: 18:
+// expect: caught replacement
+// expect: 19:
+// expect: caught n -1
+// expect: 100000
+// expect:   destructor caught n -1
+// expect:   destructor caught n -1

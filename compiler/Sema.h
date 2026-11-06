@@ -84,6 +84,11 @@ private:
     void checkVarDecl(VarDecl& v, Flow& flow);
     void checkLoopBody(Stmt& body, Flow& flow);
     void checkForEach(ForEachStmt& st, Flow& flow);
+    void checkTry(TryStmt& st, Flow& flow);
+    void checkThrow(ThrowStmt& st, Flow& flow);
+    const StructDecl* errorClass();  // `Error`, what every thrown object derives from
+    // A call to a function that can fail, or a `throw`, must have somewhere for the error to go.
+    void checkCanFail(const FuncDecl& callee, Loc loc);
     const Type* checkExpr(Expr& e, Flow& flow);
     // Checks `e` where a value of type `expected` is needed. A `{ }` list takes that type.
     void checkValue(Expr& e, Flow& flow, const Type* expected, const std::string& context);
@@ -164,6 +169,10 @@ private:
     std::set<const StructDecl*> basesWalked_, overridesDone_;
     std::unordered_map<const StructDecl*, int> structState_;  // 1 = being visited, 2 = done
     std::deque<FuncDecl*> pendingMethods_;
+    int tryBlocks_ = 0;     // the `try { }` blocks around the code being checked
+    int tryPrefixes_ = 0;   // the same for `try f()`
+    int failPoints_ = 0;    // how many places that can fail have been seen, to tell if a try block has any
+    std::vector<const CatchClause*> catches_;  // the catches around the code being checked
     std::map<std::pair<std::string, const Type*>, std::pair<std::string, Loc>> constraintResults_;
     std::unordered_map<std::string, FuncDecl*> funcs_;
     std::unordered_map<std::string, StructDecl*> structs_;

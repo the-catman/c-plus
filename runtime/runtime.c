@@ -480,6 +480,13 @@ void cplus_str_release(void* owner) {
     if (cplus_release(owner)) cplus_free(owner);
 }
 
+// An error that got out of main: what it is, already printed into `text`, which is used up here.
+void cplus_uncaught(cplus_string* text) {
+    fflush(stdout);
+    fprintf(stderr, "uncaught error: %.*s\n  = help: catch it with `try { ... } catch (Error e) { ... }`\n", (int)text->length, text->data);
+    cplus_str_release(text->owner);
+}
+
 // Returns 1 when two strings have the same bytes. An empty string may have no data.
 int32_t cplus_str_eq(const char* a, int64_t a_length, const char* b, int64_t b_length) {
     if (a_length != b_length) return 0;

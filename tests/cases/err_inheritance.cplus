@@ -60,10 +60,10 @@ class Own : public Own {};
 // error: 'spim' is marked `override`, but no base class of 'NothingToOverride' has a method with that name
 // error: did you mean 'spin'?
 // error: 'spin' is marked `override`, but 'NoBaseAtAll' has no base class
-// error: 'turn' must have the same parameters, return type and `const` as the method it replaces
+// error: 'turn' must have the same parameters, return type, `const` and `throws` as the method it replaces
 // error: the method in 'Base' is `int turn(int n) const`
-// error: 'half' must have the same parameters, return type and `const` as the method it replaces
-// error: 'text' must have the same parameters, return type and `const` as the method it replaces
+// error: 'half' must have the same parameters, return type, `const` and `throws` as the method it replaces
+// error: 'text' must have the same parameters, return type, `const` and `throws` as the method it replaces
 // error: 'FieldAgain' cannot have a field named 'value', because its base class 'Base' already has one
 // error: 'FieldNamedMethod' cannot have a field named 'plain', because its base class 'Base' has a method with that name
 // error: 'MethodNamedField' cannot have a method named 'value', because its base class 'Base' has a field with that name

@@ -94,6 +94,17 @@ Error values, not exceptions.
 - No stack unwinding, so it lowers cleanly and works on wasm.
 - Compiler diagnostics are a first-class feature: every error states what was expected,
   shows a fix, and cites the spec section. See §5.
+- What is thrown is an object of the built-in class `Error`, or of a class deriving from it. Decided
+  2026-11-06. A thrown value is then one pointer, and `catch` chooses by class with what `dynamic_cast` uses.
+  `throw 42` is an error. A function does not say which errors it throws, as in Swift before typed throws.
+- A function marked `throws` takes one more argument, the address of where to put an error, and returns;
+  the caller looks there after the call. So a call that does not fail costs one load and a branch. Decided
+  2026-11-06.
+- `try f()` applies to one call and its arguments, not to all that follows, as Swift's does, so that each call that can
+  leave is marked. An error goes to the nearest try block, prefix or not. Nothing that can fail goes unmarked, and the
+  compiler checks that every error has somewhere to go.
+- Constructors cannot fail yet: releasing a half-built object and its base classes needs its own design. Until
+  then a function that can fail makes the object.
 
 ### 2.7 Memory model — DECIDED ("safer, not safe")
 The default path:
@@ -490,8 +501,8 @@ outside functions, and `main` can take `argc` and `argv`. `--debug` makes
 a debug build with ASan, stack traces and a leak report. Every item of Phase 1 is in, and
 `examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
 criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
-`dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, and generics with
-constraints. The leak report came with Phase 1.
+`dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, generics with
+constraints, and errors. The leak report came with Phase 1.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

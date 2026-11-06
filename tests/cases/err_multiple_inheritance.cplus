@@ -99,7 +99,7 @@ int main() {
 // error: 'id' is ambiguous in 'Both', which has one through 'Left' and one through 'Right'
 // error: 'Both' holds 'Base' more than once, so this does not say which is meant
 // error: 'Twice' derives from 'Left' twice
-// error: 'run' must have the same parameters, return type and `const` as the method it replaces
+// error: 'run' must have the same parameters, return type, `const` and `throws` as the method it replaces
 // error: 'Hides' cannot have its own 'plain', because 'Base' has a method with that name that is not virtual
 // error: 'run' replaces the virtual method of 'NoMethod', so it must be marked `override`
 // error: the constructor of 'NeedsArgument' needs arguments, so 'NoArgumentForSecond' must pass them

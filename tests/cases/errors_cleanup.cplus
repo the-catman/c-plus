@@ -1,0 +1,261 @@
+// An error on its way out releases everything built so far: locals, temporaries, and the
+// parts of an expression still being worked out. The leak check would report what it missed.
+class Noisy {
+public:
+    string name;
+    Noisy(string n) : name(n) { println("  make {}", name); }
+    ~Noisy() { println("  free {}", name); }
+};
+struct Pair {
+    Noisy a;
+    Noisy b;
+};
+class Holder {
+public:
+    Noisy a;
+    Noisy b;
+    Holder(Noisy x, Noisy y) : a(x), b(y) {}
+};
+class Fields {
+public:
+    Noisy a = Noisy("default");
+    string text = "t";
+};
+Noisy fail(string why) throws {
+    Noisy mine = Noisy("inside " + why);
+    throw Error(why);
+}
+int failNumber() throws {
+    throw Error("number");
+}
+string failText() throws {
+    throw Error("text");
+}
+void take(Noisy a, Noisy b) { println("  took"); }
+void takeThree(Noisy a, string s, vector<int> v) { println("  took"); }
+Noisy make(string n) { return Noisy(n); }
+vector<Noisy> noisyList(string n) { return {Noisy(n)}; }
+
+void locals() throws {
+    Noisy one = Noisy("first");
+    Noisy two = Noisy("second");
+    {
+        Noisy inner = Noisy("inner");
+        try fail("locals");
+    }
+    println("never");
+}
+void arguments() throws {
+    take(Noisy("arg"), try fail("arguments"));
+}
+void temporaries() throws {
+    println("{} {}", make("temp").name, (try fail("temporaries")).name);
+}
+void lists() throws {
+    vector<Noisy> v = {Noisy("element 0"), Noisy("element 1"), try fail("vector")};
+}
+void arrays() throws {
+    array<Noisy, 3> a = {Noisy("slot 0"), Noisy("slot 1"), try fail("array")};
+}
+void structs() throws {
+    Pair p = {Noisy("field a"), try fail("struct")};
+}
+void classes() throws {
+    Holder h = Holder(Noisy("ctor arg"), try fail("class"));
+}
+void namedFields() throws {
+    Pair p = Pair{.a = Noisy("named"), .b = try fail("named")};
+}
+void assignments() throws {
+    Noisy n = Noisy("old value");
+    n = try fail("assign");
+}
+void strings() throws {
+    string s = "held " + to_string(3);
+    string t = s + s + try failText();
+}
+void methods() throws {
+    Holder h = Holder(Noisy("h a"), Noisy("h b"));
+    println("{}", make("receiver").name + try failText());
+}
+void vectorsOf() throws {
+    vector<Noisy> v = noisyList("in vector");
+    v.push_back(try fail("push_back"));
+}
+void placeLater() throws {
+    vector<Noisy> v = noisyList("target");
+    v[try failNumber()] = Noisy("value waiting");
+}
+int choosing(bool c) throws {
+    Noisy n = c ? Noisy("then") : try fail("else");
+    return 1;
+}
+void inLoop() throws {
+    for (int i = 0; i < 3; i++) {
+        Noisy each = Noisy("iteration " + to_string(i));
+        if (i == 1) try fail("loop");
+    }
+}
+void rangeLoop() throws {
+    for (Noisy n : noisyList("range")) {
+        Noisy each = Noisy("body");
+        try fail("range");
+    }
+}
+struct OnHeap {
+    Noisy a;
+    Noisy b;
+};
+void inNew() throws {
+    OnHeap* p = new OnHeap{Noisy("held by new"), try fail("new")};
+}
+void newArray() throws {
+    string* p = new string[try failNumber()];
+}
+
+void run(string name, int which) {
+    println("{}:", name);
+    try {
+        if (which == 0) locals();
+        if (which == 1) arguments();
+        if (which == 2) temporaries();
+        if (which == 3) lists();
+        if (which == 4) arrays();
+        if (which == 5) structs();
+        if (which == 6) classes();
+        if (which == 7) namedFields();
+        if (which == 8) assignments();
+        if (which == 9) strings();
+        if (which == 10) methods();
+        if (which == 11) vectorsOf();
+        if (which == 12) placeLater();
+        if (which == 13) choosing(false);
+        if (which == 14) inLoop();
+        if (which == 15) rangeLoop();
+        if (which == 16) inNew();
+        if (which == 17) newArray();
+    } catch (Error e) {
+        println("  caught {}", e.what());
+    }
+}
+
+int main() {
+    vector<string> names = {"locals", "arguments", "temporaries", "lists", "arrays", "structs", "classes", "named fields",
+                            "assignments", "strings", "methods", "vectors", "place later", "choosing", "in a loop",
+                            "range loop", "in new", "new array"};
+    for (int i = 0; i < names.size(); i++) run(names[i], i);
+    return 0;
+}
+// flags: -Wno-new-delete
+// expect: locals:
+// expect:   make first
+// expect:   make second
+// expect:   make inner
+// expect:   make inside locals
+// expect:   free inside locals
+// expect:   free inner
+// expect:   free second
+// expect:   free first
+// expect:   caught locals
+// expect: arguments:
+// expect:   make arg
+// expect:   make inside arguments
+// expect:   free inside arguments
+// expect:   free arg
+// expect:   caught arguments
+// expect: temporaries:
+// expect:   make temp
+// expect:   make inside temporaries
+// expect:   free inside temporaries
+// expect:   free temp
+// expect:   caught temporaries
+// expect: lists:
+// expect:   make element 0
+// expect:   make element 1
+// expect:   make inside vector
+// expect:   free inside vector
+// expect:   free element 0
+// expect:   free element 1
+// expect:   caught vector
+// expect: arrays:
+// expect:   make slot 0
+// expect:   make slot 1
+// expect:   make inside array
+// expect:   free inside array
+// expect:   free slot 1
+// expect:   free slot 0
+// expect:   caught array
+// expect: structs:
+// expect:   make field a
+// expect:   make inside struct
+// expect:   free inside struct
+// expect:   free field a
+// expect:   caught struct
+// expect: classes:
+// expect:   make ctor arg
+// expect:   make inside class
+// expect:   free inside class
+// expect:   free ctor arg
+// expect:   caught class
+// expect: named fields:
+// expect:   make named
+// expect:   make inside named
+// expect:   free inside named
+// expect:   free named
+// expect:   caught named
+// expect: assignments:
+// expect:   make old value
+// expect:   make inside assign
+// expect:   free inside assign
+// expect:   free old value
+// expect:   caught assign
+// expect: strings:
+// expect:   caught text
+// expect: methods:
+// expect:   make h a
+// expect:   make h b
+// expect:   make receiver
+// expect:   free receiver
+// expect:   free h b
+// expect:   free h a
+// expect:   caught text
+// expect: vectors:
+// expect:   make in vector
+// expect:   make inside push_back
+// expect:   free inside push_back
+// expect:   free in vector
+// expect:   caught push_back
+// expect: place later:
+// expect:   make target
+// expect:   make value waiting
+// expect:   free value waiting
+// expect:   free target
+// expect:   caught number
+// expect: choosing:
+// expect:   make inside else
+// expect:   free inside else
+// expect:   caught else
+// expect: in a loop:
+// expect:   make iteration 0
+// expect:   free iteration 0
+// expect:   make iteration 1
+// expect:   make inside loop
+// expect:   free inside loop
+// expect:   free iteration 1
+// expect:   caught loop
+// expect: range loop:
+// expect:   make range
+// expect:   make body
+// expect:   make inside range
+// expect:   free inside range
+// expect:   free body
+// expect:   free range
+// expect:   caught range
+// expect: in new:
+// expect:   make held by new
+// expect:   make inside new
+// expect:   free inside new
+// expect:   free held by new
+// expect:   caught new
+// expect: new array:
+// expect:   caught number

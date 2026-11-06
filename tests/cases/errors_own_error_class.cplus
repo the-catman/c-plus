@@ -1,0 +1,22 @@
+// A program can write its own Error class, which then takes the place of the built-in one.
+class Error {
+public:
+    int code;
+    Error(int c) : code(c) {}
+};
+class Bad : public Error {
+public:
+    Bad() : Error(7) {}
+};
+int f() throws {
+    throw Bad();
+}
+int main() {
+    try {
+        f();
+    } catch (Error e) {
+        println("{}", e.code);
+    }
+    return 0;
+}
+// expect: 7

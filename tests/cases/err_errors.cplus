@@ -1,0 +1,153 @@
+class NotFound : public Error {
+public:
+    NotFound() : Error("x") {}
+};
+struct Value {
+    int n;
+};
+interface Speaker {
+    string speak() const;
+};
+int fails() throws {
+    throw Error("x");
+}
+void plain() {}
+int notMarked() {
+    return try fails();
+}
+int noTry() throws {
+    return fails();
+}
+int noTryAnywhere() {
+    return fails();
+}
+void throwsHere() {
+    throw Error("x");
+}
+void rethrowOutside() throws {
+    throw;
+}
+void wrongThings() throws {
+    throw 3;
+    throw "text";
+    throw Value{1};
+    string s = "text";
+    throw s;
+    Error? e = null;
+    throw e;
+}
+void incomplete() {
+    try {
+        fails();
+    } catch (NotFound e) {
+    }
+}
+void wrongCatches() throws {
+    try {
+        fails();
+    } catch (int n) {
+    } catch (Value v) {
+    } catch (NotFound e) {
+    } catch (Error e) {
+    } catch (NotFound e) {
+    } catch (...) {
+    }
+}
+class Derived : public NotFound {};
+void wrongOrder() throws {
+    try {
+        fails();
+    } catch (NotFound e) {
+    } catch (Derived d) {
+    }
+}
+void scopeAfterCatch() {
+    try {
+        fails();
+    } catch (Error e) {
+    }
+    println("{}", e.what());
+}
+void declaredInTry() {
+    try {
+        int inside = fails();
+    } catch (Error e) {
+        println("{}", inside);
+    }
+}
+int unassignedInCatch() {
+    int x;
+    try {
+        x = fails();
+    } catch (Error e) {
+        return x;
+    }
+    return x;
+}
+int unassignedAfter() {
+    int x;
+    try {
+        x = fails();
+    } catch (Error e) {
+    }
+    return x;
+}
+int notEveryPath() {
+    try {
+        return fails();
+    } catch (Error e) {
+    }
+}
+class Base {
+public:
+    virtual int f() throws { return 1; }
+    virtual int g() { return 1; }
+};
+class AddsNothing : public Base {
+public:
+    int f() override { return 1; }
+};
+class AddsThrows : public Base {
+public:
+    int g() throws override { return 1; }
+};
+class OutsideFunction {
+public:
+    int n = try fails();
+    int m = fails();
+    OutsideFunction() throws {}
+};
+class Destructor {
+public:
+    ~Destructor() throws {}
+};
+const int C = fails();
+extern "C" int abs(int n) throws;
+int main() {
+    int a = fails();
+    return 0;
+}
+// error: an error from 'fails' has nowhere to go, since 'notMarked' is not marked `throws`
+// error: mark it: `... notMarked(...) throws { ... }`
+// error: 'fails' can fail, so its call must say what happens then
+// error: write `try fails(...)`, which passes the error on
+// error: 'throwsHere' is not marked `throws`, so an error has nowhere to go
+// error: `throw;` passes on the error being handled, so it can only be inside a catch
+// error: only an object of `Error`, or of a class deriving from it, can be thrown, but this is 'int'
+// error: write `throw Error(s);`
+// error: it may be null. Write `throw e.value();`
+// error: an error none of these catches takes has nowhere to go, since 'incomplete' is not marked `throws`
+// error: only `Error` and classes deriving from it are thrown, so a catch cannot take 'int'
+// error: only `Error` and classes deriving from it are thrown, so a catch cannot take 'Value'
+// error: this catch never runs, since the one before it takes every error
+// error: this catch never runs, since the one before it takes every 'NotFound'
+// error: 'e' is not declared
+// error: 'inside' is not declared
+// error: 'x' is used before it is given a value
+// error: 'f' must have the same parameters, return type, `const` and `throws` as the method it replaces
+// error: the method in 'Base' is `int f() throws`
+// error: 'g' must have the same parameters, return type, `const` and `throws` as the method it replaces
+// error: function 'notEveryPath' can reach its end without returning a value
+// error: an error from 'fails' has nowhere to go, since this is not in a function
+// error: this compiler does not support constructors that can fail yet
+// error: a destructor cannot fail

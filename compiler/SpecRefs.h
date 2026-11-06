@@ -32,6 +32,7 @@ inline constexpr const char* Classes = "classes";
 inline constexpr const char* Inheritance = "inheritance";
 inline constexpr const char* Interfaces = "interfaces";
 inline constexpr const char* Weak = "weak-references";
+inline constexpr const char* Errors = "errors";
 inline constexpr const char* Generics = "generics";
 inline constexpr const char* Constraints = "constraints";
 inline constexpr const char* Methods = "methods";

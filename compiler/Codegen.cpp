@@ -53,7 +53,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
     llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtDynamicCast, rtRetainObject, rtObjectStart;
     llvm::FunctionCallee rtRetainClass, rtReleaseClass, rtFreeClass, rtDestructorHold, rtReferences;
-    llvm::FunctionCallee rtWeakRetain, rtWeakRelease, rtWeakLock, rtWeakAlive;
+    llvm::FunctionCallee rtWeakRetain, rtWeakRelease, rtWeakLock, rtWeakAlive, rtUncaught;
     llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
@@ -149,6 +149,20 @@ struct Codegen::Impl {
         bool inMemory;  // `value` is the address of the value
     };
     std::vector<Temp> temps;
+    // Values of an expression still being worked out, owned and waiting to be used, such as the
+    // arguments before a later one is evaluated. Only an error leaves them behind.
+    std::vector<Temp> pending;
+
+    // Errors. A function that can fail takes one more argument, the address of where to put an error,
+    // and returns. Its caller looks there right after the call. That place holds null until then.
+    const Type* errorTy = nullptr;           // `Error`
+    llvm::Value* errorOut = nullptr;         // in a function that can fail: the caller's place
+    llvm::AllocaInst* localError = nullptr;  // where calls inside a try block put their errors
+    struct Handler {
+        llvm::BasicBlock* dispatch;  // where the catches are chosen
+        size_t scopeDepth;           // scopes opened inside the try block are released when leaving it
+    };
+    std::vector<Handler> handlers;  // the try blocks around the code being generated
 
     struct LoopTargets {
         llvm::BasicBlock* breakTo;
@@ -294,6 +308,7 @@ struct Codegen::Impl {
         rtWeakRelease = decl("cplus_weak_release", voidTy, {ptrTy});
         rtWeakLock = decl("cplus_weak_lock", ptrTy, {ptrTy});
         rtWeakAlive = decl("cplus_weak_alive", ptrTy, {ptrTy});
+        rtUncaught = decl("cplus_uncaught", voidTy, {ptrTy});
         rtObjectStart = decl("cplus_object_start", ptrTy, {ptrTy});
         rtStrMutable = decl("cplus_str_mutable", ptrTy, {ptrTy});
         rtStrRepeat = decl("cplus_str_repeat", voidTy, {ptrTy, i64, i32, ptrTy, i32, i32});
@@ -971,8 +986,10 @@ struct Codegen::Impl {
         if (list.elements.empty()) return llvm::ConstantPointerNull::get(b.getPtrTy());
         VecInfo& info = vecInfo(vt);
         llvm::Value* buf = b.CreateCall(rtVecNew, {b.getInt64(info.elemSize), b.getInt64(list.elements.size())}, "vec");
+        pending.push_back({buf, vt, false});  // what it holds so far, the rest being zero bytes, which release safely
         for (size_t i = 0; i < list.elements.size(); ++i)
             storeValue(genOwned(*list.elements[i].value, vt->elem), vt->elem, elementAt(buf, b.getInt64(i), vt));
+        pending.pop_back();
         return buf;
     }
 
@@ -1133,8 +1150,13 @@ struct Codegen::Impl {
         const Type* elem = at->elem;
         llvm::AllocaInst* out = entryAlloca(llvmType(at), "array");
         uint64_t given = list.elements.size();
-        for (uint64_t i = 0; i < given; ++i)
-            storeValue(genOwned(*list.elements[i].value, elem), elem, arrayElement(out, b.getInt64(i), at));
+        size_t mark = pending.size();
+        for (uint64_t i = 0; i < given; ++i) {
+            llvm::Value* place = arrayElement(out, b.getInt64(i), at);
+            storeValue(genOwned(*list.elements[i].value, elem), elem, place);
+            if (isManaged(elem)) pending.push_back({place, elem, true});
+        }
+        pending.resize(mark);
         uint64_t rest = (uint64_t)at->length - given;
         if (defaultIsZero(elem)) {
             if (rest) b.CreateMemSet(arrayElement(out, b.getInt64(given), at), b.getInt8(0), rest * sizeOf(elem), alignOf(elem));
@@ -1271,6 +1293,14 @@ struct Codegen::Impl {
             return v;
         }
         if (!owned) retainValue(v, to);
+        return v;
+    }
+
+    // The same, for a value that waits while more of the expression is worked out: an error there
+    // releases it. The caller removes it from `pending` once it is used.
+    llvm::Value* holdOwned(const Expr& e, const Type* to) {
+        llvm::Value* v = genOwned(e, to);
+        if (isManaged(to)) pending.push_back({v, to, false});
         return v;
     }
 
@@ -1468,7 +1498,9 @@ struct Codegen::Impl {
     llvm::Value* construct(const StructDecl& sd, const std::vector<const Expr*>& args) {
         const FuncDecl& ctor = *sd.constructor;
         std::vector<llvm::Value*> values{nullptr};  // `this`, set below
-        for (size_t i = 0; i < args.size(); ++i) values.push_back(genOwned(*args[i], ctor.params[i]->type));
+        size_t mark = pending.size();
+        for (size_t i = 0; i < args.size(); ++i) values.push_back(holdOwned(*args[i], ctor.params[i]->type));
+        pending.resize(mark);
         if (sd.isClass) {
             values[0] = allocObject(sd);
             b.CreateCall(funcs.at(&ctor), values);
@@ -1491,8 +1523,10 @@ struct Codegen::Impl {
             return construct(sd, args);
         }
         std::vector<llvm::Value*> given(sd.fields.size(), nullptr);
+        size_t mark = pending.size();
         for (auto& el : list.elements)  // evaluated in the order written
-            given[el.fieldIndex] = genOwned(*el.value, sd.fields[el.fieldIndex].type);
+            given[el.fieldIndex] = holdOwned(*el.value, sd.fields[el.fieldIndex].type);
+        pending.resize(mark);
         return buildAggregate(sd, std::move(given));
     }
 
@@ -1733,6 +1767,7 @@ struct Codegen::Impl {
             case Expr::Kind::FloatLit:
                 return llvm::ConstantFP::get(llvmType(e.type), static_cast<const FloatLitExpr&>(e).value);
             case Expr::Kind::Cast: return genCast(static_cast<const CastExpr&>(e));
+            case Expr::Kind::Try: return genRaw(*static_cast<const TryExpr&>(e).operand, owned);
             case Expr::Kind::CharLit: return b.getInt8(static_cast<const CharLitExpr&>(e).value);
             case Expr::Kind::BoolLit: return b.getInt1(static_cast<const BoolLitExpr&>(e).value);
             case Expr::Kind::StringLit: return stringValue(static_cast<const StringLitExpr&>(e).value);
@@ -1856,8 +1891,10 @@ struct Codegen::Impl {
                     llvm::Value* place = genMemoryAssign(a);
                     return loadValue(ty, place);
                 }
-                llvm::Value* v = genOwned(*a.value, ty);
+                size_t mark = pending.size();
+                llvm::Value* v = holdOwned(*a.value, ty);
                 llvm::Value* slot = addressOf(*a.target, false, true);
+                pending.resize(mark);
                 llvm::Value* old = isManaged(ty) ? b.CreateLoad(llvmType(ty), slot, "old") : nullptr;
                 b.CreateStore(v, slot);
                 if (old) releaseValue(old, ty);  // after the store, in case a destructor looks at the place
@@ -1936,7 +1973,10 @@ struct Codegen::Impl {
         } else {
             v = genOwned(*a.value, ty);
         }
+        size_t mark = pending.size();
+        if (isManaged(ty)) pending.push_back({v, ty, false});
         llvm::Value* slot = addressOf(*a.target, false, true);
+        pending.resize(mark);
         llvm::Value* old = isManaged(ty) ? loadValue(ty, slot, "old") : nullptr;
         storeValue(v, ty, slot);
         if (old) releaseValue(old, ty);  // after the store, in case a destructor looks at the place
@@ -1957,11 +1997,12 @@ struct Codegen::Impl {
         llvm::Type* lt = llvmType(t);
         uint64_t size = sizeOf(t);
         llvm::Value* count = n.count ? genConverted(*n.count, Type::longTy()) : b.getInt64(1);
+        llvm::Value* init = n.init ? genOwned(*n.init, t) : nullptr;  // first, since it can fail, leaving no memory behind
         llvm::Value* p = b.CreateCall(rtNew, {b.getInt64(size), count, b.getInt32(n.count ? 1 : 0), fileName,
                                               b.getInt32(n.loc.line), b.getInt32(n.loc.col)},
                                       "new");
-        if (n.init) {
-            storeValue(genOwned(*n.init, t), t, p);
+        if (init) {
+            storeValue(init, t, p);
         } else if (!defaultIsZero(t)) {  // the memory starts as zero bytes, the default of most types
             countedLoop(count, [&](llvm::Value* i) { fillElement(b.CreateInBoundsGEP(lt, p, i), t); });
         }
@@ -2398,7 +2439,9 @@ struct Codegen::Impl {
                 return construct(sd, args);
             }
             std::vector<llvm::Value*> given;
-            for (size_t i = 0; i < call.args.size(); ++i) given.push_back(genOwned(*call.args[i], sd.fields[i].type));
+            size_t mark = pending.size();
+            for (size_t i = 0; i < call.args.size(); ++i) given.push_back(holdOwned(*call.args[i], sd.fields[i].type));
+            pending.resize(mark);
             return buildAggregate(sd, std::move(given));
         }
         // A function, or a method called by name inside another method of the same type.
@@ -2406,7 +2449,9 @@ struct Codegen::Impl {
         if (target->isExtern) return genCCall(call, *target);
         std::vector<llvm::Value*> args;
         if (call.method) args.push_back(atOffset(thisPtr, pathOffset(call.path)));
-        for (size_t i = 0; i < call.args.size(); ++i) args.push_back(genOwned(*call.args[i], target->params[i]->type));
+        size_t mark = pending.size();
+        for (size_t i = 0; i < call.args.size(); ++i) args.push_back(holdOwned(*call.args[i], target->params[i]->type));
+        pending.resize(mark);
         return callFunction(*target, std::move(args), call.method != nullptr);
     }
 
@@ -2418,13 +2463,16 @@ struct Codegen::Impl {
         if (dispatch && f.vtableSlot >= 0)
             callee = llvm::FunctionCallee(funcs.at(&f)->getFunctionType(),
                                           vtableSlot(loadVtable(args[0]), kVtableMethods + f.vtableSlot, f.name.c_str()));
+        if (f.isThrows) args.push_back(errorPlace());
         if (inMemory(f.retType)) {
             llvm::AllocaInst* result = entryAlloca(llvmType(f.retType), "result");
             args.insert(args.begin(), result);
             b.CreateCall(callee, args);
+            if (f.isThrows) leaveOnError();
             return result;
         }
         llvm::CallInst* inst = b.CreateCall(callee, args);
+        if (f.isThrows) leaveOnError();
         return f.retType->is(K::Void) ? nullptr : inst;
     }
 
@@ -2437,8 +2485,10 @@ struct Codegen::Impl {
         if (recv.type->is(K::String)) return genStringMethod(call);
         std::vector<llvm::Value*> args{nullptr};  // `this` comes first, and is set below
         auto genArgs = [&] {
+            size_t mark = pending.size();
             for (size_t i = 0; i < call.args.size(); ++i)
-                args.push_back(genOwned(*call.args[i], call.method->params[i]->type));
+                args.push_back(holdOwned(*call.args[i], call.method->params[i]->type));
+            pending.resize(mark);
         };
         bool argsRunCode = false;
         for (auto& a : call.args) argsRunCode = argsRunCode || mayRunCode(*a);
@@ -2629,6 +2679,107 @@ struct Codegen::Impl {
 
     // A statement in its own scope, so locals it declares are released when it ends,
     // even without braces: `if (c) User u = ...;`.
+    llvm::Value* errorPlace() {
+        if (handlers.empty()) return errorOut;
+        if (!localError) {
+            llvm::IRBuilder<> entry(&fn->getEntryBlock(), fn->getEntryBlock().begin());
+            localError = entry.CreateAlloca(b.getPtrTy(), nullptr, "error");
+            entry.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), localError);
+        }
+        return localError;
+    }
+
+    void returnAfterError() {
+        if (fn->getReturnType()->isVoidTy()) b.CreateRetVoid();
+        else b.CreateRet(llvm::PoisonValue::get(fn->getReturnType()));
+    }
+
+    // Goes where an error goes from here, the error being in its place already.
+    void leaveWithError() {
+        if (handlers.empty()) {
+            releaseScopes(0);
+            returnAfterError();
+        } else {
+            releaseScopes(handlers.back().scopeDepth);
+            b.CreateBr(handlers.back().dispatch);
+        }
+    }
+
+    // After a call that can fail: on error, what has been built so far is released, and the
+    // error goes on. The rest of the expression is generated for when there was none.
+    void leaveOnError() {
+        auto* failedBB = llvm::BasicBlock::Create(ctx, "failed", fn);
+        auto* okBB = llvm::BasicBlock::Create(ctx, "ok", fn);
+        llvm::Value* error = b.CreateLoad(b.getPtrTy(), errorPlace(), "error");
+        b.CreateCondBr(b.CreateIsNotNull(error), failedBB, okBB, llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
+        b.SetInsertPoint(failedBB);
+        auto release = [&](const Temp& t) { releaseValue(t.inMemory ? peekValue(t.type, t.value) : t.value, t.type); };
+        for (size_t i = pending.size(); i-- > 0;) release(pending[i]);
+        for (size_t i = temps.size(); i-- > 0;) release(temps[i]);
+        leaveWithError();
+        b.SetInsertPoint(okBB);
+    }
+
+    // `throw`, with an owned reference to the error.
+    void throwValue(llvm::Value* error) {
+        b.CreateStore(error, errorPlace());
+        leaveWithError();
+    }
+
+    void genTry(const TryStmt& st) {
+        auto* dispatchBB = llvm::BasicBlock::Create(ctx, "catch.dispatch", fn);
+        auto* endBB = llvm::BasicBlock::Create(ctx, "try.end", fn);
+        handlers.push_back({dispatchBB, scopes.size()});
+        llvm::Value* place = errorPlace();
+        genStmt(*st.body);
+        handlers.pop_back();
+        b.CreateBr(endBB);
+
+        // Each catch in turn asks whether the error is what it takes.
+        b.SetInsertPoint(dispatchBB);
+        llvm::Value* error = b.CreateLoad(b.getPtrTy(), place, "error");
+        b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), place);
+        bool taken = false;
+        for (const CatchClause& c : st.catches) {
+            auto* bodyBB = llvm::BasicBlock::Create(ctx, "catch", fn);
+            llvm::BasicBlock* afterTest = nullptr;
+            llvm::Value* part = error;
+            if (c.takesEverything) {
+                b.CreateBr(bodyBB);
+                taken = true;
+            } else {
+                auto* nextBB = llvm::BasicBlock::Create(ctx, "catch.next", fn);
+                part = b.CreateCall(rtDynamicCast, {error, types.at(c.type->decl).vtables[0]}, "part");
+                b.CreateCondBr(b.CreateIsNotNull(part), bodyBB, nextBB);
+                afterTest = nextBB;
+            }
+            b.SetInsertPoint(bodyBB);
+            scopes.emplace_back();
+            // The catch holds the reference that was thrown, for `throw;`, and its variable has its own.
+            b.CreateStore(error, allocaFor(*c.held));
+            scopes.back().push_back(c.held.get());
+            if (c.var) {
+                retainValue(part, c.var->type);
+                b.CreateStore(part, allocaFor(*c.var));
+                scopes.back().push_back(c.var.get());
+            }
+            for (auto& s : c.body->stmts) genStmt(*s);
+            popScope();
+            b.CreateBr(endBB);
+            if (afterTest) b.SetInsertPoint(afterTest);
+            if (taken) break;
+        }
+        // No catch takes it, so it goes further out. Sema made sure there is somewhere to go, unless the
+        // block cannot fail, and then this never runs.
+        if (taken) {
+        } else if (!handlers.empty() || errorOut) {
+            throwValue(error);
+        } else {
+            b.CreateUnreachable();
+        }
+        b.SetInsertPoint(endBB);
+    }
+
     void genScoped(const Stmt& s) {
         if (s.kind == Stmt::Kind::Block) return genStmt(s);
         scopes.emplace_back();
@@ -2791,6 +2942,21 @@ struct Codegen::Impl {
                 b.CreateBr(loops.back().continueTo);
                 startDeadBlock();
                 return;
+            case Stmt::Kind::Try: genTry(static_cast<const TryStmt&>(s)); return;
+            case Stmt::Kind::Throw: {
+                auto& st = static_cast<const ThrowStmt&>(s);
+                llvm::Value* error;
+                if (st.value) {
+                    error = genOwned(*st.value, errorTy);
+                } else {
+                    error = b.CreateLoad(b.getPtrTy(), locals.at(st.rethrows), "error");
+                    retainValue(error, errorTy);
+                }
+                flushTemps();
+                throwValue(error);
+                startDeadBlock();
+                return;
+            }
             case Stmt::Kind::Error: llvm_unreachable("a program with parse errors reached codegen");
         }
     }
@@ -2852,6 +3018,7 @@ struct Codegen::Impl {
         if (result) params.push_back(b.getPtrTy());  // where the result goes; see callFunction
         if (f.owner) params.push_back(b.getPtrTy());  // `this`
         for (auto& p : f.params) params.push_back(valueType(p->type));
+        if (f.isThrows) params.push_back(b.getPtrTy());  // where an error goes; see errorPlace
         auto* type = llvm::FunctionType::get(result ? b.getVoidTy() : llvmType(f.retType), params, false);
         // User functions get a prefixed, internal symbol so they never collide with C
         // library names; `main` is wrapped by a C-ABI entry point below. Generated
@@ -2868,6 +3035,7 @@ struct Codegen::Impl {
         if (result) func->getArg(0)->setName("result");
         if (f.owner) func->getArg(first - 1)->setName("this");
         for (size_t i = 0; i < f.params.size(); ++i) func->getArg(first + i)->setName(f.params[i]->name);
+        if (f.isThrows) func->getArg(func->arg_size() - 1)->setName("error");
         funcs[&f] = func;
     }
 
@@ -3144,6 +3312,8 @@ struct Codegen::Impl {
         fn = funcs.at(&f);
         fnDecl = &f;
         locals.clear();
+        errorOut = f.isThrows ? fn->getArg(fn->arg_size() - 1) : nullptr;
+        localError = nullptr;
         b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
         startLineTable(f.nameLoc);
         if (f.isPure) {
@@ -3196,7 +3366,29 @@ struct Codegen::Impl {
         b.CreateCall(rtStart, {});
         std::vector<llvm::Value*> args;
         if (!userMain.params.empty()) args = {fn->getArg(0), fn->getArg(1)};  // argc and argv
-        b.CreateRet(b.CreateCall(funcs.at(&userMain), args));
+        if (!userMain.isThrows) {
+            b.CreateRet(b.CreateCall(funcs.at(&userMain), args));
+            endLineTable();
+            return;
+        }
+        // `int main() throws`: an error that gets this far is reported, and the program fails.
+        llvm::AllocaInst* place = entryAlloca(b.getPtrTy(), "error");
+        b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), place);
+        args.push_back(place);
+        llvm::Value* code = b.CreateCall(funcs.at(&userMain), args);
+        llvm::Value* error = b.CreateLoad(b.getPtrTy(), place, "error");
+        auto* failedBB = llvm::BasicBlock::Create(ctx, "uncaught", fn);
+        auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
+        b.CreateCondBr(b.CreateIsNotNull(error), failedBB, doneBB);
+        b.SetInsertPoint(failedBB);
+        llvm::AllocaInst* text = entryAlloca(stringTy, "text");
+        b.CreateStore(llvm::Constant::getNullValue(stringTy), text);
+        printValue(text, error, errorTy);
+        b.CreateCall(rtUncaught, {text});
+        releaseValue(error, errorTy);
+        b.CreateRet(b.getInt32(1));
+        b.SetInsertPoint(doneBB);
+        b.CreateRet(code);
         endLineTable();
     }
 
@@ -3502,6 +3694,7 @@ struct Codegen::Impl {
         }
         declareRuntime();
         fileName = cstring(file.path);
+        if (const StructDecl* error = program.findStruct("Error"); error && error->isClass) errorTy = &error->type;
 
         const FuncDecl* userMain = nullptr;
         for (auto& f : program.funcs) {

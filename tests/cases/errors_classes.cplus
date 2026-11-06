@@ -1,0 +1,220 @@
+// Methods, virtual methods, interfaces, generics and multiple inheritance can all fail.
+class Parser {
+public:
+    int calls = 0;
+    int read(string s) throws {
+        calls++;
+        if (s.empty()) throw Error("empty");
+        return int(s.size());
+    }
+    int readTwice(string s) throws {
+        return try read(s) + try this.read(s);
+    }
+    int count() const { return calls; }
+    int safe(string s) {
+        try {
+            return read(s);
+        } catch (Error e) {
+            return -1;
+        }
+    }
+    int fromConst(string s) const throws {
+        if (s.empty()) throw Error("const");
+        return 1;
+    }
+};
+struct Reader {
+    int n = 0;
+    int next() throws {
+        if (n >= 2) throw Error("done");
+        return n++;
+    }
+};
+class Base {
+public:
+    virtual string run(int n) throws { throw Error("base " + to_string(n)); }
+    virtual array<int, 2> pair() const throws { throw Error("no pair"); }
+};
+class Derived : public Base {
+public:
+    string run(int n) throws override {
+        if (n < 0) throw Error("derived");
+        return "ran " + to_string(n);
+    }
+    array<int, 2> pair() const throws override { return {1, 2}; }
+};
+interface Source {
+    int next() throws;
+    string label() const throws;
+};
+class First {
+public:
+    long pad = 1;
+};
+// As a second base class, so its methods are reached through a thunk.
+class Counter : public First, public Source {
+public:
+    int left;
+    Counter(int n) : left(n) {}
+    int next() throws override {
+        if (left == 0) throw Error("empty counter");
+        return left--;
+    }
+    string label() const throws override { return "counter"; }
+};
+class Thrown : public First, public Error {
+public:
+    int code;
+    Thrown(int c) : Error("thrown " + to_string(c)), code(c) {}
+};
+interface Retryable {
+    int delay() const;
+};
+class Busy : public Error, public Retryable {
+public:
+    Busy() : Error("busy") {}
+    int delay() const override { return 5; }
+};
+template<typename T>
+T firstOf(vector<T> items) throws {
+    if (items.empty()) throw Error("no items");
+    return items[0];
+}
+template<typename T>
+class Box {
+public:
+    T value;
+    Box(T v) : value(v) {}
+    T get(bool ok) const throws {
+        if (!ok) throw Error("box");
+        return value;
+    }
+};
+template<typename T>
+T orElse(vector<T> items, T fallback) {
+    try {
+        return firstOf(items);
+    } catch (Error e) {
+        return fallback;
+    }
+}
+template<typename T>
+T callGet(T x) throws {
+    return try Box<T>(x).get(true) ;
+}
+int useAll() throws {
+    Parser p = Parser();
+    Parser? maybe = p;
+    int a = (try maybe?.read("ab")) ?? 0;
+    Parser? none = null;
+    int b = (try none?.read("ab")) ?? 7;
+    return a + b;
+}
+
+int main() throws {
+    Parser p = Parser();
+    try {
+        println("{} {}", p.read("ab"), p.readTwice("abc"));
+        println("{}", p.count());
+        println("{}", p.fromConst("x"));
+        println("{}", p.safe(""));
+        println("{}", p.read(""));
+    } catch (Error e) {
+        println("{} {}", e.what(), p.count());
+    }
+    Reader r;
+    try {
+        println("{}", r.next());
+        println("{}", r.next());
+        println("{}", r.next());
+    } catch (Error e) {
+        println("{} {}", e.what(), r.n);
+    }
+    Base b = Derived();
+    Base plain = Base();
+    try {
+        println("{}", b.run(1));
+        println("{}", b.pair());
+        println("{}", plain.run(2));
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    try {
+        println("{}", b.run(-1));
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    try {
+        println("{}", plain.pair());
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    Source s = Counter(1);
+    try {
+        println("{} {}", s.label(), s.next());
+        println("{}", s.next());
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    try {
+        throw Thrown(3);
+    } catch (Thrown t) {
+        println("{} {}", t.code, t.what());
+    }
+    try {
+        throw Thrown(4);
+    } catch (Error e) {
+        println("{} {}", e.what(), dynamic_cast<Thrown>(e).code);
+        println("{}", e);
+    }
+    try {
+        throw Busy();
+    } catch (Retryable r) {
+        println("{}", r.delay());
+    } catch (Error e) {
+        println("not this");
+    }
+    try {
+        println("{} {}", firstOf(vector<int>{1}), firstOf(vector<string>{"a"}));
+        println("{}", firstOf(vector<double>{}));
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    println("{} {}", orElse(vector<int>{}, 9), orElse(vector<string>{"x"}, "y"));
+    try {
+        Box<int> box = Box<int>(5);
+        println("{}", box.get(true));
+        println("{}", callGet("text"));
+        println("{}", useAll());
+        println("{}", box.get(false));
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    return 0;
+}
+// expect: 2 6
+// expect: 3
+// expect: 1
+// expect: -1
+// expect: empty 5
+// expect: 0
+// expect: 1
+// expect: done 2
+// expect: ran 1
+// expect: [1, 2]
+// expect: base 2
+// expect: derived
+// expect: no pair
+// expect: counter 1
+// expect: empty counter
+// expect: 3 thrown 3
+// expect: thrown 4 4
+// expect: Thrown {pad: 1, message: "thrown 4", code: 4}
+// expect: 5
+// expect: 1 a
+// expect: no items
+// expect: 9 x
+// expect: 5
+// expect: text
+// expect: 9
+// expect: box

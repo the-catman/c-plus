@@ -1,0 +1,27 @@
+// An error that gets out of main is reported, and the program fails. What is on the way is released.
+class NotFound : public Error {
+public:
+    string name;
+    NotFound(string n) : Error("not found"), name(n) {}
+};
+class Noisy {
+public:
+    ~Noisy() { println("freed"); }
+};
+void fail() throws {
+    Noisy n = Noisy();
+    throw NotFound("x");
+}
+int main(int argc, char** argv) throws {
+    println("start");
+    Noisy n = Noisy();
+    try fail();
+    println("never");
+    return 0;
+}
+// expect: start
+// expect: freed
+// expect: freed
+// stderr: uncaught error: NotFound {message: "not found", name: "x"}
+// stderr: catch it with
+// exit: 1

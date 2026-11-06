@@ -1475,18 +1475,93 @@ string key = "user" + to_string(id);
 
 ## Errors
 
-Planned. A function that can fail is marked `throws`. `throw` raises an error;
-`try { } catch (E e) { }` handles it. Every call to a throwing function is either inside a
-`try` block or prefixed with `try`, which passes the error up to the caller. These are
-error values, not C++ exceptions: there is no stack unwinding, and cleanup runs on the
-way out.
+A function that can fail is marked `throws`. `throw` raises an error, and `try { } catch (E e) { }` handles
+it, written as in C++. Every call that can fail says so at the call, so you can see where a function can
+stop. These are error values, not C++ exceptions: a failed function returns, and its caller looks at
+the result right after the call. There is no unwinding of the stack, and a call that does not fail costs one comparison.
 
 ```cpp
-int parsePort(string s) throws {
-    if (s.empty()) throw Error("port is empty");
-    return try s.toInt();
+class NotFound : public Error {
+public:
+    string name;
+    NotFound(string n) : Error("not found: " + n), name(n) {}
+};
+
+int portOf(string name) throws {
+    if (name.empty()) throw Error("no name given");
+    if (name != "web") throw NotFound(name);
+    return 80;
+}
+
+int doubled(string name) throws {
+    int port = try portOf(name);      // an error goes on to the caller
+    return port * 2;
+}
+
+int main() {
+    try {
+        println("{}", doubled("mail"));
+    } catch (NotFound e) {
+        println("{}", e.name);
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    return 0;
 }
 ```
+
+**What can be thrown.** An object of the built-in class `Error`, or of a class deriving from it. A number or a string
+cannot be: `throw "text"` is an error that points to `throw Error("text")`. `Error` looks like this:
+
+```cpp
+class Error {
+public:
+    string message;
+    Error(string m) : message(m) {}
+    virtual string what() const { return message; }
+};
+```
+
+A program can define its own class named `Error`, which then takes its place.
+
+**A call that can fail** must be marked in one of two ways, or it is a compile error:
+
+- `try f()` passes an error on. It applies to the one call or chain it is written on, `try a().b()`, including its
+  arguments, so `try f() + g()` needs a second `try` if `g` can fail too. Outside a try block, the
+  function it is in must be marked `throws`.
+- Inside a `try { }` block, the call needs nothing more, and its error goes to the block's catches. `try f()` is
+  allowed there too, and means the same.
+
+A function is marked after its parameters, and after `const` on a method: `int f() const throws`. A virtual method
+and its overrides must agree on `throws`. `noexcept` does not exist, since a function not marked `throws` cannot fail. A
+destructor cannot be marked, and a constructor cannot be yet. Both can handle errors inside them.
+
+**`catch`** is tried in order, and the first that takes the error's class, or a class it derives from, runs.
+
+- `catch (NotFound e)`, or `catch (NotFound)` when the error itself is not needed. `const Error& e` is not used, since a class
+  variable already refers to the object. An interface can be caught too, if a class of error derives from it.
+- `catch (Error e)` and `catch (...)` take every error. A catch that can never run, because one before it
+  takes everything it would, is an error.
+- An error no catch takes goes on, as if the block were not there. So either something must take every error, or the
+  function must be marked `throws`, which the compiler checks. It goes without checking if nothing in the block can fail.
+- `throw;` inside a catch passes the same error on. A new `throw` there goes further out, not to the catches beside it.
+- `throw` is a statement, so it cannot be part of an expression, and a try block has no value. There is no
+  `finally`: what must always happen belongs in a destructor.
+
+**On the way out,** everything is released as if the function had returned at that point: local variables, last
+declared first, with their destructors, and whatever the expression had built so far. In
+`take(Noisy("a"), try fail())`, the first argument is released if `fail` fails. Nothing is ever left half done
+in memory, and the rest of the expression does not run.
+
+Variables can be relied on as usual. A catch only knows what was assigned before the try block, since any
+call inside may have failed. After the try statement, a variable has a value if the block and every
+catch that does not leave gave it one.
+
+**`int main() throws`** is allowed. An error that gets out of it prints `uncaught error:` and the error to standard error, and the
+program exits with code 1.
+
+Generic functions and methods of generic classes can be marked too. Errors are not part of a function's type
+otherwise: a `throws` function does not say which errors it throws.
 
 ## Memory model
 
@@ -1834,7 +1909,8 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Operator overloading | planned |
 | Destructors for structs, static members | planned |
 | `weak<T>` references: `lock`, `expired`, `reset` | implemented |
-| Errors (`throws`, `try`, `catch`) | planned |
+| Errors: `throws`, `throw`, `try f()`, `try { } catch (E e) { }`, `catch (...)`, `throw;`, `Error`, `int main() throws` | implemented |
+| Constructors that can fail | planned |
 | Generics: functions, structs, classes and interfaces, type and value parameters, working out arguments in calls | implemented |
 | Constraints: `Comparable`, `Number`, `Integer`, `Floating`, interfaces and classes, `concept ... = requires` | implemented |
 | Default template arguments, `requires` clauses, generic methods, working out a generic type's arguments | planned |

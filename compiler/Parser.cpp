@@ -81,8 +81,34 @@ void Parser::syncStatement() {
 
 // ---- Declarations ----------------------------------------------------------
 
+// What `throw` takes, for a program with errors. Its tokens have no place in the file.
+void Parser::addBuiltinError() {
+    bool uses = false, defines = false;
+    for (size_t i = 0; i < toks_.size(); ++i) {
+        Tok k = toks_[i].kind;
+        uses = uses || k == Tok::KwTry || k == Tok::KwThrow || k == Tok::KwThrows || k == Tok::KwCatch ||
+               (k == Tok::Ident && toks_[i].text == "Error");
+        defines = defines || ((k == Tok::KwClass || k == Tok::KwStruct || k == Tok::KwInterface) && i + 1 < toks_.size() &&
+                              toks_[i + 1].kind == Tok::Ident && toks_[i + 1].text == "Error");
+    }
+    if (!uses || defines) return;
+    static const SourceFile builtin("<built-in>",
+                                    "class Error {\n"
+                                    "public:\n"
+                                    "    string message;\n"
+                                    "    Error(string m) : message(m) {}\n"
+                                    "    virtual string what() const { return message; }\n"
+                                    "};\n");
+    Lexer lexer(builtin, diags_);
+    std::vector<Token> tokens = lexer.lexAll();
+    tokens.pop_back();  // its end of file
+    for (Token& t : tokens) t.loc = Loc{};
+    toks_.insert(toks_.end() - 1, tokens.begin(), tokens.end());  // after the program, so an attribute can still come first
+}
+
 void Parser::parseProgram(Program& prog) {
     prog_ = &prog;
+    addBuiltinError();
     try {
         scanDeclarations(prog);
         for (auto& t : prog.templates) readTemplate(*t);
@@ -1344,12 +1370,25 @@ std::unique_ptr<FuncDecl> Parser::parseFunction(const Type* retType, Loc retLoc)
     fn->name = name.text;
     fn->nameLoc = name.loc;
     parseParams(*fn);
+    parseThrowsMark(*fn);
     if (check(Tok::Semi))
         fail(peek().loc, "C+ has no forward declarations",
              "remove this line; functions can be called before or after they are defined", spec::Functions);
     if (!check(Tok::LBrace)) expect(Tok::LBrace, "to start the function body");
     fn->body = parseBlock();
     return fn;
+}
+
+// After a function's parameters, and after `const` on a method: `int f() const throws`.
+void Parser::parseThrowsMark(FuncDecl& fn) {
+    if (check(Tok::Ident) && peek().text == "noexcept")
+        fail(peek().loc, "C+ has no noexcept", "remove it: a function that is not marked `throws` cannot fail", spec::Errors);
+    if (check(Tok::KwThrow))
+        fail(peek().loc, "a function that can fail is marked `throws`", "write `throws` after its parameters, with no types",
+             spec::Errors);
+    fn.isThrows = match(Tok::KwThrows);
+    if (fn.isThrows && check(Tok::KwConst))
+        fail(peek().loc, "`const` comes before `throws`", "write `int f() const throws`", spec::Errors);
 }
 
 // ---- Structs and classes --------------------------------------------------
@@ -1539,6 +1578,8 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         dtor->access = Access::Public;
         expect(Tok::LParen, "after the destructor name");
         expect(Tok::RParen, "a destructor takes no parameters");
+        if (check(Tok::KwThrows))
+            fail(peek().loc, "a destructor cannot fail", "handle errors inside it, with `try { } catch (Error e) { }`", spec::Errors);
         // A destructor always runs for what the object really is, so `virtual` and `override`
         // change nothing. They are allowed, as C++ code is full of them.
         if (match(Tok::KwOverride) && sd.baseNames.empty())
@@ -1572,6 +1613,10 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         ctor->owner = &sd;
         ctor->access = access;
         parseParams(*ctor);
+        if (check(Tok::KwThrows))
+            notYet(peek().loc, "constructors that can fail",
+                   "write a function that can fail and makes the object: `" + ownName + " make(int x) throws { ...; return " +
+                       ownName + "(x); }`");
         if (match(Tok::Colon)) parseMemberInits(*ctor);
         if (check(Tok::Semi))
             fail(peek().loc, "write the constructor body here", "C+ has no separate definitions; add `{ ... }`",
@@ -1616,6 +1661,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         method->isVirtual = isVirtual;
         parseParams(*method);
         method->isConst = match(Tok::KwConst);
+        parseThrowsMark(*method);
         auto rejectFinal = [&] {
             if (check(Tok::Ident) && peek().text == "final") notYet(peek().loc, "final methods", "leave out `final`");
         };
@@ -1692,6 +1738,52 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
 }
 
 // ---- Statements ------------------------------------------------------------
+
+StmtPtr Parser::parseTry() {
+    auto st = std::make_unique<TryStmt>(advance().loc);
+    st->body = parseBlock();
+    if (!check(Tok::KwCatch))
+        fail(peek().loc, "a try block needs at least one catch",
+             "write `catch (Error e) { ... }` after it. To pass errors on to the caller, leave out the block and write "
+             "`try f();`",
+             spec::Errors);
+    while (check(Tok::KwCatch)) {
+        CatchClause clause;
+        clause.loc = advance().loc;
+        if (!check(Tok::LParen))
+            fail(peek().loc, "a catch says what it takes", "write `catch (Error e) { ... }`, or `catch (...) { ... }` for any error",
+                 spec::Errors);
+        advance();
+        if (check(Tok::Dot) && peek(1).kind == Tok::Dot && peek(2).kind == Tok::Dot) {
+            advance();
+            advance();
+            advance();
+        } else {
+            if (check(Tok::Ident) && !isTypeName(peek()) && !classTemplate(peek().text) && peek(1).kind == Tok::RParen)
+                fail(peek().loc, "a catch says the type of error it takes", "write `catch (Error " + peek().text + ")`", spec::Errors);
+            bool isConst = false;
+            clause.type = parseType(clause.typeLoc, &isConst);
+            if (check(Tok::Amp) || check(Tok::AmpAmp))
+                fail(peek().loc, "a catch takes its error without a reference",
+                     "write `catch (" + std::string(clause.type->name) + " e)`: a class variable already refers to the object, "
+                     "so nothing is copied",
+                     spec::Errors);
+            if (check(Tok::Ident)) {
+                const Token& name = advance();
+                rejectTemplateParamName(name);
+                clause.var = std::make_unique<VarDecl>(name.loc, name.text, clause.type, clause.typeLoc);
+                clause.var->isConst = isConst;
+            }
+        }
+        expect(Tok::RParen, "to close the catch");
+        clause.body = parseBlock();
+        st->catches.push_back(std::move(clause));
+    }
+    if (check(Tok::Ident) && peek().text == "finally")
+        fail(peek().loc, "C+ has no finally", "what must always happen belongs in a destructor, which runs on every way out",
+             spec::Errors);
+    return st;
+}
 
 std::unique_ptr<BlockStmt> Parser::parseBlock() {
     auto block = std::make_unique<BlockStmt>(expect(Tok::LBrace, "to start a block").loc);
@@ -1854,7 +1946,17 @@ StmtPtr Parser::parseStmt() {
             notYet(t.loc, "static local variables",
                    "keep the value in a class object, or pass it to the function and return the new value");
         case Tok::KwSwitch: notYet(t.loc, "switch statements", "use if / else if for now");
-        case Tok::KwTry: case Tok::KwThrow: notYet(t.loc, "errors (try, throw, catch)");
+        case Tok::KwTry:
+            if (peek(1).kind == Tok::LBrace) return parseTry();
+            break;  // `try f();`, an expression
+        case Tok::KwThrow: {
+            advance();
+            ExprPtr value = check(Tok::Semi) ? nullptr : parseExpr();
+            expect(Tok::Semi, "after the throw");
+            return std::make_unique<ThrowStmt>(t.loc, std::move(value));
+        }
+        case Tok::KwCatch:
+            fail(t.loc, "a catch comes right after a try block", "write `try { ... } catch (Error e) { ... }`", spec::Errors);
         case Tok::KwExtern:
             fail(t.loc, "C functions are declared outside of functions",
                  "move the `extern \"C\"` declaration to the top level of the file; it can then be called anywhere "
@@ -2038,6 +2140,12 @@ ExprPtr Parser::parseUnary() {
     Nesting nesting(*this);
     const Token& t = peek();
     switch (t.kind) {
+        case Tok::KwTry:
+            advance();
+            if (check(Tok::LBrace))
+                fail(t.loc, "a try block is a statement, so it has no value",
+                     "declare a variable before it and assign it inside, or write `try f()` for a single call", spec::Errors);
+            return std::make_unique<TryExpr>(t.loc, parseUnary());
         case Tok::Minus: {
             advance();
             // Fold "-<literal>" so that -2147483648 is an int and -9223372036854775808 a long.
@@ -2070,6 +2178,9 @@ ExprPtr Parser::parseUnary() {
         case Tok::Star: advance(); return std::make_unique<UnaryExpr>(t.loc, UnOp::Deref, parseUnary());
         case Tok::Amp: advance(); return std::make_unique<UnaryExpr>(t.loc, UnOp::AddrOf, parseUnary());
         case Tok::KwNew: return parseNew();
+        case Tok::KwThrow:
+            fail(t.loc, "`throw` is a statement, so it cannot be part of an expression",
+                 "write `if (bad) throw Error(\"...\");` on a line of its own", spec::Errors);
         case Tok::KwDelete: {
             advance();
             bool array = false;

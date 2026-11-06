@@ -58,6 +58,9 @@ private:
     [[noreturn]] void failStd(Loc loc, const Token& name);
     const Type* parseBaseType(Loc& loc);
     ExprPtr parseCoalesce();
+    void addBuiltinError();  // `class Error`, for a program that uses errors and has none of its own
+    void parseThrowsMark(FuncDecl& fn);
+    StmtPtr parseTry();
     ExprPtr parseMemberAccess(ExprPtr e, const char* after, std::string qualifier = "");
     CondDecl parseCondDecl(const char* stmt);
     void syncTopLevel();

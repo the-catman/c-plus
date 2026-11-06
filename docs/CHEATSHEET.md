@@ -35,6 +35,7 @@ long square(long n) { return n * n; }
 | Interfaces | `interface Speaker { string speak() const; };`: methods only, no bodies or fields. `class Dog : public Speaker { string speak() const override { ... } };`, then `Speaker s = Dog();` |
 | Finding the real type | `if (auto d = dynamic_cast<Dog?>(a))` (null when it is not a `Dog`), `dynamic_cast<Dog>(a)` (**stops the program** when it is not) |
 | Weak references | `weak<Node> parent;` starts empty and does not keep the object alive, which breaks cycles. `parent = node;`, `if (auto p = parent.lock())`, `parent.lock()?.name`, `parent.expired()`, `parent.reset()`. As `std::weak_ptr` |
+| Errors | `int f() throws { if (bad) throw Error("why"); return 1; }`. Each call that can fail is `try f()`, which passes the error on, or is inside `try { f(); } catch (NotFound e) { } catch (Error e) { println("{}", e.what()); }`. `class NotFound : public Error {...}`. `catch (...)`, `throw;`, `int main() throws`. Everything is released on the way out |
 | Generics | `template<typename T> T largest(T a, T b) { ... }`, called as `largest(1, 2)` or `largest<long>(1, 2)`. `template<typename T> class Stack { ... };`, used as `Stack<int>` with its arguments always written. `template<typename T, int N> struct Buffer { array<T, N> items; };`. `T()` is the default value of T |
 | Constraints | `template<Comparable T>`, `template<Number T>`, `template<Integer T>`, `template<Floating T>`, `template<Speaker T>` for an interface or class. Your own: `template<typename T> concept Addable = requires(T a, T b) { a + b; };` |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
@@ -80,6 +81,10 @@ long square(long n) { return n * n; }
 | `int i = someLong;`, `int i = 2.5;` | error: a conversion that can lose information needs a cast: `int(x)`, which stops the program if `x` does not fit |
 | `float f = someDouble;` | error: write `float(x)`. Only a double written as a number, `float f = 0.5;`, converts by itself |
 | `const_cast` | does not exist. `const` cannot be cast away |
+| `throw 42`, `throw "bad"`, `throw new Error(...)` | only an `Error` or a class deriving from it: `throw Error("bad");` |
+| `f();` when `f` can fail | error: `try f();`, or inside `try { }`. A function that can fail is marked `throws` |
+| `catch (const Error& e)`, `catch (e)`, `finally`, `noexcept` | `catch (Error e)`. No `finally`: use a destructor. No `noexcept`: a function not marked `throws` cannot fail |
+| `x = c ? 1 : throw ...` | `throw` is a statement: use `if` |
 | `Stack s(1);`, `auto s = Stack(1);` on a generic class | write the arguments: `Stack<int> s = Stack<int>(1);` |
 | `template<>` specialization, SFINAE, `typename... Ts` | left out. One definition for every type; a vector for any number of values |
 | `template<typename T> requires Comparable<T>` | `template<Comparable T>` |
@@ -89,7 +94,7 @@ long square(long n) { return n * n; }
 | `w == null`, `if (w)` on a `weak<Node>` | `w.expired()`, `if (auto n = w.lock())`. A weak reference is not a condition |
 | `dynamic_cast<Dog*>(a)`, `static_cast<Dog*>(a)` | a class variable is already a reference: `dynamic_cast<Dog?>(a)` |
 | `class Dog : Animal` | error, since that is private in C++: `class Dog : public Animal`. Only classes derive; a struct cannot |
-| `string sound() const` replacing a virtual method | error: `override` is required, and the parameters, return type and `const` must match |
+| `string sound() const` replacing a virtual method | error: `override` is required, and the parameters, return type, `const` and `throws` must match |
 | a method or field with the name of an inherited one | error, unless it overrides a virtual method. C++ would quietly hide the inherited one |
 | `virtual ~Animal() {}` | optional: a destructor always runs for what the object really is |
 | `class D : public virtual B` | no virtual inheritance. A diamond holds two `B`s; use an interface, or write `d.Left::x` |
@@ -162,7 +167,6 @@ long square(long n) { return n * n; }
 |---------|---------|
 | Classes | `final`, covariant return types, private and protected base classes |
 | Operators | operator overloading with C++ syntax, after function overloading |
-| Errors | `int f() throws`, `throw Error("..")`, `try f()`, `try { } catch (Error e) { }` |
 | Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments; `constexpr`, `if constexpr` |
 | Modules | `import net.server;`, `http::get(url)` |
 | Memory | `unique<T>`, `local<T>`; pointers into vectors and strings |

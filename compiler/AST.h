@@ -156,7 +156,7 @@ struct TemplatePattern {
 struct Expr {
     enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
                       Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof, New,
-                      Delete };
+                      Delete, Try };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -245,6 +245,12 @@ struct SizeofExpr : Expr {
     const Type* target;  // `sizeof(T)`, or null
     ExprPtr operand;     // `sizeof x`, or null
     SizeofExpr(Loc l, const Type* t, ExprPtr e) : Expr(Kind::Sizeof, l), target(t), operand(std::move(e)) {}
+};
+
+// `try f()`: what can fail inside it passes its error on, to a catch or the caller.
+struct TryExpr : Expr {
+    ExprPtr operand;
+    TryExpr(Loc l, ExprPtr e) : Expr(Kind::Try, l), operand(std::move(e)) {}
 };
 
 // `new T`, `new T(args)`, `new T{...}` or `new T[n]`: memory for one T, or for n of them,
@@ -432,7 +438,8 @@ struct CoalesceExpr : Expr {
 // ---- Statements ------------------------------------------------------------
 
 struct Stmt {
-    enum class Kind { VarDecl, DeclGroup, Expr, Block, If, While, DoWhile, For, ForEach, Return, Break, Continue, Error };
+    enum class Kind { VarDecl, DeclGroup, Expr, Block, If, While, DoWhile, For, ForEach, Return, Break, Continue, Try, Throw,
+                      Error };
     const Kind kind;
     Loc loc;
     Stmt(Kind k, Loc l) : kind(k), loc(l) {}
@@ -535,6 +542,30 @@ struct ContinueStmt : Stmt {
     explicit ContinueStmt(Loc l) : Stmt(Kind::Continue, l) {}
 };
 
+// `catch (NotFound e) { ... }`, `catch (NotFound) { ... }` or `catch (...) { ... }`.
+struct CatchClause {
+    Loc loc;
+    const Type* type = nullptr;  // null for `catch (...)`
+    Loc typeLoc;
+    std::unique_ptr<VarDecl> var;   // may be absent
+    std::unique_ptr<VarDecl> held;  // set by Sema: the error while it is handled, which `throw;` passes on
+    std::unique_ptr<BlockStmt> body;
+    bool takesEverything = false;   // set by Sema
+};
+
+struct TryStmt : Stmt {
+    std::unique_ptr<BlockStmt> body;
+    std::vector<CatchClause> catches;
+    explicit TryStmt(Loc l) : Stmt(Kind::Try, l) {}
+};
+
+// `throw value;`, or `throw;` inside a catch.
+struct ThrowStmt : Stmt {
+    ExprPtr value;
+    const VarDecl* rethrows = nullptr;  // set by Sema for `throw;`
+    ThrowStmt(Loc l, ExprPtr v) : Stmt(Kind::Throw, l), value(std::move(v)) {}
+};
+
 // ---- Declarations ----------------------------------------------------------
 
 enum class Access { Public, Private, Protected };
@@ -563,6 +594,7 @@ struct FuncDecl {
     bool isVirtual = false;       // marked `virtual`, or overriding a virtual method
     bool isOverride = false;      // marked `override`
     bool isPure = false;          // `virtual int f() = 0;`, which has no body
+    bool isThrows = false;        // `int f() throws`
     bool requested = false;       // it will be checked and generated; a generic class's methods wait for their first use
     Loc usedAt;                   // for a function made from a generic: where it was first needed
     int genericDepth = 0;         // for a function made from a generic: how many others led to it

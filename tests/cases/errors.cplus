@@ -1,0 +1,172 @@
+// A function that can fail is marked `throws`. Its error goes to a catch, or on to its caller.
+class NotFound : public Error {
+public:
+    string name;
+    NotFound(string n) : Error("not found: " + n), name(n) {}
+};
+class Empty : public NotFound {
+public:
+    Empty() : NotFound("nothing") {}
+    string what() const override { return "it is empty"; }
+};
+class Other : public Error {
+public:
+    Other() : Error("other") {}
+};
+
+int parse(string s) throws {
+    if (s.empty()) throw Empty();
+    if (s == "x") throw NotFound(s);
+    if (s == "y") throw Other();
+    if (s == "z") throw Error("plain");
+    return int(s.size());
+}
+
+// Passed on with `try`.
+int twice(string s) throws {
+    int n = try parse(s);
+    return n * 2;
+}
+int both(string a, string b) throws {
+    return try parse(a) + try parse(b);
+}
+void nothing(string s) throws {
+    try parse(s);
+}
+string text(string s) throws {
+    return format("{}", try parse(s));
+}
+
+string attempt(string s) {
+    try {
+        int n = parse(s);
+        return "got " + to_string(n);
+    } catch (Empty e) {
+        return "empty: " + e.what() + " " + e.name;
+    } catch (NotFound e) {
+        return "not found: " + e.name;
+    } catch (Error e) {
+        return "error: " + e.what();
+    }
+}
+
+int main() throws {
+    println("{}", attempt("abc"));
+    println("{}", attempt(""));
+    println("{}", attempt("x"));
+    println("{}", attempt("y"));
+    println("{}", attempt("z"));
+
+    // Both forms in a block, and everything else in it is skipped.
+    try {
+        println("{}", twice("ab"));
+        println("{}", try twice("x"));
+        println("never");
+    } catch (Error e) {
+        println("{}", e.message);
+        println("{}", e);
+    }
+
+    // `try` on a call needs no block when the caller takes it. Here a block takes it.
+    try {
+        println("{}", both("a", "bb"));
+        println("{}", both("a", "x"));
+    } catch (NotFound e) {
+        println("{}", e.what());
+    } catch (...) {
+        println("something else");
+    }
+    try {
+        nothing("");
+    } catch (...) {
+        println("caught anything");
+    }
+    try {
+        nothing("y");
+    } catch (Other) {
+        println("caught without a name");
+    } catch (Error e) {
+        println("not this one");
+    }
+    try {
+        println("{}", text("abc"));
+    } catch (Error e) {
+        println("not this either");
+    }
+
+    // A catch that does not take it lets it through to the next block out.
+    try {
+        try {
+            nothing("x");
+        } catch (Other o) {
+            println("not this");
+        }
+        println("skipped");
+    } catch (NotFound e) {
+        println("outer {}", e.name);
+    }
+
+    // `throw;` and a new error, from inside a catch.
+    try {
+        try {
+            nothing("x");
+        } catch (NotFound e) {
+            println("inner {}", e.name);
+            throw;
+        }
+    } catch (Error e) {
+        println("rethrown {}", e.what());
+    }
+    try {
+        try {
+            nothing("x");
+        } catch (NotFound e) {
+            throw Error("replaced " + e.name);
+        }
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // `throw` in a block, caught right there.
+    try {
+        throw Other();
+    } catch (Other e) {
+        println("{}", e.what());
+    }
+    // Keeping the error for later.
+    Error? kept = null;
+    try {
+        throw NotFound("kept");
+    } catch (Error e) {
+        kept = e;
+    }
+    println("{}", kept?.what() ?? "none");
+    println("{}", dynamic_cast<NotFound?>(kept)?.name ?? "none");
+    // A block that cannot fail.
+    try {
+        println("fine");
+    } catch (NotFound e) {
+        println("never");
+    }
+    return 0;
+}
+// expect: got 3
+// expect: empty: it is empty nothing
+// expect: not found: x
+// expect: error: other
+// expect: error: plain
+// expect: 4
+// expect: not found: x
+// expect: NotFound {message: "not found: x", name: "x"}
+// expect: 3
+// expect: not found: x
+// expect: caught anything
+// expect: caught without a name
+// expect: 3
+// expect: outer x
+// expect: inner x
+// expect: rethrown not found: x
+// expect: replaced x
+// expect: other
+// expect: not found: kept
+// expect: kept
+// expect: fine
