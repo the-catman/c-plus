@@ -29,13 +29,9 @@ extern "C" {
 // SQLite's result codes, which are macros in C.
 const int SQLITE_OK = 0, SQLITE_NULL = 5, SQLITE_ROW = 100, SQLITE_DONE = 101;
 
-// SQLITE_TRANSIENT, which is -1 as a pointer in C. It tells SQLite to copy the text, which
-// it must, since C+ frees its copy for C when the call returns. A number cannot be cast to a
-// pointer, so this is the address one byte before null.
-void* sqliteTransient() {
-    char* none = null;
-    return (void*)(none - 1);
-}
+// Not a real address, but a signal: it tells SQLite to copy the text, which it must, since C+
+// frees its copy for C when the call returns.
+void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);
 
 struct Book {
     string title;
@@ -93,7 +89,7 @@ public:
     }
 
     void bindText(int index, string value) {
-        sqlite3_bind_text(handle, index, value, -1, sqliteTransient());
+        sqlite3_bind_text(handle, index, value, -1, SQLITE_TRANSIENT);
     }
 
     void bindRating(int index, double? value) {

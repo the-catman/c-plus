@@ -547,7 +547,7 @@ void Sema::check(Program& program) {
 static const Expr* notConstant(const Expr& e) {
     switch (e.kind) {
         case Expr::Kind::IntLit: case Expr::Kind::FloatLit: case Expr::Kind::CharLit: case Expr::Kind::BoolLit:
-        case Expr::Kind::StringLit: case Expr::Kind::Sizeof:
+        case Expr::Kind::StringLit: case Expr::Kind::NullLit: case Expr::Kind::Sizeof:
             return nullptr;
         case Expr::Kind::Name: {
             auto& n = static_cast<const NameExpr&>(e);
@@ -568,7 +568,11 @@ static const Expr* notConstant(const Expr& e) {
             if (!bad) bad = notConstant(*t.thenExpr);
             return bad ? bad : notConstant(*t.elseExpr);
         }
-        case Expr::Kind::Cast: return notConstant(*static_cast<const CastExpr&>(e).operand);
+        case Expr::Kind::Cast: {
+            auto& c = static_cast<const CastExpr&>(e);
+            if (c.target->is(K::String) && c.operand->type->isPointer()) return &e;  // reads memory
+            return notConstant(*c.operand);
+        }
         default: return &e;
     }
 }
@@ -612,7 +616,7 @@ void Sema::checkConstant(VarDecl& c) {
         diags_.error(c.loc, "the constant " + q(c.name) + " needs a value", "write `const " +
                      std::string(c.declType->name) + " " + c.name + " = <value>;`", spec::Constants);
     } else if (const Type* t = c.type; !t->isError() && !t->is(K::Bool) && !t->isNumber() && !t->is(K::Char) &&
-                                       !t->is(K::String)) {
+                                       !t->is(K::String) && !t->isPointer()) {
         diags_.error(c.typeLoc, "this compiler does not support constants of type " + q(t) + " yet",
                      "write a function that returns the value", spec::Status);
     } else if (const Expr* bad = notConstant(*c.init); bad && !t->isError()) {
@@ -3017,10 +3021,29 @@ const Type* Sema::checkToString(CallExpr& call, Flow& flow) {
 
 // `int(x)`, `static_cast<int>(x)` and `(int)x` convert between the number types and bool,
 // as in C++. A conversion that cannot keep the value stops the program (see Codegen).
+// `reinterpret_cast`: between a pointer and a number, which no other cast does, for
+// addresses that C libraries use as signals, such as `reinterpret_cast<void*>(-1)`. Between
+// pointers it is like the other casts, as in C++.
+const Type* Sema::checkReinterpretCast(CastExpr& c, const Type* from, const Type* to) {
+    if (from->isError()) return to;
+    if (to->isPointer() && from->isInteger()) return to;
+    if (to->isPointer() && (from->isPointer() || from->isNull())) return checkPointerCast(c, from, to);
+    if (from->isPointer() && to->is(K::Long)) return to;
+    if (from->isPointer())
+        diags_.error(c.loc, "reinterpret_cast turns a pointer into a long, but this asks for " + q(to),
+                     "write `reinterpret_cast<long>(p)`: only a long is sure to hold an address", spec::Casts);
+    else
+        diags_.error(c.loc, "reinterpret_cast converts between a pointer and an integer, or between pointers, but this "
+                            "goes from " + q(from) + " to " + q(to),
+                     "to convert a number, write `int(x)` or `static_cast<int>(x)`", spec::Casts);
+    return to;
+}
+
 const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     const Type* from = checkExpr(*c.operand, flow);
     const Type* to = c.target;
     checkStorable(to, c.loc);
+    if (c.reinterpret) return checkReinterpretCast(c, from, to);
     if (to->isPointer() || (from->isPointer() && !to->is(K::Bool) && !to->is(K::String)))
         return checkPointerCast(c, from, to);
     std::string cast = std::string(to->name) + "(x)";
@@ -3079,14 +3102,15 @@ const Type* Sema::checkPointerCast(CastExpr& c, const Type* from, const Type* to
     if (!to->isPointer()) {
         diags_.error(c.loc, "a cast cannot turn a pointer into " + q(to),
                      "for a bool, compare it with null: `p != null`. The distance between two pointers into the same "
-                     "memory is `p - q`",
+                     "memory is `p - q`. The address as a number is `reinterpret_cast<long>(p)`",
                      spec::Casts);
         return to;
     }
     if (from->isNull()) return to;
     if (!from->isPointer()) {
         diags_.error(c.operand->loc, "a cast to " + q(to) + " converts another pointer, but this is " + q(from),
-                     from->isInteger()       ? "C+ does not turn numbers into pointers; a pointer to nothing is `null`"
+                     from->isInteger()       ? "a pointer to nothing is `null`. To make a pointer from a number, such as a "
+                                               "C constant that is -1 as a pointer, write `reinterpret_cast<void*>(-1)`"
                      : from->isArray()         ? "for a pointer to its first element, write `" + spelled(*c.operand, "a") + ".data()`"
                      : isPlaceKind(*c.operand) ? "write `&" + spelled(*c.operand, "x") + "` for its address"
                                                : "",

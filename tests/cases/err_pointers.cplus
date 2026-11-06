@@ -103,7 +103,7 @@ int main() {
 // error: compare it with null: `p != null`
 // error: a cast cannot turn a pointer into 'long'
 // error: a cast to 'int*' converts another pointer, but this is 'int'
-// error: C+ does not turn numbers into pointers
+// error: To make a pointer from a number, such as a C constant that is -1 as a pointer, write `reinterpret_cast<void*>(-1)`
 // error: a cast cannot remove the const of 'const int*'
 // error: C++ prints a 'char*' as the text it points to, but C+ cannot tell where that text ends
 // error: write `string(cp)` to print the text, which must end with a zero byte, or `(void*)cp` to print the address

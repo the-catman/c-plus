@@ -223,8 +223,11 @@ void Parser::parseTopLevel(Program& prog) {
              spec::Classes);
     if (check(Tok::Ident) && peek(1).kind != Tok::LParen)
         notYet(peek().loc, "global variables",
-               "for a value that never changes, write a constant: `const int " + peek().text + " = 0;`. For one "
-               "that changes, pass it to the functions that use it, or keep it in a class object");
+               ret->isPointer()
+                   ? "for a pointer that never changes, write a constant, with `const` after the '*': `" +
+                         std::string(ret->name) + " const " + peek().text + " = null;`"
+                   : "for a value that never changes, write a constant: `const int " + peek().text + " = 0;`. For one "
+                     "that changes, pass it to the functions that use it, or keep it in a class object");
     prog.funcs.push_back(parseFunction(ret, retLoc));
 }
 
@@ -1718,25 +1721,24 @@ ExprPtr Parser::parsePrimary() {
         }
         case Tok::LBrace: return parseInitList(t.loc, nullptr);
         case Tok::Ident: {
-            if (t.text == "static_cast" && check(Tok::Less)) {  // `static_cast<int>(x)`
+            if ((t.text == "static_cast" || t.text == "reinterpret_cast") && check(Tok::Less)) {  // `static_cast<int>(x)`
                 advance();
                 Loc typeLoc;
                 const Type* ty = parseType(typeLoc);
-                expectCloseAngle("to close static_cast<...>");
-                expect(Tok::LParen, "after static_cast<" + std::string(ty->name) + ">");
+                expectCloseAngle("to close " + t.text + "<...>");
+                expect(Tok::LParen, "after " + t.text + "<" + std::string(ty->name) + ">");
                 ExprPtr operand = parseExpr();
-                expect(Tok::RParen, "to close the static_cast");
+                expect(Tok::RParen, "to close the " + t.text);
                 Loc loc = t.loc;
                 if (prev().loc.line == loc.line) loc.len = prev().loc.col + 1 - loc.col;
-                return std::make_unique<CastExpr>(loc, ty, std::move(operand));
+                auto cast = std::make_unique<CastExpr>(loc, ty, std::move(operand));
+                cast->reinterpret = t.text == "reinterpret_cast";
+                return cast;
             }
-            if (t.text == "reinterpret_cast" || t.text == "const_cast" || t.text == "dynamic_cast")
+            if (t.text == "const_cast" || t.text == "dynamic_cast")
                 fail(t.loc, "C+ has no " + t.text,
                      t.text == "dynamic_cast" ? "inheritance is planned; until then every object has exactly one type"
-                     : t.text == "const_cast" ? "a const variable cannot be changed; copy it into a variable that is not const"
-                                              : "a cast between pointer types is written `static_cast<char*>(p)` or "
-                                                "`(char*)p`. To convert a number, write `int(x)` or "
-                                                "`static_cast<int>(x)`",
+                                              : "a const variable cannot be changed; copy it into a variable that is not const",
                      spec::Casts);
             if (check(Tok::ColonColon)) {
                 if (t.text == "std") failStd(t.loc, peek(1));

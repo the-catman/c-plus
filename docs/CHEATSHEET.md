@@ -22,7 +22,7 @@ long square(long n) { return n * n; }
 |------|----|
 | Types | `int` (32-bit), `long` (64-bit), `double` (64-bit), `float` (32-bit), `bool`, `char` (one byte, 0 to 255), `string`, `void`, `auto`, structs, classes, `vector<T>`, `array<T, N>`, `T?`, `T*` |
 | Floating point | `1.5`, `.5`, `1e9`, `2.5f`, as in C++. `7 / 2` is 3, `7 / 2.0` is 3.5. IEEE: `1 / 0.0` is `inf`, no traps. `float f = 0.5;` works for a written number |
-| Casts | `int(x)`, `static_cast<int>(x)`, `(int)x` between numbers, `char` and `bool`. A fraction is dropped toward zero; a value that does not fit **stops the program**. `(int*)p`, `static_cast<int*>(p)` between pointer types |
+| Casts | `int(x)`, `static_cast<int>(x)`, `(int)x` between numbers, `char` and `bool`. A fraction is dropped toward zero; a value that does not fit **stops the program**. `(int*)p`, `static_cast<int*>(p)` between pointer types. `reinterpret_cast<void*>(-1)`, `reinterpret_cast<long>(p)` between a pointer and a number |
 | Math | `sqrt`, `pow`, `sin`, `floor`, `round`, `fmod`, `isnan`, `abs`, `min`, `max` and the rest of `<cmath>`, with no `std::` |
 | Characters | `char c = 'a';`, escapes as in strings. `c + 1` and `c - '0'` are `int`s, as in C++; `char(n)` is checked. `c++`, `c += 2` stay chars. `isdigit`, `isalpha`, `isspace`, `toupper`, `tolower` and the rest of `<cctype>` (ASCII, return `bool` or `char`) |
 | Structs | `struct P { int x; int y = 0; };` is a **value** that is copied. Build with `{1, 2}`, `{.y = 2}`, `P{1, 2}`, `P(1, 2)`, `{}` |
@@ -48,7 +48,7 @@ long square(long n) { return n * n; }
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors and arrays element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
-| Constants | outside any function, in any order: `const int MAX = 100;`, `const string NAME = "a" + OTHER;`. A number, `char`, `bool` or `string`, from literals, other constants and operators |
+| Constants | outside any function, in any order: `const int MAX = 100;`, `const string NAME = "a" + OTHER;`, `void* const NONE = null;`. A number, `char`, `bool`, `string` or pointer, from literals, other constants, operators and casts |
 | Program | `int main()`, or `int main(int argc, char** argv)`, with `string(argv[1])` for the first argument. `cplus run app.cplus -- arg1 arg2` |
 | Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long), `1.5`, `1e-9`, `2.5f` (float), `'a'`, `'\n'` (char) |
 | Conditions | `bool`, a number, a pointer or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (p)` (not null), `if (opt)` (holds a value). Not a `char`: write `c != '\0'` |
@@ -73,8 +73,9 @@ long square(long n) { return n * n; }
 | `int x;` then read `x` | compile error until `x` is assigned on every path |
 | `int i = someLong;`, `int i = 2.5;` | error: a conversion that can lose information needs a cast: `int(x)`, which stops the program if `x` does not fit |
 | `float f = someDouble;` | error: write `float(x)`. Only a double written as a number, `float f = 0.5;`, converts by itself |
-| `reinterpret_cast`, `const_cast`, `dynamic_cast` | do not exist. `static_cast`, `int(x)` and `(int)x` convert numbers; `static_cast<int*>(p)` and `(int*)p` convert pointers. `const` cannot be cast away |
-| `(long)p`, `(int*)0x1000`, `int* p = 0;` | error: numbers and pointers never convert. A pointer to nothing is `null` |
+| `const_cast`, `dynamic_cast` | do not exist. `const` cannot be cast away |
+| `(long)p`, `(int*)0x1000`, `int* p = 0;` | error. A pointer to nothing is `null`; only `reinterpret_cast` converts between a pointer and a number |
+| `#define SQLITE_TRANSIENT ((void*)-1)` | `void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);` |
 | `bool ok = p;` | error: write `p != null` or `bool(p)`. `if (p)` is fine |
 | `int* a, b;` | error, since `b` would be a plain `int`. Write `int* a, * b;` or two declarations |
 | `int*? p` | error: a pointer can already be null; write `int*` |

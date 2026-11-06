@@ -296,8 +296,11 @@ double share = double(n) / total;   // without the cast, n / total divides integ
   `static_cast<int*>(memory)` or `(int*)memory`, and `bool(p)` is true when `p` is not
   null. It cannot remove `const` from what a pointer points to, and a number and a
   pointer do not convert into each other (see [Pointers](#pointers)).
-- `reinterpret_cast` does not exist, since the casts above already convert pointers, and
-  neither does `const_cast`, since `const` cannot be cast away. `dynamic_cast` would need
+- `reinterpret_cast<void*>(-1)` makes a pointer from an `int` or a `long`, and
+  `reinterpret_cast<long>(p)` a `long` from a pointer, as in C++. No other cast does this. It
+  is for addresses that C libraries use as signals, such as `SQLITE_TRANSIENT`, and for
+  looking at an address as a number. Between pointers it works as the other casts do.
+- `const_cast` does not exist, since `const` cannot be cast away. `dynamic_cast` would need
   inheritance, which is planned.
 
 ### Optionals
@@ -734,8 +737,8 @@ if (p) println("{}", *p);       // a pointer is true when it is not null
   `void*`, or a `const T*` to `const void*`. Other pointer types need a cast,
   `static_cast<int*>(v)` or `(int*)v` (see [Casts](#casts)). A pointer is a
   [condition](#conditions), as in C++, but does not convert to a `bool` variable by
-  itself: write `p != null` or `bool(p)`. Numbers and pointers do not convert into each
-  other, even with a cast.
+  itself: write `p != null` or `bool(p)`. A number and a pointer convert only with
+  [`reinterpret_cast`](#casts): `(int*)0x1000` and `int* p = 0;` are errors.
 - **Text.** `string(p)` copies the text that a `char*` or `const char*` points to, up to
   its zero byte, as C stores it. A null pointer stops the program.
 - **Printing.** A pointer prints its address in hex, such as `0x7ffd5e8c`, and null
@@ -860,10 +863,13 @@ const string GREETING = "hello " + NAME;
 const string NAME = "Ada";
 ```
 
-- A constant is a number, a `char`, a `bool` or a `string`, or `auto` for one of those. Other
-  types are not supported yet; write a function that returns the value.
+- A constant is a number, a `char`, a `bool`, a `string` or a pointer, or `auto` for one of
+  those. Other types are not supported yet; write a function that returns the value. A
+  pointer has its `const` after the `*`, as in C++: `void* const NOTHING = null;`.
 - Its value is worked out from literals, other constants, operators, casts and `sizeof`. A
   variable or a function call is an error.
+- C's macros are written this way: `const int SQLITE_OK = 0;`, and for a macro that is really
+  an address, `void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);`.
 - A value that cannot be worked out, such as `1 / 0`, stops the program when the constant is
   used, naming the constant's line. A compile-time check will come with `constexpr`.
 - A constant cannot be changed, and it has no address. To point to it, copy it into a
@@ -1487,7 +1493,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Range-based `for` over vectors | implemented |
 | Optionals: `T?`, `null`, `?.`, `??`, `if (auto u = opt)`, `value()`, `value_or()` | implemented |
 | `double` and `float`: literals, IEEE arithmetic, shortest printing, `{:.2f}`, `{:e}`, `{:g}` | implemented |
-| Casts: `int(x)`, `static_cast<int>(x)`, `(int)x`, stopping when the value does not fit | implemented |
+| Casts: `int(x)`, `static_cast<int>(x)`, `(int)x`, stopping when the value does not fit; `reinterpret_cast` | implemented |
 | Math functions from `<cmath>`, `abs`, `min`, `max` | implemented |
 | `char`: `'a'`, checked `s[i]`, `for (char c : s)`, `push_back`, `pop_back`, `front`, `back`, `string(n, c)`, `<cctype>` functions | implemented |
 | `extern "C"` functions taking and returning numbers, `char`, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
@@ -1496,7 +1502,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | C structs: fields, array fields, through pointers, and by value on Linux x86-64 and aarch64 | implemented |
 | `array<T, N>`: checked `a[i]`, `size`, `empty`, `front`, `back`, `fill`, `data`, range-based `for`, `==`, pointers to elements, `string(a)` | implemented |
 | `new`, `new[]`, `delete`, `delete[]`, with a warning; `[[allow(new_delete)]]`, `-Wno-new-delete` | implemented |
-| Constants outside functions: numbers, `char`, `bool`, `string` | implemented |
+| Constants outside functions: numbers, `char`, `bool`, `string`, pointers | implemented |
 | `main` with `argc` and `argv` | implemented |
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Debug builds with `--debug`: AddressSanitizer, stack traces, misaligned pointer and invalid bool checks, leak report | implemented |

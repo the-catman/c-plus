@@ -10,7 +10,6 @@ int main() {
     int& r = x;
     vector<const int> v;
     FILE* f = null;
-    auto rc = reinterpret_cast<char*>(&x);
     int* const fixed = &x;
     fixed = null;
     return 0;
@@ -30,6 +29,4 @@ int main() {
 // error: 'const' cannot be used here
 // error: unknown type 'FILE'
 // error: if 'FILE' is a C type used through pointers, declare it first, at the top level: `extern "C" struct FILE;`
-// error: C+ has no reinterpret_cast
-// error: a cast between pointer types is written `static_cast<char*>(p)` or `(char*)p`
 // error: 'fixed' is const and cannot be assigned to

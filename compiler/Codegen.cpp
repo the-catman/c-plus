@@ -2032,8 +2032,12 @@ struct Codegen::Impl {
         llvm::Value* v = gen(*c.operand);
         if (from == to) return v;
         Loc loc = c.loc;
-        if (to->isPointer()) return v;  // from another pointer, or null: the same address
+        if (to->isPointer()) {
+            if (from->isInteger()) return b.CreateIntToPtr(b.CreateSExt(v, b.getInt64Ty()), b.getPtrTy());  // reinterpret_cast
+            return v;  // from another pointer, or null: the same address
+        }
         if (from->isPointer()) {
+            if (to->is(K::Long)) return b.CreatePtrToInt(v, b.getInt64Ty());  // reinterpret_cast
             if (to->is(K::Bool)) return b.CreateIsNotNull(v);
             // `string(p)`: a copy of the text p points to, up to its zero byte. It is a new
             // value, released when the statement ends unless it is stored.

@@ -318,8 +318,9 @@ Decided 2026-11-05.
 - Casts use C++'s spellings, `int(x)`, `static_cast<int>(x)` and `(int)x`, all with the
   same meaning, between the number types and `bool`, and between pointer types (§2.21). A
   value that does not fit the new type, including NaN and the infinities converted to an
-  integer, stops the program, as integer overflow does. `reinterpret_cast` and
-  `const_cast` do not exist; `dynamic_cast` would come with inheritance. A cast never
+  integer, stops the program, as integer overflow does. `reinterpret_cast` is the one cast
+  between a pointer and a number (§2.21). `const_cast` does not exist; `dynamic_cast` would
+  come with inheritance. A cast never
   makes or reads a string, except `string(p)` from a `char*`.
 - `{}` prints the shortest digits that read back exactly, as C++'s `std::format` does,
   except that NaN always prints as `nan`, so output does not change with optimization.
@@ -363,7 +364,10 @@ Decided 2026-11-05.
   so they need a rule first.
 - A pointer is a condition, but converts to `bool` only with `bool(p)`. Implicitly, only
   `null` → `T*`, `T*` → `const T*`, and `T*` → `void*`. Casts between any pointer types
-  are allowed except removing `const`; numbers and pointers never convert.
+  are allowed except removing `const`. A number and a pointer convert only with
+  `reinterpret_cast`, as in C++. Decided 2026-11-06, replacing "numbers and pointers never
+  convert": C libraries use addresses as signals, such as `SQLITE_TRANSIENT`, `MAP_FAILED` and
+  `SIG_IGN`, and C+ had no honest way to write them. `(int*)0x1000` and `int* p = 0;` stay errors.
 - A pointer prints as hex. Printing a `char*` is an error, since its end is not known;
   `string(p)` copies the text up to the zero byte.
 - Pointers are not counted. A pointer to a class variable points to the variable, not
@@ -504,9 +508,6 @@ will confidently write C++ wherever the two differ.
 - Remaining syntax: interfaces, `unique<T>` and `local<T>` construction, `async`
   functions, lambdas, enums, `switch`. Settled in Phase 0 as each feature is reached.
 - Function overloading is planned, as in C++, after the v1 core.
-- C constants that are really pointers, such as `SQLITE_TRANSIENT`, `MAP_FAILED` and `SIG_IGN`,
-  which are `-1` or `1` as a pointer. Numbers never convert to pointers, so today it takes
-  `(void*)((char*)null - 1)`, as `examples/books.cplus` does. They need a proper form.
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, since the update to the element would be lost (decided 2026-11-06). The alternative
   is to pin a buffer separately from its reference count, so that writes land in place, at a

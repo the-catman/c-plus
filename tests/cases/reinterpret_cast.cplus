@@ -1,0 +1,55 @@
+// reinterpret_cast is the one cast between a pointer and a number, as for addresses that C
+// libraries use as signals. Between pointers it is like the other casts.
+extern "C" struct FILE;
+
+void* const SIGNAL = reinterpret_cast<void*>(-1);
+void* const NOTHING = null;
+const void* const ALSO_NOTHING = null;
+FILE* const NO_FILE = null;
+const auto ONE = reinterpret_cast<void*>(1);
+int* const HIGH = reinterpret_cast<int*>(4096);
+const long MINUS_ONE = reinterpret_cast<long>(SIGNAL);
+const bool IS_SET = bool(ONE);
+
+bool isSignal(void* p) {
+    return p == SIGNAL;
+}
+
+int main() {
+    println("{} {} {}", SIGNAL, NOTHING, ALSO_NOTHING);
+    println("{} {}", ONE, HIGH);
+    println("{} {} {}", MINUS_ONE, IS_SET, NO_FILE == null);
+    println("{} {}", isSignal(SIGNAL), isSignal(ONE));
+
+    // An int is widened with its sign, as a long, so both of these are the same address.
+    int small = -1;
+    long big = -1;
+    println("{}", reinterpret_cast<void*>(small) == reinterpret_cast<void*>(big));
+
+    // There and back again.
+    int n = 5;
+    int* p = &n;
+    long address = reinterpret_cast<long>(p);
+    int* back = reinterpret_cast<int*>(address);
+    *back = 7;
+    println("{} {}", n, address % 4);
+
+    // Between pointers, and to and from const, as the other casts allow.
+    char* bytes = reinterpret_cast<char*>(p);
+    int* again = reinterpret_cast<int*>(bytes);
+    const int* readOnly = reinterpret_cast<const int*>(again);
+    println("{}", *readOnly);
+    int* none = reinterpret_cast<int*>(null);
+    println("{}", none == null);
+    println("{}", reinterpret_cast<long>(none));
+    return 0;
+}
+// expect: 0xffffffffffffffff 0x0 0x0
+// expect: 0x1 0x1000
+// expect: -1 true true
+// expect: true false
+// expect: true
+// expect: 7 0
+// expect: 7
+// expect: true
+// expect: 0

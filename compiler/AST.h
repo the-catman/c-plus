@@ -156,6 +156,7 @@ struct CharLitExpr : Expr {
 struct CastExpr : Expr {
     const Type* target;
     ExprPtr operand;
+    bool reinterpret = false;  // written `reinterpret_cast`, the one cast between numbers and pointers
     CastExpr(Loc l, const Type* t, ExprPtr e) : Expr(Kind::Cast, l), target(t), operand(std::move(e)) {}
 };
 

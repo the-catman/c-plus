@@ -48,6 +48,7 @@ private:
     void checkStructs(Program& program);
     void checkConstants(Program& program);
     void checkConstant(VarDecl& constant);
+    const Type* checkReinterpretCast(CastExpr& c, const Type* from, const Type* to);
     std::set<const VarDecl*> constantsChecked_, constantsBeingChecked_;
     void checkMembers(StructDecl& sd);
     void checkFunction(FuncDecl& fn);

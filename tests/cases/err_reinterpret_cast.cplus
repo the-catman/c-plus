@@ -1,0 +1,41 @@
+// reinterpret_cast only goes between a pointer and an integer, and between pointers. The
+// other casts still do not turn a number into a pointer.
+const string TEXT = "a";
+char* const POINTER = null;
+const string FROM_POINTER = string(POINTER);
+const void* NOT_CONSTANT = null;
+
+int main() {
+    double d = 1.5;
+    int n = 1;
+    char c = 'a';
+    int* p = &n;
+    const int* cp = &n;
+    auto a = reinterpret_cast<int>(p);
+    auto b = reinterpret_cast<void*>(d);
+    auto e = reinterpret_cast<long>(n);
+    auto f = reinterpret_cast<int*>(cp);
+    auto g = reinterpret_cast<double>(p);
+    auto h = reinterpret_cast<void*>(c);
+    auto i = reinterpret_cast<void*>(TEXT);
+    void* j = (void*)-1;
+    void* k = static_cast<void*>(5);
+    long l = (long)p;
+    int* m = 0;
+    POINTER = null;
+    return 0;
+}
+// error: the value of a constant is worked out from literals, other constants and operators
+// error: for a pointer that never changes, write a constant, with `const` after the '*': `const void* const NOT_CONSTANT = null;`
+// error: reinterpret_cast turns a pointer into a long, but this asks for 'int'
+// error: reinterpret_cast turns a pointer into a long, but this asks for 'double'
+// error: this goes from 'double' to 'void*'
+// error: this goes from 'int' to 'long'
+// error: this goes from 'char' to 'void*'
+// error: this goes from 'string' to 'void*'
+// error: a cast cannot remove the const of 'const int*'
+// error: a cast to 'void*' converts another pointer, but this is 'int'
+// error: write `reinterpret_cast<void*>(-1)`
+// error: a cast cannot turn a pointer into 'long'
+// error: The address as a number is `reinterpret_cast<long>(p)`
+// error: 'POINTER' is const and cannot be

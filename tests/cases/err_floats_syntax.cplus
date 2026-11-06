@@ -32,8 +32,8 @@ int main() {
 // error: the exponent of '1.5e+' has no digits
 // error: write `double`, which has 64 bits
 // error: 'd' is not a suffix for a floating-point number
-// error: C+ has no reinterpret_cast
-// error: To convert a number, write `int(x)` or `static_cast<int>(x)`
+// error: reinterpret_cast converts between a pointer and an integer, or between pointers, but this goes from 'double' to 'int'
+// error: to convert a number, write `int(x)` or `static_cast<int>(x)`
 // error: C+ has no const_cast
 // error: C+ has no dynamic_cast
 // error: write `int(x)` to convert x. For a zero, write `0`
