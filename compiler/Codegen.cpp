@@ -107,6 +107,7 @@ struct Codegen::Impl {
     bool hasInnerParts = false;
     llvm::Function* objectRelease = nullptr;  // void(ptr object), for every class
     std::map<std::pair<const FuncDecl*, uint64_t>, llvm::Function*> thunks;  // see vtableMethod
+    std::unordered_map<const VarDecl*, llvm::Function*> constantFunctions;
 
     // A vector is a pointer to a buffer laid out as the runtime's cplus_vec: a header of
     // count, size and capacity, then the elements. Null is an empty vector.
@@ -1629,11 +1630,11 @@ struct Codegen::Impl {
 
     // The address of the place `recv`, about to change, found after `args` run: what leads
     // to it comes first, as in C++, but `args` may move it.
-    llvm::Value* placeAfter(const Expr& recv, const std::function<void()>& args) {
+    llvm::Value* placeAfter(const Expr& recv, const std::function<void()>& args, bool hold = false, bool write = true) {
         std::vector<const Expr*> made;
         freezePlace(recv, made);
         args();
-        llvm::Value* place = addressOf(recv, false, true);
+        llvm::Value* place = addressOf(recv, hold, write);
         for (const Expr* part : made) frozen.erase(part);
         return place;
     }
@@ -1785,11 +1786,13 @@ struct Codegen::Impl {
             case Expr::Kind::OptChain: return genOptChain(static_cast<const OptChainExpr&>(e), owned);
             case Expr::Kind::Coalesce: return genCoalesce(static_cast<const CoalesceExpr&>(e), owned);
             case Expr::Kind::Name: {
-                // A constant's value is worked out where it is used. It can only come from
-                // literals and other constants, so this does the same work every time.
+                // A constant is a literal by now, or a function of its own for what must happen
+                // when it is used, such as a pointer's value or stopping at `1 / 0`.
                 const VarDecl* decl = static_cast<const NameExpr&>(e).decl;
                 if (decl && decl->isTopLevel) {
                     owned = true;
+                    if (auto it = constantFunctions.find(decl); it != constantFunctions.end())
+                        return b.CreateCall(it->second, {}, decl->name);
                     return genOwned(*decl->init, decl->type);
                 }
                 return loadValue(e.type, addressOf(e), static_cast<const NameExpr&>(e).name.c_str());
@@ -2148,6 +2151,17 @@ struct Codegen::Impl {
             case K::Struct: b.CreateCall(types.at(t->decl).print, {v, out}); break;
             case K::Class: case K::Unique:  // whatever the object really is, with all of its fields
             {
+                llvm::BasicBlock* endBB = nullptr;
+                if (t->isUnique()) {  // what was moved out of a field or an element shows as that
+                    auto* thereBB = llvm::BasicBlock::Create(ctx, "print.object", fn);
+                    auto* movedBB = llvm::BasicBlock::Create(ctx, "print.moved", fn);
+                    endBB = llvm::BasicBlock::Create(ctx, "print.end", fn);
+                    b.CreateCondBr(b.CreateIsNotNull(v), thereBB, movedBB);
+                    b.SetInsertPoint(movedBB);
+                    printText(out, "moved");
+                    b.CreateBr(endBB);
+                    b.SetInsertPoint(thereBB);
+                }
                 llvm::Value* vtable = loadVtable(v);
                 llvm::Value* print = vtableSlot(vtable, kVtablePrint, "print");
                 if (hasInnerParts) {  // print takes the object from its start
@@ -2155,6 +2169,10 @@ struct Codegen::Impl {
                     v = b.CreateInBoundsGEP(b.getInt8Ty(), v, b.CreateNeg(start));
                 }
                 b.CreateCall(types.at(t->decl).print->getFunctionType(), print, {v, out});
+                if (endBB) {
+                    b.CreateBr(endBB);
+                    b.SetInsertPoint(endBB);
+                }
                 break;
             }
             case K::Vector: b.CreateCall(vecInfo(t).print, {v, out}); break;
@@ -2436,18 +2454,11 @@ struct Codegen::Impl {
         if (!isPlace(x) || (!variable && !holdsUnique(t))) return genOwned(x, t);
         llvm::Value* place = addressOf(x, false, true);
         llvm::Value* value = loadValue(t, place, "moved");
+        // A variable is known to hold it, and the rest could have been moved from already.
+        if (t->isUnique() && !variable) trapIf(b.CreateIsNull(value), "this '" + std::string(t->name) + "' has been moved away", call.loc);
         if (inMemory(t)) b.CreateMemSet(place, b.getInt8(0), sizeOf(t), alignOf(t));
         else b.CreateStore(llvm::Constant::getNullValue(llvmType(t)), place);
         return value;
-    }
-
-    static bool holdsUnique(const Type* t) {
-        if (t->isUnique()) return true;
-        if (t->isOptional() || t->isVector() || t->isArray()) return holdsUnique(t->elem);
-        if (!t->isStruct()) return false;
-        for (auto& f : t->decl->fields)
-            if (holdsUnique(f.type)) return true;
-        return false;
     }
 
     llvm::Value* genCall(const CallExpr& call) {
@@ -2530,28 +2541,30 @@ struct Codegen::Impl {
                 args.push_back(holdOwned(*call.args[i], call.method->params[i]->type));
             pending.resize(mark);
         };
-        bool argsRunCode = false;
-        for (auto& a : call.args) argsRunCode = argsRunCode || mayRunCode(*a);
+        // A struct method works on the struct in place, so its place is found after the arguments.
+        // An argument could write to a vector it lies in, or hold a copy of that vector, and in both
+        // cases the vector must then get a buffer of its own, with `this` in it.
+        bool argsFirst = false;
+        for (auto& a : call.args) argsFirst = argsFirst || mayRunCode(*a) || isManaged(a->type);
         bool argsDone = false;
         std::vector<std::pair<llvm::Value*, llvm::Value*>> held;
         llvm::Value* self;
         if (recv.type->isClass()) {
             self = atOffset(gen(recv), pathOffset(call.path));
         } else if (isPlace(recv)) {
-            // A struct method may change the struct in place. Holding a vector element's
-            // buffer would make an argument that writes to that vector copy it, leaving
-            // `this` in the old copy, so the address is found after the arguments.
-            std::vector<const Expr*> made;
-            if (argsRunCode) {
-                freezePlace(recv, made);
-                genArgs();
-                argsDone = true;
-            }
             auto* outerHeld = heldBuffers;
-            heldBuffers = call.method->isConst ? nullptr : &held;
-            self = addressOf(recv, /*hold=*/true, /*write=*/!call.method->isConst);
+            auto* thisHeld = call.method->isConst ? nullptr : &held;
+            if (argsFirst) {
+                self = placeAfter(recv, [&] {
+                    genArgs();
+                    heldBuffers = thisHeld;
+                }, /*hold=*/true, /*write=*/!call.method->isConst);
+                argsDone = true;
+            } else {
+                heldBuffers = thisHeld;
+                self = addressOf(recv, /*hold=*/true, /*write=*/!call.method->isConst);
+            }
             heldBuffers = outerHeld;
-            for (const Expr* part : made) frozen.erase(part);
         } else {
             // A struct value that is not stored anywhere, e.g. makePoint().move(1): the
             // method works on a temporary, which is released when the statement ends.
@@ -2567,14 +2580,18 @@ struct Codegen::Impl {
         if (!argsDone) genArgs();
         args[0] = self;
         llvm::Value* result = callFunction(*call.method, std::move(args), call.qualifier.empty());
-        // If the method's body wrote to the vector this element lies in, the vector has moved
-        // to a new buffer, and what the method did to `this` went to the old one. That would
-        // be lost without a word, so the program stops.
-        for (auto& [slot, buf] : held)
-            trapIf(b.CreateICmpNE(b.CreateLoad(b.getPtrTy(), slot, "vec"), buf),
-                   "a vector was changed while a method of one of its elements was running, which would lose what the "
-                   "method did to the element; call the method on a copy of the element, then store it back",
+        // While the method ran, only the vector and this call held the buffer `this` lies in. If that
+        // changed, the method's body changed, copied or freed the vector. What it did to `this` would then
+        // be lost, or seen by a copy, without a word, so the program stops. The buffer is held, so
+        // it can be looked at, while what holds the vector may be gone.
+        for (auto& [slot, buf] : held) {
+            auto* count = b.CreateAlignedLoad(b.getInt64Ty(), buf, llvm::MaybeAlign(8), "count");
+            count->setAtomic(llvm::AtomicOrdering::Monotonic);
+            trapIf(b.CreateICmpNE(count, b.getInt64(2)),
+                   "a vector was changed, copied or freed while a method of one of its elements was running, which would lose "
+                   "what the method did to the element; call the method on a copy of the element, then store it back",
                    call.loc);
+        }
         return result;
     }
 
@@ -3769,6 +3786,30 @@ struct Codegen::Impl {
             if (sd->isClass) defineVtables(*sd);
         if (objectRelease) defineObjectRelease();
         for (const StructDecl* sd : structs) defineHelpers(*sd);
+        // One function for each constant that is not a literal, so that a chain of them, each using the one
+        // before twice, stays as small as it is written.
+        auto isLiteral = [](const Expr& e) {
+            return e.kind == Expr::Kind::IntLit || e.kind == Expr::Kind::FloatLit || e.kind == Expr::Kind::CharLit ||
+                   e.kind == Expr::Kind::BoolLit || e.kind == Expr::Kind::StringLit;
+        };
+        for (auto& c : program.constants)
+            if (!isLiteral(*c->init))
+                constantFunctions[c.get()] = llvm::Function::Create(llvm::FunctionType::get(llvmType(c->type), {}, false),
+                                                                    llvm::Function::InternalLinkage, "cplus.const." + c->name, mod.get());
+        for (auto& [c, f] : constantFunctions) {
+            fn = f;
+            fnDecl = nullptr;
+            locals.clear();
+            errorOut = nullptr;
+            localError = nullptr;
+            thisPtr = nullptr;
+            b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
+            startLineTable(c->loc);
+            llvm::Value* v = genOwned(*c->init, c->type);
+            flushTemps();
+            b.CreateRet(v);
+            endLineTable();
+        }
         for (auto& f : program.funcs) defineFunction(*f);
         for (const StructDecl* sd : structs)
             for (auto& m : sd->methods)

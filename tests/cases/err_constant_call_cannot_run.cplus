@@ -1,0 +1,19 @@
+// A constant has no moment to run anything while the program runs, or it would run again at
+// every use. So a call in its value must be able to run while compiling.
+constexpr int noisy() {
+    println("called");
+    return 1;
+}
+
+const int A = noisy();
+
+// A pointer's value is only made while the program runs, so a call cannot be in it.
+constexpr long address() { return 5; }
+void* const P = reinterpret_cast<void*>(address());
+
+int main() {
+    println("{} {}", A, A);
+    return 0;
+}
+// error: a function called for the value of a constant must be able to run while compiling, but 'println'
+// error: a function called for the value of a constant must be able to run while compiling, but a value of type 'void*'

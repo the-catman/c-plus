@@ -1,0 +1,51 @@
+// A chain of constants that cannot be worked out while compiling still makes a small program,
+// and using one stops the program. Using none would not.
+const int Z0 = 1 / 0;
+const int Z1 = Z0 + Z0;
+const int Z2 = Z1 + Z1;
+const int Z3 = Z2 + Z2;
+const int Z4 = Z3 + Z3;
+const int Z5 = Z4 + Z4;
+const int Z6 = Z5 + Z5;
+const int Z7 = Z6 + Z6;
+const int Z8 = Z7 + Z7;
+const int Z9 = Z8 + Z8;
+const int Z10 = Z9 + Z9;
+const int Z11 = Z10 + Z10;
+const int Z12 = Z11 + Z11;
+const int Z13 = Z12 + Z12;
+const int Z14 = Z13 + Z13;
+const int Z15 = Z14 + Z14;
+const int Z16 = Z15 + Z15;
+const int Z17 = Z16 + Z16;
+const int Z18 = Z17 + Z17;
+const int Z19 = Z18 + Z18;
+const int Z20 = Z19 + Z19;
+const int Z21 = Z20 + Z20;
+const int Z22 = Z21 + Z21;
+const int Z23 = Z22 + Z22;
+const int Z24 = Z23 + Z23;
+const int Z25 = Z24 + Z24;
+const int Z26 = Z25 + Z25;
+const int Z27 = Z26 + Z26;
+const int Z28 = Z27 + Z27;
+const int Z29 = Z28 + Z28;
+const int Z30 = Z29 + Z29;
+const int Z31 = Z30 + Z30;
+const int Z32 = Z31 + Z31;
+const int Z33 = Z32 + Z32;
+const int Z34 = Z33 + Z33;
+const int Z35 = Z34 + Z34;
+const int Z36 = Z35 + Z35;
+const int Z37 = Z36 + Z36;
+const int Z38 = Z37 + Z37;
+const int Z39 = Z38 + Z38;
+const int Z40 = Z39 + Z39;
+
+int main() {
+    println("before");
+    println("{}", Z40);
+    return 0;
+}
+// expect: before
+// trap: division by zero

@@ -1,0 +1,17 @@
+// The same for an element of a vector.
+class Node {
+public:
+    int n = 1;
+};
+
+int main() {
+    vector<unique<Node>> v;
+    v.push_back(unique<Node>());
+    unique<Node> a = move(v[0]);
+    println("{}", a.n);
+    unique<Node> b = move(v[0]);
+    println("{}", b.n);
+    return 0;
+}
+// expect: 1
+// trap: this 'unique<Node>' has been moved away

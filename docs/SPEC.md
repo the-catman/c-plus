@@ -730,11 +730,12 @@ Building a vector:
 - `push_back`, `pop_back` and `clear` cannot be called on a temporary, such as
   `makeList().push_back(1)`, because the change would be lost.
 - A vector is not a [condition](#conditions); write `!v.empty()`.
-- A method that changes a struct in a vector, `v[0].move(1)`, works on that element in place.
-  If its body also writes to `v`, through a pointer or an object holding it, the program
-  stops when the method returns, since what the method did to the element would be lost. C++
-  leaves this undefined if `v` moves. Call the method on a copy of the element and store it
-  back.
+- A method that changes a struct in a vector, `v[0].move(1)`, works on that element in place,
+  and an argument that holds a copy of `v` keeps seeing `v` as it was. If the method's body
+  writes to `v`, keeps a copy of it, or frees what holds it, through a pointer or an object
+  holding it, the program stops when the method returns, since what the method did to the
+  element would be lost. C++ leaves this undefined if `v` moves. Call the method on a copy of
+  the element and store it back.
 - Not yet: `insert`, `erase`, `resize`, `reserve`, iterators (`begin()`, `end()`), and
   `hashmap<K, V>`.
 
@@ -1012,13 +1013,17 @@ const string NAME = "Ada";
   pointer has its `const` after the `*`, as in C++: `void* const NOTHING = null;`.
 - Its value is worked out from literals, other constants, operators, casts, `sizeof` and calls to
   [`constexpr` functions](#constexpr). A variable or any other call is an error.
+- The compiler works the value out once, while compiling, whenever it can. A call in the value must be
+  able to run then, and it is an error if it cannot, since a constant has no moment to run anything
+  while the program runs.
 - C's macros are written this way: `const int SQLITE_OK = 0;`, and for a macro that is really
   an address, `void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);`.
 - A value that cannot be worked out, such as `1 / 0`, stops the program when the constant is
   used, naming the constant's line. With `constexpr` it is a compile error instead.
 - A constant cannot be changed, and it has no address. To point to it, copy it into a
   variable first.
-- A local variable or a parameter can have the same name, and hides the constant.
+- A local variable or a parameter can have the same name, and hides the constant. So does a field,
+  inside its type, as in C++.
 - A variable outside any function, `int count = 0;`, is not supported yet. Pass the value to
   the functions that use it, or keep it in a class object.
 
@@ -1487,6 +1492,12 @@ long biggest = max(total, 0L);
   place of the built-in one.
 - Constants such as C++20's `std::numbers::pi` are planned. Until then, `acos(-1)` is π.
 
+### Nesting limits
+
+Code nested too deeply is a compile error, where a C++ compiler might crash. The limits are about 333
+nested parentheses, 1000 nested blocks or `else if`s in a row, and 10000 terms in one chain such as
+`a + b + c` or `a.b.c`. Split such code into smaller pieces, with local variables or functions.
+
 ---
 
 ## Printing
@@ -1734,8 +1745,8 @@ lend(a.get());                              // `void lend(Node n)`: a keeps it
 - **`move(x)`** gives x's value away, and leaves a variable with no value until it gets a new one. The compiler follows this
   through branches, loops, `&&` and try blocks. A value moved in a loop needs a new value before the loop goes round. `return a;` on a
   local variable moves it by itself, as in C++. `move` works on a value of any type, so generic code can use it for every `T`.
-- **Fields and elements** are not followed by the compiler. `move(o.child)` or `move(v[0])` leaves that place empty, and using it then
-  stops the program. For a type that can be copied, such as a string or a class, `move` on a field or an element copies it and leaves it as it was.
+- **Fields and elements** are not followed by the compiler. `move(o.child)` or `move(v[0])` leaves that place empty. Using it or moving
+  from it again then stops the program, and printing it shows `moved`. For a type that can be copied, such as a string or a class, `move` on a field or an element copies it and leaves it as it was.
 - **It cannot be copied**, so neither can what holds one, such as a struct with a `unique<Node>` field or a `vector<unique<Node>>`: `b = a` is an
   error that shows what to write. Move them instead, and reach elements by position, as `for (auto x : v)` would copy each.
 - **Never empty:** `unique<Node> u;` must be assigned before it is read, as a class variable must. For one that can be empty, write

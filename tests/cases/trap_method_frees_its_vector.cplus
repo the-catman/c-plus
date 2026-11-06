@@ -1,0 +1,23 @@
+// The method frees what holds the vector its element lies in. Checking on that afterward must
+// not read the freed memory, and the program stops.
+[[allow(new_delete)]];
+
+struct M {
+    int x = 0;
+    void fin(H* h) {
+        x = 1;
+        delete h;
+    }
+};
+
+struct H {
+    vector<M> items;
+};
+
+int main() {
+    H* h = new H{{M{0}}};
+    h->items[0].fin(h);
+    println("not reached");
+    return 0;
+}
+// trap: a vector was changed, copied or freed while a method of one of its elements was running

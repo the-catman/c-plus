@@ -522,8 +522,8 @@ a debug build with ASan, stack traces and a leak report. Every item of Phase 1 i
 `examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
 criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
 `dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, generics with
-constraints, errors, `constexpr` with `if constexpr`, and `unique<T>` with `move`. `local<T>` is left, which
-has little use until there are threads. The leak report came with Phase 1.
+constraints, errors, `constexpr` with `if constexpr`, and `unique<T>` with `move`, which is every item of Phase 2.
+The leak report came with Phase 1.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -536,10 +536,11 @@ Debug builds with ASan/UBSan. Exit criterion: a non-trivial program that calls a
 
 **Phase 2 — Abstractions.** Classes with inheritance and interfaces, multiple
 inheritance, generics with constraints, `constexpr`, error values and
-`try`, `unique` and `local`, `weak`, leak report.
+`try`, `unique`, `weak`, leak report.
 
 **Phase 3 — Batteries.** Reflection descriptors, `json`, `http` and WebSockets via
-libcurl, `hashmap`, `spawn` and `Task`.
+libcurl, `hashmap`, `spawn` and `Task`, and `local`, which moved here on 2026-11-06: it only means
+something next to threads, and its rule that it cannot cross into `spawn` can only be enforced then.
 
 **Phase 4 — Diagnostics and docs pass.** Rewrite every diagnostic to the standard in §5.
 Finish the spec. Examples corpus from the test suite. `cplus explain`.
@@ -580,11 +581,12 @@ will confidently write C++ wherever the two differ.
   feature is reached.
 - Function overloading is planned, as in C++, after the v1 core.
 - A struct method changing a vector element stops the program if its body also writes to that
-  vector, since the update to the element would be lost (decided 2026-11-06). The alternative
-  is to pin a buffer separately from its reference count, so that writes land in place, at a
-  cost to every vector write.
-- A plain `const` is worked out where it is used, so `const int X = 1 / 0;` stops the program when `X` is
-  used, and `constexpr` reports it while compiling. They could become one rule.
+  vector, keeps a copy of it or frees it, since the update to the element would be lost (decided
+  2026-11-06). The alternative is to pin a buffer separately from its reference count, so that writes
+  land in place, at a cost to every vector write. One case goes unnoticed: a copy taken through a
+  pointer and dropped again inside the method's body sees what the method did to the element so far.
+- A plain `const` is worked out while compiling when it can be, but `const int X = 1 / 0;` still stops the
+  program when `X` is used, and `constexpr` reports it while compiling. They could become one rule.
 - `main` takes its arguments as in C++, through raw pointers. A checked form, such as
   `int main(vector<string> args)`, could come later.
 - References (`T&`): whether C+ gets them, and in what form. They decide how

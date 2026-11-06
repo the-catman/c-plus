@@ -21,5 +21,5 @@ int main() {
     return 0;
 }
 // expect: before
-// trap: a vector was changed while a method of one of its elements was running
+// trap: a vector was changed, copied or freed while a method of one of its elements was running
 // trap: trap_vector_changed_in_method.cplus:19:

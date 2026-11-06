@@ -825,6 +825,24 @@ struct TemplateDecl {
     std::map<std::string, FuncDecl*> functions;
 };
 
+// Whether a value of this type holds a unique reference, directly or inside. `seen` stops at a struct
+// already looked at, since a struct can lead back to itself through a vector.
+inline bool holdsUnique(const Type* t, std::vector<const StructDecl*>& seen) {
+    if (t->isUnique()) return true;
+    if (t->isOptional() || t->isVector() || t->isArray()) return holdsUnique(t->elem, seen);
+    if (!t->isStruct()) return false;
+    for (const StructDecl* d : seen)
+        if (d == t->decl) return false;
+    seen.push_back(t->decl);
+    for (auto& f : t->decl->fields)
+        if (holdsUnique(f.type, seen)) return true;
+    return false;
+}
+inline bool holdsUnique(const Type* t) {
+    std::vector<const StructDecl*> seen;
+    return holdsUnique(t, seen);
+}
+
 struct ImportDecl {
     std::string path;  // dotted, e.g. "net.server"
     Loc loc;

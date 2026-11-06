@@ -224,14 +224,7 @@ static bool needsValue(const Type* t, int depth = 0) {
 }
 
 // Whether a value can be copied. What has one owner cannot, nor can what holds one.
-static bool isCopyable(const Type* t, int depth = 0) {
-    if (t->isUnique()) return false;
-    if (t->isOptional() || t->isVector() || t->isArray()) return isCopyable(t->elem, depth);
-    if (!t->isStruct() || depth > 32) return true;
-    for (auto& f : t->decl->fields)
-        if (!isCopyable(f.type, depth + 1)) return false;
-    return true;
-}
+static bool isCopyable(const Type* t) { return !holdsUnique(t); }
 
 // Why a value of type `t` cannot be made without being given one.
 static std::string elementDefaultProblem(const Type* t) {
@@ -776,7 +769,9 @@ void Sema::checkConstant(VarDecl& c) {
                      "write a function that returns the value", spec::Status);
     } else if (c.isConstexpr) {
         foldConstexpr(c);
-    } else if (const Expr* bad = notConstant(*c.init); bad && !t->isError()) {
+    } else if (const Expr* bad = notConstant(*c.init); !bad && !t->isError()) {
+        foldConstant(c);
+    } else if (bad && !t->isError()) {
         diags_.error(bad->loc, "the value of a constant is worked out from literals, other constants and operators",
                      "a variable or a call cannot be used here. For a value computed while the program runs, write "
                      "a function, or use a local variable",
@@ -1271,6 +1266,15 @@ void Sema::foldConstexpr(VarDecl& v) {
         diags_.error(v.init->loc, "the value of " + q(v.name) + " must be known at compile time, but " + error.message, "", spec::Constexpr);
         return;
     }
+    putLiteral(v, value);
+}
+
+bool Sema::fieldHides(const std::string& name) const {
+    const StructDecl* in = owner() ? owner() : defaultsOf_;
+    return in && in->fieldOwner(name);
+}
+
+void Sema::putLiteral(VarDecl& v, const ConstValue& value) {
     Loc loc = v.init->loc;
     ExprPtr literal;
     switch (value.kind) {
@@ -1286,6 +1290,44 @@ void Sema::foldConstexpr(VarDecl& v) {
     }
     literal->type = v.type;
     v.init = std::move(literal);
+}
+
+// Whether working out this expression calls a function.
+static bool callsFunction(const Expr& e) {
+    switch (e.kind) {
+        case Expr::Kind::Call: return true;
+        case Expr::Kind::Unary: return callsFunction(*static_cast<const UnaryExpr&>(e).operand);
+        case Expr::Kind::Binary: {
+            auto& b = static_cast<const BinaryExpr&>(e);
+            return callsFunction(*b.lhs) || callsFunction(*b.rhs);
+        }
+        case Expr::Kind::Ternary: {
+            auto& t = static_cast<const TernaryExpr&>(e);
+            return callsFunction(*t.cond) || callsFunction(*t.thenExpr) || callsFunction(*t.elseExpr);
+        }
+        case Expr::Kind::Cast: {
+            auto& c = static_cast<const CastExpr&>(e);
+            return c.operand && callsFunction(*c.operand);
+        }
+        default: return false;
+    }
+}
+
+void Sema::foldConstant(VarDecl& v) {
+    if (!v.init || !v.type || v.type->isError()) return;
+    bool holdsLiteral = v.type->isNumber() || v.type->is(K::Bool) || v.type->is(K::Char) || v.type->is(K::String);
+    try {
+        if (!holdsLiteral) throw ConstError{v.init->loc, "a value of type " + q(v.type) + " cannot be worked out while compiling"};
+        ConstEval eval(constHooks());
+        putLiteral(v, eval.convert(eval.eval(*v.init), v.type, v.init->loc));
+    } catch (ConstError& error) {
+        // Without a call, a value that cannot be worked out, such as `1 / 0`, stops the program when it is used. A
+        // call would otherwise run again at every use, so it must be able to run once, here.
+        if (callsFunction(*v.init))
+            diags_.error(v.init->loc, "a function called for the value of a constant must be able to run while compiling, but " + error.message,
+                         "a constant has no moment to run anything while the program runs. Fix the call, or write a function that returns the value",
+                         spec::Constants);
+    }
 }
 
 void Sema::checkIfConstexpr(IfStmt& st, Flow& flow) {
@@ -1318,7 +1360,15 @@ void Sema::checkIfConstexpr(IfStmt& st, Flow& flow) {
 
 ConstHooks Sema::constHooks() {
     ConstHooks hooks;
-    hooks.constant = [this](const std::string& name) -> const VarDecl* { return lookup(name); };
+    hooks.constant = [this](const std::string& name) -> const VarDecl* {
+        const VarDecl* decl = lookup(name);
+        return decl && decl->isTopLevel && fieldHides(name) ? nullptr : decl;
+    };
+    hooks.globalConstant = [this](const std::string& name) -> const VarDecl* {
+        if (scopes_.empty()) return nullptr;
+        auto it = scopes_[0].find(name);
+        return it == scopes_[0].end() ? nullptr : it->second;
+    };
     hooks.function = [this](const std::string& name) -> const FuncDecl* {
         auto it = funcs_.find(name);
         return it == funcs_.end() ? nullptr : it->second;
@@ -2148,6 +2198,8 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     if (e.kind == Expr::Kind::Name) {
         auto& n = static_cast<NameExpr&>(e);
         n.decl = lookup(n.name);
+        // A member of the type hides a constant of the file, as in C++. A local variable hides both.
+        if (n.decl && n.decl->isTopLevel && fieldHides(n.name)) n.decl = nullptr;
         if (!n.decl) {
             // Inside a method, a field can be used by its name alone, as in C++.
             if (StructDecl* o = owner()) {
@@ -2642,7 +2694,7 @@ const Type* Sema::checkAddressOf(UnaryExpr& u, Flow& flow) {
     }
     if (target.kind == Expr::Kind::Name) {
         const VarDecl* found = lookup(static_cast<NameExpr&>(target).name);
-        if (found && found->isTopLevel) {
+        if (found && found->isTopLevel && !fieldHides(found->name)) {
             checkExpr(target, flow);
             diags_.error(u.loc, q(found->name) + " is a constant, which has no address",
                          "copy it into a variable first: `auto copy = " + found->name + ";`, then `&copy`",
@@ -4314,7 +4366,12 @@ const Type* Sema::checkDynamicCast(CastExpr& c, const Type* from, const Type* to
 }
 
 const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
-    if (!c.operand) return c.target;  // `T()` where T is not a struct or class: its default value
+    if (!c.operand) {  // `T()` where T is not a struct or class: its default value
+        if (needsValue(c.target))
+            diags_.error(c.loc, "a " + q(c.target) + " has no default value, since it is never empty",
+                         "give it a value. For one that can be empty, use `" + std::string(c.target->name) + "?`", spec::Unique);
+        return c.target;
+    }
     const Type* from = checkExpr(*c.operand, flow);
     const Type* to = c.target;
     checkStorable(to, c.loc);
@@ -4659,6 +4716,7 @@ const Type* Sema::checkCoalesce(CoalesceExpr& c, Flow& flow) {
     } else {
         r = checkExpr(*c.rhs, rhsFlow);
     }
+    rejectCopy(*c.rhs);
     if (r->isError()) return inner;
     if (r == l || r->isNull()) return l;  // the fallback may itself be null
     if (canConvert(r, inner)) return inner;

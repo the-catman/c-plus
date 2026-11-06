@@ -1,0 +1,65 @@
+// What is worked out while compiling has the types the running program would have. Each pair
+// prints the same value twice, the first from the compiler and the second from the program.
+const double HALF = (true ? 1 : 2.5) / 2;
+constexpr double HALF2 = (true ? 1 : 2.5) / 2;
+constexpr long BIG = (true ? 2000000000 : 1L) + 2000000000;
+constexpr double OTHER_BRANCH = (false ? 2.5f : 3) / 2;
+
+// These are read by the parser, for a type, before anything else is known.
+const int THREE = int((true ? 3 : 2.5) / 2 * 2);
+
+constexpr long autoKeepsLong() {
+    auto x = 1L;
+    x = 5;
+    return x * 2000000000;
+}
+constexpr double autoKeepsDouble() {
+    auto x = 1.5;
+    x = 2;
+    return x / 4;
+}
+
+// A function sees the constants of the file, not those of whoever called it.
+const int N = 1;
+const int FROM_N = N + 1;
+constexpr int readsN() { return N; }
+
+template<typename T> int branch() {
+    if constexpr (int((true ? 3 : 2.5) / 2 * 2) == 3) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+int main() {
+    bool yes = true;
+    bool no = false;
+    println("{} {}", HALF, (yes ? 1 : 2.5) / 2);
+    println("{} {}", HALF2, (yes ? 1 : 2.5) / 2);
+    println("{} {}", BIG, (yes ? 2000000000 : 1L) + 2000000000);
+    println("{} {}", OTHER_BRANCH, (no ? 2.5f : 3) / 2);
+
+    array<int, THREE> a;
+    println("{} {}", a.size(), int((yes ? 3 : 2.5) / 2 * 2));
+    println("{}", branch<int>());
+
+    println("{}", autoKeepsLong());
+    println("{}", autoKeepsDouble());
+
+    const int N = 5;
+    constexpr int seen = readsN();
+    constexpr int seenThroughConstant = FROM_N;
+    constexpr int mine = N;
+    println("{} {} {}", seen, seenThroughConstant, mine);
+    return 0;
+}
+// expect: 0.5 0.5
+// expect: 0.5 0.5
+// expect: 4000000000 4000000000
+// expect: 1.5 1.5
+// expect: 3 3
+// expect: 1
+// expect: 10000000000
+// expect: 0.5
+// expect: 1 2 5

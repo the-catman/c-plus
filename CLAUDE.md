@@ -2,7 +2,7 @@
 
 C+ is a compiled language shaped like C++, with safer defaults and more built in. The
 compiler is written in C++20 and generates code through LLVM 18. The current focus is
-Phase 2 of `PLAN.md`, the abstractions: inheritance, generics, errors and ownership forms.
+Phase 3 of `PLAN.md`, the batteries: reflection, JSON, HTTP, `hashmap` and threads.
 
 ## Where things are
 

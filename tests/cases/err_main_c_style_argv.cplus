@@ -1,0 +1,6 @@
+// The usual C spelling of main's arguments gets the C+ spelling, and this is still the
+// program's main, not a program without one.
+int main(int argc, char* argv[]) { return 0; }
+// error: C+ has no C-style arrays
+// error: int main(int argc, char** argv)
+// not-error: this program has no main function

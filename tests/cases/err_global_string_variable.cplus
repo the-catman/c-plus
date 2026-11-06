@@ -1,0 +1,6 @@
+// The advice is written with the type that was used.
+string name = "a";
+
+int main() { return 0; }
+// error: const string name = ""
+// not-error: const int

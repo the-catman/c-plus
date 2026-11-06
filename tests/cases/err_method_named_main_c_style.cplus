@@ -1,0 +1,8 @@
+// Only the program's main gets advice about main's arguments.
+class C {
+    void main(int x[]) {}
+};
+
+int main() { return 0; }
+// error: C+ has no C-style arrays
+// not-error: int main(int argc

@@ -13,5 +13,5 @@ int main() {
     println("{}", rows);
     return 0;
 }
-// trap: a vector was changed while a method of one of its elements was running
+// trap: a vector was changed, copied or freed while a method of one of its elements was running
 // trap: trap_vector_changed_in_method_pointer.cplus:12:

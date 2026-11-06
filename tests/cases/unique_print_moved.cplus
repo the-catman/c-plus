@@ -1,0 +1,30 @@
+// What was moved out of a field or an element prints as that.
+class Node {
+public:
+    int n = 1;
+};
+struct Holds {
+    unique<Node> u;
+};
+
+int main() {
+    Holds h = {unique<Node>()};
+    println("{}", h);
+    unique<Node> a = move(h.u);
+    println("{}", h);
+    println("{}", h.u);
+
+    vector<unique<Node>> v;
+    v.push_back(unique<Node>());
+    println("{}", v);
+    unique<Node> b = move(v[0]);
+    println("{}", v);
+    println("{} {}", a, b);
+    return 0;
+}
+// expect: {u: Node {n: 1}}
+// expect: {u: moved}
+// expect: moved
+// expect: [Node {n: 1}]
+// expect: [moved]
+// expect: Node {n: 1} Node {n: 1}

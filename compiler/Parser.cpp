@@ -37,7 +37,7 @@ void Parser::fail(Loc loc, const std::string& message, const std::string& help, 
 
 void Parser::failTooDeep() {
     diags_.error(peek().loc, "this code is nested too deeply for the compiler",
-                 "split it into smaller pieces, with local variables or functions");
+                 "split it into smaller pieces, with local variables or functions", spec::NestingLimits);
     gaveUp_ = true;
     throw TooDeep{};
 }
@@ -331,9 +331,13 @@ void Parser::readConstants() {
             Stmt* decl = constantDecls_.back().get();
             if (decl->kind == Stmt::Kind::VarDecl) {
                 auto* v = static_cast<VarDecl*>(decl);
+                v->isTopLevel = true;
                 constants_[v->name] = v;
             } else {
-                for (auto& v : static_cast<DeclGroupStmt*>(decl)->decls) constants_[v->name] = v.get();
+                for (auto& v : static_cast<DeclGroupStmt*>(decl)->decls) {
+                    v->isTopLevel = true;
+                    constants_[v->name] = v.get();
+                }
             }
         } catch (ParseError&) {
         } catch (TooDeep&) {
@@ -346,6 +350,11 @@ ConstHooks Parser::constHooks() {
     hooks.constant = [this](const std::string& name) -> const VarDecl* {
         for (size_t i = localScopes_.size(); i-- > 0;)
             if (auto it = localScopes_[i].find(name); it != localScopes_[i].end()) return it->second;
+        readConstants();
+        auto it = constants_.find(name);
+        return it == constants_.end() ? nullptr : it->second;
+    };
+    hooks.globalConstant = [this](const std::string& name) -> const VarDecl* {
         readConstants();
         auto it = constants_.find(name);
         return it == constants_.end() ? nullptr : it->second;
@@ -855,20 +864,27 @@ void Parser::parseTopLevel(Program& prog) {
     Loc retLoc;
     bool isConst = false;
     const Type* ret = parseType(retLoc, &isConst);
-    if (isConst && check(Tok::Ident) && peek(1).kind != Tok::LParen) return parseConstants(prog, ret, retLoc, false);
-    if (ret->is(Type::Kind::Auto)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `int`");
     if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && isTypeName(peek()))
         fail(peek().loc, "methods are defined inside their " + std::string(prog_->findStruct(peek().text)->keyword()),
              "move this definition into the body of '" + peek().text + "'; C+ has no headers, so there is no "
              "separate declaration to match",
              spec::Classes);
+    if (isConst && check(Tok::Ident) && peek(1).kind != Tok::LParen) return parseConstants(prog, ret, retLoc, false);
+    if (ret->is(Type::Kind::Auto)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `int`");
     if (check(Tok::Ident) && peek(1).kind != Tok::LParen)
         notYet(peek().loc, "global variables",
                ret->isPointer()
                    ? "for a pointer that never changes, write a constant, with `const` after the '*': `" +
                          std::string(ret->name) + " const " + peek().text + " = null;`"
-                   : "for a value that never changes, write a constant: `const int " + peek().text + " = 0;`. For one "
-                     "that changes, pass it to the functions that use it, or keep it in a class object");
+                   : ret->isNumber() || ret->is(Type::Kind::Bool) || ret->is(Type::Kind::Char) || ret->is(Type::Kind::String)
+                       ? "for a value that never changes, write a constant: `const " + std::string(ret->name) + " " + peek().text +
+                             " = " + (ret->is(Type::Kind::String) ? "\"\""
+                                      : ret->is(Type::Kind::Bool) ? "false"
+                                      : ret->is(Type::Kind::Char) ? "'a'"
+                                                                  : "0") +
+                             ";`. For one that changes, pass it to the functions that use it, or keep it in a class object"
+                       : "pass the value to the functions that use it, or keep it in a class object. A function that returns it "
+                         "also works, if it never changes");
     prog.funcs.push_back(parseFunction(ret, retLoc));
 }
 
@@ -1558,8 +1574,15 @@ void Parser::parseParams(FuncDecl& fn) {
                        "pass a pointer: `int* count`, called as `f(&n)`");
             const Token& pname = expect(Tok::Ident, "for the parameter name");
             rejectTemplateParamName(pname);
-            if (check(Tok::LBracket) && fn.name == "main")
-                fail(peek().loc, "C+ has no C-style arrays", "write `int main(int argc, char** argv)`", spec::MainFunction);
+            if (check(Tok::LBracket) && fn.name == "main" && fn.role == FuncDecl::Role::Free) {
+                // Reported, and read as what it means, so that this is still the program's main.
+                diags_.error(peek().loc, "C+ has no C-style arrays", "write `int main(int argc, char** argv)`", spec::MainFunction);
+                while (match(Tok::LBracket)) {
+                    while (!check(Tok::RBracket) && !check(Tok::Eof)) advance();
+                    match(Tok::RBracket);
+                    ty = Type::pointerTo(ty);
+                }
+            }
             if (check(Tok::LBracket)) failCStyleArray(ty, pname.text);
             auto param = std::make_unique<VarDecl>(pname.loc, pname.text, ty, typeLoc);
             param->isParam = true;

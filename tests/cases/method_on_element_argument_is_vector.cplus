@@ -1,0 +1,36 @@
+// An argument that holds a copy of the vector must keep seeing the vector as it was: the
+// method changes the element in the vector itself, as in C++.
+struct P {
+    int x = 0;
+    void add(vector<P> other) {
+        x = 99;
+        println("{}", other[0].x);
+    }
+    void addFirst(P first) {
+        x = 50;
+        println("{}", first.x);
+    }
+};
+
+struct Box {
+    vector<P> items;
+};
+
+int main() {
+    vector<P> v = {P{1}};
+    v[0].add(v);
+    println("{}", v[0].x);
+    v[0].addFirst(v[0]);
+    println("{}", v[0].x);
+
+    vector<Box> boxes = {Box{{P{2}}}};
+    boxes[0].items[0].add(boxes[0].items);
+    println("{}", boxes[0].items[0].x);
+    return 0;
+}
+// expect: 1
+// expect: 99
+// expect: 99
+// expect: 50
+// expect: 2
+// expect: 99

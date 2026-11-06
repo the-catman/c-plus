@@ -1,0 +1,18 @@
+// `size` here is the field, whose value is only known while the program runs, even though a
+// constant of the file has that name as well.
+const int size = 10;
+
+struct S {
+    int size = 1;
+    int get() const {
+        constexpr int twice = size * 2;
+        return twice;
+    }
+};
+
+int main() {
+    S s;
+    println("{}", s.get());
+    return 0;
+}
+// error: 'size' is not a constant

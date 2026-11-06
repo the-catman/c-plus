@@ -1,0 +1,14 @@
+// `T()` for a unique reference would be an empty one, which is never allowed to exist.
+class Node {
+public:
+    int n = 1;
+};
+
+template<typename T> T make() { return T(); }
+
+int main() {
+    unique<Node> u = make<unique<Node>>();
+    println("{}", u.n);
+    return 0;
+}
+// error: 'unique<Node>' has no default value

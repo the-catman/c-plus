@@ -1,0 +1,90 @@
+// Each constant uses the one before twice. The compiler must take a time, and write a program,
+// in proportion to how many there are, in whichever order they are written.
+const long C0 = 1;
+const long C1 = C0 + C0;
+const long C2 = C1 + C1;
+const long C3 = C2 + C2;
+const long C4 = C3 + C3;
+const long C5 = C4 + C4;
+const long C6 = C5 + C5;
+const long C7 = C6 + C6;
+const long C8 = C7 + C7;
+const long C9 = C8 + C8;
+const long C10 = C9 + C9;
+const long C11 = C10 + C10;
+const long C12 = C11 + C11;
+const long C13 = C12 + C12;
+const long C14 = C13 + C13;
+const long C15 = C14 + C14;
+const long C16 = C15 + C15;
+const long C17 = C16 + C16;
+const long C18 = C17 + C17;
+const long C19 = C18 + C18;
+const long C20 = C19 + C19;
+const long C21 = C20 + C20;
+const long C22 = C21 + C21;
+const long C23 = C22 + C22;
+const long C24 = C23 + C23;
+const long C25 = C24 + C24;
+const long C26 = C25 + C25;
+const long C27 = C26 + C26;
+const long C28 = C27 + C27;
+const long C29 = C28 + C28;
+const long C30 = C29 + C29;
+
+const long D30 = D29 + D29;
+const long D29 = D28 + D28;
+const long D28 = D27 + D27;
+const long D27 = D26 + D26;
+const long D26 = D25 + D25;
+const long D25 = D24 + D24;
+const long D24 = D23 + D23;
+const long D23 = D22 + D22;
+const long D22 = D21 + D21;
+const long D21 = D20 + D20;
+const long D20 = D19 + D19;
+const long D19 = D18 + D18;
+const long D18 = D17 + D17;
+const long D17 = D16 + D16;
+const long D16 = D15 + D15;
+const long D15 = D14 + D14;
+const long D14 = D13 + D13;
+const long D13 = D12 + D12;
+const long D12 = D11 + D11;
+const long D11 = D10 + D10;
+const long D10 = D9 + D9;
+const long D9 = D8 + D8;
+const long D8 = D7 + D7;
+const long D7 = D6 + D6;
+const long D6 = D5 + D5;
+const long D5 = D4 + D4;
+const long D4 = D3 + D3;
+const long D3 = D2 + D2;
+const long D2 = D1 + D1;
+const long D1 = D0 + D0;
+const long D0 = 1;
+
+const string S0 = "a";
+const string S1 = S0 + S0;
+const string S2 = S1 + S1;
+const string S3 = S2 + S2;
+const string S4 = S3 + S3;
+const string S5 = S4 + S4;
+const string S6 = S5 + S5;
+const string S7 = S6 + S6;
+const string S8 = S7 + S7;
+const string S9 = S8 + S8;
+const string S10 = S9 + S9;
+
+int main() {
+    println("{}", C30);
+    println("{}", D30);
+    println("{}", S10.size());
+    constexpr long both = C30 + D30;
+    println("{}", both);
+    return 0;
+}
+// expect: 1073741824
+// expect: 1073741824
+// expect: 1024
+// expect: 2147483648

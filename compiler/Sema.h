@@ -98,6 +98,11 @@ private:
     bool evaluate(const Expr& e, ConstValue& out, const std::string& what);
     // For `constexpr`: checks the value can be worked out, and puts it in place of the expression.
     void foldConstexpr(VarDecl& v);
+    // For a plain `const`: the same when it can be done. It is an error only if the value calls a function.
+    void foldConstant(VarDecl& v);
+    // Whether a member of the type being checked hides a constant of the file with this name.
+    bool fieldHides(const std::string& name) const;
+    void putLiteral(VarDecl& v, const ConstValue& value);
     bool constraintHolds(const ConstraintExpr& c);
     void checkNow(FuncDecl& fn);  // for a function that runs while compiling, whose body must be checked first
     // While something else is checked in the middle of what is being checked: nothing around it counts.

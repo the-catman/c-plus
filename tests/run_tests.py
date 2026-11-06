@@ -8,6 +8,7 @@ in its comments. A test can use these, one per line, anywhere in the file:
 
   // expect: <text>    the next line the program must print (in order)
   // error: <text>     compiling must fail, and the errors must contain <text>
+  // not-error: <text> the errors must not contain <text>, for a test with error directives
   // warning: <text>   compiling must print a warning containing <text>; a test with no
                        warning directives fails if the compiler prints any warning
   // trap: <text>      the program must stop with a runtime error containing <text>,
@@ -32,9 +33,10 @@ Tests run at the same time, one per processor, and print in order.
 The runner also checks that every spec anchor in compiler/SpecRefs.h is a real
 heading in docs/SPEC.md, so diagnostics never point at a missing section, that every
 program in examples/ compiles without warnings, that very deeply nested code is an
-error instead of a crash, and that no way of copying a unique reference compiles. That
-last one builds each case by itself, since one test file with many errors would pass with
-one of them missing.
+error instead of a crash, that no way of copying a unique reference compiles, and that a
+crash whose report cannot flush the program's output still says what happened. The check of
+copies builds each case by itself, since one test file with many errors would pass with one
+of them missing.
 """
 import concurrent.futures
 import os
@@ -99,7 +101,8 @@ def check_nesting_limit(cplus, workdir):
     for what, text in too_deep.items():
         source.write_text(text)
         run = subprocess.run([cplus, "check", str(source)], capture_output=True, text=True)
-        if run.returncode != 1 or run.stderr.count("nested too deeply") != 1 or "no main" in run.stderr:
+        if (run.returncode != 1 or run.stderr.count("nested too deeply") != 1 or "no main" in run.stderr
+                or "docs/SPEC.md#nesting-limits" not in run.stderr):
             print(f"FAIL nesting limit with {what}: exit code {run.returncode}\n  " + run.stderr[:500])
             ok = False
     for what, text in close.items():
@@ -117,8 +120,10 @@ def check_unique_copies(cplus, workdir):
 class Node { public: int n = 1; };
 class Dog : public Node {};
 struct Holds { unique<Node> u; };
+struct Family { vector<Family> kids; unique<Node>? u; };
 class Owner { public: unique<Node> held; Owner(unique<Node> h) : held(move(h)) {} };
 unique<Node> make() { return unique<Node>(); }
+unique<Node>? none() { return null; }
 void take(unique<Node> u) {}
 template<typename T> T same(T x) { return x; }
 template<typename T> void noReturn(T x) {}
@@ -150,6 +155,7 @@ int main() {
         "auto b = v.back();", "auto b = arr.front();", "try { auto b = mayFail(a); } catch (Error e) {}",
         "unique<Node> b = (a2 = a);", "unique<Node> b = (a2 = make());", "Node n = yes ? a : a2;",
         "unique<Node>* p = &a; take(*p);", "weak<Node> w = a;", "unique<Dog> d = unique<Dog>(); unique<Node> up = d;",
+        "unique<Node> b = none() ?? a;", "auto b = none() ?? a;", "Family f; Family g = f;", "Family f; auto k = f.kids;",
     ]
     ok = True
     source = workdir / "copies.cplus"
@@ -158,6 +164,33 @@ int main() {
         run = subprocess.run([cplus, "check", str(source)], capture_output=True, text=True)
         if run.returncode != 1:
             print(f"FAIL this copies a unique reference, but it compiled: {copy}\n  " + run.stderr[:300])
+            ok = False
+    return ok
+
+
+def check_crash_in_output(cplus, workdir):
+    """Flushing the output can crash while reporting a crash. The report must still come out."""
+    if not sys.platform.startswith("linux"):
+        return True  # tests/c/crash.c builds its output with fopencookie
+    problem = build_c_library(ROOT / "tests" / "c" / "crash.c", workdir)
+    if problem:
+        print("FAIL a crash while flushing: " + problem)
+        return False
+    ok = True
+    source = workdir / "crash_in_output.cplus"
+    exe = workdir / "crash_in_output"
+    for what, by_abort in (("a crash", 0), ("an abort", 1)):
+        source.write_text('extern "C" void break_output(int by_abort);\nextern "C" void crash();\n'
+                          f'int main() {{ break_output({by_abort}); println("lost"); crash(); return 0; }}\n')
+        build = subprocess.run([cplus, "build", str(source), "-o", str(exe), "-L", str(workdir), "-lcrash"],
+                               capture_output=True, text=True)
+        if build.returncode != 0:
+            print(f"FAIL {what} while flushing did not compile:\n  " + build.stderr[:500])
+            ok = False
+            continue
+        run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10)
+        if run.returncode != 134 or "the program used memory it does not own" not in run.stderr:
+            print(f"FAIL {what} while flushing: exit code {run.returncode}\n  " + run.stderr[:500])
             ok = False
     return ok
 
@@ -201,6 +234,9 @@ def run_case(cplus, path, workdir):
         missing = [e for e in errors if e not in build.stderr]
         if missing:
             return "compile errors did not contain: " + "; ".join(missing) + "\n--- stderr ---\n" + build.stderr
+        wrong = [e for e in re.findall(r"//[ \t]*not-error:[ \t]*(.*?)[ \t]*$", text, re.M) if e in build.stderr]
+        if wrong:
+            return "compile errors should not contain: " + "; ".join(wrong) + "\n--- stderr ---\n" + build.stderr
         return None
     for flags in ([], ["-O"], ["--debug"], ["--debug", "-O"]):
         problem = run_program(cplus, rel, workdir / path.stem, [*extra, *flags], expect, traps, want_exit, warnings,
@@ -266,6 +302,7 @@ def main():
         if not name_filter:
             ok = check_nesting_limit(cplus, pathlib.Path(tmp)) and ok
             ok = check_unique_copies(cplus, pathlib.Path(tmp)) and ok
+            ok = check_crash_in_output(cplus, pathlib.Path(tmp)) and ok
 
         def run_in_own_folder(path):
             workdir = pathlib.Path(tmp) / path.stem

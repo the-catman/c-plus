@@ -32,6 +32,26 @@ ConstValue stringValue(std::string s) {
     out.s = std::move(s);
     return out;
 }
+const Type* typeOfValue(const ConstValue& v) {
+    switch (v.kind) {
+        case VK::Int: return Type::intTy();
+        case VK::Long: return Type::longTy();
+        case VK::Float: return Type::floatTy();
+        case VK::Double: return Type::doubleTy();
+        case VK::Bool: return Type::boolTy();
+        case VK::Char: return Type::charTy();
+        case VK::String: return Type::stringTy();
+    }
+    return Type::intTy();
+}
+// The type two numbers of these types are worked out in, as Sema's commonNumber finds. Null for anything else.
+const Type* commonNumberType(const Type* a, const Type* b) {
+    if (!a || !b || !a->isArithmetic() || !b->isArithmetic()) return nullptr;
+    if (a->is(K::Double) || b->is(K::Double)) return Type::doubleTy();
+    if (a->is(K::Float) || b->is(K::Float)) return Type::floatTy();
+    if (a->is(K::Long) || b->is(K::Long)) return Type::longTy();
+    return Type::intTy();
+}
 bool isFloating(const ConstValue& v) { return v.kind == VK::Float || v.kind == VK::Double; }
 bool isIntegerLike(const ConstValue& v) { return v.kind == VK::Int || v.kind == VK::Long || v.kind == VK::Char; }
 bool isNumberLike(const ConstValue& v) { return isIntegerLike(v) || isFloating(v); }
@@ -119,25 +139,92 @@ ConstValue ConstEval::convert(const ConstValue& v, const Type* to, Loc loc) {
 
 ConstValue ConstEval::evalName(const NameExpr& n) {
     if (Local* local = findLocal(n.name)) return local->value;
-    const VarDecl* decl = hooks_.constant ? hooks_.constant(n.name) : nullptr;
+    auto& lookup = globalsOnly_ ? hooks_.globalConstant : hooks_.constant;
+    const VarDecl* decl = lookup ? lookup(n.name) : nullptr;
     if (!decl) throw ConstError{n.loc, "'" + n.name + "' is not a constant"};
     if (!decl->isConst || !decl->init)
         throw ConstError{n.loc, "'" + n.name + "' is a variable, whose value is only known while the program runs"};
+    if (auto it = known_.find(decl); it != known_.end()) return it->second;
     if (std::find(evaluating_.begin(), evaluating_.end(), decl) != evaluating_.end())
         throw ConstError{n.loc, "the value of '" + n.name + "' depends on itself"};
     evaluating_.push_back(decl);
     // Constants see no locals of whoever asks.
     std::vector<std::vector<Scope>> saved;
     saved.swap(frames_);
+    if (decl->isTopLevel) ++globalsOnly_;
     struct Restore {
         ConstEval& e;
         std::vector<std::vector<Scope>>& saved;
+        bool global;
         ~Restore() {
             e.frames_.swap(saved);
             e.evaluating_.pop_back();
+            if (global) --e.globalsOnly_;
         }
-    } restore{*this, saved};
-    return convert(eval(*decl->init), decl->declType, n.loc);
+    } restore{*this, saved, decl->isTopLevel};
+    ConstValue value = convert(eval(*decl->init), decl->declType, n.loc);
+    known_[decl] = value;
+    return value;
+}
+
+const Type* ConstEval::staticType(const Expr& e) {
+    if (e.type && !e.type->isError() && !e.type->is(K::Auto)) return e.type;
+    switch (e.kind) {
+        case Expr::Kind::IntLit: {
+            auto& lit = static_cast<const IntLitExpr&>(e);
+            return !lit.isLong && lit.value >= INT32_MIN && lit.value <= INT32_MAX ? Type::intTy() : Type::longTy();
+        }
+        case Expr::Kind::FloatLit: return static_cast<const FloatLitExpr&>(e).isFloat ? Type::floatTy() : Type::doubleTy();
+        case Expr::Kind::CharLit: return Type::charTy();
+        case Expr::Kind::BoolLit: case Expr::Kind::Constraint: return Type::boolTy();
+        case Expr::Kind::StringLit: return Type::stringTy();
+        case Expr::Kind::Sizeof: return Type::longTy();
+        case Expr::Kind::Name: {
+            auto& n = static_cast<const NameExpr&>(e);
+            if (Local* local = findLocal(n.name)) return local->type;
+            auto& lookup = globalsOnly_ ? hooks_.globalConstant : hooks_.constant;
+            const VarDecl* decl = lookup ? lookup(n.name) : nullptr;
+            if (!decl) return nullptr;
+            return decl->declType->is(K::Auto) ? (decl->init ? staticType(*decl->init) : nullptr) : decl->declType;
+        }
+        case Expr::Kind::Cast: return static_cast<const CastExpr&>(e).target;
+        case Expr::Kind::Try: return staticType(*static_cast<const TryExpr&>(e).operand);
+        case Expr::Kind::Unary: {
+            auto& u = static_cast<const UnaryExpr&>(e);
+            if (u.op == UnOp::Not) return Type::boolTy();
+            const Type* t = staticType(*u.operand);
+            return t && t->is(K::Char) ? Type::intTy() : t;
+        }
+        case Expr::Kind::Binary: {
+            auto& b = static_cast<const BinaryExpr&>(e);
+            if ((b.op >= BinOp::Eq && b.op <= BinOp::Ge) || b.op == BinOp::LogAnd || b.op == BinOp::LogOr) return Type::boolTy();
+            const Type* l = staticType(*b.lhs);
+            if (b.op == BinOp::Shl || b.op == BinOp::Shr) return l && l->is(K::Long) ? Type::longTy() : Type::intTy();
+            const Type* r = staticType(*b.rhs);
+            if (l && r && (l->is(K::String) || r->is(K::String))) return Type::stringTy();
+            return commonNumberType(l, r);
+        }
+        case Expr::Kind::Ternary: {
+            auto& t = static_cast<const TernaryExpr&>(e);
+            const Type* x = staticType(*t.thenExpr);
+            const Type* y = staticType(*t.elseExpr);
+            return x == y ? x : commonNumberType(x, y);
+        }
+        case Expr::Kind::Call: {
+            auto& c = static_cast<const CallExpr&>(e);
+            const FuncDecl* f = c.target;
+            if (!f && hooks_.function) f = hooks_.function(c.callee);
+            return f ? f->retType : nullptr;
+        }
+        case Expr::Kind::MethodCall: {
+            auto& c = static_cast<const MethodCallExpr&>(e);
+            return c.name == "empty" ? Type::boolTy() : c.name == "size" || c.name == "length" ? Type::longTy() : nullptr;
+        }
+        case Expr::Kind::Index: return Type::charTy();
+        case Expr::Kind::Assign: return staticType(*static_cast<const AssignExpr&>(e).target);
+        case Expr::Kind::IncDec: return staticType(*static_cast<const IncDecExpr&>(e).target);
+        default: return nullptr;
+    }
 }
 
 ConstValue ConstEval::evalUnary(const UnaryExpr& u) {
@@ -317,9 +404,13 @@ ConstValue ConstEval::callFunction(const FuncDecl& f, std::vector<ConstValue> ar
         params[f.params[i]->name] = Local{f.params[i]->declType, convert(args[i], f.params[i]->declType, loc)};
     frames_.emplace_back();
     frames_.back().push_back(std::move(params));
+    ++globalsOnly_;  // a function sees its own locals and the file's constants, not its caller's
     struct Leave {
         ConstEval& e;
-        ~Leave() { e.frames_.pop_back(); }
+        ~Leave() {
+            e.frames_.pop_back();
+            --e.globalsOnly_;
+        }
     } leave{*this};
     Flow flow = Flow::Normal;
     for (auto& s : f.body->stmts) {
@@ -364,8 +455,11 @@ ConstValue ConstEval::eval(const Expr& e) {
         case Expr::Kind::Assign: return evalAssign(static_cast<const AssignExpr&>(e));
         case Expr::Kind::IncDec: return evalIncDec(static_cast<const IncDecExpr&>(e));
         case Expr::Kind::Ternary: {
+            // Its type comes from both branches, as `c ? 1 : 2.5` is a double whichever runs.
             auto& t = static_cast<const TernaryExpr&>(e);
-            return eval(isTrue(eval(*t.cond), t.cond->loc) ? *t.thenExpr : *t.elseExpr);
+            ConstValue value = eval(isTrue(eval(*t.cond), t.cond->loc) ? *t.thenExpr : *t.elseExpr);
+            const Type* type = staticType(e);
+            return type && type->isArithmetic() ? convert(value, type, e.loc) : value;
         }
         case Expr::Kind::Call: return evalCall(static_cast<const CallExpr&>(e));
         case Expr::Kind::MethodCall: return evalMethodCall(static_cast<const MethodCallExpr&>(e));
@@ -420,7 +514,9 @@ ConstEval::Flow ConstEval::execVar(const VarDecl& v) {
     else if (v.declType->is(K::String)) value = stringValue("");
     if (!v.init && !v.declType->is(K::String)) value = convert(intValue(0), v.declType, v.loc);
     else value = convert(value, v.declType, v.loc);
-    frames_.back().back()[v.name] = Local{v.declType, std::move(value)};
+    // An `auto` variable keeps the type of its first value, as it does in the running program.
+    const Type* type = v.declType->is(K::Auto) ? typeOfValue(value) : v.declType;
+    frames_.back().back()[v.name] = Local{type, std::move(value)};
     return Flow::Normal;
 }
 

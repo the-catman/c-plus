@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 // This file is built twice. Programs built with --debug link the copy built with
 // CPLUS_DEBUG_RUNTIME, under AddressSanitizer, which frees memory for real so that
@@ -79,25 +80,59 @@ _Noreturn static void stop_program(void) {
 // A plain build has no AddressSanitizer to report a crash, so it says what happened here.
 // Output printed so far would otherwise be lost. The program is out of stack when the
 // address it could not reach is close to its stack pointer.
+//
+// The crash may have damaged what stdio uses, or have happened inside it, so flushing the output can
+// crash too, or abort if the C library notices. The handler then runs again, since it does not block
+// its own signal, and the message still gets out: only the flush uses stdio, and the message
+// goes through write().
+static void write_error(const char* message) {
+    size_t left = strlen(message);
+    while (left) {
+        ssize_t wrote = write(STDERR_FILENO, message, left);
+        if (wrote <= 0) return;
+        message += wrote;
+        left -= (size_t)wrote;
+    }
+}
+
+static const char* const out_of_stack =
+    "fatal error: the program ran out of stack\n"
+    "  = help: if a function calls itself, check that its recursion stops; a very large local array can go "
+    "in a vector instead\n";
+static const char* const bad_memory =
+    "fatal error: the program used memory it does not own\n"
+    "  = help: a pointer may be wrong; run with --debug to see where\n";
+
 static void on_crash(int signal_number, siginfo_t* info, void* context) {
     (void)signal_number;
+    // Where the handler got to: nowhere yet, flushing, or past that.
+    static volatile sig_atomic_t state = 0;
+    static const char* volatile message = NULL;
+    if (state == 2) _Exit(134);  // the message or stopping crashed: nothing is left to try
+    if (state == 1) {  // flushing crashed: what was printed is lost, and the message is not
+        write_error(message);
+        _Exit(134);
+    }
     uintptr_t address = (uintptr_t)info->si_addr, stack = 0;
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
     stack = (uintptr_t)((ucontext_t*)context)->uc_mcontext.gregs[REG_RSP];
-#elif defined(__aarch64__)
+#elif defined(__linux__) && defined(__aarch64__)
     stack = (uintptr_t)((ucontext_t*)context)->uc_mcontext.sp;
 #else
-    (void)context;
+    (void)context;  // Elsewhere the stack pointer lies in other places, and the general message is still true.
 #endif
     const uintptr_t near = 64 * 1024;
+    message = stack && address + near >= stack && address <= stack + near ? out_of_stack : bad_memory;
+    struct sigaction again;
+    memset(&again, 0, sizeof again);
+    again.sa_sigaction = on_crash;
+    again.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
+    sigemptyset(&again.sa_mask);
+    sigaction(SIGABRT, &again, NULL);
+    state = 1;
     fflush(stdout);
-    if (stack && address + near >= stack && address <= stack + near)
-        fputs("fatal error: the program ran out of stack\n"
-              "  = help: if a function calls itself, check that its recursion stops; a very large local array can go "
-              "in a vector instead\n", stderr);
-    else
-        fputs("fatal error: the program used memory it does not own\n"
-              "  = help: a pointer may be wrong; run with --debug to see where\n", stderr);
+    state = 2;
+    write_error(message);
     stop_program();
 }
 #endif
@@ -110,15 +145,15 @@ void cplus_start(void) {
     // business happening when a program crashes.
     unsetenv("DEBUGINFOD_URLS");
 #else
-    // The handler needs a stack of its own, since the program's may be what ran out. If the
-    // handler itself crashes, the signal's default action ends the program.
+    // The handler needs a stack of its own, since the program's may be what ran out. It can
+    // run again if it crashes itself, which it is written to handle.
     static char crash_stack[64 * 1024];
     stack_t stack = {.ss_sp = crash_stack, .ss_size = sizeof crash_stack};
     sigaltstack(&stack, NULL);
     struct sigaction action;
     memset(&action, 0, sizeof action);
     action.sa_sigaction = on_crash;
-    action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     sigemptyset(&action.sa_mask);
     sigaction(SIGSEGV, &action, NULL);
     sigaction(SIGBUS, &action, NULL);

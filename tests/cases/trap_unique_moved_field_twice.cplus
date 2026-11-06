@@ -1,0 +1,20 @@
+// Moving out of a field that was already moved from must not put nothing into a variable,
+// which is never checked again.
+class Node {
+public:
+    int n = 1;
+};
+struct Holds {
+    unique<Node> u;
+};
+
+int main() {
+    Holds h = {unique<Node>()};
+    unique<Node> a = move(h.u);
+    println("{}", a.n);
+    unique<Node> b = move(h.u);
+    println("{}", b.n);
+    return 0;
+}
+// expect: 1
+// trap: this 'unique<Node>' has been moved away

@@ -1,0 +1,10 @@
+// `const` at the front must not turn this into a question about a missing semicolon.
+struct R {
+    int x;
+};
+
+const int R::get() { return 1; }
+
+int main() { return 0; }
+// error: methods are defined inside their struct
+// not-error: expected ';'

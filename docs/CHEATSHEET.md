@@ -56,7 +56,7 @@ long square(long n) { return n * n; }
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors and arrays element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
-| Constants | outside any function, in any order: `const int MAX = 100;`, `const string NAME = "a" + OTHER;`, `void* const NONE = null;`. A number, `char`, `bool`, `string` or pointer, from literals, other constants, operators and casts |
+| Constants | outside any function, in any order: `const int MAX = 100;`, `const string NAME = "a" + OTHER;`, `void* const NONE = null;`. A number, `char`, `bool`, `string` or pointer, from literals, other constants, operators, casts and calls to `constexpr` functions that can run while compiling |
 | constexpr | `constexpr int MAX = square(4);`, `constexpr int square(int n) { return n * n; }`, worked out while compiling, so `1 / 0` there is a compile error. `array<int, MAX * 2> a;`, `Buffer<int, MAX>`, also with a plain `const` |
 | if constexpr | `if constexpr (Integer<T>) { ... } else { ... }`: only the branch taken is checked. Also `Number<T>`, `Floating<T>`, `Comparable<T>`, `same_as<T, int>`, `derived_from<T, Base>`, your own `Addable<T>`, and `N == 0` |
 | Program | `int main()`, or `int main(int argc, char** argv)`, with `string(argv[1])` for the first argument. `cplus run app.cplus -- arg1 arg2` |

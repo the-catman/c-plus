@@ -1,0 +1,37 @@
+// A struct can lead back to itself through a vector, any number of times. Asking whether it
+// can be copied or moved must not take forever, or never stop.
+struct Tree {
+    vector<Tree> left;
+    vector<Tree> right;
+    int n = 0;
+};
+
+struct Wide {
+    vector<Wide> a;
+    vector<Wide> b;
+    vector<Wide> c;
+    vector<Wide> d;
+    vector<Other> e;
+};
+
+struct Other {
+    vector<Wide> f;
+    vector<Other> g;
+};
+
+int main() {
+    Tree t;
+    t.left.push_back(Tree{{}, {}, 1});
+    Tree copy = t;
+    println("{}", copy.left[0].n);
+    auto taken = move(t.left);
+    println("{} {}", taken.size(), t.left.size());
+
+    Wide w;
+    Wide w2 = w;
+    println("{}", w2.a.size());
+    return 0;
+}
+// expect: 1
+// expect: 1 1
+// expect: 0

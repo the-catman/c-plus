@@ -32,7 +32,8 @@ struct ConstError {
 
 // What the evaluator asks of whoever is using it, the parser or Sema.
 struct ConstHooks {
-    std::function<const VarDecl*(const std::string&)> constant;   // a variable by name, or null
+    std::function<const VarDecl*(const std::string&)> constant;   // a variable by name, as seen from where this is asked, or null
+    std::function<const VarDecl*(const std::string&)> globalConstant;  // the same outside any function, which is all a function sees
     std::function<const FuncDecl*(const std::string&)> function;  // a function by name, or null
     std::function<bool(const ConstraintExpr&)> constraint;        // `Number<T>`; may throw a ConstError
     std::function<int64_t(const Type*, Loc)> sizeOf;              // may throw a ConstError
@@ -73,12 +74,16 @@ private:
     ConstValue callFunction(const FuncDecl& f, std::vector<ConstValue> args, Loc loc);
     Flow exec(const Stmt& s);
     Flow execVar(const VarDecl& v);
+    // What type an expression has, without running it, when no type was set on it. Null if not known.
+    const Type* staticType(const Expr& e);
 
     ConstHooks hooks_;
     std::vector<std::vector<Scope>> frames_;  // the scopes of each function being run
     ConstValue returned_;
     int64_t steps_ = 0;
     std::vector<const VarDecl*> evaluating_;  // constants being worked out, to find one that needs itself
+    std::unordered_map<const VarDecl*, ConstValue> known_;  // constants worked out, so a chain of them takes no longer than its length
+    int globalsOnly_ = 0;  // inside a function or a constant of the file, whose code sees no one else's locals
 };
 
 }  // namespace cplus

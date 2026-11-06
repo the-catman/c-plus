@@ -1,0 +1,65 @@
+// Inside a type, a field hides a constant of the file with the same name, as in C++. A local
+// variable hides both.
+const int size = 10;
+const int other = 7;
+
+struct S {
+    int size = 1;
+    int get() const { return size; }
+    void set(int n) { size = n; }
+    int* where() { return &size; }
+    int outside() const { return other; }
+    int shadowed() const {
+        int size = 3;
+        return size;
+    }
+};
+
+class C {
+public:
+    int size = 2;
+    int get() const { return size; }
+};
+
+int fromFile() { return size; }
+
+// A constant is the same wherever it is first needed: inside a method of a type with a field of
+// that name, or in a function with a local variable of that name.
+const int hidden = 1;
+const int fromHidden = hidden + 1;
+const int fromHidden2 = hidden + 2;
+
+struct Hides {
+    int hidden = 7;
+    int get() const { return fromHidden; }
+};
+
+int main() {
+    S s;
+    println("{}", s.get());
+    s.set(5);
+    println("{}", s.get());
+    *s.where() = 6;
+    println("{}", s.size);
+    println("{}", s.outside());
+    println("{}", s.shadowed());
+    println("{}", C().get());
+    println("{}", fromFile());
+    println("{}", size);
+
+    Hides h;
+    println("{}", h.get());
+    const int hidden = 5;
+    println("{} {}", fromHidden2, hidden);
+    return 0;
+}
+// expect: 1
+// expect: 5
+// expect: 6
+// expect: 7
+// expect: 3
+// expect: 2
+// expect: 10
+// expect: 10
+// expect: 2
+// expect: 3 5
