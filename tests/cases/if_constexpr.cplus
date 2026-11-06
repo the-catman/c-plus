@@ -1,0 +1,152 @@
+// `if constexpr` chooses while compiling. The branch not taken is not checked for these types, which
+// is what lets one generic do different things for different types.
+struct Point {
+    int x;
+};
+class Dog {
+public:
+    string name = "Rex";
+    string sound() const { return "woof"; }
+};
+interface Speaker {
+    string speak() const;
+};
+class Robot : public Speaker {
+public:
+    string speak() const override { return "beep"; }
+};
+
+template<typename T>
+concept HasSize = requires(T x) {
+    x.size();
+};
+
+template<typename T>
+string describe(T x) {
+    if constexpr (Integer<T>) {
+        return format("integer {}", x + 1);
+    } else if constexpr (Floating<T>) {
+        return format("floating {:.1f}", x / 2);
+    } else if constexpr (same_as<T, string>) {
+        return "string of " + to_string(x.size());
+    } else if constexpr (same_as<T, Dog>) {
+        return x.name + " says " + x.sound();
+    } else if constexpr (derived_from<T, Speaker>) {
+        return x.speak();
+    } else if constexpr (HasSize<T>) {
+        return "has size " + to_string(x.size());
+    } else {
+        return "something else";
+    }
+}
+
+// What is not taken would not compile, also what would make new types.
+template<typename T>
+long measure(T x) {
+    if constexpr (HasSize<T>) return x.size();
+    else return sizeof(T);
+}
+template<Number T>
+struct OnlyNumbers {
+    T value;
+};
+template<typename T>
+int useOnlyNumbers(T x) {
+    if constexpr (Number<T>) {
+        OnlyNumbers<T> n = {x};
+        weak<Dog> w;
+        return 1;
+    } else {
+        return 0;
+    }
+}
+template<typename T>
+int useWeak(T x) {
+    if constexpr (derived_from<T, Dog>) {
+        weak<T> w = x;
+        return w.expired() ? 0 : 1;
+    }
+    return 2;
+}
+
+// In a class, by a value parameter, and without an else.
+template<typename T, int N>
+struct Pool {
+    array<T, N> items;
+    int kind() const {
+        if constexpr (N == 0) return 0;
+        else if constexpr (N < 3) return 1;
+        return 2;
+    }
+    string text() const {
+        if constexpr (Comparable<T>) return "ordered";
+        else return "unordered";
+    }
+};
+
+// The return in the branch taken is enough for the end of the function.
+template<bool B>
+int chooses() {
+    if constexpr (B) {
+        return 1;
+    } else {
+        return 2;
+    }
+}
+template<typename T>
+constexpr int rank() {
+    if constexpr (Integer<T>) return 1;
+    else if constexpr (Floating<T>) return 2;
+    return 3;
+}
+constexpr int DOUBLE_RANK = rank<double>();
+constexpr bool INT_IS_NUMBER = Number<int>;
+
+int main() {
+    println("{}", describe(1));
+    println("{}", describe(5L));
+    println("{}", describe(5.0));
+    println("{}", describe("abc"));
+    println("{}", describe(Dog()));
+    println("{}", describe(Robot()));
+    println("{}", describe(vector<int>{1, 2}));
+    println("{}", describe(Point{1}));
+    println("{} {} {}", measure("abcd"), measure(1), measure(vector<int>{1}));
+    println("{} {}", useOnlyNumbers(1), useOnlyNumbers("x"));
+    println("{} {}", useWeak(Dog()), useWeak(1));
+    Pool<int, 0> empty;
+    Pool<int, 2> small;
+    Pool<Point, 5> large;
+    println("{} {} {}", empty.kind(), small.kind(), large.kind());
+    println("{} {}", small.text(), large.text());
+    println("{} {}", chooses<true>(), chooses<false>());
+    println("{} {} {}", rank<int>(), rank<string>(), DOUBLE_RANK);
+    println("{}", INT_IS_NUMBER);
+
+    // Outside generics too. Both branches must still be valid syntax, and only one is checked.
+    if constexpr (sizeof(long) == 8) {
+        println("64-bit long");
+    } else {
+        println(undeclared + 1);
+    }
+    println("{} {}", Number<int>, Comparable<Point>);
+    return 0;
+}
+// expect: integer 2
+// expect: integer 6
+// expect: floating 2.5
+// expect: string of 3
+// expect: Rex says woof
+// expect: beep
+// expect: has size 2
+// expect: something else
+// expect: 4 4 1
+// expect: 1 0
+// expect: 1 2
+// expect: 0 1 2
+// expect: ordered unordered
+// expect: 1 2
+// expect: 1 3 2
+// expect: true
+// expect: 64-bit long
+// expect: true false

@@ -1,0 +1,186 @@
+// `constexpr` values are worked out while compiling, and can size arrays and be template arguments.
+constexpr int MAX = 100;
+constexpr int TWICE = LATER * 2;       // in any order, as with other constants
+constexpr int LATER = square(4) + 1;
+constexpr long BIG = 1L << 40;
+constexpr double HALF = 1.0 / 2;
+constexpr float QUARTER = 0.25f;
+constexpr bool FLAG = MAX > 50 && !false;
+constexpr char LETTER = 'a' + 1 > 'a' ? 'y' : 'n';
+constexpr string NAME = "c" + LETTERS + "+";
+constexpr string LETTERS = "++";
+constexpr long NAME_SIZE = NAME.size();
+constexpr auto INFERRED = 7;
+constexpr int A = 1, B = A + 1, C = B + 1;
+const int PLAIN = 5;
+const int FROM_FUNCTION = square(3);
+
+constexpr int square(int n) {
+    return n * n;
+}
+constexpr long factorial(int n) {
+    return n <= 1 ? 1L : n * factorial(n - 1);
+}
+constexpr int fibonacci(int n) {
+    int a = 0;
+    int b = 1;
+    for (int i = 0; i < n; i++) {
+        int next = a + b;
+        a = b;
+        b = next;
+    }
+    return a;
+}
+constexpr int collatz(long n) {
+    int steps = 0;
+    while (n != 1) {
+        if (n % 2 == 0) n /= 2;
+        else n = 3 * n + 1;
+        steps++;
+        if (steps > 1000) break;
+    }
+    return steps;
+}
+constexpr bool isPrime(int n) {
+    if (n < 2) return false;
+    int i = 2;
+    do {
+        if (i * i > n) break;
+        if (n % i == 0) return false;
+        i++;
+    } while (true);
+    return true;
+}
+constexpr int digits(string s) {
+    int count = 0;
+    for (int i = 0; i < s.size(); i++) {
+        if (s[i] >= '0' && s[i] <= '9') count++;
+        else continue;
+    }
+    return count;
+}
+constexpr int limited(int n) {
+    return min(max(n, 0), 10) + abs(-1);
+}
+constexpr double area(double r) {
+    return 3.5 * r * r;
+}
+
+// As sizes and arguments, also with arithmetic.
+struct Sized {
+    array<int, B> items;
+    array<char, square(2) + 1> text;
+};
+template<typename T, int N>
+struct Buffer {
+    array<T, N> items;
+    array<T, N * 2> twice;
+    int capacity() const { return N; }
+};
+template<int N>
+constexpr int timesTwo() {
+    return N * 2;
+}
+constexpr int branches() {
+    if constexpr (Number<int>) return 3;
+    else return 4;
+}
+constexpr int chosen(int n) {
+    if constexpr (MAX > 1000) {
+        return 0;
+    } else {
+        return n + 1;
+    }
+}
+template<typename T>
+long localsInBranches() {
+    constexpr int K = 3;
+    if constexpr (Integer<T>) {
+        array<T, K> a;
+        constexpr int L = K + 1;
+        if constexpr (L == 4) {
+            array<T, L> b;
+            return a.size() + b.size();
+        }
+    }
+    return 0;
+}
+
+int main() {
+    println("{} {} {} {} {}", MAX, TWICE, LATER, BIG, HALF);
+    println("{} {} {} {} {}", QUARTER, FLAG, LETTER, NAME, NAME_SIZE);
+    println("{} {} {} {} {} {}", INFERRED, A, B, C, PLAIN, FROM_FUNCTION);
+    println("{} {} {} {}", factorial(10), fibonacci(10), collatz(27), isPrime(97));
+    println("{} {} {}", digits("a1b22"), limited(50), area(2));
+
+    // The same functions run in the program, with values only known there.
+    int n = 5;
+    println("{} {} {}", square(n), factorial(n), fibonacci(n));
+
+    // Locals, which can size arrays below them.
+    constexpr int LOCAL = square(2) + 1;
+    constexpr string TEXT = "text " + NAME;
+    const int READ_ONLY = LOCAL - 1;
+    println("{} {} {}", LOCAL, TEXT, READ_ONLY);
+    array<int, LOCAL> a;
+    array<int, READ_ONLY> b;
+    array<int, MAX / 25> c;
+    array<int, square(2)> d;
+    array<int, (MAX > 50 ? 2 : 3)> e;
+    println("{} {} {} {} {}", a.size(), b.size(), c.size(), d.size(), e.size());
+    {
+        constexpr int LOCAL2 = LOCAL * 2;
+        array<int, LOCAL2> inner;
+        println("{}", inner.size());
+    }
+    array<array<int, A>, B> rows;
+    println("{}", rows);
+    auto built = array<int, B>{1, 2};
+    println("{}", built);
+    println("{}", Sized{});
+
+    Buffer<int, MAX / 50> buffer;
+    println("{} {} {}", buffer.capacity(), buffer.items.size(), buffer.twice.size());
+    Buffer<string, square(1)> one;
+    println("{} {}", one.capacity(), one.twice.size());
+    println("{}", timesTwo<B + 1>());
+    println("{}", timesTwo<(MAX > 5 ? 1 : 2)>());
+    constexpr int FROM_GENERIC = timesTwo<4>();
+    println("{}", FROM_GENERIC);
+    array<int, branches()> byBranch;
+    array<int, chosen(1)> byBranch2;
+    println("{} {}", byBranch.size(), byBranch2.size());
+    println("{} {}", localsInBranches<int>(), localsInBranches<string>());
+    array<int, 2 + 2> four = {1, 2, 3, 4};
+    array<int, 4> sameType = four;
+    Buffer<int, 2> two;
+    Buffer<int, MAX / 50> alsoTwo = two;
+    println("{} {}", sameType == four, alsoTwo.capacity());
+    array<int, sizeof(int)> bySize;
+    println("{}", bySize.size());
+    constexpr long SIZE = sizeof(Sized);
+    println("{}", SIZE);
+    return 0;
+}
+// expect: 100 34 17 1099511627776 0.5
+// expect: 0.25 true y c+++ 4
+// expect: 7 1 2 3 5 9
+// expect: 3628800 55 111 true
+// expect: 3 11 14
+// expect: 25 120 5
+// expect: 5 text c+++ 4
+// expect: 5 4 4 4 2
+// expect: 10
+// expect: [[0], [0]]
+// expect: [1, 2]
+// expect: {items: [0, 0], text: ['\0', '\0', '\0', '\0', '\0']}
+// expect: 2 2 4
+// expect: 1 2
+// expect: 6
+// expect: 2
+// expect: 8
+// expect: 3 2
+// expect: 7 0
+// expect: true 2
+// expect: 4
+// expect: 16

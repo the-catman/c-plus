@@ -1,0 +1,127 @@
+// Corners the evaluator must agree with the running program on.
+constexpr int NEG = -2147483647 - 1;
+constexpr long LNEG = -9223372036854775807L - 1;
+constexpr int REM = -7 % 3;
+constexpr int DIV = -7 / 2;
+constexpr int SHR = -8 >> 1;
+constexpr int SHL = 1 << 31;
+constexpr long SHL2 = 1L << 63;
+constexpr int NOT = ~5;
+constexpr int AND = 12 & 10, OR = 12 | 10, XOR = 12 ^ 10;
+constexpr double INF = 1 / 0.0;
+constexpr double NEGZ = -0.0;
+constexpr bool NAN_EQ = (0.0 / 0) == (0.0 / 0);
+constexpr float F = 0.1f + 0.2f;
+constexpr double D = 0.1 + 0.2;
+constexpr double FROM_FLOAT = 0.1f;
+constexpr int TRUNC = int(-2.9);
+constexpr long FROM_INT = 5;
+constexpr double FROM_INT2 = 5;
+constexpr char C = char(65);
+constexpr int CODE = 'a';
+constexpr int CMINUS = 'c' - 'a';
+constexpr bool B1 = bool(5);
+constexpr bool B2 = 3;
+constexpr bool LESS = "abc" < "abd";
+constexpr bool SAME = "x" == "x";
+constexpr string JOIN = "a" + 'b';
+constexpr char AT = "xyz"[1];
+constexpr bool EMPTY = "".empty();
+constexpr int TERN = 1 > 2 ? 3 : 4;
+constexpr bool SHORT = false && 1 / 0 == 0;
+constexpr bool SHORT2 = true || 1 / 0 == 0;
+constexpr long MIXED = 1 + 2L;
+constexpr double MIXED2 = 1 + 2.5;
+constexpr int INCS = incs();
+constexpr int incs() {
+    int a = 1;
+    int b = a++;
+    int c = ++a;
+    a += 10;
+    a *= 2;
+    a -= 1;
+    a /= 3;
+    a %= 5;
+    a <<= 2;
+    a >>= 1;
+    a |= 1;
+    a &= 7;
+    a ^= 2;
+    return a * 100 + b * 10 + c;
+}
+constexpr char NEXT_CHAR = nextChar('a');
+constexpr char nextChar(char c) {
+    c++;
+    c += 1;
+    return c;
+}
+constexpr int NESTED = nested(3);
+constexpr int nested(int n) {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        int x = i;
+        {
+            int x = 100;
+            total += x;
+        }
+        for (int j = 0; j < 10; j++) {
+            if (j == 2) continue;
+            if (j == 4) break;
+            total += x;
+        }
+    }
+    return total;
+}
+constexpr string REPEAT = repeat("ab", 3);
+constexpr string repeat(string s, int n) {
+    string out = "";
+    for (int i = 0; i < n; i++) out += s;
+    return out;
+}
+constexpr int FROM_TRY = tries();
+constexpr int fine() throws { return 2; }
+constexpr int tries() {
+    try {
+        return fine() + 1;
+    } catch (Error e) {
+        return 0;
+    }
+}
+constexpr long ACK = ackermann(2, 3);
+constexpr long ackermann(long m, long n) {
+    if (m == 0) return n + 1;
+    if (n == 0) return ackermann(m - 1, 1);
+    return ackermann(m - 1, ackermann(m, n - 1));
+}
+constexpr int MANY = many();
+constexpr int many() {
+    int total = 0;
+    for (int i = 0; i < 1000000; i++) total = (total + i) % 1000;
+    return total;
+}
+// The same computations run while the program runs, for comparison.
+int runtimeIncs() { return incs(); }
+int main() {
+    println("{} {} {} {} {} {} {} {}", NEG, LNEG, REM, DIV, SHR, SHL, SHL2, NOT);
+    println("{} {} {} {} {} {} {} {}", AND, OR, XOR, INF, NEGZ, NAN_EQ, F, D);
+    println("{} {} {} {} {} {} {} {} {}", FROM_FLOAT, TRUNC, FROM_INT, FROM_INT2, C, CODE, CMINUS, B1, B2);
+    println("{} {} {} {} {} {} {} {} {} {}", LESS, SAME, JOIN, AT, EMPTY, TERN, SHORT, SHORT2, MIXED, MIXED2);
+    println("{} {} {} {} {} {} {}", INCS, NEXT_CHAR, NESTED, REPEAT, FROM_TRY, ACK, MANY);
+    // and worked out at run time from variables
+    int m = -2147483647; int one = 1; long l = -9223372036854775807L; long lone = 1; int seven = -7; int three = 3; int two = 2; int eight = -8; int five = 5;
+    float pf = 0.1f; float pg = 0.2f; double pd = 0.1; double pe = 0.2; double zero = 0;
+    println("{} {} {} {} {} {} {} {}", m - one, l - lone, seven % three, seven / two, eight >> one, one << 31, lone << 63, ~five);
+    println("{} {} {} {} {} {} {} {}", 12 & (five * 2), 12 | (five * 2), 12 ^ (five * 2), one / zero, -zero, (zero / 0) == (zero / 0), pf + pg, pd + pe);
+    println("{} {} {} {} {}", double(pf), int(pd - 3), incs(), nextChar('a'), nested(3));
+    println("{} {} {} {} {}", repeat("ab", 3), tries(), ackermann(2, 3), many(), bool(five));
+    return 0;
+}
+// expect: -2147483648 -9223372036854775808 -1 -3 -4 -2147483648 -9223372036854775808 -6
+// expect: 8 14 6 inf -0 false 0.3 0.30000000000000004
+// expect: 0.10000000149011612 -2 5 5 A 97 2 true true
+// expect: true true ab y true 4 false true 3 3.5
+// expect: 513 c 309 ababab 3 9 0
+// expect: -2147483648 -9223372036854775808 -1 -3 -4 -2147483648 -9223372036854775808 -6
+// expect: 8 14 6 inf -0 false 0.3 0.30000000000000004
+// expect: 0.10000000149011612 -2 513 c 309
+// expect: ababab 3 9 0 true

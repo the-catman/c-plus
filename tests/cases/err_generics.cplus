@@ -67,8 +67,9 @@ int main() {
 // error: 'Pair' takes 2 template arguments, but 1 was given
 // error: 'Box' takes 1 template argument, but 0 were given
 // error: 'auto' cannot be given for a template parameter
-// error: expected a value of type 'int' for the template parameter 'N', found
-// error: this compiler does not support names as template values, other than a template parameter yet
+// error: expected a value of type 'int' for the template parameter 'N', but this is a 'string'
+// error: expected a value of type 'int' for the template parameter 'N', but this is a 'double'
+// error: a template argument must be known at compile time, but 'big' is not a constant
 // error: the size of an array cannot be negative, but 'N' is -1
 // error: in 'Sized<int, -1>', which is used here
 // error: cannot work out 'T' of 'nothing' from the arguments

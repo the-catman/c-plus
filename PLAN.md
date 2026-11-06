@@ -191,6 +191,13 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
   metaprogramming.
 - If more power is ever needed, copy Zig: types as compile-time values passed to ordinary
   functions.
+- `constexpr` is worked out by a small interpreter over the syntax tree, separate from code generation, which
+  Sema and the parser share, since an array's size is part of a type, known before Sema runs. Decided 2026-11-06. It keeps
+  the running program's rules, and its answers are tested against the program's. A plain `const` with a constant value can
+  size an array, as in C++. Only numbers, `char`, `bool` and strings can be values for now.
+- In a generic, `if constexpr` reads a branch only once it is known to run, so a branch not taken makes no new types
+  and reports nothing. Constraints are also `bool` values when written with their type, `Number<T>`, with C++20's
+  `same_as` and `derived_from`.
 - A generic is kept as its tokens and read again for each set of arguments, with its parameters
   standing for them, which gives an ordinary function or type. Decided 2026-11-06. So type checking and
   code generation never see a type that is not known, and need no second set of rules. A definition is read
@@ -442,7 +449,8 @@ Decided 2026-11-05.
 - A value that holds its elements in itself, with C's layout, so it is also how a C struct
   writes an array field. There is no C-style form, `int a[5]`, because that form turns into a
   pointer. The error for it gives the `array` to write.
-- `N` is a written whole number, zero or more. Named sizes wait for constants or generics.
+- `N` is a whole number, zero or more, known while compiling: a literal, a constant, or a call to a
+  `constexpr` function.
 - `array<int, 3> a;` gives every element its default, since elements cannot be tracked one
   by one by definite assignment. C++ would leave numbers unknown. A shorter `{ }` list fills
   the rest with defaults, as in C++. With no default, as for class references, every element
@@ -502,7 +510,8 @@ a debug build with ASan, stack traces and a leak report. Every item of Phase 1 i
 `examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
 criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
 `dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, generics with
-constraints, and errors. The leak report came with Phase 1.
+constraints, errors, and `constexpr` with `if constexpr`. `unique` and `local` are left. The leak
+report came with Phase 1.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -562,9 +571,8 @@ will confidently write C++ wherever the two differ.
   vector, since the update to the element would be lost (decided 2026-11-06). The alternative
   is to pin a buffer separately from its reference count, so that writes land in place, at a
   cost to every vector write.
-- Constants are worked out where they are used, so `const int X = 1 / 0;` stops the program
-  when `X` is used. `constexpr` in Phase 2 can report it at compile time, and make names
-  usable as array sizes.
+- A plain `const` is worked out where it is used, so `const int X = 1 / 0;` stops the program when `X` is
+  used, and `constexpr` reports it while compiling. They could become one rule.
 - `main` takes its arguments as in C++, through raw pointers. A checked form, such as
   `int main(vector<string> args)`, could come later.
 - References (`T&`): whether C+ gets them, and in what form. They decide how

@@ -1,15 +1,10 @@
 // C++ habits for constants say what to write instead.
-constexpr int MAX = 100;
 static const int LIMIT = 5;
 static int helper() { return 1; }
 
 int main() {
-    constexpr int x = 1;
     static int count = 0;
     return 0;
 }
-// error: this compiler does not support constexpr yet
-// error: for a number, a char, a bool or a string, write a constant: `const int MAX = 100;`
 // error: C+ has no 'static' outside a type
-// error: write `const` instead: `const int x = 1;`
 // error: this compiler does not support static local variables yet

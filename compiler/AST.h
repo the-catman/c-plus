@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "Diagnostics.h"
@@ -156,7 +157,7 @@ struct TemplatePattern {
 struct Expr {
     enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
                       Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof, New,
-                      Delete, Try };
+                      Delete, Try, Constraint };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -251,6 +252,16 @@ struct SizeofExpr : Expr {
 struct TryExpr : Expr {
     ExprPtr operand;
     TryExpr(Loc l, ExprPtr e) : Expr(Kind::Try, l), operand(std::move(e)) {}
+};
+
+// `Number<T>`, `same_as<T, int>` or `Addable<T>`: whether a type fits a constraint, as a bool.
+struct ConstraintExpr : Expr {
+    std::string name;
+    const Type* first;
+    const Type* second;  // for `same_as` and `derived_from`; else null
+    bool value = false;  // set by Sema
+    ConstraintExpr(Loc l, std::string n, const Type* a, const Type* b)
+        : Expr(Kind::Constraint, l), name(std::move(n)), first(a), second(b) {}
 };
 
 // `new T`, `new T(args)`, `new T{...}` or `new T[n]`: memory for one T, or for n of them,
@@ -452,6 +463,7 @@ struct VarDecl : Stmt {
     const Type* declType;  // as written; may be auto
     Loc typeLoc;
     bool isConst = false;
+    bool isConstexpr = false;  // its value must be known while compiling
     bool isParam = false;
     bool isTopLevel = false;  // a constant outside any function
     ExprPtr init;
@@ -490,10 +502,23 @@ struct CondDecl {
     bool unwraps = false;  // set by Sema
 };
 
+// The branches of an `if constexpr` in something made from a generic, which are not read until
+// the condition is known. A branch that does not run must not even be looked at for these types.
+struct LazyBranches {
+    size_t thenStart = 0, elseStart = 0;  // token positions; elseStart is 0 without an else
+    const TemplateDecl* tmpl = nullptr;
+    std::vector<TemplateArg> args;
+    const Type* injected = nullptr;  // what the generic's own name means
+    std::vector<std::unordered_map<std::string, const VarDecl*>> localScopes;
+};
+
 struct IfStmt : Stmt {
     ExprPtr cond;              // null when `decl` is set
     std::optional<CondDecl> decl;
     StmtPtr thenStmt, elseStmt;
+    bool isConstexpr = false;  // `if constexpr (c)`
+    bool resolved = false;     // set by Sema when it has one: only the branch that runs is kept
+    std::shared_ptr<LazyBranches> lazy;
     IfStmt(Loc l, ExprPtr c, StmtPtr t, StmtPtr e)
         : Stmt(Kind::If, l), cond(std::move(c)), thenStmt(std::move(t)), elseStmt(std::move(e)) {}
 };
@@ -595,6 +620,8 @@ struct FuncDecl {
     bool isOverride = false;      // marked `override`
     bool isPure = false;          // `virtual int f() = 0;`, which has no body
     bool isThrows = false;        // `int f() throws`
+    bool isConstexpr = false;     // `constexpr int f()`, which can run while compiling
+    bool checked = false;         // set by Sema once its body has been checked
     bool requested = false;       // it will be checked and generated; a generic class's methods wait for their first use
     Loc usedAt;                   // for a function made from a generic: where it was first needed
     int genericDepth = 0;         // for a function made from a generic: how many others led to it

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "AST.h"
+#include "ConstEval.h"
 
 namespace cplus {
 
@@ -84,6 +85,28 @@ private:
     void checkVarDecl(VarDecl& v, Flow& flow);
     void checkLoopBody(Stmt& body, Flow& flow);
     void checkForEach(ForEachStmt& st, Flow& flow);
+    void checkIfConstexpr(IfStmt& st, Flow& flow);
+    // Working out values while compiling. `what` starts the message of an error.
+    ConstHooks constHooks();
+    bool evaluate(const Expr& e, ConstValue& out, const std::string& what);
+    // For `constexpr`: checks the value can be worked out, and puts it in place of the expression.
+    void foldConstexpr(VarDecl& v);
+    bool constraintHolds(const ConstraintExpr& c);
+    void checkNow(FuncDecl& fn);  // for a function that runs while compiling, whose body must be checked first
+    // While something else is checked in the middle of what is being checked: nothing around it counts.
+    struct FreshContext {
+        Sema& s;
+        FuncDecl* fn;
+        const FieldDecl* initField;
+        const StructDecl* buildingBase;
+        const StructDecl* defaultsOf;
+        std::vector<std::unordered_map<std::string, VarDecl*>> scopes;
+        std::vector<LoopContext> loops;
+        int tryBlocks, tryPrefixes, failPoints;
+        std::vector<const CatchClause*> catches;
+        explicit FreshContext(Sema& sema);
+        ~FreshContext();
+    };
     void checkTry(TryStmt& st, Flow& flow);
     void checkThrow(ThrowStmt& st, Flow& flow);
     const StructDecl* errorClass();  // `Error`, what every thrown object derives from

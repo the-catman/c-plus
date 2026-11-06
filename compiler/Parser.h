@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "AST.h"
+#include "ConstEval.h"
 #include "Lexer.h"
 
 namespace cplus {
@@ -25,6 +26,8 @@ public:
         std::vector<ExprPtr> requirements;
     };
     bool instantiateConcept(TemplateDecl& t, const TemplateArg& arg, ConceptBody& out);
+    // Reads the branch of an `if constexpr` that runs.
+    StmtPtr readBranch(const LazyBranches& lazy, bool thenBranch);
 
 private:
     struct ParseError {};  // thrown after reporting, caught at a recovery point
@@ -68,7 +71,7 @@ private:
 
     // Grammar
     void parseTopLevel(Program& prog);
-    void parseConstants(Program& prog, const Type* type, Loc typeLoc);
+    void parseConstants(Program& prog, const Type* type, Loc typeLoc, bool isConstexpr);
     // `[[allow(new_delete)]]`, the one attribute C+ has. Returns where it is written.
     Loc parseAttribute();
     bool atAttribute() const { return check(Tok::LBracket) && peek(1).kind == Tok::LBracket; }
@@ -86,9 +89,11 @@ private:
         size_t pos;
         std::unordered_map<std::string, TemplateBinding> bindings;
         const TemplateDecl* current;
+        std::vector<TemplateArg> currentArgs;
         const Type* injected;
         bool dryRun;
         size_t splitShr;
+        std::vector<std::unordered_map<std::string, const VarDecl*>> localScopes;
         explicit GenericScope(Parser& parser);
         ~GenericScope();
     };
@@ -110,6 +115,12 @@ private:
     const Type* instantiateRecord(TemplateDecl& t, const std::vector<TemplateArg>& args, Loc usedAt);
     ExprPtr parseBoundValue(const Token& t, const Type* bound);  // `T(x)`, `T{...}`, `T()`
     void rejectTemplateParamName(const Token& name);
+    // Working out values while reading: array sizes and template arguments.
+    void readConstants();  // the constants and constexpr functions of the file, wherever they are
+    ConstHooks constHooks();
+    ConstValue evaluate(const Expr& e, const std::string& what);  // reports what it cannot work out
+    bool isConstraintName(const std::string& name) const;
+    StmtPtr parseIf(bool isConstexpr, size_t ifPos, Loc loc);
     void parseExtern(Program& prog);
     void parseExternItem(Program& prog);  // a C function, or `struct sqlite3;`
     void parseOpaqueStruct();
@@ -131,7 +142,7 @@ private:
     [[noreturn]] void failCStyleArray(const Type* elem, const std::string& name);
     size_t afterAngles(size_t ahead) const;
     std::unique_ptr<FuncDecl> parseFunction(const Type* retType, Loc retLoc);
-    std::unique_ptr<BlockStmt> parseBlock();
+    std::unique_ptr<BlockStmt> parseBlock(const FuncDecl* function = nullptr);  // with the parameters of the function it is the body of
     StmtPtr parseStmt();
     StmtPtr parseDeclaration();  // one or more variables, without the trailing ';'
     StmtPtr parseDeclarators(bool isConst, const Type* ty, Loc typeLoc);  // the part after the type
@@ -164,6 +175,18 @@ private:
     std::deque<std::string> names_;                         // what the placeholders' names point to
     std::unordered_map<std::string, TemplateBinding> bindings_;  // the parameters of the generic being read
     const TemplateDecl* currentTemplate_ = nullptr;
+    std::vector<TemplateArg> currentArgs_;
+    std::vector<size_t> constantStarts_;  // where `const` and `constexpr` begin outside any function
+    bool constantsRead_ = false;
+    std::unordered_map<std::string, const VarDecl*> constants_;
+    std::vector<StmtPtr> constantDecls_;  // what `constants_` points into
+    std::unordered_map<std::string, std::unique_ptr<FuncDecl>> constexprFunctions_;
+    // The constants and variables of the blocks being read, innermost last.
+    std::vector<std::unordered_map<std::string, const VarDecl*>> localScopes_;
+    struct ConstexprIf {
+        size_t thenStart, elseStart, end;
+    };
+    std::unordered_map<size_t, ConstexprIf> constexprIfs_;  // from reading a generic's definition, by the `if`
     const Type* injected_ = nullptr;  // inside `Box<T>`: what `Box` alone means
     bool dryRun_ = false;  // reading a definition with parameters not yet known
     std::deque<Type> placeholders_;

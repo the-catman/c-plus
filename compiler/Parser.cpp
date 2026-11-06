@@ -141,6 +141,7 @@ void Parser::scanDeclarations(Program& prog) {
             scanTemplate(prog, i);
             continue;
         }
+        if ((kind == Tok::KwConst || kind == Tok::KwConstexpr) && depth == 0) constantStarts_.push_back(i);
         bool isRecord = kind == Tok::KwStruct || kind == Tok::KwClass || kind == Tok::KwInterface;
         if (isRecord && toks_[i + 1].kind == Tok::Ident && typeNames_.insert(toks_[i + 1].text).second)
             prog.structs.push_back(std::make_unique<StructDecl>(toks_[i + 1].text, kind != Tok::KwStruct));
@@ -274,8 +275,11 @@ void Parser::parseTemplateHeader(TemplateDecl& t) {
 
 Parser::GenericScope::GenericScope(Parser& parser)
     : p(parser), pos(parser.pos_), bindings(std::move(parser.bindings_)), current(parser.currentTemplate_),
-      injected(parser.injected_), dryRun(parser.dryRun_), splitShr(parser.splitShr_) {
+      currentArgs(std::move(parser.currentArgs_)), injected(parser.injected_), dryRun(parser.dryRun_), splitShr(parser.splitShr_),
+      localScopes(std::move(parser.localScopes_)) {
     p.bindings_.clear();
+    p.currentArgs_.clear();
+    p.localScopes_.clear();
     p.splitShr_ = SIZE_MAX;
 }
 
@@ -286,6 +290,162 @@ Parser::GenericScope::~GenericScope() {
     p.injected_ = injected;
     p.dryRun_ = dryRun;
     p.splitShr_ = splitShr;
+    p.currentArgs_ = std::move(currentArgs);
+    p.localScopes_ = std::move(localScopes);
+}
+
+// The file's constants and constexpr functions, wherever they are, for values worked out before
+// the parser reaches them. They are read again at their place, where errors are reported.
+void Parser::readConstants() {
+    if (constantsRead_) return;
+    constantsRead_ = true;
+    GenericScope scope(*this);
+    dryRun_ = true;
+    currentTemplate_ = nullptr;
+    injected_ = nullptr;
+    diags_.mute();
+    struct Unmute {
+        Diagnostics& d;
+        ~Unmute() { d.unmute(); }
+    } unmute{diags_};
+    for (size_t start : constantStarts_) {
+        pos_ = start;
+        try {
+            bool isConstexpr = match(Tok::KwConstexpr);
+            match(Tok::KwConst);
+            Tok k = peek().kind;
+            if (k != Tok::KwInt && k != Tok::KwLong && k != Tok::KwBool && k != Tok::KwChar && k != Tok::KwFloat &&
+                k != Tok::KwDouble && k != Tok::KwString && k != Tok::KwAuto)
+                continue;
+            Loc loc;
+            const Type* type = parseBaseType(loc);
+            if (check(Tok::Ident) && peek(1).kind == Tok::LParen) {
+                if (!isConstexpr) continue;
+                auto fn = parseFunction(type, loc);
+                fn->isConstexpr = true;
+                std::string name = fn->name;
+                constexprFunctions_[name] = std::move(fn);
+                continue;
+            }
+            constantDecls_.push_back(parseDeclarators(true, type, loc));
+            Stmt* decl = constantDecls_.back().get();
+            if (decl->kind == Stmt::Kind::VarDecl) {
+                auto* v = static_cast<VarDecl*>(decl);
+                constants_[v->name] = v;
+            } else {
+                for (auto& v : static_cast<DeclGroupStmt*>(decl)->decls) constants_[v->name] = v.get();
+            }
+        } catch (ParseError&) {
+        } catch (TooDeep&) {
+        }
+    }
+}
+
+ConstHooks Parser::constHooks() {
+    ConstHooks hooks;
+    hooks.constant = [this](const std::string& name) -> const VarDecl* {
+        for (size_t i = localScopes_.size(); i-- > 0;)
+            if (auto it = localScopes_[i].find(name); it != localScopes_[i].end()) return it->second;
+        readConstants();
+        auto it = constants_.find(name);
+        return it == constants_.end() ? nullptr : it->second;
+    };
+    hooks.function = [this](const std::string& name) -> const FuncDecl* {
+        readConstants();
+        auto it = constexprFunctions_.find(name);
+        return it == constexprFunctions_.end() ? nullptr : it->second.get();
+    };
+    hooks.constraint = [](const ConstraintExpr& c) {
+        std::optional<bool> holds = builtinConstraint(c.name, c.first, c.second);
+        if (!holds) throw ConstError{c.loc, "'" + c.name + "' can only be asked where everything has been read, such as in `if constexpr`"};
+        return *holds;
+    };
+    hooks.sizeOf = [](const Type* t, Loc loc) -> int64_t {
+        switch (t->kind) {
+            case Type::Kind::Bool: case Type::Kind::Char: return 1;
+            case Type::Kind::Int: case Type::Kind::Float: return 4;
+            case Type::Kind::Long: case Type::Kind::Double: case Type::Kind::Pointer: case Type::Kind::Class:
+            case Type::Kind::Vector: case Type::Kind::Weak:
+                return 8;
+            case Type::Kind::String: return 24;
+            default: throw ConstError{loc, "the size of '" + std::string(t->name) + "' is not known yet where this is read"};
+        }
+    };
+    return hooks;
+}
+
+ConstValue Parser::evaluate(const Expr& e, const std::string& what) {
+    ConstEval eval(constHooks());
+    try {
+        return eval.eval(e);
+    } catch (ConstError& error) {
+        diags_.error(e.loc, what + ", but " + error.message,
+                     "use a literal, a `const` or `constexpr` value, or a call to a `constexpr` function. For a size only known "
+                     "while the program runs, use a vector",
+                     spec::Constexpr);
+        if (error.loc.line && error.loc.line != e.loc.line) diags_.note(error.loc, "this is what cannot be worked out");
+        throw ParseError{};
+    }
+}
+
+bool Parser::isConstraintName(const std::string& name) const {
+    if (classTemplate(name) || typeNames_.count(name)) return false;
+    if (isBuiltinConstraintName(name)) return true;
+    TemplateDecl* t = prog_->findTemplate(name);
+    return t && t->kind == TemplateDecl::Kind::Concept;
+}
+
+StmtPtr Parser::readBranch(const LazyBranches& lazy, bool thenBranch) {
+    size_t start = thenBranch ? lazy.thenStart : lazy.elseStart;
+    if (!start) return nullptr;
+    GenericScope scope(*this);
+    dryRun_ = false;
+    bindTemplate(*lazy.tmpl, lazy.args);
+    injected_ = lazy.injected;
+    localScopes_ = lazy.localScopes;
+    pos_ = start;
+    try {
+        return parseStmt();
+    } catch (ParseError&) {
+    } catch (TooDeep&) {
+    }
+    return std::make_unique<ErrorStmt>(Loc{});
+}
+
+StmtPtr Parser::parseIf(bool isConstexpr, size_t ifPos, Loc loc) {
+    expect(Tok::LParen, isConstexpr ? "after 'if constexpr'" : "after 'if'");
+    std::optional<CondDecl> decl;
+    if (isConstexpr && isDeclarationStart())
+        fail(peek().loc, "the condition of `if constexpr` cannot declare a variable", "declare it before the `if`", spec::Constexpr);
+    ExprPtr cond = isDeclarationStart() ? (decl = parseCondDecl("if"), nullptr) : parseExpr();
+    expect(Tok::RParen, "after the if condition");
+    if (isConstexpr && currentTemplate_ && !dryRun_) {  // what runs is read once it is known which
+        ConstexprIf place = constexprIfs_.at(ifPos);
+        auto st = std::make_unique<IfStmt>(loc, std::move(cond), nullptr, nullptr);
+        st->isConstexpr = true;
+        st->lazy = std::make_shared<LazyBranches>();
+        st->lazy->thenStart = place.thenStart;
+        st->lazy->elseStart = place.elseStart;
+        st->lazy->tmpl = currentTemplate_;
+        st->lazy->args = currentArgs_;
+        st->lazy->injected = injected_;
+        st->lazy->localScopes = localScopes_;
+        pos_ = place.end;
+        return st;
+    }
+    size_t thenStart = pos_;
+    StmtPtr thenS = parseStmt();
+    size_t elseStart = 0;
+    StmtPtr elseS;
+    if (match(Tok::KwElse)) {
+        elseStart = pos_;
+        elseS = parseStmt();
+    }
+    if (isConstexpr && dryRun_) constexprIfs_[ifPos] = {thenStart, elseStart, pos_};
+    auto st = std::make_unique<IfStmt>(loc, std::move(cond), std::move(thenS), std::move(elseS));
+    st->decl = std::move(decl);
+    st->isConstexpr = isConstexpr;
+    return st;
 }
 
 // Reads a definition with its parameters unknown. Nothing is kept but a function's parameter
@@ -321,6 +481,7 @@ void Parser::readTemplate(TemplateDecl& t) {
             ConceptBody body;
             parseConcept(body);
         } else {
+            match(Tok::KwConstexpr);
             Loc retLoc;
             bool isConst = false;
             const Type* ret = parseType(retLoc, &isConst);
@@ -336,6 +497,7 @@ void Parser::readTemplate(TemplateDecl& t) {
 
 void Parser::bindTemplate(const TemplateDecl& t, const std::vector<TemplateArg>& args) {
     currentTemplate_ = &t;
+    currentArgs_ = args;
     for (size_t i = 0; i < t.params.size(); ++i) {
         TemplateBinding binding;
         binding.type = t.params[i].valueType ? nullptr : args[i].type;
@@ -385,35 +547,30 @@ void Parser::rejectTemplateParamName(const Token& name) {
 }
 
 TemplateArg Parser::parseTemplateValue(const TemplateParam& p) {
-    TemplateArg arg;
     const Token& t = peek();
-    bool wantsBool = p.valueType->is(Type::Kind::Bool), wantsChar = p.valueType->is(Type::Kind::Char);
-    if (t.kind == Tok::Ident) {
+    Tok after = peek(1).kind;
+    if (t.kind == Tok::Ident && (after == Tok::Comma || after == Tok::Greater || after == Tok::Shr)) {  // `N` alone
         auto it = bindings_.find(t.text);
-        if (it == bindings_.end() || it->second.type)
-            notYet(t.loc, "names as template values, other than a template parameter", "write the value itself, e.g. `16`");
-        advance();
-        return it->second.value;
+        if (it != bindings_.end() && !it->second.type) {
+            advance();
+            return it->second.value;
+        }
     }
-    if (wantsBool && (t.kind == Tok::KwTrue || t.kind == Tok::KwFalse)) {
-        advance();
-        arg.value = t.kind == Tok::KwTrue;
-        return arg;
-    }
-    if (wantsChar && t.kind == Tok::CharLit) {
-        advance();
-        arg.value = (int64_t)t.intValue;
-        return arg;
-    }
-    bool negative = match(Tok::Minus);
-    if (!wantsBool && !wantsChar && check(Tok::IntLit)) {
-        arg.value = (int64_t)advance().intValue;
-        if (negative) arg.value = -arg.value;
-        return arg;
-    }
-    fail(peek().loc, "expected a value of type '" + std::string(p.valueType->name) + "' for the template parameter '" + p.name +
-                         "', found " + describeToken(peek()),
-         "write the value itself. Working one out is planned, together with constexpr", spec::Generics);
+    ExprPtr e = parseBinary(9);  // no `>` at its top, which closes the arguments; parentheses allow one
+    TemplateArg arg;
+    if (dryRun_) return arg;  // its parameters are not known yet
+    ConstValue v = evaluate(*e, "a template argument must be known at compile time");
+    bool wantsBool = p.valueType->is(Type::Kind::Bool), wantsChar = p.valueType->is(Type::Kind::Char);
+    bool fits = wantsBool ? v.kind == ConstValue::Kind::Bool
+                : wantsChar ? v.kind == ConstValue::Kind::Char
+                            : v.kind == ConstValue::Kind::Int || v.kind == ConstValue::Kind::Long || v.kind == ConstValue::Kind::Char;
+    if (p.valueType->is(Type::Kind::Int) && (v.i < INT32_MIN || v.i > INT32_MAX)) fits = false;
+    if (!fits)
+        fail(e->loc, "expected a value of type '" + std::string(p.valueType->name) + "' for the template parameter '" + p.name +
+                         "', but this is a '" + v.typeName() + "'",
+             "write a value of that type", spec::Generics);
+    arg.value = v.i;
+    return arg;
 }
 
 std::vector<TemplateArg> Parser::parseTemplateArgs(const TemplateDecl& t, Loc nameLoc, bool partial) {
@@ -510,10 +667,12 @@ FuncDecl* Parser::instantiateFunction(TemplateDecl& t, const std::vector<Templat
         ~Leave() { p.diags_.popContext(); }
     } leave{*this};
     try {
+        bool isConstexpr = match(Tok::KwConstexpr);
         Loc retLoc;
         bool isConst = false;
         const Type* ret = parseType(retLoc, &isConst);
         auto fn = parseFunction(ret, retLoc);
+        fn->isConstexpr = isConstexpr;
         fn->name = name;
         fn->allowNewDelete = t.allowNewDelete;
         fn->usedAt = usedAt;
@@ -653,8 +812,19 @@ void Parser::parseTopLevel(Program& prog) {
             return;
         }
         case Tok::KwEnum: notYet(t.loc, "enums");
-        case Tok::KwConstexpr:
-            notYet(t.loc, "constexpr", "for a number, a char, a bool or a string, write a constant: `const int MAX = 100;`");
+        case Tok::KwConstexpr: {
+            advance();
+            Loc typeLoc;
+            bool isConst = false;
+            const Type* type = parseType(typeLoc, &isConst);
+            if (check(Tok::Ident) && peek(1).kind == Tok::LParen) {
+                if (type->is(Type::Kind::Auto)) notYet(typeLoc, "'auto' return types", "write the return type, e.g. `int`");
+                prog.funcs.push_back(parseFunction(type, typeLoc));
+                prog.funcs.back()->isConstexpr = true;
+                return;
+            }
+            return parseConstants(prog, type, typeLoc, true);
+        }
         case Tok::KwStatic:
             fail(t.loc, "C+ has no 'static' outside a type", "remove it, which leaves a constant or a function as it was",
                  spec::Constants);
@@ -685,7 +855,7 @@ void Parser::parseTopLevel(Program& prog) {
     Loc retLoc;
     bool isConst = false;
     const Type* ret = parseType(retLoc, &isConst);
-    if (isConst && check(Tok::Ident) && peek(1).kind != Tok::LParen) return parseConstants(prog, ret, retLoc);
+    if (isConst && check(Tok::Ident) && peek(1).kind != Tok::LParen) return parseConstants(prog, ret, retLoc, false);
     if (ret->is(Type::Kind::Auto)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `int`");
     if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && isTypeName(peek()))
         fail(peek().loc, "methods are defined inside their " + std::string(prog_->findStruct(peek().text)->keyword()),
@@ -703,11 +873,12 @@ void Parser::parseTopLevel(Program& prog) {
 }
 
 // `const int LIMIT = 10, TWICE = LIMIT * 2;`, after the type.
-void Parser::parseConstants(Program& prog, const Type* type, Loc typeLoc) {
+void Parser::parseConstants(Program& prog, const Type* type, Loc typeLoc, bool isConstexpr) {
     StmtPtr decl = parseDeclarators(true, type, typeLoc);
     expect(Tok::Semi, "after the constant");
     auto add = [&](std::unique_ptr<VarDecl> constant) {
         constant->isTopLevel = true;
+        constant->isConstexpr = isConstexpr;
         prog.constants.push_back(std::move(constant));
     };
     if (decl->kind == Stmt::Kind::VarDecl) add(std::unique_ptr<VarDecl>(static_cast<VarDecl*>(decl.release())));
@@ -1241,7 +1412,8 @@ const Type* Parser::parseBaseType(Loc& loc) {
                          spec::Arrays);
                 advance();
                 const Token& size = peek();
-                if (size.kind == Tok::Ident) {
+                Tok afterSize = peek(1).kind;
+                if (size.kind == Tok::Ident && (afterSize == Tok::Greater || afterSize == Tok::Shr)) {
                     auto bound = bindings_.find(size.text);
                     if (bound != bindings_.end() && bound->second.valueType && bound->second.valueType->isInteger()) {  // `array<T, N>`
                         advance();
@@ -1256,25 +1428,30 @@ const Type* Parser::parseBaseType(Loc& loc) {
                         return Type::arrayOf(elem, value.valueParam >= 0 ? -1 - value.valueParam : value.value);
                     }
                 }
-                if (size.kind == Tok::Ident)
-                    notYet(size.loc, "array sizes given by a name",
-                           "write the number itself, e.g. `array<" + name + ", 5>`. For a size known only while the "
-                           "program runs, use `vector<" + name + ">`");
-                if (size.kind != Tok::IntLit)
-                    fail(size.loc, "the size of an array is a whole number, zero or more, written out",
-                         "write e.g. `array<" + name + ", 5>`. For a size known only while the program runs, use `vector<" +
+                if (size.kind == Tok::Greater || size.kind == Tok::Shr || size.kind == Tok::Comma || isTypeAt(0) ||
+                    size.kind == Tok::StringLit)
+                    fail(size.loc, "the size of an array is a whole number, zero or more",
+                         "write e.g. `array<" + name + ", 5>`, or a constant. For a size known only while the program runs, use `vector<" +
                              name + ">`",
                          spec::Arrays);
-                advance();
+                ExprPtr sizeExpr = parseBinary(9);  // no `>` at its top, which closes the type; parentheses allow one
                 if (!check(Tok::Greater) && !check(Tok::Shr))
-                    fail(peek().loc, "the size of an array is a single number, written out",
+                    fail(peek().loc, "the size of an array is a single number",
                          "write e.g. `array<" + name + ", 5>`. For rows and columns, use an array of arrays: `array<array<" +
                              name + ", 3>, 2>`",
                          spec::Arrays);
                 expectCloseAngle("to close array<...>");
                 loc = start;
                 loc.len = prev().loc.col + prev().loc.len - start.col;
-                return Type::arrayOf(elem, (int64_t)size.intValue);
+                if (dryRun_) return Type::arrayOf(elem, 0);  // what it depends on is not known yet
+                ConstValue length = evaluate(*sizeExpr, "the size of an array must be known at compile time");
+                if (length.kind != ConstValue::Kind::Int && length.kind != ConstValue::Kind::Long)
+                    fail(sizeExpr->loc, "the size of an array is a whole number, zero or more, but this is a '" + std::string(length.typeName()) + "'",
+                         "write e.g. `array<" + name + ", 5>`", spec::Arrays);
+                if (length.i < 0)
+                    fail(sizeExpr->loc, "the size of an array cannot be negative, but this is " + std::to_string(length.i),
+                         "write a whole number, zero or more", spec::Arrays);
+                return Type::arrayOf(elem, length.i);
             }
             if (t.text == "hashmap" && check(Tok::Less))
                 notYet(t.loc, "hash maps (hashmap<K, V>)", "use vector<T> for now");
@@ -1287,12 +1464,18 @@ const Type* Parser::parseBaseType(Loc& loc) {
 // if the brackets do not close.
 size_t Parser::afterAngles(size_t ahead) const {
     int depth = 0;
+    int parens = 0;  // inside parentheses, as in `Box<(a > b)>`, angle brackets count for nothing
     for (size_t i = ahead;; ++i) {
         switch (peek(i).kind) {
-            case Tok::Less: ++depth; break;
-            case Tok::Greater: --depth; break;
-            case Tok::Shr: depth -= 2; break;
-            case Tok::RParen: case Tok::Semi: case Tok::LBrace: case Tok::RBrace: case Tok::Eof: return 0;
+            case Tok::LParen: ++parens; break;
+            case Tok::Less: if (!parens) ++depth; break;
+            case Tok::Greater: if (!parens) --depth; break;
+            case Tok::Shr: if (!parens) depth -= 2; break;
+            case Tok::RParen:
+                if (!parens) return 0;
+                --parens;
+                break;
+            case Tok::Semi: case Tok::LBrace: case Tok::RBrace: case Tok::Eof: return 0;
             default: break;
         }
         if (depth == 0) return i + 1;
@@ -1375,7 +1558,7 @@ std::unique_ptr<FuncDecl> Parser::parseFunction(const Type* retType, Loc retLoc)
         fail(peek().loc, "C+ has no forward declarations",
              "remove this line; functions can be called before or after they are defined", spec::Functions);
     if (!check(Tok::LBrace)) expect(Tok::LBrace, "to start the function body");
-    fn->body = parseBlock();
+    fn->body = parseBlock(fn.get());
     return fn;
 }
 
@@ -1555,6 +1738,8 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
             rejectStructKeyword();
             notYet(t.loc, "nested type definitions", "define it at the top level instead");
         case Tok::KwStatic: notYet(t.loc, "static members");
+        case Tok::KwConstexpr:
+            notYet(t.loc, "constexpr methods and fields", "write a `constexpr` function or constant outside the type");
         case Tok::KwOperator: notYet(t.loc, "operator overloading");
         case Tok::KwTemplate:
             notYet(t.loc, "generic methods", "make the whole type generic, or write a generic function outside it");
@@ -1621,7 +1806,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         if (check(Tok::Semi))
             fail(peek().loc, "write the constructor body here", "C+ has no separate definitions; add `{ ... }`",
                  spec::Classes);
-        ctor->body = parseBlock();
+        ctor->body = parseBlock(ctor.get());
         if (sd.constructor) {
             diags_.error(ctor->nameLoc, "'" + sd.name + "' already has a constructor",
                          "several constructors need overloading, which is planned; for now give the "
@@ -1702,7 +1887,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
                  "C+ has no separate definitions; replace ';' with `{ ... }`, or write `virtual ... = 0;` for a method "
                  "that deriving classes must write",
                  spec::Classes);
-        method->body = parseBlock();
+        method->body = parseBlock(method.get());
         sd.methods.push_back(std::move(method));
         return;
     }
@@ -1785,8 +1970,15 @@ StmtPtr Parser::parseTry() {
     return st;
 }
 
-std::unique_ptr<BlockStmt> Parser::parseBlock() {
+std::unique_ptr<BlockStmt> Parser::parseBlock(const FuncDecl* function) {
     auto block = std::make_unique<BlockStmt>(expect(Tok::LBrace, "to start a block").loc);
+    localScopes_.emplace_back();
+    if (function)  // not constants, whatever else has the name
+        for (auto& param : function->params) localScopes_.back()[param->name] = param.get();
+    struct Leave {
+        std::vector<std::unordered_map<std::string, const VarDecl*>>& scopes;
+        ~Leave() { scopes.pop_back(); }
+    } leave{localScopes_};
     while (!check(Tok::RBrace) && !check(Tok::Eof)) {
         Loc start = peek().loc;
         try {
@@ -1857,6 +2049,7 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
         rejectTemplateParamName(name);
         auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
         var->isConst = isConst;
+        if (!localScopes_.empty()) localScopes_.back()[name.text] = var.get();  // a name in an array's size may mean it
         if (match(Tok::Assign)) {
             var->init = parseAssign();
         } else if (check(Tok::LBrace) || check(Tok::LParen)) {
@@ -1898,16 +2091,9 @@ StmtPtr Parser::parseStmt() {
             }
             break;
         case Tok::KwIf: {
+            size_t ifPos = pos_;
             advance();
-            expect(Tok::LParen, "after 'if'");
-            std::optional<CondDecl> decl;
-            ExprPtr cond = isDeclarationStart() ? (decl = parseCondDecl("if"), nullptr) : parseExpr();
-            expect(Tok::RParen, "after the if condition");
-            StmtPtr thenS = parseStmt();
-            StmtPtr elseS = match(Tok::KwElse) ? parseStmt() : nullptr;
-            auto st = std::make_unique<IfStmt>(t.loc, std::move(cond), std::move(thenS), std::move(elseS));
-            st->decl = std::move(decl);
-            return st;
+            return parseIf(match(Tok::KwConstexpr), ifPos, t.loc);
         }
         case Tok::KwWhile: {
             advance();
@@ -1941,7 +2127,18 @@ StmtPtr Parser::parseStmt() {
             advance();
             expect(Tok::Semi, "after 'continue'");
             return std::make_unique<ContinueStmt>(t.loc);
-        case Tok::KwConstexpr: notYet(t.loc, "constexpr", "write `const` instead: `const int x = 1;`");
+        case Tok::KwConstexpr: {
+            advance();
+            StmtPtr decl = parseDeclaration();
+            expect(Tok::Semi, "after the variable declaration");
+            auto mark = [](VarDecl& v) {
+                v.isConst = true;
+                v.isConstexpr = true;
+            };
+            if (decl->kind == Stmt::Kind::VarDecl) mark(static_cast<VarDecl&>(*decl));
+            else for (auto& v : static_cast<DeclGroupStmt&>(*decl).decls) mark(*v);
+            return decl;
+        }
         case Tok::KwStatic:
             notYet(t.loc, "static local variables",
                    "keep the value in a class object, or pass it to the function and return the new value");
@@ -2532,6 +2729,18 @@ ExprPtr Parser::parsePrimary() {
             }
             if (const Type* bound = boundType(t); bound && (check(Tok::LParen) || check(Tok::LBrace)))
                 return parseBoundValue(t, bound);
+            if (check(Tok::Less) && isConstraintName(t.text) && isTypeAt(1)) {  // `Number<T>`
+                advance();
+                Loc loc;
+                const Type* first = parseType(loc);
+                const Type* second = nullptr;
+                if (t.text == "same_as" || t.text == "derived_from") {
+                    expect(Tok::Comma, "and the second type of '" + t.text + "'");
+                    second = parseType(loc);
+                }
+                expectCloseAngle("to close '" + t.text + "<...>'");
+                return std::make_unique<ConstraintExpr>(t.loc, t.text, first, second);
+            }
             TemplateDecl* tmpl = classTemplate(t.text);
             if (tmpl && !boundType(t) && (check(Tok::LParen) || check(Tok::LBrace)))
                 fail(t.loc, "'" + t.text + "' is generic, so its template arguments must be written",

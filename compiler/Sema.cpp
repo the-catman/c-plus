@@ -694,6 +694,14 @@ static const Expr* notConstant(const Expr& e) {
             if (c.target->is(K::String) && c.operand->type->isPointer()) return &e;  // reads memory
             return notConstant(*c.operand);
         }
+        case Expr::Kind::Constraint: return nullptr;
+        case Expr::Kind::Call: {  // a call to a constexpr function, as in C++
+            auto& c = static_cast<const CallExpr&>(e);
+            if (!c.target || !c.target->isConstexpr) return &e;
+            for (auto& a : c.args)
+                if (const Expr* bad = notConstant(*a)) return bad;
+            return nullptr;
+        }
         default: return &e;
     }
 }
@@ -740,6 +748,8 @@ void Sema::checkConstant(VarDecl& c) {
                                        !t->is(K::String) && !t->isPointer()) {
         diags_.error(c.typeLoc, "this compiler does not support constants of type " + q(t) + " yet",
                      "write a function that returns the value", spec::Status);
+    } else if (c.isConstexpr) {
+        foldConstexpr(c);
     } else if (const Expr* bad = notConstant(*c.init); bad && !t->isError()) {
         diags_.error(bad->loc, "the value of a constant is worked out from literals, other constants and operators",
                      "a variable or a call cannot be used here. For a value computed while the program runs, write "
@@ -1160,7 +1170,141 @@ void Sema::checkExternFunction(FuncDecl& fn) {
     }
 }
 
+static int64_t sizeOfType(const Type* t);
+
+Sema::FreshContext::FreshContext(Sema& sema)
+    : s(sema), fn(s.fn_), initField(s.initField_), buildingBase(s.buildingBase_), defaultsOf(s.defaultsOf_),
+      scopes(std::move(s.scopes_)), loops(std::move(s.loops_)), tryBlocks(s.tryBlocks_), tryPrefixes(s.tryPrefixes_),
+      failPoints(s.failPoints_), catches(std::move(s.catches_)) {
+    s.fn_ = nullptr;
+    s.initField_ = nullptr;
+    s.buildingBase_ = nullptr;
+    s.defaultsOf_ = nullptr;
+    s.scopes_.clear();
+    if (!scopes.empty()) s.scopes_.push_back(scopes[0]);  // the constants
+    s.loops_.clear();
+    s.tryBlocks_ = 0;
+    s.tryPrefixes_ = 0;
+    s.catches_.clear();
+}
+
+Sema::FreshContext::~FreshContext() {
+    s.fn_ = fn;
+    s.initField_ = initField;
+    s.buildingBase_ = buildingBase;
+    s.defaultsOf_ = defaultsOf;
+    s.scopes_ = std::move(scopes);
+    s.loops_ = std::move(loops);
+    s.tryBlocks_ = tryBlocks;
+    s.tryPrefixes_ = tryPrefixes;
+    s.failPoints_ = failPoints;
+    s.catches_ = std::move(catches);
+}
+
+void Sema::checkNow(FuncDecl& fn) {
+    if (fn.checked || fn.isExtern) return;
+    FreshContext fresh(*this);
+    checkFunction(fn);
+}
+
+bool Sema::constraintHolds(const ConstraintExpr& c) {
+    if (structs_.count(c.name) || (program_->findTemplate(c.name) && program_->findTemplate(c.name)->kind == TemplateDecl::Kind::Concept)) {
+        Loc where;
+        return constraintProblem(c.name, c.first, where).empty();
+    }
+    return builtinConstraint(c.name, c.first, c.second).value_or(false);
+}
+
+bool Sema::evaluate(const Expr& e, ConstValue& out, const std::string& what) {
+    ConstEval eval(constHooks());
+    try {
+        out = eval.eval(e);
+        return true;
+    } catch (ConstError& error) {
+        diags_.error(e.loc, what + ", but " + error.message,
+                     "use literals, `const` and `constexpr` values, and calls to `constexpr` functions", spec::Constexpr);
+        if (error.loc.line && error.loc.line != e.loc.line) diags_.note(error.loc, "this is what cannot be worked out");
+        return false;
+    }
+}
+
+void Sema::foldConstexpr(VarDecl& v) {
+    if (!v.init || !v.type || v.type->isError()) return;
+    if (!v.type->isNumber() && !v.type->is(K::Bool) && !v.type->is(K::Char) && !v.type->is(K::String)) {
+        diags_.error(v.typeLoc, "this compiler does not support constexpr values of type " + q(v.type) + " yet",
+                     "a number, a char, a bool or a string can be constexpr. For a pointer, write `const`", spec::Status);
+        return;
+    }
+    ConstValue value;
+    if (!evaluate(*v.init, value, "the value of " + q(v.name) + " must be known at compile time")) return;
+    ConstEval eval(constHooks());
+    try {
+        value = eval.convert(value, v.type, v.init->loc);
+    } catch (ConstError& error) {
+        diags_.error(v.init->loc, "the value of " + q(v.name) + " must be known at compile time, but " + error.message, "", spec::Constexpr);
+        return;
+    }
+    Loc loc = v.init->loc;
+    ExprPtr literal;
+    switch (value.kind) {
+        case ConstValue::Kind::Int: case ConstValue::Kind::Long:
+            literal = std::make_unique<IntLitExpr>(loc, value.i, value.kind == ConstValue::Kind::Long);
+            break;
+        case ConstValue::Kind::Float: case ConstValue::Kind::Double:
+            literal = std::make_unique<FloatLitExpr>(loc, value.d, value.kind == ConstValue::Kind::Float);
+            break;
+        case ConstValue::Kind::Bool: literal = std::make_unique<BoolLitExpr>(loc, value.i != 0); break;
+        case ConstValue::Kind::Char: literal = std::make_unique<CharLitExpr>(loc, (uint8_t)value.i); break;
+        case ConstValue::Kind::String: literal = std::make_unique<StringLitExpr>(loc, value.s); break;
+    }
+    literal->type = v.type;
+    v.init = std::move(literal);
+}
+
+void Sema::checkIfConstexpr(IfStmt& st, Flow& flow) {
+    checkCondition(*st.cond, flow, "condition of if");
+    ConstValue value;
+    bool taken = false;
+    if (evaluate(*st.cond, value, "the condition of `if constexpr` must be known at compile time")) {
+        ConstEval eval(constHooks());
+        try {
+            taken = eval.isTrue(value, st.cond->loc);
+        } catch (ConstError& error) {
+            diags_.error(st.cond->loc, "the condition of `if constexpr` must be a bool or a number, but " + error.message, "", spec::Constexpr);
+        }
+    }
+    if (st.lazy) {
+        StmtPtr branch = parser_.readBranch(*st.lazy, taken);
+        adoptTypes();
+        (taken ? st.thenStmt : st.elseStmt) = std::move(branch);
+        st.lazy.reset();
+    } else {
+        (taken ? st.elseStmt : st.thenStmt).reset();  // not checked, and never generated
+    }
+    st.resolved = true;
+    if (StmtPtr& kept = taken ? st.thenStmt : st.elseStmt) {
+        scopes_.emplace_back();
+        checkStmt(*kept, flow);
+        scopes_.pop_back();
+    }
+}
+
+ConstHooks Sema::constHooks() {
+    ConstHooks hooks;
+    hooks.constant = [this](const std::string& name) -> const VarDecl* { return lookup(name); };
+    hooks.function = [this](const std::string& name) -> const FuncDecl* {
+        auto it = funcs_.find(name);
+        return it == funcs_.end() ? nullptr : it->second;
+    };
+    hooks.constraint = [this](const ConstraintExpr& c) { return constraintHolds(c); };
+    hooks.sizeOf = [](const Type* t, Loc) { return sizeOfType(t); };
+    hooks.prepare = [this](const FuncDecl& f) { checkNow(const_cast<FuncDecl&>(f)); };
+    return hooks;
+}
+
 void Sema::checkFunction(FuncDecl& fn) {
+    if (fn.checked) return;
+    fn.checked = true;
     if (fn.isExtern) return checkExternFunction(fn);
     bool generic = fn.owner ? fn.owner->templateOf != nullptr : fn.usedAt.line != 0;
     struct Context {
@@ -1408,6 +1552,7 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
                          spec::Variables);
         v.type = v.declType->is(K::Auto) ? Type::error() : v.declType;
     }
+    if (v.isConstexpr) foldConstexpr(v);
     declare(v);  // after the initializer: `int x = x;` refers to an outer x, as in C++
     if (v.init) markAssigned(flow, &v, "");
     else markDefaults(flow, &v, v.type, "");
@@ -1492,6 +1637,10 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
         case Stmt::Kind::Throw: checkThrow(static_cast<ThrowStmt&>(s), flow); return;
         case Stmt::Kind::If: {
             auto& st = static_cast<IfStmt&>(s);
+            if (st.isConstexpr) {
+                checkIfConstexpr(st, flow);
+                return;
+            }
             if (st.decl) checkCondDecl(*st.decl, flow, "if");
             else checkCondition(*st.cond, flow, "if condition");
             Flow thenFlow = flow;
@@ -2375,6 +2524,11 @@ Layout layoutOf(const Type* t, std::unordered_map<const StructDecl*, Layout>& se
 }  // namespace
 
 // A value larger than this cannot be stored, whatever holds it.
+static int64_t sizeOfType(const Type* t) {
+    std::unordered_map<const StructDecl*, Layout> seen;
+    return (int64_t)layoutOf(t, seen).size;
+}
+
 bool Sema::checkSize(const Type* t, Loc loc) {
     std::unordered_map<const StructDecl*, Layout> seen;
     uint64_t size = layoutOf(t, seen).size;
@@ -2573,6 +2727,12 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             result = static_cast<FloatLitExpr&>(e).isFloat ? Type::floatTy() : Type::doubleTy();
             break;
         case Expr::Kind::Cast: result = checkCast(static_cast<CastExpr&>(e), flow); break;
+        case Expr::Kind::Constraint: {
+            auto& c = static_cast<ConstraintExpr&>(e);
+            c.value = constraintHolds(c);
+            result = Type::boolTy();
+            break;
+        }
         case Expr::Kind::Try: {
             ++tryPrefixes_;
             result = checkExpr(*static_cast<TryExpr&>(e).operand, flow);
@@ -3355,39 +3515,27 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
         Parser::ConceptBody body;
         if (!parser_.instantiateConcept(*c, arg, body)) return "";  // reported where it is defined
         // Whether the requirements would compile is found out by trying them, in a scope of their own.
-        auto* savedFn = fn_;
-        auto* savedInit = initField_;
-        auto* savedBase = buildingBase_;
-        auto* savedDefaults = defaultsOf_;
-        auto savedScopes = std::move(scopes_);
-        fn_ = nullptr;
-        initField_ = nullptr;
-        buildingBase_ = nullptr;
-        defaultsOf_ = nullptr;
-        scopes_.clear();
-        scopes_.emplace_back();
-        Flow flow;
-        diags_.mute();
-        for (auto& p : body.params->params) {
-            p->type = p->declType;
-            declare(*p);
-            markAssigned(flow, p.get(), "");
-        }
         std::string problem;
-        for (auto& requirement : body.requirements) {
-            int before = diags_.mutedErrors();
-            checkExpr(*requirement, flow);
-            if (diags_.mutedErrors() == before) continue;
-            problem = "what " + q(constraint) + " requires does not work for " + q(t);
-            where = requirement->loc;
-            break;
+        {
+            FreshContext fresh(*this);
+            scopes_.emplace_back();
+            Flow flow;
+            diags_.mute();
+            for (auto& p : body.params->params) {
+                p->type = p->declType;
+                declare(*p);
+                markAssigned(flow, p.get(), "");
+            }
+            for (auto& requirement : body.requirements) {
+                int before = diags_.mutedErrors();
+                checkExpr(*requirement, flow);
+                if (diags_.mutedErrors() == before) continue;
+                problem = "what " + q(constraint) + " requires does not work for " + q(t);
+                where = requirement->loc;
+                break;
+            }
+            diags_.unmute();
         }
-        diags_.unmute();
-        scopes_ = std::move(savedScopes);
-        fn_ = savedFn;
-        initField_ = savedInit;
-        buildingBase_ = savedBase;
-        defaultsOf_ = savedDefaults;
         adoptTypes();
         constraintResults_[key] = {problem, where};
         return problem;

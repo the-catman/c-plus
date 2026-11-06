@@ -59,6 +59,7 @@ add_executable(cplus
   compiler/Lexer.cpp
   compiler/Parser.cpp
   compiler/Sema.cpp
+  compiler/ConstEval.cpp
   compiler/Codegen.cpp)
 target_include_directories(cplus SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})

@@ -1571,7 +1571,7 @@ struct Codegen::Impl {
         switch (e.kind) {
             case Expr::Kind::IntLit: case Expr::Kind::BoolLit: case Expr::Kind::StringLit: case Expr::Kind::NullLit:
             case Expr::Kind::FloatLit: case Expr::Kind::CharLit: case Expr::Kind::Name: case Expr::Kind::This:
-            case Expr::Kind::OptValue: case Expr::Kind::Sizeof:
+            case Expr::Kind::OptValue: case Expr::Kind::Sizeof: case Expr::Kind::Constraint:
                 return false;
             case Expr::Kind::Cast: {
                 auto& c = static_cast<const CastExpr&>(e);
@@ -1768,6 +1768,7 @@ struct Codegen::Impl {
                 return llvm::ConstantFP::get(llvmType(e.type), static_cast<const FloatLitExpr&>(e).value);
             case Expr::Kind::Cast: return genCast(static_cast<const CastExpr&>(e));
             case Expr::Kind::Try: return genRaw(*static_cast<const TryExpr&>(e).operand, owned);
+            case Expr::Kind::Constraint: return b.getInt1(static_cast<const ConstraintExpr&>(e).value);
             case Expr::Kind::CharLit: return b.getInt8(static_cast<const CharLitExpr&>(e).value);
             case Expr::Kind::BoolLit: return b.getInt1(static_cast<const BoolLitExpr&>(e).value);
             case Expr::Kind::StringLit: return stringValue(static_cast<const StringLitExpr&>(e).value);
@@ -2821,6 +2822,11 @@ struct Codegen::Impl {
                 return;
             case Stmt::Kind::If: {
                 auto& st = static_cast<const IfStmt&>(s);
+                if (st.isConstexpr) {  // only the branch that runs is still there
+                    if (st.thenStmt) genScoped(*st.thenStmt);
+                    else if (st.elseStmt) genScoped(*st.elseStmt);
+                    return;
+                }
                 auto* thenBB = llvm::BasicBlock::Create(ctx, "if.then", fn);
                 auto* endBB = llvm::BasicBlock::Create(ctx, "if.end", fn);
                 auto* elseBB = st.elseStmt ? llvm::BasicBlock::Create(ctx, "if.else", fn) : endBB;

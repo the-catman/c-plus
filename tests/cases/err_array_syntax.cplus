@@ -15,7 +15,6 @@ int main() {
     array<int, n> a5;
     array<int, -1> a6;
     array<int, 2.5> a7;
-    array<int, 2 * 3> a8;
     array<int, 2, 3> a9;
     int c1[5];
     int c2[] = {1, 2};
@@ -41,10 +40,11 @@ int main() {
 // error: an array cannot hold 'auto' elements
 // error: array needs a size after its element type
 // error: write e.g. `array<int, 5>`. For a list that can grow, use `vector<int>`
-// error: this compiler does not support array sizes given by a name yet
-// error: write the number itself, e.g. `array<int, 5>`. For a size known only while the program runs, use `vector<int>`
-// error: the size of an array is a whole number, zero or more, written out
-// error: the size of an array is a single number, written out
+// error: the size of an array must be known at compile time, but 'n' is a variable
+// error: For a size only known while the program runs, use a vector
+// error: the size of an array cannot be negative, but this is -1
+// error: the size of an array is a whole number, zero or more, but this is a 'double'
+// error: the size of an array is a single number
 // error: For rows and columns, use an array of arrays: `array<array<int, 3>, 2>`
 // error: C+ has no C-style arrays
 // error: write `array<int, 5> c1`

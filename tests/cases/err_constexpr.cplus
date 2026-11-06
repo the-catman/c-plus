@@ -1,0 +1,109 @@
+int notMarked(int n) { return n + 1; }
+constexpr int divides(int n) { return 10 / n; }
+constexpr int forever() {
+    while (true) {}
+    return 1;
+}
+constexpr int deep(int n) { return deep(n + 1); }
+constexpr int noReturn(int n) { if (n > 0) return 1; }
+constexpr int throwing() throws { throw Error("x"); }
+constexpr int usesVector() {
+    vector<int> v;
+    return 1;
+}
+constexpr int prints() {
+    println("x");
+    return 1;
+}
+struct Point {
+    int x;
+};
+constexpr int BY_ZERO = 1 / 0;
+constexpr int OVERFLOW = 2147483647 + 1;
+constexpr int LONG_INTO_INT = 3000000000;
+constexpr int SHIFT = 1 << 40;
+constexpr int NOT_MARKED = notMarked(1);
+constexpr int DIVIDES = divides(0);
+constexpr int FOREVER = forever();
+constexpr int DEEP = deep(1);
+constexpr int NO_RETURN = noReturn(-1);
+constexpr int THROWING = throwing();
+constexpr int VECTOR = usesVector();
+constexpr int PRINTS = prints();
+constexpr int NARROW = int(3e10);
+constexpr char WIDE = char(300);
+constexpr int SELF = SELF + 1;
+constexpr int ONE = TWO;
+constexpr int TWO = ONE;
+constexpr Point P = {1};
+constexpr void* NOTHING = null;
+constexpr int NO_VALUE;
+constexpr int INDEXED = "abc"[5];
+class WithMember {
+    constexpr int f() { return 1; }
+};
+template<int N> struct Fixed {};
+template<typename T> constexpr T generic(T x) { return x; }
+const int SHADOWED = 3;
+void parameterHidesIt(int SHADOWED) {
+    array<int, SHADOWED> a;
+}
+void localHidesIt() {
+    int SHADOWED = 2;
+    array<int, SHADOWED> a;
+}
+int main() {
+    int n = 3;
+    const int notKnown = notMarked(n);
+    constexpr int fromVariable = n;
+    constexpr int fromConst = notKnown;
+    array<int, n> a;
+    array<int, notKnown> b;
+    array<int, notMarked(1)> c;
+    array<int, 1 / 0> d;
+    array<int, "x"> e;
+    Fixed<n> f;
+    Fixed<1 / 0> g;
+    array<int, generic(3)> h;
+    if constexpr (n > 1) {
+        println("x");
+    }
+    if constexpr (auto x = 1) {
+    }
+    if constexpr ("text") {
+    }
+    return 0;
+}
+// error: the value of 'BY_ZERO' must be known at compile time, but division by zero
+// error: the value of 'OVERFLOW' must be known at compile time, but integer overflow: the result of '+' does not fit in 'int'
+// error: the value of 'SHIFT' must be known at compile time, but shift amount 40 is out of range for 'int'
+// error: the value of 'NOT_MARKED' must be known at compile time, but 'notMarked' is not marked `constexpr`
+// error: the value of 'DIVIDES' must be known at compile time, but division by zero
+// error: this is what cannot be worked out
+// error: the value of 'FOREVER' must be known at compile time, but working it out takes too long
+// error: the value of 'DEEP' must be known at compile time, but 'deep' calls itself too deeply
+// error: the value of 'NO_RETURN' must be known at compile time, but 'noReturn' reached its end without returning a value
+// error: the value of 'THROWING' must be known at compile time, but it reached a `throw` while compiling
+// error: the value of 'VECTOR' must be known at compile time, but a value of type 'vector<int>' cannot be worked out while compiling
+// error: the value of 'PRINTS' must be known at compile time, but 'println' cannot run while compiling
+// error: the value of 'NARROW' must be known at compile time, but the value
+// error: the value of 'WIDE' must be known at compile time, but the value 300 does not fit in 'char'
+// error: the value of 'SELF' depends on itself
+// error: the value of 'ONE' depends on itself
+// error: this compiler does not support constants of type 'Point' yet
+// error: this compiler does not support constexpr values of type 'void*' yet
+// error: the constant 'NO_VALUE' needs a value
+// error: index 5 is out of range for a string of size 3
+// error: this compiler does not support constexpr methods and fields yet
+// error: the value of 'fromVariable' must be known at compile time, but 'n' is a variable
+// error: the value of 'fromConst' must be known at compile time, but 'notMarked' is not marked `constexpr`
+// error: the size of an array must be known at compile time, but 'n' is a variable
+// error: the size of an array must be known at compile time, but 'notMarked' cannot run while compiling
+// error: the size of an array must be known at compile time, but division by zero
+// error: the size of an array is a whole number, zero or more
+// error: a template argument must be known at compile time, but 'n' is a variable
+// error: a template argument must be known at compile time, but division by zero
+// error: the size of an array must be known at compile time, but 'generic' cannot run while compiling
+// error: the condition of `if constexpr` must be known at compile time, but 'n' is a variable
+// error: the condition of `if constexpr` cannot declare a variable
+// error: the size of an array must be known at compile time, but 'SHADOWED' is a variable

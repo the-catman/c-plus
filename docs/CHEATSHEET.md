@@ -40,7 +40,7 @@ long square(long n) { return n * n; }
 | Constraints | `template<Comparable T>`, `template<Number T>`, `template<Integer T>`, `template<Floating T>`, `template<Speaker T>` for an interface or class. Your own: `template<typename T> concept Addable = requires(T a, T b) { a + b; };` |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
-| Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` written as a number. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
+| Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` a number or a constant. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
 | Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>` |
 | String chars | `s[i]` and `s[i] = 'x'` (checked), `for (char c : s)`, `s + '!'`, `s += c`, `s.push_back(c)`, `s.pop_back()`, `s.front()`, `s.back()`, `string(3, '-')`, `s.find('/')` |
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them |
@@ -56,6 +56,8 @@ long square(long n) { return n * n; }
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors and arrays element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
 | Constants | outside any function, in any order: `const int MAX = 100;`, `const string NAME = "a" + OTHER;`, `void* const NONE = null;`. A number, `char`, `bool`, `string` or pointer, from literals, other constants, operators and casts |
+| constexpr | `constexpr int MAX = square(4);`, `constexpr int square(int n) { return n * n; }`, worked out while compiling, so `1 / 0` there is a compile error. `array<int, MAX * 2> a;`, `Buffer<int, MAX>`, also with a plain `const` |
+| if constexpr | `if constexpr (Integer<T>) { ... } else { ... }`: only the branch taken is checked. Also `Number<T>`, `Floating<T>`, `Comparable<T>`, `same_as<T, int>`, `derived_from<T, Base>`, your own `Addable<T>`, and `N == 0` |
 | Program | `int main()`, or `int main(int argc, char** argv)`, with `string(argv[1])` for the first argument. `cplus run app.cplus -- arg1 arg2` |
 | Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long), `1.5`, `1e-9`, `2.5f` (float), `'a'`, `'\n'` (char) |
 | Conditions | `bool`, a number, a pointer or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (p)` (not null), `if (opt)` (holds a value). Not a `char`: write `c != '\0'` |
@@ -65,7 +67,7 @@ long square(long n) { return n * n; }
 | C++ habit | C+ |
 |-----------|----|
 | `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;`; C functions are declared with `extern "C"` |
-| `#define MAX 100`, `constexpr int MAX = 100;`, `static const int MAX = 100;` | `const int MAX = 100;` |
+| `#define MAX 100`, `static const int MAX = 100;` | `const int MAX = 100;`, or `constexpr int MAX = 100;` |
 | `int count = 0;` outside a function | not supported yet. A value that never changes is a `const`; otherwise pass it to the functions that use it |
 | `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `int`. `char*` is a raw pointer, for buffers and text to free |
 | `struct FILE* f`, `struct tm t;`, `typedef struct x x;` | `extern "C" struct FILE;` once, then `FILE* f`; `tm t;`, no word `struct`; no `typedef` |
@@ -144,7 +146,7 @@ long square(long n) { return n * n; }
 | `vector<int> v(5);`, `vector<int> v{1, 2};` | `auto v = vector<int>(5);`, `vector<int> v = {1, 2};` |
 | `v.emplace_back(x)`, `v.at(i)` | `v.push_back(x)`, `v[i]` (always checked) |
 | `int a[5];`, `int a[5] = {1, 2};` | `array<int, 5> a;`, `array<int, 5> a = {1, 2};`. Every element starts with a value, 0 if none is given |
-| `int a[n];`, `array<int, N>` with a named `N` | write the number: `array<int, 5>`. For a size known only at run time, `auto a = vector<int>(n);` |
+| `int a[n];` with a variable `n` | an array's size must be known while compiling: `constexpr int N = 5; array<int, N> a;`. For a size known only at run time, `auto a = vector<int>(n);` |
 | `int* p = a;`, `f(a)` for a C array | an array does not turn into a pointer: `a.data()` |
 | `std::array<int, 3> a{1, 2};`, `a.at(i)` | `array<int, 3> a = {1, 2};`, `a[i]` (always checked) |
 | a huge local array, `array<int, 10000000> a;` | it is on the stack, like in C++, and running out of stack **stops the program**. Use a vector |
@@ -167,14 +169,14 @@ long square(long n) { return n * n; }
 |---------|---------|
 | Classes | `final`, covariant return types, private and protected base classes |
 | Operators | operator overloading with C++ syntax, after function overloading |
-| Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments; `constexpr`, `if constexpr` |
+| Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments |
 | Modules | `import net.server;`, `http::get(url)` |
 | Memory | `unique<T>`, `local<T>`; pointers into vectors and strings |
 | Types | enums, `const` fields, types nested in a type or a function, `short` and other small integers |
 | Functions | default arguments, `auto` parameters and return types, lambdas |
 | Statements | `switch` |
-| Top level | variables outside functions, constants of other types, `constexpr` |
-| Containers | `hashmap<K, V>`; `insert`, `erase` and iterators on vectors; array sizes given by a name |
+| Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
+| Containers | `hashmap<K, V>`; `insert`, `erase` and iterators on vectors |
 | References | `T&` parameters, `for (auto& x : v)` |
 | Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
 | More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare`; parsing numbers from strings |

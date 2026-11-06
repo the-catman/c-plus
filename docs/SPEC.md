@@ -1010,17 +1010,72 @@ const string NAME = "Ada";
 - A constant is a number, a `char`, a `bool`, a `string` or a pointer, or `auto` for one of
   those. Other types are not supported yet; write a function that returns the value. A
   pointer has its `const` after the `*`, as in C++: `void* const NOTHING = null;`.
-- Its value is worked out from literals, other constants, operators, casts and `sizeof`. A
-  variable or a function call is an error.
+- Its value is worked out from literals, other constants, operators, casts, `sizeof` and calls to
+  [`constexpr` functions](#constexpr). A variable or any other call is an error.
 - C's macros are written this way: `const int SQLITE_OK = 0;`, and for a macro that is really
   an address, `void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);`.
 - A value that cannot be worked out, such as `1 / 0`, stops the program when the constant is
-  used, naming the constant's line. A compile-time check will come with `constexpr`.
+  used, naming the constant's line. With `constexpr` it is a compile error instead.
 - A constant cannot be changed, and it has no address. To point to it, copy it into a
   variable first.
 - A local variable or a parameter can have the same name, and hides the constant.
 - A variable outside any function, `int count = 0;`, is not supported yet. Pass the value to
   the functions that use it, or keep it in a class object.
+
+### constexpr
+
+`constexpr` says a value must be worked out while compiling, as in C++. A mistake in it is then a compile error,
+and it can be used where a value must be known that early: an array's size or a template argument.
+
+```cpp
+constexpr int square(int n) { return n * n; }
+constexpr int SIDE = 4;
+constexpr int CELLS = square(SIDE) + 1;
+
+array<int, CELLS> grid;                     // 17 elements
+Buffer<string, SIDE * 2> buffer;            // a template argument
+constexpr int BAD = 1 / 0;                  // error: division by zero
+```
+
+- **A `constexpr` value** is a number, a `char`, a `bool` or a string, at the top level or in a function. It must
+  have a value that can be worked out, and it cannot be changed. For a pointer, write `const`.
+- **A `constexpr` function** can run while compiling, and is also an ordinary function that runs in the program with
+  values only known there. It can be recursive, and have local variables, `if`, loops and `return`, and can use
+  numbers, `char`, `bool` and strings, with a string's `+`, `==`, `<`, `size()`, `empty()` and `s[i]`, plus `abs`, `min`, `max`, `sizeof`
+  and casts. It can call other `constexpr` functions. What a function does is only looked at when it
+  runs while compiling, so it can also do things that only work in the program, such as printing, on paths that
+  are not taken then. A `throw` that is reached is a compile error. Methods cannot be `constexpr` yet.
+- The rules are the running program's: overflow, a bad shift and a cast that does not fit are errors, not surprises.
+  A function that takes too long (about 20 million steps) or calls itself more than 512 deep is an error too.
+- **An array's size and a template argument** can be any such expression, including a plain `const` with a value that can be
+  worked out, as in C++: `const int N = 3; array<int, N> a;`. A `>` at the top of it would end the type,
+  so write `array<int, (a > b ? 1 : 2)>` in parentheses. A function's parameter or a variable is not known then. In these two
+  places, `sizeof` works on numbers, `char`, `bool`, strings, pointers and class references so far, since a struct may not have been
+  read yet. It works on every type in a `constexpr` value that is not used for one of them.
+- A generic `constexpr` function can run while compiling for a `constexpr` value, but not yet in an array's size or a
+  template argument.
+
+**`if constexpr`** chooses a branch while compiling. Only that branch is checked and generated. In a generic, the other
+branch is not even read for these types, so it can use what they do not have, as in C++. Its condition must be
+known at compile time, and cannot declare a variable.
+
+```cpp
+template<typename T>
+string describe(T x) {
+    if constexpr (Integer<T>) {
+        return format("integer {}", x + 1);
+    } else if constexpr (same_as<T, string>) {
+        return "text of " + to_string(x.size());
+    } else {
+        return "something else";
+    }
+}
+```
+
+The questions about types are the [constraints](#constraints), written with their type: `Comparable<T>`, `Number<T>`, `Integer<T>`,
+`Floating<T>`, or your own `Addable<T>`. There are also `same_as<T, U>` and `derived_from<T, Base>`, as C++20 names them. Each of
+them is a `bool` that can be used anywhere. Template value parameters can be asked about too: `if constexpr (N == 0)`. Outside generics
+both branches are still read, so both must be valid syntax.
 
 ### Definite assignment
 
@@ -1760,7 +1815,8 @@ println("{}", s);                       // Stack<string> {items: ["a"]}
 
 - `typename` and `class` mean the same in the parameter list. A parameter can also be a value of type
   `int`, `long`, `bool` or `char`: `template<typename T, int N> struct Buffer { array<T, N> items; };`, used as
-  `Buffer<string, 16>`. Inside, `N` is that value, and it can be an array size.
+  `Buffer<string, 16>`. Inside, `N` is that value, and it can be an array size. The value can be
+  [worked out while compiling](#constexpr): `Buffer<string, MAX * 2>`.
 - **Calling a generic function** works out its parameters from the arguments, also through what a
   parameter is written as, such as `vector<T>`, `T?`, `T*`, `array<T, N>`, `weak<T>` or `Box<T>`, including a
   base class of the argument. Arguments must agree: `largest(1, 2.5)` is an error, since T cannot be both, so write
@@ -1799,9 +1855,9 @@ run without being named. So is every field. A generic that is never used is chec
 undeclared name in one goes unnoticed until it is used. A generic that keeps needing larger versions of itself,
 such as `f<T>` calling `f<vector<T>>`, is an error rather than a compiler that never ends.
 
-Left out on purpose: template specialization, SFINAE and templates with any number of parameters. Not yet:
-default template arguments, `requires` clauses, generic methods, working out a type's arguments, and values worked
-out at compile time as arguments. `constexpr` and `if constexpr` are planned for compile-time work.
+Left out on purpose: template specialization, SFINAE and templates with any number of parameters. For different
+code for different types, use [`if constexpr`](#constexpr). Not yet: default template arguments, `requires` clauses, generic methods
+and working out a type's arguments.
 
 ### Constraints
 
@@ -1888,7 +1944,9 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
 | Debug builds with `--debug`: AddressSanitizer, stack traces, misaligned pointer and invalid bool checks, leak report | implemented |
 | Imports and multi-file programs | planned |
-| Variables outside functions; constants of other types; `constexpr` | planned |
+| `constexpr` values and functions, `if constexpr`, array sizes and template arguments worked out while compiling | implemented |
+| `constexpr` methods and structs; a generic `constexpr` function in an array's size | planned |
+| Variables outside functions; constants of other types | planned |
 | Enums, `switch`, lambdas | planned |
 | Default arguments, `auto` parameters and return types | planned |
 | `const` fields, nested types, types defined inside a function | planned |
@@ -1901,7 +1959,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Format options for width, alignment and `{:x}`; math constants | planned |
 | Function overloading | planned |
 | Strings: `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
-| `hashmap<K, V>`; vector `insert`, `erase`, iterators; array sizes given by a name | planned |
+| `hashmap<K, V>`; vector `insert`, `erase`, iterators | planned |
 | References (`T&`), including `for (auto& x : v)` | planned |
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |
