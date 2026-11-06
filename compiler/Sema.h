@@ -45,6 +45,13 @@ private:
     void requireFullyBuilt(Flow& flow, Loc loc);  // at the end of a constructor
     void requireAssigned(Flow& flow, const VarDecl* var, const std::string& path, const Type* type, Loc loc);
 
+    void checkBases(Program& program);
+    void checkOverrides(StructDecl& sd);
+    // Reports what stops the base classes of `sd` from being built with no values.
+    void checkBaseWithoutValues(const StructDecl& sd, Loc loc);
+    // The class named before `::` in `x.Animal::speak()`, when `sd` is it or derives from it.
+    const StructDecl* findQualifier(const std::string& name, const StructDecl& sd, Loc loc);
+    const Type* checkDynamicCast(CastExpr& c, const Type* from, const Type* to);
     void checkStructs(Program& program);
     void checkConstants(Program& program);
     void checkConstant(VarDecl& constant);
@@ -103,9 +110,12 @@ private:
         Expr* value;
         int* fieldIndex;  // where to record the field it fills, or null
     };
-    void checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc);
-    bool canAccess(const StructDecl& sd, Access access) const;
-    void reportAccess(const StructDecl& sd, const std::string& member, bool isMethod, Loc loc);
+    // `asBase` when a constructor is building its base class, not a new object.
+    void checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc, bool asBase = false);
+    // Whether the code being checked can use a member `sd` declares, reached through a value
+    // of type `through`. As in C++, a deriving class sees protected members of its own objects.
+    bool canAccess(const StructDecl& sd, Access access, const StructDecl* through) const;
+    void reportAccess(const StructDecl& sd, const std::string& member, bool isMethod, Access access, Loc loc);
     const Type* checkPrint(CallExpr& call, Flow& flow);
     void checkCondition(Expr& e, Flow& flow, const char* what);
     void checkShiftAmount(const Type* lhsType, const Expr* lhs, const Expr& amount);
@@ -133,6 +143,7 @@ private:
     std::vector<LoopContext> loops_;
     FuncDecl* fn_ = nullptr;
     const FieldDecl* initField_ = nullptr;  // the field a constructor's initializer list is setting
+    const StructDecl* buildingBase_ = nullptr;  // the base class a constructor's initializer list is building
     const StructDecl* defaultsOf_ = nullptr;  // the type whose field defaults are being checked
     StructDecl* owner() const { return fn_ ? fn_->owner : nullptr; }
     VarDecl* thisVar() const { return fn_ ? fn_->thisDecl.get() : nullptr; }

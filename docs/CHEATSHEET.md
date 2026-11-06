@@ -30,7 +30,9 @@ long square(long n) { return n * n; }
 | Classes | `class U {...}; U u = U("a");` is a **reference-counted object**: `U v = u;` shares it. No `new`; freed when the last reference goes away |
 | Methods | written inside the type: `int area() const { return w * h; }`. Use fields by name or as `this.w` |
 | Constructors | `U(string n) : name(n) {}`, one per type. `~U() {}` destructors for classes only |
-| Access | `public:` / `private:`; class members are private by default, struct members public |
+| Access | `public:`, `private:`, `protected:`; class members are private by default, struct members public |
+| Inheritance | `class Dog : public Animal {...};`, from one class. `virtual string sound() const { ... }`, `string sound() const override { ... }`, `virtual double area() const = 0;`. `Dog(string n) : Animal(n) {}`. A `Dog` converts to an `Animal`, as the same object. `Animal::sound()` for the base class's version |
+| Finding the real type | `if (auto d = dynamic_cast<Dog?>(a))` (null when it is not a `Dog`), `dynamic_cast<Dog>(a)` (**stops the program** when it is not) |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
 | Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` written as a number. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
@@ -73,7 +75,12 @@ long square(long n) { return n * n; }
 | `int x;` then read `x` | compile error until `x` is assigned on every path |
 | `int i = someLong;`, `int i = 2.5;` | error: a conversion that can lose information needs a cast: `int(x)`, which stops the program if `x` does not fit |
 | `float f = someDouble;` | error: write `float(x)`. Only a double written as a number, `float f = 0.5;`, converts by itself |
-| `const_cast`, `dynamic_cast` | do not exist. `const` cannot be cast away |
+| `const_cast` | does not exist. `const` cannot be cast away |
+| `dynamic_cast<Dog*>(a)`, `static_cast<Dog*>(a)` | a class variable is already a reference: `dynamic_cast<Dog?>(a)` |
+| `class Dog : Animal` | error, since that is private in C++: `class Dog : public Animal`. Only classes derive; a struct cannot |
+| `string sound() const` replacing a virtual method | error: `override` is required, and the parameters, return type and `const` must match |
+| a method or field with the name of an inherited one | error, unless it overrides a virtual method. C++ would quietly hide the inherited one |
+| `virtual ~Animal() {}` | optional: a destructor always runs for what the object really is |
 | `(long)p`, `(int*)0x1000`, `int* p = 0;` | error. A pointer to nothing is `null`; only `reinterpret_cast` converts between a pointer and a number |
 | `#define SQLITE_TRANSIENT ((void*)-1)` | `void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);` |
 | `bool ok = p;` | error: write `p != null` or `bool(p)`. `if (p)` is fine |
@@ -141,13 +148,13 @@ long square(long n) { return n * n; }
 
 | Feature | C+ form |
 |---------|---------|
-| Inheritance | `class Admin : User {...}`, multiple inheritance, `virtual`, `override` |
+| Classes | multiple inheritance, interfaces, `final`, covariant return types |
 | Operators | operator overloading with C++ syntax, after function overloading |
 | Errors | `int f() throws`, `throw Error("..")`, `try f()`, `try { } catch (Error e) { }` |
 | Generics | `template<typename T>`, `template<Comparable T>`; no specialization or SFINAE |
 | Modules | `import net.server;`, `http::get(url)` |
 | Memory | `weak` to break reference cycles, `unique<T>`, `local<T>`; pointers into vectors and strings |
-| Types | enums, interfaces, `const` fields, types nested in a type or a function, `short` and other small integers |
+| Types | enums, `const` fields, types nested in a type or a function, `short` and other small integers |
 | Functions | default arguments, `auto` parameters and return types, lambdas |
 | Statements | `switch` |
 | Top level | variables outside functions, constants of other types, `constexpr` |

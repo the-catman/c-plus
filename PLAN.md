@@ -184,7 +184,17 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
 - `const` on a class variable is shallow: the variable cannot refer to another object, but
   the object can change, as with `const` in JavaScript.
 - One constructor per type until function overloading arrives.
-- `protected:` acts as `private:` until inheritance arrives.
+- Syntax is C++'s: `class Dog : public Animal`, `virtual`, `override`, `= 0`, `Animal::f()`,
+  `dynamic_cast`. Decided 2026-11-06, where C++ allows something easy to get wrong, C+ makes it an
+  error, so any program it accepts means what C++ would mean: `public` must be written, `override` is required,
+  and a member cannot hide an inherited one. A destructor always runs for what the object really
+  is, so it needs no `virtual`.
+- `dynamic_cast<Dog?>(a)` gives null and `dynamic_cast<Dog>(a)` stops the program. These are C++'s
+  `Dog*` and `Dog&` forms, for a language where a class variable is already a reference.
+- Every object starts with its count and a vtable pointer, 16 bytes, also when its class has no
+  virtual methods, since it can be released through a base class. Swift's objects have the same.
+- A struct cannot have a base class or virtual methods, since copying one into a variable of its
+  base type would lose part of it.
 
 ### 2.12 Strings — DECIDED
 - A value type, like `std::string`, holding UTF-8 text by convention and bytes in fact:
@@ -452,7 +462,8 @@ through pointers and by value, including array fields, and `array<T, N>`. Consta
 outside functions, and `main` can take `argc` and `argv`. `--debug` makes
 a debug build with ASan, stack traces and a leak report. Every item of Phase 1 is in, and
 `examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
-criterion.
+criterion. Phase 2 is in progress: inheritance from one class works, with virtual methods,
+abstract classes and `dynamic_cast`. The leak report came with Phase 1.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page

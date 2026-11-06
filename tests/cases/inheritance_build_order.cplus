@@ -1,0 +1,100 @@
+// As in C++: the base class is built first and destroyed last, whatever order the list is
+// written in, and until its own constructor starts, an object is only what is built so far.
+class Part {
+public:
+    string name;
+    Part(string n) : name(n) { println("  part {}", name); }
+    ~Part() { println("  ~part {}", name); }
+};
+
+class Base {
+public:
+    Part basePart = Part("base field");
+    string label;
+    Base(string l) : label(l) {
+        println("Base({}): {}", l, who());
+    }
+    virtual string who() const { return "base"; }
+    string whoNow() const { return who(); }
+    ~Base() {
+        println("~Base: {}", who());
+    }
+};
+
+class Middle : public Base {
+public:
+    Part middlePart = Part("middle field");
+    Middle(string l) : middlePart(Part("from list")), Base("for " + l) {
+        println("Middle: {}, {}", who(), label);
+    }
+    string who() const override { return "middle"; }
+    ~Middle() { println("~Middle: {}", who()); }
+};
+
+class Top : public Middle {
+public:
+    Part first = Part("first");
+    Part second = Part("second");
+    Top() : Middle("top") { println("Top: {}", whoNow()); }
+    string who() const override { return "top"; }
+    ~Top() { println("~Top: {}", who()); }
+};
+
+// No constructor here: the base classes are built with their defaults.
+class Plain {
+public:
+    int a = 1;
+    Plain() { println("Plain()"); }
+};
+class NoConstructor : public Plain {
+public:
+    int b = 2;
+};
+class Fields {
+public:
+    int x = 1;
+    string s;
+    Part? p;
+};
+class Empty : public Fields {};
+class Given : public Fields {
+public:
+    int y = 5;
+    Given() : Fields(7, "seven") {}
+};
+class GivenBraces : public Fields {
+public:
+    GivenBraces() : Fields{8} {}
+};
+
+int main() {
+    {
+        Top t = Top();
+        println("made");
+    }
+    println("{}", NoConstructor{});
+    println("{}", Empty());
+    println("{}", Given());
+    println("{}", GivenBraces());
+    return 0;
+}
+// expect:   part base field
+// expect: Base(for top): base
+// expect:   part from list
+// expect: Middle: middle, for top
+// expect:   part first
+// expect:   part second
+// expect: Top: top
+// expect: made
+// expect: ~Top: top
+// expect:   ~part second
+// expect:   ~part first
+// expect: ~Middle: middle
+// expect:   ~part from list
+// expect: ~Base: base
+// expect:   ~part base field
+// expect: Plain()
+// expect: NoConstructor {a: 1, b: 2}
+// expect: Empty {x: 1, s: "", p: null}
+// expect: Given {x: 7, s: "seven", p: null, y: 5}
+// expect: GivenBraces {x: 8, s: "", p: null}

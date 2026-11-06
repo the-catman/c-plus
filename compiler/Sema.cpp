@@ -25,10 +25,12 @@ static bool canConvert(const Type* from, const Type* to) {
     }
     if (to->isOptional()) {
         // `null`, or a value that the optional then holds. Two optional types do not
-        // convert into each other.
+        // convert into each other, except `Dog?` to `Animal?`.
         if (from->isNull()) return true;
-        return !from->isOptional() && canConvert(from, to->elem);
+        if (from->isOptional()) return from->elem->isClass() && canConvert(from->elem, to->elem);
+        return canConvert(from, to->elem);
     }
+    if (from->isClass() && to->isClass()) return from->decl->derivesFrom(to->decl);  // to a base class
     if (from->is(K::Int) && to->is(K::Long)) return true;      // widening never loses information
     if (from->isInteger() && to->isFloating()) return true;    // as in C++; a very large long is rounded
     if (from->is(K::Float) && to->is(K::Double)) return true;  // never loses information
@@ -45,6 +47,16 @@ static const Type* commonPointer(const Type* a, const Type* b) {
     if (canConvert(a, b)) return b;
     if (canConvert(b, a)) return a;
     return nullptr;
+}
+
+// What two class references, either of them optional, both convert to, for comparing them
+// or choosing between them: the one that is a base class of the other. Null if there is none.
+static const Type* commonReference(const Type* a, const Type* b) {
+    const Type* x = a->isOptional() ? a->elem : a;
+    const Type* y = b->isOptional() ? b->elem : b;
+    if (!x->isClass() || !y->isClass()) return nullptr;
+    const Type* common = x->decl->derivesFrom(y->decl) ? y : y->decl->derivesFrom(x->decl) ? x : nullptr;
+    return common && (a->isOptional() || b->isOptional()) ? Type::optionalOf(common) : common;
 }
 
 // Whether `*p`, `p[i]` and pointer arithmetic can use what `p` points to: not `void`,
@@ -227,11 +239,19 @@ static std::string signature(const FuncDecl& fn) {
                (fn.params[i]->name.empty() ? "" : " " + fn.params[i]->name);
     return sig + ")";
 }
+// The fields of a type, the base class's first.
+static std::vector<const FieldDecl*> allFields(const StructDecl& sd) {
+    std::vector<const FieldDecl*> out;
+    if (sd.base) out = allFields(*sd.base);
+    for (auto& f : sd.fields) out.push_back(&f);
+    return out;
+}
 static std::string listFields(const StructDecl& sd) {
-    if (sd.fields.empty()) return q(sd.name) + " has no fields";
+    std::vector<const FieldDecl*> fields = allFields(sd);
+    if (fields.empty()) return q(sd.name) + " has no fields";
     std::string out = "its fields are ";
-    for (size_t i = 0; i < sd.fields.size(); ++i)
-        out += (i ? ", " : "") + std::string(sd.fields[i].type->name) + " " + sd.fields[i].name;
+    for (size_t i = 0; i < fields.size(); ++i)
+        out += (i ? ", " : "") + std::string(fields[i]->type->name) + " " + fields[i]->name;
     return out;
 }
 
@@ -243,9 +263,9 @@ static const Type* typeAtPath(const VarDecl* v, const std::string& path) {
         size_t dot = path.find('.', start);
         std::string field = path.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
         if (!t->hasFields()) return Type::error();
-        int idx = t->decl->fieldIndex(field);
-        if (idx < 0) return Type::error();
-        t = t->decl->fields[idx].type;
+        const StructDecl* declaring = t->decl->fieldOwner(field);
+        if (!declaring) return Type::error();
+        t = declaring->fields[declaring->fieldIndex(field)].type;
         if (dot == std::string::npos) break;
         start = dot + 1;
     }
@@ -357,6 +377,12 @@ Sema::Flow Sema::merge(const Flow& a, const Flow& b) const {
 }
 
 void Sema::requireAssigned(Flow& flow, const VarDecl* var, const std::string& path, const Type* type, Loc loc) {
+    if (buildingBase_ && var == thisVar() && flow.reachable) {
+        diags_.error(loc, (path.empty() ? "the object" : q(path.substr(0, path.find('.')))) + " cannot be used while the base class " +
+                              q(buildingBase_->name) + " is being built, which comes before everything else",
+                     "pass values from the constructor's parameters, and do the rest in its body", spec::Inheritance);
+        return;
+    }
     if (var->isTopLevel || !flow.reachable || isAssigned(flow, var, type, path)) return;
     std::string name = placeName(var, path);
     if (initField_ && var == thisVar()) {
@@ -451,7 +477,7 @@ std::string Sema::suggestName(const std::string& name) {
 
 static std::string suggestField(const StructDecl& sd, const std::string& name) {
     std::vector<std::string> candidates;
-    for (auto& f : sd.fields) candidates.push_back(f.name);
+    for (const FieldDecl* f : allFields(sd)) candidates.push_back(f->name);
     return closest(name, candidates);
 }
 
@@ -467,7 +493,7 @@ void Sema::reportUnknownName(const NameExpr& n) {
         help = n.name == "INFINITY" || n.name == "NAN"
                    ? "write `1.0 / 0` for infinity, or `0.0 / 0` for NaN; constants for them are planned"
                    : "math constants are planned. Until then, `acos(-1)` is pi and `exp(1)` is e";
-    else if (defaultsOf_ && defaultsOf_->fieldIndex(n.name) >= 0)
+    else if (defaultsOf_ && defaultsOf_->fieldOwner(n.name))
         help = "a field's default cannot read other fields; set this field in a constructor instead";
     else if (std::string guess = suggestName(n.name); !guess.empty()) help = "did you mean " + q(guess) + "?";
     else help = "declare it before this line, e.g. `auto " + n.name + " = ...;`";
@@ -532,6 +558,7 @@ void Sema::check(Program& program) {
                          spec::MainFunction);
     }
 
+    checkBases(program);
     checkConstants(program);
     checkStructs(program);
     for (auto& sd : program.structs)
@@ -630,6 +657,7 @@ void Sema::checkConstant(VarDecl& c) {
 }
 
 void Sema::checkMembers(StructDecl& sd) {
+    if (sd.base && !sd.constructor) checkBaseWithoutValues(sd, sd.nameLoc);
     std::unordered_map<std::string, FuncDecl*> seen;
     for (auto& m : sd.methods) {
         if (m->role != FuncDecl::Role::Method) continue;
@@ -647,15 +675,173 @@ void Sema::checkMembers(StructDecl& sd) {
     }
 }
 
-bool Sema::canAccess(const StructDecl& sd, Access access) const {
-    return access == Access::Public || owner() == &sd;
+bool Sema::canAccess(const StructDecl& sd, Access access, const StructDecl* through) const {
+    if (access == Access::Public || owner() == &sd) return true;
+    if (access != Access::Protected || !owner() || !owner()->derivesFrom(&sd)) return false;
+    return through && through->derivesFrom(owner());
 }
 
-void Sema::reportAccess(const StructDecl& sd, const std::string& member, bool isMethod, Loc loc) {
-    diags_.error(loc, q(member) + " is private in " + q(sd.name),
-                 std::string("it can only be used inside the methods of ") + q(sd.name) + ". Put the " +
-                     (isMethod ? "method" : "field") + " under `public:` to use it here",
-                 spec::Classes);
+void Sema::reportAccess(const StructDecl& sd, const std::string& member, bool isMethod, Access access, Loc loc) {
+    std::string what = isMethod ? "method" : "field";
+    if (access == Access::Protected)
+        diags_.error(loc, q(member) + " is protected in " + q(sd.name),
+                     "it can only be used inside the methods of " + q(sd.name) + " and of classes that derive from it, on "
+                     "objects of the deriving class. Put the " + what + " under `public:` to use it here",
+                     spec::Inheritance);
+    else
+        diags_.error(loc, q(member) + " is private in " + q(sd.name),
+                     "it can only be used inside the methods of " + q(sd.name) + ". Put the " + what +
+                         " under `public:` to use it here" +
+                         (sd.isClass ? ", or under `protected:` to use it in classes that derive from it" : ""),
+                     spec::Classes);
+}
+
+// Finds each class's base class, before anything looks through the chain of them.
+void Sema::checkBases(Program& program) {
+    for (auto& sd : program.structs) {
+        if (sd->baseName.empty() || !sd->defined) continue;
+        StructDecl* base = program.findStruct(sd->baseName);
+        if (!base) {
+            std::vector<std::string> classes;
+            for (auto& other : program.structs)
+                if (other->isClass) classes.push_back(other->name);
+            std::string guess = closest(sd->baseName, classes);
+            diags_.error(sd->baseLoc, "there is no class named " + q(sd->baseName),
+                         guess.empty() ? "define it in this file, in any order" : "did you mean " + q(guess) + "?",
+                         spec::Inheritance);
+        } else if (!base->isClass) {
+            diags_.error(sd->baseLoc, "a class can only derive from a class, but " + q(base->name) + " is a struct",
+                         "make it a class, or hold it in a field", spec::Inheritance);
+        } else {
+            sd->base = base;
+        }
+    }
+    // A class cannot be its own ancestor. The link that closes a circle is cut, so that
+    // what follows can walk up from any class.
+    for (auto& sd : program.structs) {
+        std::set<const StructDecl*> seen{sd.get()};
+        for (StructDecl* d = sd.get(); d->base; d = d->base) {
+            if (seen.insert(d->base).second) continue;
+            diags_.error(d->baseLoc, "class " + q(d->name) + " would be its own base class, through " + q(d->baseName),
+                         "a class can only derive from a class that does not derive from it", spec::Inheritance);
+            d->base = nullptr;
+            break;
+        }
+    }
+    std::set<const StructDecl*> done;
+    std::function<void(StructDecl&)> visit = [&](StructDecl& sd) {
+        if (!done.insert(&sd).second) return;
+        if (sd.base) visit(*sd.base);
+        checkOverrides(sd);
+    };
+    for (auto& sd : program.structs)
+        if (sd->defined) visit(*sd);
+}
+
+// Works out the virtual methods of a class, whose base class is already done, and checks that
+// what it declares fits with what it inherits.
+void Sema::checkOverrides(StructDecl& sd) {
+    if (sd.base) sd.vtable = sd.base->vtable;
+    for (auto& f : sd.fields) {
+        if (!sd.base) break;
+        if (const StructDecl* declaring = sd.base->fieldOwner(f.name)) {
+            diags_.error(f.loc, q(sd.name) + " cannot have a field named " + q(f.name) + ", because its base class " +
+                                    q(declaring->name) + " already has one",
+                         "use the inherited field, or give this one another name", spec::Inheritance);
+        } else if (const FuncDecl* method = sd.base->findMethod(f.name)) {
+            diags_.error(f.loc, q(sd.name) + " cannot have a field named " + q(f.name) + ", because its base class " +
+                                    q(method->owner->name) + " has a method with that name",
+                         "give the field another name", spec::Inheritance);
+        }
+    }
+    for (auto& m : sd.methods) {
+        if (m->role != FuncDecl::Role::Method) continue;
+        if (sd.base && sd.base->fieldOwner(m->name)) {
+            diags_.error(m->nameLoc, q(sd.name) + " cannot have a method named " + q(m->name) + ", because its base class " +
+                                         q(sd.base->fieldOwner(m->name)->name) + " has a field with that name",
+                         "give the method another name", spec::Inheritance);
+            continue;
+        }
+        FuncDecl* inherited = sd.base ? sd.base->findMethod(m->name) : nullptr;
+        if (!inherited) {
+            if (m->isOverride) {
+                std::string guess;
+                if (sd.base) {
+                    std::vector<std::string> names;
+                    for (const FuncDecl* v : sd.base->vtable) names.push_back(v->name);
+                    guess = closest(m->name, names);
+                }
+                diags_.error(m->nameLoc, q(m->name) + " is marked `override`, but " +
+                                             (sd.base ? "no base class of " + q(sd.name) + " has a method with that name"
+                                                      : q(sd.name) + " has no base class"),
+                             !guess.empty() ? "did you mean " + q(guess) + "?" : "remove `override`", spec::Inheritance);
+            }
+            if (m->isVirtual) {
+                m->vtableSlot = (int)sd.vtable.size();
+                sd.vtable.push_back(m.get());
+            }
+            continue;
+        }
+        if (!inherited->isVirtual) {
+            diags_.error(m->nameLoc, q(sd.name) + " cannot have its own " + q(m->name) + ", because " +
+                                         q(inherited->owner->name) + " has a method with that name that is not virtual",
+                         "mark the one in " + q(inherited->owner->name) + " `virtual` and this one `override`, or give "
+                         "this one another name",
+                         spec::Inheritance);
+            diags_.note(inherited->nameLoc, "the method in the base class is here");
+            continue;
+        }
+        if (!m->isOverride)
+            diags_.error(m->nameLoc, q(m->name) + " replaces the virtual method of " + q(inherited->owner->name) +
+                                         ", so it must be marked `override`",
+                         "write `override` after its parameters, and after `const` if it has that", spec::Inheritance);
+        bool same = m->retType == inherited->retType && m->params.size() == inherited->params.size() &&
+                    m->isConst == inherited->isConst;
+        for (size_t i = 0; same && i < m->params.size(); ++i)
+            same = m->params[i]->declType == inherited->params[i]->declType;
+        if (!same) {
+            diags_.error(m->nameLoc, q(m->name) + " must have the same parameters, return type and `const` as the method "
+                                         "it replaces",
+                         "the method in " + q(inherited->owner->name) + " is `" + inherited->retType->name + " " +
+                             signature(*inherited).substr(inherited->owner->name.size() + 1) +
+                             (inherited->isConst ? " const" : "") + "`",
+                         spec::Inheritance);
+            diags_.note(inherited->nameLoc, "it is here");
+        }
+        m->isVirtual = true;
+        m->vtableSlot = inherited->vtableSlot;
+        sd.vtable[m->vtableSlot] = m.get();
+    }
+}
+
+void Sema::checkBaseWithoutValues(const StructDecl& sd, Loc loc) {
+    for (const StructDecl* base = sd.base; base; base = base->base) {
+        if (const FuncDecl* ctor = base->constructor) {
+            if (!ctor->params.empty())
+                diags_.error(loc, "the constructor of " + q(base->name) + " needs arguments, so " + q(sd.name) +
+                                      " must pass them",
+                             "write a constructor that does: `" + sd.name + "(...) : " + base->name + "(...) { }`",
+                             spec::Inheritance);
+            else if (ctor->access == Access::Private)
+                reportAccess(*base, base->name + "(...)", true, ctor->access, loc);
+            return;  // it builds what is above it
+        }
+        for (auto& f : base->fields)
+            if (!f.defaultValue && needsValue(f.type))
+                diags_.error(loc, "field " + q(f.name) + " of the base class " + q(base->name) + " needs a value",
+                             "give it a default there, or give " + q(base->name) + " a constructor and pass the value to it",
+                             spec::Inheritance);
+    }
+}
+
+const StructDecl* Sema::findQualifier(const std::string& name, const StructDecl& sd, Loc loc) {
+    auto s = structs_.find(name);
+    if (s != structs_.end() && sd.derivesFrom(s->second)) return s->second;
+    diags_.error(loc, q(name) + " is not " + q(sd.name) + " or a base class of it",
+                 "`Base::name` reaches a member of a base class of the object. Members that belong to no object, such "
+                 "as static ones, are planned",
+                 spec::Inheritance);
+    return nullptr;
 }
 
 // What in `t` has no equivalent in C, or "" when C can use it: C knows numbers, chars,
@@ -820,10 +1006,29 @@ void Sema::checkFunction(FuncDecl& fn) {
         declare(*p);
         markAssigned(flow, p.get(), "");
     }
+    if (fn.isPure) {  // no body to check
+        scopes_.pop_back();
+        fn_ = nullptr;
+        return;
+    }
     if (isCtor) {
         // Fields are initialized in the order they are declared, whatever the order of
         // the list, as in C++, so a value in the list can only read the fields before its own.
         const StructDecl& sd = *fn.owner;
+        if (sd.base) {  // the base class comes first, whatever the order of the list
+            if (fn.callsBase) {
+                std::vector<ConstructArg> args;
+                for (auto& a : fn.baseArgs) args.push_back({"", a->loc, a.get(), nullptr});
+                buildingBase_ = sd.base;
+                checkConstruction(*sd.base, std::move(args), flow, fn.baseLoc, true);
+                buildingBase_ = nullptr;
+            } else {
+                checkBaseWithoutValues(sd, fn.nameLoc);
+            }
+            for (const FieldDecl* f : allFields(*sd.base)) markAssigned(flow, fn.thisDecl.get(), f->name);
+        } else {
+            for (auto& a : fn.baseArgs) checkLooseValue(*a, flow);
+        }
         size_t ready = 0;  // the fields before this one have their values
         auto readyUpTo = [&](size_t end) {
             for (; ready < end; ++ready) markFieldConstructed(flow, fn.thisDecl.get(), sd.fields[ready], "");
@@ -835,8 +1040,18 @@ void Sema::checkFunction(FuncDecl& fn) {
         for (auto& init : fn.memberInits) {
             if (init.fieldIndex < 0) {
                 std::string guess = suggestField(sd, init.field);
-                diags_.error(init.loc, q(sd.name) + " has no field named " + q(init.field),
-                             guess.empty() ? listFields(sd) : "did you mean " + q(guess) + "?", spec::Classes);
+                if (sd.fieldOwner(init.field))
+                    diags_.error(init.loc, q(init.field) + " belongs to the base class " +
+                                               q(sd.fieldOwner(init.field)->name) + ", which sets its own fields",
+                                 "pass the value to its constructor, or set the field in the constructor's body",
+                                 spec::Inheritance);
+                else if (structs_.count(init.field) && sd.isClass)
+                    diags_.error(init.loc, q(init.field) + " is not the base class of " + q(sd.name),
+                                 sd.base ? "its base class is " + q(sd.base->name) : q(sd.name) + " has no base class",
+                                 spec::Inheritance);
+                else
+                    diags_.error(init.loc, q(sd.name) + " has no field named " + q(init.field),
+                                 guess.empty() ? listFields(sd) : "did you mean " + q(guess) + "?", spec::Classes);
                 checkLooseValue(*init.value, flow);
                 continue;
             }
@@ -1288,10 +1503,17 @@ void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
     checkConstruction(*type->decl, std::move(args), flow, list.loc);
 }
 
-void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc) {
+void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc, bool asBase) {
+    if (const FuncDecl* pure = sd.firstPure(); pure && !asBase) {
+        for (auto& a : args) checkLooseValue(*a.value, flow);
+        diags_.error(loc, "cannot create a " + q(sd.name) + " object, because its method " + q(pure->name) +
+                              (pure->owner == &sd ? "" : " from " + q(pure->owner->name)) + " has no body",
+                     "create an object of a class that derives from it and overrides " + q(pure->name), spec::Inheritance);
+        return;
+    }
     // With a constructor, the values are its arguments, in order.
     if (const FuncDecl* ctor = sd.constructor) {
-        if (!canAccess(sd, ctor->access)) reportAccess(sd, sd.name + "(...)", true, loc);
+        if (!canAccess(sd, ctor->access, asBase ? owner() : nullptr)) reportAccess(sd, sd.name + "(...)", true, ctor->access, loc);
         for (auto& a : args)
             if (!a.designator.empty()) {
                 diags_.error(a.loc, q(sd.name) + " has a constructor, so its values are passed in order",
@@ -1313,6 +1535,15 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
                        "for parameter " + q(ctor->params[i]->name) + " of the " + q(sd.name) + " constructor");
         }
         return;
+    }
+
+    if (sd.base) {
+        if (!args.empty()) {
+            for (auto& a : args) checkLooseValue(*a.value, flow);
+            diags_.error(loc, q(sd.name) + " has a base class, so it needs a constructor to take values",
+                         "write one: `" + sd.name + "(...) : " + sd.base->name + "(...) { }`", spec::Inheritance);
+            return;
+        }
     }
 
     // Without one, the values fill the fields, by position or by name.
@@ -1353,7 +1584,7 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
         if (idx >= 0) {
             seen[idx] = true;
             const FieldDecl& f = sd.fields[idx];
-            if (!canAccess(sd, f.access)) reportAccess(sd, f.name, false, a.loc);
+            if (!canAccess(sd, f.access, asBase ? owner() : nullptr)) reportAccess(sd, f.name, false, f.access, a.loc);
             checkValue(*a.value, flow, f.type, "for field " + q(f.name) + " of " + q(sd.name));
         } else {
             checkLooseValue(*a.value, flow);
@@ -1380,12 +1611,14 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         if (!n.decl) {
             // Inside a method, a field can be used by its name alone, as in C++.
             if (StructDecl* o = owner()) {
-                int idx = o->fieldIndex(n.name);
-                if (idx >= 0) {
-                    n.implicitField = idx;
+                if (const StructDecl* declaring = o->fieldOwner(n.name)) {
+                    n.implicitField = declaring->fieldIndex(n.name);
+                    n.fieldOwner = declaring;
+                    const FieldDecl& f = declaring->fields[n.implicitField];
+                    if (!canAccess(*declaring, f.access, o)) reportAccess(*declaring, f.name, false, f.access, e.loc);
                     var = thisVar();
                     path = n.name;
-                    return e.type = o->fields[idx].type;
+                    return e.type = f.type;
                 }
             }
             reportUnknownName(n);
@@ -1480,6 +1713,13 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     if (e.kind != Expr::Kind::Member) return checkExpr(e, flow);
 
     auto& m = static_cast<MemberExpr&>(e);
+    if (!m.qualifier.empty() && m.base->kind == Expr::Kind::This && !owner()) {
+        diags_.error(e.loc, q(m.qualifier + "::" + m.field) + " can only be used inside a method of a class that derives from " +
+                                q(m.qualifier),
+                     "members that belong to no object, such as static ones, are planned", spec::Inheritance);
+        var = nullptr;
+        return e.type = Type::error();
+    }
     bool baseIsPlace = isPlaceKind(*m.base);
     const Type* baseType = baseIsPlace ? resolvePlace(*m.base, flow, var, path)
                                        : checkExpr(*m.base, flow);  // e.g. makePoint().x
@@ -1530,8 +1770,16 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         return e.type;
     }
     const StructDecl& sd = *baseType->decl;
-    m.fieldIndex = sd.fieldIndex(m.field);
-    if (m.fieldIndex < 0) {
+    const StructDecl* start = &sd;
+    if (!m.qualifier.empty()) {
+        start = findQualifier(m.qualifier, sd, e.loc);
+        if (!start) {
+            var = nullptr;
+            return e.type;
+        }
+    }
+    m.fieldOwner = start->fieldOwner(m.field);
+    if (!m.fieldOwner) {
         std::string help;
         if (sd.findMethod(m.field)) help = q(m.field) + " is a method; call it with `" + m.field + "()`";
         else if (std::string guess = suggestField(sd, m.field); !guess.empty()) help = "did you mean " + q(guess) + "?";
@@ -1540,9 +1788,11 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         var = nullptr;
         return e.type;
     }
-    if (!canAccess(sd, sd.fields[m.fieldIndex].access)) reportAccess(sd, m.field, false, e.loc);
+    m.fieldIndex = m.fieldOwner->fieldIndex(m.field);
+    const FieldDecl& field = m.fieldOwner->fields[m.fieldIndex];
+    if (!canAccess(*m.fieldOwner, field.access, &sd)) reportAccess(*m.fieldOwner, m.field, false, field.access, e.loc);
     if (var) path = join(path, m.field);
-    return e.type = sd.fields[m.fieldIndex].type;
+    return e.type = field.type;
 }
 
 // Where the value at a place is stored: in a variable (or `this`), inside a class
@@ -1959,6 +2209,16 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
     }
     const Type* t = resolvePlace(target, flow, var, path);
     if (t->isError()) return false;
+    // In a constructor's initializer list, a field that gets its value later would lose this one.
+    if ((initField_ || buildingBase_) && var && var == thisVar() && !path.empty() && !isAssigned(flow, var, t, path)) {
+        diags_.error(target.loc, q(path.substr(0, path.find('.'))) + " cannot be " + action + " while " +
+                                     (buildingBase_ ? "the base class " + q(buildingBase_->name) + " is being built"
+                                                    : q(initField_->name) + " is being set") +
+                                     ", because it gets its own value after that, and this one would be lost",
+                     "do this in the constructor's body", spec::Classes);
+        var = nullptr;
+        return false;
+    }
     if (throughOptionalChain(target)) {
         diags_.error(target.loc, std::string("a value reached through '?.' cannot be ") + action, kChainOnlyReads,
                      spec::Optionals);
@@ -2086,6 +2346,11 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             }
             if (equality && l == r && !l->isNumber()) {
                 b.operandType = l;
+                result = Type::boolTy();
+                break;
+            }
+            if (const Type* common = equality ? commonReference(l, r) : nullptr) {  // a Dog and an Animal
+                b.operandType = common;
                 result = Type::boolTy();
                 break;
             }
@@ -2254,6 +2519,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (x == y) result = x;
             else if (x->isArithmetic() && y->isArithmetic()) result = commonNumber(x, y);
             else if (const Type* ptr = commonPointer(x, y)) result = ptr;  // `c ? p : null` is a pointer
+            else if (const Type* ref = commonReference(x, y)) result = ref;  // `c ? dog : animal` is an Animal
             else if (const Type* opt = optionalOfBranches(x, y)) result = opt;
             else
                 diags_.error(t.loc, "the two branches of ?: have different types, " + q(x) + " and " + q(y),
@@ -2489,6 +2755,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (StructDecl* o = owner()) {
         if (FuncDecl* m = o->findMethod(call.callee)) {
             call.method = m;
+            if (!canAccess(*m->owner, m->access, o)) reportAccess(*m->owner, m->name, true, m->access, nameLoc);
             requireAssigned(flow, thisVar(), "", &o->type, call.loc);
             if (!m->isConst && fn_->isConst)
                 diags_.error(nameLoc, "const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
@@ -2543,6 +2810,13 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     const VarDecl* var = nullptr;
     std::string path;
     Expr& recv = *call.receiver;
+    if (!call.qualifier.empty() && recv.kind == Expr::Kind::This && !owner()) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, q(call.qualifier + "::" + call.name) + " can only be called inside a method of a class that "
+                               "derives from " + q(call.qualifier),
+                     "methods that belong to no object, such as static ones, are planned", spec::Inheritance);
+        return Type::error();
+    }
     bool isPlace = isPlaceKind(recv);
     const Type* t = isPlace ? resolvePlace(recv, flow, var, path) : checkExpr(recv, flow);
     if (var && !t->isError()) requireAssigned(flow, var, path, t, recv.loc);
@@ -2567,22 +2841,34 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         return Type::error();
     }
     const StructDecl& sd = *t->decl;
-    FuncDecl* m = sd.findMethod(call.name);
+    const StructDecl* start = &sd;
+    if (!call.qualifier.empty()) {
+        start = findQualifier(call.qualifier, sd, call.loc);
+        if (!start) {
+            for (auto& a : call.args) checkLooseValue(*a, flow);
+            return Type::error();
+        }
+    }
+    FuncDecl* m = start->findMethod(call.name);
     if (!m) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         std::string help;
-        if (sd.fieldIndex(call.name) >= 0) help = q(call.name) + " is a field; read it without parentheses";
+        if (sd.fieldOwner(call.name)) help = q(call.name) + " is a field; read it without parentheses";
         else {
             std::vector<std::string> names;
-            for (auto& mm : sd.methods)
-                if (mm->role == FuncDecl::Role::Method) names.push_back(mm->name);
+            for (const StructDecl* d = &sd; d; d = d->base)
+                for (auto& mm : d->methods)
+                    if (mm->role == FuncDecl::Role::Method) names.push_back(mm->name);
             if (std::string guess = closest(call.name, names); !guess.empty()) help = "did you mean " + q(guess) + "?";
         }
         diags_.error(call.loc, q(sd.name) + " has no method named " + q(call.name), help, spec::Methods);
         return Type::error();
     }
     call.method = m;
-    if (!canAccess(sd, m->access)) reportAccess(sd, m->name, true, call.loc);
+    if (!canAccess(*m->owner, m->access, &sd)) reportAccess(*m->owner, m->name, true, m->access, call.loc);
+    if (!call.qualifier.empty() && m->isPure)
+        diags_.error(call.loc, q(m->owner->name + "::" + m->name) + " has no body, so it cannot be called directly",
+                     "write `" + m->name + "(...)` to call the version the object really has", spec::Inheritance);
     if (!m->isConst && t->isStruct() && inOptionalCopy(recv)) {
         diags_.error(call.loc, q(m->name) + " may change the struct, but '?.' works on a copy of it",
                      "unwrap the optional, change the copy and store it back: `if (auto v = opt) { v." + m->name +
@@ -3039,11 +3325,49 @@ const Type* Sema::checkReinterpretCast(CastExpr& c, const Type* from, const Type
     return to;
 }
 
+// `dynamic_cast<Dog?>(a)` gives null when `a` is not a Dog, as C++ does for `Dog*`, and
+// `dynamic_cast<Dog>(a)` stops the program. The type written is the type of the result.
+const Type* Sema::checkDynamicCast(CastExpr& c, const Type* from, const Type* to) {
+    const Type* toClass = to->isOptional() ? to->elem : to;
+    const Type* fromClass = from->isOptional() ? from->elem : from;
+    if (!toClass->isClass()) {
+        bool toPointer = to->isPointer() && to->elem->isClass();
+        diags_.error(c.loc, "dynamic_cast finds out whether an object is of a class, but this asks for " + q(to),
+                     toPointer ? "a class variable is already a reference, so write `dynamic_cast<" +
+                                     std::string(to->elem->name) + "?>(x)`, which gives null when it is not"
+                               : "write e.g. `dynamic_cast<Dog?>(x)`, which gives null when it is not, for a class named Dog. "
+                                 "Between numbers, write `static_cast`",
+                     spec::Inheritance);
+        return to;
+    }
+    if (from->isError()) return to;
+    if (!fromClass->isClass()) {
+        diags_.error(c.operand->loc, "dynamic_cast needs a class object, but this is " + q(from), "", spec::Inheritance);
+        return to;
+    }
+    if (!toClass->decl->derivesFrom(fromClass->decl) && !fromClass->decl->derivesFrom(toClass->decl))
+        diags_.error(c.loc, "a " + q(fromClass) + " can never be a " + q(toClass) + ", because neither class derives from the other",
+                     "check which class you meant", spec::Inheritance);
+    return to;
+}
+
 const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     const Type* from = checkExpr(*c.operand, flow);
     const Type* to = c.target;
     checkStorable(to, c.loc);
     if (c.reinterpret) return checkReinterpretCast(c, from, to);
+    if (c.dynamic) return checkDynamicCast(c, from, to);
+    const Type* toClass = to->isOptional() ? to->elem : to;
+    const Type* fromClass = from->isOptional() ? from->elem : from;
+    if (toClass->isClass() && fromClass->isClass()) {
+        if (canConvert(from, to)) return to;  // `static_cast<Animal>(dog)`, to choose a type for `?:`
+        if (toClass->decl->derivesFrom(fromClass->decl)) {
+            diags_.error(c.loc, "this cast could not know whether the object really is a " + q(toClass),
+                         "write `dynamic_cast<" + std::string(toClass->name) + "?>(x)`, which gives null when it is not",
+                         spec::Inheritance);
+            return to;
+        }
+    }
     if (to->isPointer() || (from->isPointer() && !to->is(K::Bool) && !to->is(K::String)))
         return checkPointerCast(c, from, to);
     std::string cast = std::string(to->name) + "(x)";
@@ -3111,6 +3435,9 @@ const Type* Sema::checkPointerCast(CastExpr& c, const Type* from, const Type* to
         diags_.error(c.operand->loc, "a cast to " + q(to) + " converts another pointer, but this is " + q(from),
                      from->isInteger()       ? "a pointer to nothing is `null`. To make a pointer from a number, such as a "
                                                "C constant that is -1 as a pointer, write `reinterpret_cast<void*>(-1)`"
+                     : from->isClass() && to->elem->isClass()
+                         ? "a class variable is already a reference, so no pointer is needed. To find out whether an object "
+                           "is of a class, write `dynamic_cast<" + std::string(to->elem->name) + "?>(x)`"
                      : from->isArray()         ? "for a pointer to its first element, write `" + spelled(*c.operand, "a") + ".data()`"
                      : isPlaceKind(*c.operand) ? "write `&" + spelled(*c.operand, "x") + "` for its address"
                                                : "",
@@ -3321,6 +3648,7 @@ const Type* Sema::checkCoalesce(CoalesceExpr& c, Flow& flow) {
     if (r->isError()) return inner;
     if (r == l || r->isNull()) return l;  // the fallback may itself be null
     if (canConvert(r, inner)) return inner;
+    if (const Type* common = commonReference(inner, r)) return common;  // `maybeDog ?? animal` is an Animal
     if (r->isInteger() && inner->isInteger()) return commonInteger(r, inner);
     diags_.error(c.rhs->loc, "the fallback after '\?\?' must be " + q(inner) + ", but this is " + q(r),
                  "both sides of '\?\?' hold the same type of value", spec::Optionals);

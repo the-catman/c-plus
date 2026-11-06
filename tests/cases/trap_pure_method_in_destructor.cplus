@@ -1,0 +1,20 @@
+class Shape {
+public:
+    virtual int area() const = 0;
+    ~Shape() { println("{}", area()); }
+};
+class Square : public Shape {
+public:
+    int area() const override { return 4; }
+    ~Square() { println("~Square {}", area()); }
+};
+
+int main() {
+    {
+        Square s = Square();
+    }
+    println("never");
+    return 0;
+}
+// expect: ~Square 4
+// trap: the method 'Shape.area' has no body

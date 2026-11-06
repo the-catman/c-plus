@@ -35,7 +35,7 @@ int main() {
 // error: reinterpret_cast converts between a pointer and an integer, or between pointers, but this goes from 'double' to 'int'
 // error: to convert a number, write `int(x)` or `static_cast<int>(x)`
 // error: C+ has no const_cast
-// error: C+ has no dynamic_cast
+// error: dynamic_cast finds out whether an object is of a class, but this asks for 'int'
 // error: write `int(x)` to convert x. For a zero, write `0`
 // error: a conversion to 'int' takes one value
 // error: a number can have only one decimal point

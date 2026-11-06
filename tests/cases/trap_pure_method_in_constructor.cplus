@@ -1,0 +1,17 @@
+// While its constructor runs, the object is only a Shape, whose area has no body.
+class Shape {
+public:
+    Shape() { println("{}", area()); }
+    virtual int area() const = 0;
+};
+class Square : public Shape {
+public:
+    int area() const override { return 4; }
+};
+
+int main() {
+    Square s = Square();
+    return 0;
+}
+// trap: the method 'Shape.area' has no body
+// trap: trap_pure_method_in_constructor.cplus:5

@@ -1,0 +1,79 @@
+// A method with `= 0` has no body, and a class that still has one cannot be made into an
+// object. A value of that class can still refer to an object of a class deriving from it.
+class Shape {
+public:
+    string label = "shape";
+    Shape(string l) : label(l) {}
+    virtual double area() const = 0;
+    virtual void grow(double by) = 0;
+    double twice() const { return 2 * area(); }
+};
+
+// Still abstract: only one of the two has a body.
+class Grown : public Shape {
+public:
+    double size = 1;
+    Grown(string l) : Shape(l) {}
+    void grow(double by) override { size += by; }
+};
+
+class Square : public Grown {
+public:
+    Square() : Grown("square") {}
+    double area() const override { return size * size; }
+};
+
+// Virtual methods can return and take anything a method can.
+struct Point {
+    int x;
+    int y;
+};
+class Source {
+public:
+    virtual string text(string prefix, int n) const { return prefix + to_string(n); }
+    virtual Point point() const { return {1, 2}; }
+    virtual array<int, 3> numbers() const { return {1, 2, 3}; }
+    virtual vector<string> words() { return {"a"}; }
+    virtual int? maybe() { return null; }
+    virtual Source self() { return this; }
+    virtual void nothing() {}
+};
+class Other : public Source {
+public:
+    int calls = 0;
+    string text(string prefix, int n) const override { return prefix + "/" + to_string(n * 2); }
+    Point point() const override { return {3, 4}; }
+    array<int, 3> numbers() const override { return {7, 8, 9}; }
+    vector<string> words() override { calls++; return {"b", "c"}; }
+    int? maybe() override { return 5; }
+    void nothing() override { calls += 10; }
+};
+
+int main() {
+    Square square = Square();
+    Shape s = square;
+    s.grow(2);
+    println("{} {} {}", s.label, s.area(), s.twice());
+
+    Other other = Other();
+    Source src = other;
+    println("{}", src.text("n", 4));
+    println("{}", src.point());
+    println("{}", src.numbers());
+    println("{}", src.words());
+    println("{}", src.maybe());
+    src.nothing();
+    println("{}", src.self() == src);
+    println("{}", src.self().self().self().point().y);
+    println("{}", other.calls);
+    return 0;
+}
+// expect: square 9 18
+// expect: n/8
+// expect: {x: 3, y: 4}
+// expect: [7, 8, 9]
+// expect: ["b", "c"]
+// expect: 5
+// expect: true
+// expect: 4
+// expect: 11

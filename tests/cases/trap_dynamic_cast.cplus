@@ -1,0 +1,15 @@
+class Animal {
+public:
+    int n = 1;
+};
+class Dog : public Animal {};
+class Cat : public Animal {};
+
+int main() {
+    Animal a = Cat();
+    Dog d = dynamic_cast<Dog>(a);
+    println("{}", d.n);
+    return 0;
+}
+// trap: the object is not a 'Dog'
+// trap: trap_dynamic_cast.cplus:10

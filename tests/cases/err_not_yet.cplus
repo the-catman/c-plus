@@ -1,5 +1,5 @@
 class User { int age; };
-class Admin : User { int level; };
+class Admin : public User, public Other { int level; };
 int main() { return 0; }
-// error: this compiler does not support inheritance yet
+// error: this compiler does not support multiple inheritance yet
 // error: spec: docs/SPEC.md#implementation-status

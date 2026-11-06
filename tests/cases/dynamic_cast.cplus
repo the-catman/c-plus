@@ -1,0 +1,50 @@
+// dynamic_cast asks what an object really is. The type written is the type of the result.
+class Animal {
+public:
+    string name = "any";
+};
+class Dog : public Animal {
+public:
+    int tricks = 3;
+};
+class Puppy : public Dog {};
+class Cat : public Animal {};
+
+void describe(Animal a) {
+    if (auto d = dynamic_cast<Dog?>(a)) println("a dog with {} tricks", d.tricks);
+    else println("not a dog");
+}
+
+int main() {
+    describe(Animal());
+    describe(Dog());
+    describe(Puppy());
+    describe(Cat());
+
+    Animal a = Puppy();
+    println("{}", dynamic_cast<Puppy>(a).tricks);
+    Dog d = dynamic_cast<Dog>(a);
+    println("{}", d == a);
+    println("{}", dynamic_cast<Cat?>(a) == null);
+    println("{}", dynamic_cast<Animal>(d) == a);
+
+    Animal? none = null;
+    println("{}", dynamic_cast<Dog?>(none) == null);
+    Animal? some = a;
+    println("{}", dynamic_cast<Dog?>(some) == a);
+    println("{}", dynamic_cast<Dog>(some).tricks);
+    println("{}", (dynamic_cast<Dog?>(some))?.tricks ?? 0);
+    return 0;
+}
+// expect: not a dog
+// expect: a dog with 3 tricks
+// expect: a dog with 3 tricks
+// expect: not a dog
+// expect: 3
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: true
+// expect: 3
+// expect: 3

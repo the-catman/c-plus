@@ -453,17 +453,102 @@ println("{}", a);              // User {name: "Alice", age: 31}
   out null (see [Optionals](#optionals)).
 - `const User u = ...;` stops `u` from referring to another object. The object itself can
   still change, as with `const` in JavaScript.
-- Members are private by default in a class and public in a struct, as in C++. `public:`
-  and `private:` work as in C++. `protected:` acts as `private:` until inheritance arrives.
+- Members are private by default in a class and public in a struct, as in C++. `public:`,
+  `private:` and `protected:` work as in C++; see [Inheritance](#inheritance).
 - A class has at most one constructor until overloading arrives. To let a caller leave
   out values, leave out the constructor and give the fields defaults.
 - `a == b` is true when `a` and `b` refer to the same object, like `===` on objects in
   JavaScript or `==` on `shared_ptr` in C++. Two objects with equal fields are still two
   objects, so `User("Ann") == User("Ann")` is false. To compare contents, compare the
   fields. Classes will be able to define their own `==` with operator overloading.
-- Not yet: inheritance. Multiple inheritance will follow
-  C++ default semantics: a diamond holds two copies of the shared base, and ambiguous
-  members are qualified as `d.B::speak()`. There will be no virtual inheritance.
+
+### Inheritance
+
+A class can derive from one other class, written as in C++. It gets the fields and methods of
+its base class. A method marked `virtual` runs the version of what the object really is, however
+the object is reached.
+
+```cpp
+class Animal {
+public:
+    string name;
+    Animal(string n) : name(n) {}
+    virtual string sound() const { return "..."; }
+    string describe() const { return name + " says " + sound(); }
+};
+
+class Dog : public Animal {
+public:
+    string breed = "mutt";
+    Dog(string n) : Animal(n) {}
+    string sound() const override { return "Woof"; }
+};
+
+Animal a = Dog("Rex");            // the same object, seen as an Animal
+println("{}", a.describe());      // Rex says Woof
+println("{}", a);                 // Dog {name: "Rex", breed: "mutt"}
+```
+
+- A class must say `public`. Without it, C++ derives privately, which is rarely what was meant,
+  so `class Dog : Animal` is an error. Only a class can derive, and only from a class: a struct is
+  a value, and copying one into a variable of its base type would lose part of it. The base class
+  can be defined before or after.
+- A `Dog` converts to an `Animal` by itself, wherever a value is stored, passed, returned or
+  compared, and so does a `Dog?` to an `Animal?`. It is the same object, not a copy. A
+  `vector<Dog>` does not convert to a `vector<Animal>`, but a `vector<Animal>` can hold dogs.
+  `c ? dog : animal` is an `Animal`. For two classes that only share a base class, say which:
+  `c ? static_cast<Animal>(dog) : cat`.
+- **`override` is required** on a method that replaces a virtual one, and its parameters, return
+  type and `const` must be the same. C++ only recommends `override`, and a typo there quietly
+  makes a new method. A method cannot share its name with a method of a base class that is not
+  virtual, nor can a field share its name with a member of a base class: in C++ these quietly hide
+  the inherited one, so that which one runs depends on the variable's type.
+- `Animal::sound()` runs that class's own version, without looking at what the object really is;
+  this is how an overriding method calls the one it replaces. From outside, `d.Animal::sound()`.
+  `Animal::name` and `d.Animal::name` reach fields the same way.
+- `virtual double area() const = 0;` declares a method without a body. A class that has one, or
+  inherits one without overriding it, is abstract: no object of it can be created, but a variable
+  of its type can refer to an object of a class deriving from it.
+- `protected:` members can be used in the methods of a class and of classes deriving from it, on
+  objects of the deriving class, as in C++.
+- Fields of the base class print first, and an object always prints as what it really is.
+
+**Constructors.** The base class is built first, then the class's own fields, then the
+constructor's body runs, whatever order the initializer list is written in. Its values are passed
+with the name of the base class, as in C++: `Dog(string n) : Animal(n), breed("lab") {}`.
+
+- If the base class's constructor needs arguments, the class must have a constructor that passes
+  them. A base class without a constructor takes its fields' values in order, `: Plain(1, "a")`, or
+  its defaults if the list does not name it.
+- A class with a base class and no constructor is built from defaults alone: `Dog()`. To give it
+  values, write a constructor.
+- A base class's fields belong to it: `: name(n)` is an error in the deriving class, which can
+  pass the value on to the base class or set the field in its body.
+- The values for the base class cannot use the object or its fields, since nothing exists yet.
+
+**While constructors and destructors run,** an object is only as much as has been built, as in
+C++. In `Animal`'s constructor a `Dog` is only an `Animal`: a virtual method runs `Animal`'s
+version, and `Dog`'s fields have no values yet. A method with no body called then stops the program.
+
+**Destructors.** `~Dog() {}` runs first, then `Dog`'s fields are released, last declared first,
+then the same for `Animal`. A destructor always runs for what the object really is, so unlike in
+C++ it does not need `virtual`. `virtual`, `override` and `= default` are allowed on a destructor
+and change nothing.
+
+**`dynamic_cast`** finds out what an object really is. The type written is the type of the result:
+
+```cpp
+if (auto d = dynamic_cast<Dog?>(a)) println("{}", d.breed);   // null when it is not a Dog
+Dog d = dynamic_cast<Dog>(a);                                 // stops the program when it is not
+```
+
+These are C++'s `dynamic_cast<Dog*>` and `dynamic_cast<Dog&>`, for a language where a class variable
+is already a reference. It also takes an `Animal?`, where null is not a `Dog`. `static_cast<Dog>(a)`
+and `(Dog)a`, which C++ does not check, are errors. `static_cast<Animal>(dog)` and `(Animal)dog` are allowed.
+
+Not yet: multiple inheritance and interfaces. Multiple inheritance will follow C++ default semantics:
+a diamond holds two copies of the shared base, and ambiguous members are qualified as `d.B::speak()`.
+There will be no virtual inheritance.
 
 ### Methods
 
@@ -1359,7 +1444,9 @@ shared between threads. Counting is automatic:
 - A parameter holds its argument until the function returns.
 - When an object is freed, its fields are released, the last declared first. A long
   chain of objects, such as a linked list of a million nodes, is freed one node after
-  another, without running out of stack.
+  another, without running out of stack. The exception is a link in a class whose base class
+  has a destructor: that destructor runs after the link is released, so each node waits for the
+  rest of the chain, and a very long chain stops the program when it runs out of stack.
 - Two objects that refer to each other, such as `a.next = b; b.next = a;`, are never
   freed; this is a reference cycle. `weak` references, which break cycles, are planned.
   Until then, set one of the references to `null` when you are done with them.
@@ -1508,7 +1595,7 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Debug builds with `--debug`: AddressSanitizer, stack traces, misaligned pointer and invalid bool checks, leak report | implemented |
 | Imports and multi-file programs | planned |
 | Variables outside functions; constants of other types; `constexpr` | planned |
-| Enums, `switch`, interfaces, lambdas | planned |
+| Enums, `switch`, lambdas | planned |
 | Default arguments, `auto` parameters and return types | planned |
 | `const` fields, nested types, types defined inside a function | planned |
 | `int x{5}`, `int x(5)`, brace initializers for fields | planned |
@@ -1522,7 +1609,8 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | Strings: `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
 | `hashmap<K, V>`; vector `insert`, `erase`, iterators; array sizes given by a name | planned |
 | References (`T&`), including `for (auto& x : v)` | planned |
-| Inheritance, `virtual`, `protected:` | planned |
+| Inheritance from one class, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
+| Multiple inheritance, interfaces, `final`, covariant return types | planned |
 | Operator overloading | planned |
 | Destructors for structs, static members | planned |
 | `weak` references | planned |

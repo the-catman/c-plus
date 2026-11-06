@@ -1,0 +1,82 @@
+// A class gets the fields and methods of its base class, and a virtual method runs the
+// version of what the object really is, however the object is reached.
+class Animal {
+public:
+    string name;
+    int legs = 4;
+    Animal(string n) : name(n) { println("Animal({})", n); }
+    virtual string sound() const { return "..."; }
+    string describe() const { return name + " says " + sound(); }
+    void rename(string n) { name = n; }
+    virtual ~Animal() { println("~Animal {}", name); }
+};
+
+class Dog : public Animal {
+public:
+    string breed = "mutt";
+    Dog(string n) : Animal(n) { println("Dog({})", breed); }
+    string sound() const override { return "Woof"; }
+    ~Dog() override { println("~Dog {}", breed); }
+};
+
+class Puppy : public Dog {
+public:
+    int age = 1;
+    Puppy(string n, int a) : Dog(n), age(a) { println("Puppy({})", age); }
+    string sound() const override { return Dog::sound() + "!"; }
+    string parentSound() const { return Animal::sound(); }
+};
+
+class Quiet : public Animal {
+public:
+    Quiet() : Animal("quiet") {}
+};
+
+string speak(Animal a) { return a.sound(); }
+Animal make(bool dog) {
+    if (dog) return Dog("made");
+    return Quiet();
+}
+
+int main() {
+    {
+        Puppy p = Puppy("Rex", 2);
+        println("{}", p.describe());
+        println("{}", speak(p));
+        println("{}", p.parentSound());
+        println("{}", p.Animal::sound());
+        println("{}", p.Animal::name);
+        p.rename("Max");
+        p.legs = 3;
+        println("{}", p);
+        Animal a = p;
+        println("{}", a);
+        println("{} {}", a.name, a.legs);
+        println("{}", a == p);
+    }
+    println("{}", make(true).sound());
+    println("{}", make(false).sound());
+    return 0;
+}
+// expect: Animal(Rex)
+// expect: Dog(mutt)
+// expect: Puppy(2)
+// expect: Rex says Woof!
+// expect: Woof!
+// expect: ...
+// expect: ...
+// expect: Rex
+// expect: Puppy {name: "Max", legs: 3, breed: "mutt", age: 2}
+// expect: Puppy {name: "Max", legs: 3, breed: "mutt", age: 2}
+// expect: Max 3
+// expect: true
+// expect: ~Dog mutt
+// expect: ~Animal Max
+// expect: Animal(made)
+// expect: Dog(mutt)
+// expect: Woof
+// expect: ~Dog mutt
+// expect: ~Animal made
+// expect: Animal(quiet)
+// expect: ...
+// expect: ~Animal quiet

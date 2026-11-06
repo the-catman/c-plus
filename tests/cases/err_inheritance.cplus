@@ -1,0 +1,76 @@
+class Base {
+public:
+    int value = 1;
+    int plain() const { return 1; }
+    virtual int spin() const { return 1; }
+    virtual int turn(int n) const { return n; }
+    virtual int half() { return 1; }
+    virtual string text() { return ""; }
+};
+
+class Unmarked : public Base {
+public:
+    int spin() const { return 2; }
+};
+class HidesPlain : public Base {
+public:
+    int plain() const { return 2; }
+};
+class NothingToOverride : public Base {
+public:
+    int spim() const override { return 2; }
+};
+class NoBaseAtAll {
+public:
+    int spin() const override { return 2; }
+};
+class WrongParams : public Base {
+public:
+    int turn(long n) const override { return 2; }
+};
+class WrongConst : public Base {
+public:
+    int half() const override { return 2; }
+};
+class WrongReturn : public Base {
+public:
+    int text() override { return 2; }
+};
+class FieldAgain : public Base {
+public:
+    int value = 2;
+};
+class FieldNamedMethod : public Base {
+public:
+    int plain = 2;
+};
+class MethodNamedField : public Base {
+public:
+    int value() { return 2; }
+};
+class Unknown : public Bass {};
+struct Value {};
+class FromStruct : public Value {};
+class Loop1 : public Loop2 {};
+class Loop2 : public Loop1 {};
+class Own : public Own {};
+
+// error: 'spin' replaces the virtual method of 'Base', so it must be marked `override`
+// error: 'HidesPlain' cannot have its own 'plain', because 'Base' has a method with that name that is not virtual
+// error: 'spim' is marked `override`, but no base class of 'NothingToOverride' has a method with that name
+// error: did you mean 'spin'?
+// error: 'spin' is marked `override`, but 'NoBaseAtAll' has no base class
+// error: 'turn' must have the same parameters, return type and `const` as the method it replaces
+// error: the method in 'Base' is `int turn(int n) const`
+// error: 'half' must have the same parameters, return type and `const` as the method it replaces
+// error: 'text' must have the same parameters, return type and `const` as the method it replaces
+// error: 'FieldAgain' cannot have a field named 'value', because its base class 'Base' already has one
+// error: 'FieldNamedMethod' cannot have a field named 'plain', because its base class 'Base' has a method with that name
+// error: 'MethodNamedField' cannot have a method named 'value', because its base class 'Base' has a field with that name
+// error: there is no class named 'Bass'
+// error: did you mean 'Base'?
+// error: a class can only derive from a class, but 'Value' is a struct
+// error: class 'Loop2' would be its own base class, through 'Loop1'
+// error: class 'Own' would be its own base class, through 'Own'
+// error: spec: docs/SPEC.md#inheritance
+int main() { return 0; }

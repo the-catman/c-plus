@@ -1,0 +1,29 @@
+// Freeing a long chain of objects takes no more stack than freeing one, also when the link
+// is in a deriving class, or the base class has fields of its own.
+class Base {
+public:
+    string name = "base";
+    vector<int> numbers;
+};
+class Node : public Base {
+public:
+    Node? next;
+    Node(Node? n) : next(n) {}
+};
+class Link : public Node {
+public:
+    int value = 0;
+    Link(Node? n) : Node(n) {}
+};
+
+int main() {
+    Node? head = null;
+    for (int i = 0; i < 1000000; i++) {
+        if (i % 2 == 0) head = Node(head);
+        else head = Link(head);
+    }
+    head = null;
+    println("done");
+    return 0;
+}
+// expect: done

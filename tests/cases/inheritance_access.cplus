@@ -1,0 +1,44 @@
+// `protected:` opens a member to the classes that derive from it.
+class Account {
+private:
+    int secret = 42;
+    int doubled() const { return secret * 2; }
+protected:
+    int balance = 10;
+    void add(int n) { balance += n; }
+    Account(int start) : balance(start) {}
+public:
+    int peek() const { return secret + doubled(); }
+    virtual int total() const { return balance; }
+};
+class Savings : public Account {
+public:
+    Savings(int start) : Account(start) {}
+    void deposit(int n) {
+        add(n);
+        this.add(n);
+        balance += 1;
+        this.balance += 1;
+    }
+    int same(Savings other) const { return other.balance; }
+    int total() const override { return balance * 2; }
+};
+// A method can be overridden under another access, as in C++. What counts is the type it is
+// called through.
+class Hidden : public Account {
+private:
+    int total() const override { return -1; }
+public:
+    Hidden() : Account(0) {}
+};
+
+int main() {
+    Savings s = Savings(5);
+    s.deposit(1);
+    println("{} {} {}", s.peek(), s.total(), s.same(s));
+    Account a = Hidden();
+    println("{}", a.total());
+    return 0;
+}
+// expect: 126 18 9
+// expect: -1

@@ -1,0 +1,14 @@
+class Base {
+public:
+    ~Base() { keep.push_back(this); }
+    vector<Base> keep;
+};
+class Derived : public Base {};
+
+int main() {
+    {
+        Derived d = Derived();
+    }
+    return 0;
+}
+// trap: the destructor of 'Base' stored 'this' somewhere

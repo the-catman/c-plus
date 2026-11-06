@@ -46,7 +46,7 @@ private:
     [[noreturn]] void failStd(Loc loc, const Token& name);
     const Type* parseBaseType(Loc& loc);
     ExprPtr parseCoalesce();
-    ExprPtr parseMemberAccess(ExprPtr e, const char* after);
+    ExprPtr parseMemberAccess(ExprPtr e, const char* after, std::string qualifier = "");
     CondDecl parseCondDecl(const char* stmt);
     void syncTopLevel();
     void syncStatement();

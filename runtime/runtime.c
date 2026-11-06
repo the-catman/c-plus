@@ -220,6 +220,15 @@ void cplus_retain(void* object) {
     if (__atomic_fetch_add((int64_t*)object, 1, __ATOMIC_RELAXED) <= 0) bad_count();
 }
 
+// Whether a class object is of the class with this vtable, or of one deriving from it. A
+// vtable starts with the vtable of the base class, and an object with its count and vtable.
+int32_t cplus_is_a(void* object, void* vtable) {
+    if (!object) return 0;
+    for (void** v = ((void***)object)[1]; v; v = v[0])
+        if (v == vtable) return 1;
+    return 0;
+}
+
 // Returns 1 when this was the last reference, so the caller destroys the object.
 int32_t cplus_release(void* object) {
     if (!object) return 0;

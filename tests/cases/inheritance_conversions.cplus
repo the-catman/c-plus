@@ -1,0 +1,107 @@
+// A class converts to its base class wherever a value is stored, passed or compared.
+class Shape {
+public:
+    virtual double area() const = 0;
+    virtual string name() const { return "shape"; }
+};
+
+class Square : public Shape {
+public:
+    double side;
+    Square(double s) : side(s) {}
+    double area() const override { return side * side; }
+    string name() const override { return "square"; }
+};
+
+class Circle : public Shape {
+public:
+    double r = 1;
+    double area() const override { return 3 * r * r; }
+};
+
+class Holder {
+public:
+    Shape shape;
+    Shape? maybe;
+    Holder(Shape s) : shape(s), maybe(s) {}
+};
+
+struct Pair {
+    Shape a;
+    Shape? b;
+};
+
+Shape? none() { return null; }
+Square? noSquare() { return null; }
+Shape? some(Square s) { return s; }
+
+int main() {
+    Square s = Square(2);
+    Circle c = Circle();
+    vector<Shape> all = {s, c};
+    all.push_back(Square(3));
+    for (Shape x : all) println("{} {}", x.name(), x.area());
+    for (auto x : all) print("{} ", x.area());
+    println();
+
+    array<Shape, 2> two = {s, c};
+    println("{}", two[1].name());
+
+    Holder h = Holder(c);
+    println("{} {}", h.shape.name(), h.maybe?.name() ?? "none");
+    h.shape = s;
+    h.maybe = null;
+    println("{} {}", h.shape.name(), h.maybe?.name() ?? "none");
+
+    Pair p = {s, c};
+    println("{} {}", p.a.name(), p.b?.area() ?? 0.0);
+
+    Shape? opt = s;
+    println("{}", opt.value().name());
+    opt = c;
+    println("{}", opt?.name() ?? "none");
+    Square? maybeSquare = s;
+    Shape? widened = maybeSquare;
+    println("{}", widened?.area() ?? 0.0);
+    widened = noSquare();
+    println("{}", widened == null);
+    println("{}", some(s) == s);
+
+    bool yes = true;
+    Shape one = yes ? s : all[1];
+    println("{}", one.name());
+    auto either = yes ? static_cast<Shape>(s) : c;
+    println("{}", either.name());
+    println("{}", (yes ? noSquare() : opt) == null);
+    Shape fallback = noSquare() ?? all[1];
+    println("{}", fallback.name());
+    Shape fallback2 = none() ?? s;
+    println("{}", fallback2.name());
+
+    Shape same = s;
+    println("{} {} {}", same == s, s == same, s == all[0]);
+    println("{} {}", same != c, opt == same);
+    println("{}", maybeSquare == same);
+    return 0;
+}
+// expect: square 4
+// expect: shape 3
+// expect: square 9
+// expect: 4 3 9 
+// expect: shape
+// expect: shape shape
+// expect: square none
+// expect: square 3
+// expect: square
+// expect: shape
+// expect: 4
+// expect: true
+// expect: true
+// expect: square
+// expect: square
+// expect: true
+// expect: shape
+// expect: square
+// expect: true true true
+// expect: true false
+// expect: true

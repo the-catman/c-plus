@@ -50,7 +50,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
-    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart;
+    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtIsA;
     llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
@@ -78,7 +78,12 @@ struct Codegen::Impl {
 
     // What is generated for each struct and class.
     struct TypeInfo {
-        llvm::StructType* layout = nullptr;  // a struct's value, or a class object: { i64 refcount, fields... }
+        // A struct's value, or a class object. An object starts with its reference count and a
+        // pointer to its vtable, which is how code that only knows a base class finds what the
+        // object really is. A class with a base class starts with the layout of that class:
+        // { i64 count, ptr vtable, fields... } or { base, fields... }.
+        llvm::StructType* layout = nullptr;
+        llvm::GlobalVariable* vtable = nullptr;  // classes
         llvm::Function* print = nullptr;
         llvm::Function* equals = nullptr;   // structs: compares two values field by field
         llvm::Function* retain = nullptr;   // structs that hold class references
@@ -88,6 +93,11 @@ struct Codegen::Impl {
         int inMemory = -1;                  // structs: whether they hold arrays (-1: not computed)
     };
     std::unordered_map<const StructDecl*, TypeInfo> types;
+    // A vtable is a table of addresses: the vtable of the base class, which dynamic_cast walks
+    // up, then the object's destroy and print helpers, then its virtual methods by slot.
+    static constexpr uint64_t kObjectVtableOffset = 8;
+    static constexpr uint64_t kVtableDestroy = 1, kVtablePrint = 2, kVtableMethods = 3;
+    llvm::Function* objectRelease = nullptr;  // void(ptr object), for every class
 
     // A vector is a pointer to a buffer laid out as the runtime's cplus_vec: a header of
     // count, size and capacity, then the elements. Null is an empty vector.
@@ -264,6 +274,7 @@ struct Codegen::Impl {
         rtDeleteCheck = decl("cplus_delete_check", i64, {ptrTy, i32, ptrTy, i32, i32});
         rtDeleteFree = decl("cplus_delete_free", voidTy, {ptrTy});
         rtStart = decl("cplus_start", voidTy, {});
+        rtIsA = decl("cplus_is_a", i32, {ptrTy, ptrTy});
         rtStrMutable = decl("cplus_str_mutable", ptrTy, {ptrTy});
         rtStrRepeat = decl("cplus_str_repeat", voidTy, {ptrTy, i64, i32, ptrTy, i32, i32});
         rtVecNew = decl("cplus_vec_new", ptrTy, {i64, i64});
@@ -406,6 +417,12 @@ struct Codegen::Impl {
     }
 
     // ---- Traps -------------------------------------------------------------
+
+    void trapHere(const std::string& message, Loc loc) {
+        auto* call = b.CreateCall(rtTrap, {cstring(message), fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+        call->setDoesNotReturn();
+        b.CreateUnreachable();
+    }
 
     void trapIf(llvm::Value* cond, const std::string& message, Loc loc) {
         auto* trapBB = llvm::BasicBlock::Create(ctx, "trap", fn);
@@ -1175,7 +1192,9 @@ struct Codegen::Impl {
     llvm::Value* convert(llvm::Value* v, const Type* from, const Type* to) {
         if (from == to) return v;
         if (from->isNull()) return zeroValue(to);
+        if (from->isOptional() && to->isOptional()) return v;  // `Dog?` to `Animal?`: the same address
         if (to->isOptional()) return wrapOptional(convert(v, from, to->elem), to);
+        if (from->isClass() && to->isClass()) return v;  // to a base class: the same address
         if (from->is(K::Int) && to->is(K::Long)) return b.CreateSExt(v, b.getInt64Ty());
         if (from->is(K::Char) && to->isInteger()) return b.CreateZExt(v, llvmType(to));  // its code, 0 to 255
         if (from->is(K::Char) && to->isFloating()) return b.CreateUIToFP(v, llvmType(to));
@@ -1298,8 +1317,42 @@ struct Codegen::Impl {
     }
 
     llvm::Value* fieldAddress(const Type* owner, llvm::Value* object, int index, const std::string& name) {
-        unsigned slot = owner->isClass() ? index + 1 : index;  // a class object starts with its count
+        // A class object starts with its base class, or with its count and vtable.
+        unsigned slot = !owner->isClass() ? index : owner->decl->base ? index + 1 : index + 2;
         return b.CreateStructGEP(types.at(owner->decl).layout, object, slot, name);
+    }
+
+    void storeVtable(llvm::Value* object, const StructDecl& sd) {
+        b.CreateStore(types.at(&sd).vtable, b.CreateConstInBoundsGEP1_64(b.getInt8Ty(), object, kObjectVtableOffset, "vptr"));
+    }
+
+    // What the vtable of an object holds at `slot`, for the class the object really is, or for
+    // the class of a constructor or destructor while one runs.
+    llvm::Value* vtableEntry(llvm::Value* object, uint64_t slot, const char* name) {
+        llvm::Value* vptr = b.CreateConstInBoundsGEP1_64(b.getInt8Ty(), object, kObjectVtableOffset, "vptr");
+        llvm::Value* vtable = b.CreateLoad(b.getPtrTy(), vptr, "vtable");
+        return b.CreateLoad(b.getPtrTy(), b.CreateConstInBoundsGEP1_64(b.getPtrTy(), vtable, slot), name);
+    }
+
+    // Builds the base class in the memory of an object, from the values in a constructor's
+    // initializer list: its constructor's arguments, or else its fields, in order.
+    void buildBase(llvm::Value* object, const StructDecl& base, const std::vector<ExprPtr>* args) {
+        if (const FuncDecl* ctor = base.constructor) {
+            std::vector<llvm::Value*> values{object};
+            for (size_t i = 0; args && i < args->size(); ++i) values.push_back(genOwned(*(*args)[i], ctor->params[i]->type));
+            b.CreateCall(funcs.at(ctor), values);
+            return;
+        }
+        std::vector<llvm::Value*> given(base.fields.size(), nullptr);
+        for (size_t i = 0; args && i < args->size(); ++i) given[i] = genOwned(*(*args)[i], base.fields[i].type);
+        buildObject(object, base, given);
+    }
+
+    // Fills a class object that has no constructor: its base class, then its own fields.
+    void buildObject(llvm::Value* object, const StructDecl& sd, const std::vector<llvm::Value*>& given) {
+        if (sd.base) buildBase(object, *sd.base, nullptr);
+        storeVtable(object, sd);
+        fillFields(object, sd, given);
     }
 
     // Builds a struct value, or a new class object, without a constructor. `given[i]`,
@@ -1308,7 +1361,7 @@ struct Codegen::Impl {
         given.resize(sd.fields.size(), nullptr);
         if (sd.isClass) {
             llvm::Value* object = allocObject(sd);
-            fillFields(object, sd, given);
+            buildObject(object, sd, given);
             return object;
         }
         if (inMemory(&sd.type)) {
@@ -1496,7 +1549,7 @@ struct Codegen::Impl {
         switch (e.kind) {
             case Expr::Kind::Name: {
                 auto& n = static_cast<const NameExpr&>(e);
-                if (n.implicitField >= 0) return fieldAddress(&fnDecl->owner->type, thisPtr, n.implicitField, n.name);
+                if (n.implicitField >= 0) return fieldAddress(&n.fieldOwner->type, thisPtr, n.implicitField, n.name);
                 return locals.at(n.decl);
             }
             case Expr::Kind::This: return thisPtr;
@@ -1508,7 +1561,7 @@ struct Codegen::Impl {
                 else if (llvm::Value* f = frozenValue(*m.base)) object = f;
                 else if (hold || !isPlace(*m.base)) object = gen(*m.base);
                 else object = b.CreateLoad(b.getPtrTy(), addressOf(*m.base), "obj");
-                return fieldAddress(baseType, object, m.fieldIndex, m.field);
+                return fieldAddress(&m.fieldOwner->type, object, m.fieldIndex, m.field);
             }
             case Expr::Kind::Unary: {  // `*p`
                 auto& u = static_cast<const UnaryExpr&>(e);
@@ -1962,8 +2015,10 @@ struct Codegen::Impl {
                 else b.CreateCall(rtPrintStr, {out, charBytes(v), b.getInt64(1)});
                 break;
             case K::String: b.CreateCall(nested ? rtPrintQuoted : rtPrintStr, {out, strData(v), strLength(v)}); break;
-            case K::Struct:
-            case K::Class: b.CreateCall(types.at(t->decl).print, {v, out}); break;
+            case K::Struct: b.CreateCall(types.at(t->decl).print, {v, out}); break;
+            case K::Class:  // whatever the object really is, with all of its fields
+                b.CreateCall(types.at(t->decl).print->getFunctionType(), vtableEntry(v, kVtablePrint, "print"), {v, out});
+                break;
             case K::Vector: b.CreateCall(vecInfo(t).print, {v, out}); break;
             case K::Array: b.CreateCall(arrayInfo(t).print, {v, out}); break;
             case K::Null: printText(out, "null"); break;
@@ -2030,7 +2085,18 @@ struct Codegen::Impl {
         const Type* from = c.operand->type;
         const Type* to = c.target;
         llvm::Value* v = gen(*c.operand);
+        if (c.dynamic) {
+            const Type* toClass = to->isOptional() ? to->elem : to;
+            llvm::Value* isA = b.CreateICmpNE(b.CreateCall(rtIsA, {v, types.at(toClass->decl).vtable}), b.getInt32(0));
+            if (to->isOptional()) return b.CreateSelect(isA, v, llvm::ConstantPointerNull::get(b.getPtrTy()));
+            trapIf(b.CreateNot(isA),
+                   "the object is not a '" + std::string(toClass->name) + "'; dynamic_cast<" + toClass->name +
+                       "?> gives null instead of stopping the program",
+                   c.loc);
+            return v;
+        }
         if (from == to) return v;
+        if (to->isClass() || to->isOptional()) return convert(v, from, to);  // to a base class
         Loc loc = c.loc;
         if (to->isPointer()) {
             if (from->isInteger()) return b.CreateIntToPtr(b.CreateSExt(v, b.getInt64Ty()), b.getPtrTy());  // reinterpret_cast
@@ -2237,19 +2303,24 @@ struct Codegen::Impl {
         std::vector<llvm::Value*> args;
         if (call.method) args.push_back(thisPtr);
         for (size_t i = 0; i < call.args.size(); ++i) args.push_back(genOwned(*call.args[i], target->params[i]->type));
-        return callFunction(*target, std::move(args));
+        return callFunction(*target, std::move(args), call.method != nullptr);
     }
 
     // Calls a function of the program. One that returns a value handled through its address
     // writes it to memory the caller gives it, as a hidden first argument.
-    llvm::Value* callFunction(const FuncDecl& f, std::vector<llvm::Value*> args) {
+    // With `dispatch`, a virtual method is found through the vtable of `this`, the first of `args`.
+    llvm::Value* callFunction(const FuncDecl& f, std::vector<llvm::Value*> args, bool dispatch = false) {
+        llvm::FunctionCallee callee = funcs.at(&f);
+        if (dispatch && f.vtableSlot >= 0)
+            callee = llvm::FunctionCallee(funcs.at(&f)->getFunctionType(),
+                                          vtableEntry(args[0], kVtableMethods + f.vtableSlot, f.name.c_str()));
         if (inMemory(f.retType)) {
             llvm::AllocaInst* result = entryAlloca(llvmType(f.retType), "result");
             args.insert(args.begin(), result);
-            b.CreateCall(funcs.at(&f), args);
+            b.CreateCall(callee, args);
             return result;
         }
-        llvm::CallInst* inst = b.CreateCall(funcs.at(&f), args);
+        llvm::CallInst* inst = b.CreateCall(callee, args);
         return f.retType->is(K::Void) ? nullptr : inst;
     }
 
@@ -2300,7 +2371,7 @@ struct Codegen::Impl {
         }
         if (!argsDone) genArgs();
         args[0] = self;
-        llvm::Value* result = callFunction(*call.method, std::move(args));
+        llvm::Value* result = callFunction(*call.method, std::move(args), call.qualifier.empty());
         // If the method's body wrote to the vector this element lies in, the vector has moved
         // to a new buffer, and what the method did to `this` went to the old one. That would
         // be lost without a word, so the program stops.
@@ -2954,6 +3025,15 @@ struct Codegen::Impl {
         locals.clear();
         b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
         startLineTable(f.nameLoc);
+        if (f.isPure) {
+            // Calling this takes a constructor or destructor of the class, when the object is
+            // only that class, since any other object has a version with a body.
+            trapHere("the method '" + f.owner->name + "." + f.name + "' has no body, and was called while an object was "
+                     "only a '" + f.owner->name + "', because a constructor or destructor was running",
+                     f.nameLoc);
+            endLineTable();
+            return;
+        }
         unsigned first = (inMemory(f.retType) ? 1 : 0) + (f.owner ? 1 : 0);
         thisPtr = f.owner ? fn->getArg(first - 1) : nullptr;
         // Parameters own their values, like locals, and are released when the function ends.
@@ -2963,7 +3043,18 @@ struct Codegen::Impl {
             else b.CreateStore(fn->getArg(first + i), allocaFor(*f.params[i]));
             if (isManaged(f.params[i]->type)) scopes.back().push_back(f.params[i].get());
         }
-        if (f.role == FuncDecl::Role::Constructor) genFieldInits(f);
+        if (f.role == FuncDecl::Role::Constructor) {
+            if (f.owner->isClass) {
+                // The base class comes first. While its constructor runs, the object is only
+                // that class, and a virtual call finds its version, as in C++.
+                if (f.owner->base) {
+                    buildBase(thisPtr, *f.owner->base, f.callsBase ? &f.baseArgs : nullptr);
+                    flushTemps();
+                }
+                storeVtable(thisPtr, *f.owner);
+            }
+            genFieldInits(f);
+        }
         genStmt(*f.body);
         if (!b.GetInsertBlock()->getTerminator()) {
             releaseScopes(0);
@@ -3003,7 +3094,10 @@ struct Codegen::Impl {
         info.print = helper(sd, "print", b.getVoidTy(), {self, b.getPtrTy()});  // the value, the output
         if (!sd.isClass) info.equals = helper(sd, "equals", b.getInt1Ty(), {self, self});
         if (sd.isClass) {
-            info.release = helper(sd, "release", b.getVoidTy(), {self});
+            if (!objectRelease)
+                objectRelease = llvm::Function::Create(llvm::FunctionType::get(b.getVoidTy(), {self}, false),
+                                                       llvm::Function::InternalLinkage, "cplus.release_object", mod.get());
+            info.release = objectRelease;
             info.destroy = helper(sd, "destroy", b.getVoidTy(), {self});
         } else if (isManaged(&sd.type)) {
             info.retain = helper(sd, "retain", b.getVoidTy(), {self});
@@ -3041,10 +3135,15 @@ struct Codegen::Impl {
             printText(out, sd.name + " ");
         }
         printText(out, "{");
-        for (size_t i = 0; i < sd.fields.size(); ++i) {
-            printText(out, (i ? ", " : "") + sd.fields[i].name + ": ");
-            printValue(out, loadField(sd, self, i), sd.fields[i].type, true);
-        }
+        std::vector<const StructDecl*> rootFirst;  // the base class's fields come first
+        for (const StructDecl* d = &sd; d; d = d->base) rootFirst.insert(rootFirst.begin(), d);
+        bool first = true;
+        for (const StructDecl* d : rootFirst)
+            for (size_t i = 0; i < d->fields.size(); ++i) {
+                printText(out, (first ? "" : ", ") + d->fields[i].name + ": ");
+                printValue(out, loadField(*d, self, i), d->fields[i].type, true);
+                first = false;
+            }
         printText(out, "}");
         if (sd.isClass) b.CreateCall(rtPrintLeave, {});
         b.CreateRetVoid();
@@ -3077,41 +3176,47 @@ struct Codegen::Impl {
             return;
         }
 
-        // Release: destroy the object when the last reference goes away.
-        startHelper(info.release);
-        self = info.release->getArg(0);
-        auto* destroyBB = llvm::BasicBlock::Create(ctx, "destroy", fn);
-        auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
-        b.CreateCondBr(b.CreateICmpNE(b.CreateCall(rtRelease, {self}), b.getInt32(0)), destroyBB, doneBB);
-        b.SetInsertPoint(destroyBB);
-        b.CreateCall(info.destroy, {self})->setTailCallKind(llvm::CallInst::TCK_MustTail);
-        b.CreateRetVoid();
-        b.SetInsertPoint(doneBB);
-        b.CreateRetVoid();
-
-        // Destroy: run the destructor, read the fields, free the memory, and release the
-        // fields, last declared first as in C++. The last release is a tail call, so
-        // freeing a long chain of objects, like a linked list, needs no more stack than
-        // freeing one.
+        // Destroy: run the destructor, then release the fields, last declared first as in C++,
+        // and the same for each base class in turn, with the object then counting as only that
+        // class. The fields that come after the last destructor are read first, the memory
+        // freed, and then they are released. The last release is a tail call, so freeing a long
+        // chain of objects, like a linked list, needs no more stack than freeing one.
         startHelper(info.destroy);
         self = info.destroy->getArg(0);
-        if (sd.destructor) {
-            // While the destructor runs, the object counts as having one reference, so
-            // passing `this` to a function cannot destroy it a second time.
-            llvm::Value* count = b.CreateStructGEP(info.layout, self, 0, "count");
-            b.CreateStore(b.getInt64(1), count);
-            b.CreateCall(funcs.at(sd.destructor), {self});
-            trapIf(b.CreateICmpNE(b.CreateLoad(b.getInt64Ty(), count), b.getInt64(1)),
-                   "the destructor of '" + sd.name + "' stored 'this' somewhere, so the object would be used after it is freed",
-                   sd.destructor->nameLoc);
+        std::vector<const StructDecl*> chain;  // this class, then each base class
+        size_t lastDestructor = 0;
+        for (const StructDecl* d = &sd; d; d = d->base) {
+            if (d->destructor) lastDestructor = chain.size();
+            chain.push_back(d);
         }
-        std::vector<size_t> order;  // the managed fields, in the order they are released
-        for (size_t i = sd.fields.size(); i-- > 0;)
-            if (isManaged(sd.fields[i].type)) order.push_back(i);
+        struct HeldField {
+            const StructDecl* owner;
+            size_t index;
+            const Type* type() const { return owner->fields[index].type; }
+        };
+        std::vector<HeldField> order;  // the managed fields to release after freeing, in that order
+        for (size_t c = 0; c < chain.size(); ++c) {
+            const StructDecl& cls = *chain[c];
+            if (cls.destructor) {
+                // While the destructor runs, the object counts as having one reference, so
+                // passing `this` to a function cannot destroy it a second time.
+                b.CreateStore(b.getInt64(1), self);
+                if (c > 0) storeVtable(self, cls);
+                b.CreateCall(funcs.at(cls.destructor), {self});
+                trapIf(b.CreateICmpNE(b.CreateLoad(b.getInt64Ty(), self), b.getInt64(1)),
+                       "the destructor of '" + cls.name + "' stored 'this' somewhere, so the object would be used after it is freed",
+                       cls.destructor->nameLoc);
+            }
+            for (size_t i = cls.fields.size(); i-- > 0;) {
+                if (!isManaged(cls.fields[i].type)) continue;
+                if (c >= lastDestructor) order.push_back({&cls, i});
+                else releaseValue(loadField(cls, self, i), cls.fields[i].type);
+            }
+        }
         // The chain usually goes through the first class-typed field. It can be released
         // last only if no field declared before it could run a destructor.
         for (size_t k = order.size(); k-- > 0;) {
-            const Type* ft = sd.fields[order[k]].type;
+            const Type* ft = order[k].type();
             if (classOf(ft)) {
                 std::rotate(order.begin() + k, order.begin() + k + 1, order.end());
                 break;
@@ -3120,22 +3225,47 @@ struct Codegen::Impl {
             if (mayRunDestructor(ft, seen)) break;
         }
         std::vector<llvm::Value*> values;
-        for (size_t i : order) {  // a value in the object's memory is copied out of it first
-            const Type* ft = sd.fields[i].type;
-            values.push_back(inMemory(ft) ? loadValue(ft, fieldAddress(&sd.type, self, (int)i, sd.fields[i].name))
-                                          : loadField(sd, self, i));
+        for (const HeldField& f : order) {  // a value in the object's memory is copied out of it first
+            const FieldDecl& field = f.owner->fields[f.index];
+            values.push_back(inMemory(field.type) ? loadValue(field.type, fieldAddress(&f.owner->type, self, (int)f.index, field.name))
+                                                  : loadField(*f.owner, self, f.index));
         }
         b.CreateCall(rtFree, {self});
         for (size_t k = 0; k < order.size(); ++k) {
-            const Type* ft = sd.fields[order[k]].type;
+            const Type* ft = order[k].type();
             if (k + 1 == order.size() && classOf(ft)) {
-                b.CreateCall(types.at(classOf(ft)->decl).release, {values[k]})
-                    ->setTailCallKind(llvm::CallInst::TCK_MustTail);
+                b.CreateCall(objectRelease, {values[k]})->setTailCallKind(llvm::CallInst::TCK_MustTail);
                 break;
             }
             releaseValue(values[k], ft);
         }
         b.CreateRetVoid();
+    }
+
+    // Releasing any object: when that was the last reference, destroy what the object really is.
+    void defineObjectRelease() {
+        startHelper(objectRelease);
+        llvm::Value* self = objectRelease->getArg(0);
+        auto* destroyBB = llvm::BasicBlock::Create(ctx, "destroy", fn);
+        auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
+        b.CreateCondBr(b.CreateICmpNE(b.CreateCall(rtRelease, {self}), b.getInt32(0)), destroyBB, doneBB);
+        b.SetInsertPoint(destroyBB);
+        b.CreateCall(objectRelease->getFunctionType(), vtableEntry(self, kVtableDestroy, "destroy"), {self})
+            ->setTailCallKind(llvm::CallInst::TCK_MustTail);
+        b.CreateRetVoid();
+        b.SetInsertPoint(doneBB);
+        b.CreateRetVoid();
+    }
+
+    void defineVtable(const StructDecl& sd) {
+        TypeInfo& info = types.at(&sd);
+        std::vector<llvm::Constant*> entries;
+        entries.push_back(sd.base ? static_cast<llvm::Constant*>(types.at(sd.base).vtable)
+                                  : llvm::ConstantPointerNull::get(b.getPtrTy()));
+        entries.push_back(info.destroy);
+        entries.push_back(info.print);
+        for (const FuncDecl* m : sd.vtable) entries.push_back(funcs.at(m));
+        info.vtable->setInitializer(llvm::ConstantArray::get(llvm::cast<llvm::ArrayType>(info.vtable->getValueType()), entries));
     }
 
     // The class of a field that refers to an object, or may: `User` or `User?`.
@@ -3170,7 +3300,12 @@ struct Codegen::Impl {
             types[sd].layout = llvm::StructType::create(ctx, (sd->isClass ? "cplus.class." : "cplus.struct.") + sd->name);
         for (const StructDecl* sd : structs) {
             std::vector<llvm::Type*> fields;
-            if (sd->isClass) fields.push_back(b.getInt64Ty());  // the reference count
+            if (sd->isClass && sd->base) {
+                fields.push_back(types.at(sd->base).layout);
+            } else if (sd->isClass) {
+                fields.push_back(b.getInt64Ty());  // the reference count
+                fields.push_back(b.getPtrTy());    // the vtable
+            }
             for (auto& f : sd->fields) fields.push_back(llvmType(f.type));
             // As in C++, an empty struct takes one byte, so `new E[3]` makes three of them at
             // different addresses. Inside `extern "C"` it follows C, where it takes none.
@@ -3193,6 +3328,15 @@ struct Codegen::Impl {
             for (auto& m : sd->methods) declareFunction(*m);
             declareHelpers(*sd);
         }
+        for (const StructDecl* sd : structs) {
+            if (!sd->isClass) continue;
+            auto* type = llvm::ArrayType::get(b.getPtrTy(), kVtableMethods + sd->vtable.size());
+            types.at(sd).vtable = new llvm::GlobalVariable(*mod, type, true, llvm::GlobalValue::InternalLinkage, nullptr,
+                                                           "cplus.vtable." + sd->name);
+        }
+        for (const StructDecl* sd : structs)
+            if (sd->isClass) defineVtable(*sd);
+        if (objectRelease) defineObjectRelease();
         for (const StructDecl* sd : structs) defineHelpers(*sd);
         for (auto& f : program.funcs) defineFunction(*f);
         for (const StructDecl* sd : structs)

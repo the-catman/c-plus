@@ -1,0 +1,163 @@
+class Base {
+private:
+    int hidden = 1;
+    int hiddenMethod() { return 1; }
+protected:
+    int inner = 1;
+    int innerMethod() { return 1; }
+public:
+    int open = 1;
+    virtual int f() const = 0;
+    Base(int n) : open(n) {}
+};
+class Fine : public Base {
+public:
+    int mine = 2;
+    Fine() : Base(1) {}
+    int f() const override { return 1; }
+    int bad() {
+        int a = hidden;
+        int b = hiddenMethod();
+        int c = this.hidden;
+        return a + b + c;
+    }
+    int otherObject(Base other) { return other.inner; }
+    int otherMethod(Base other) { return other.innerMethod(); }
+    int pure() { return Base::f(); }
+    int wrongQualifier() { return Other::g(); }
+};
+class Other {
+public:
+    int g() { return 1; }
+};
+class NoCall : public Base {
+public:
+    int f() const override { return 1; }
+    NoCall() {}
+};
+class NoConstructor : public Base {
+public:
+    int f() const override { return 1; }
+};
+class NotOverridden : public Base {
+public:
+    NotOverridden() : Base(1) {}
+};
+class ReadsField : public Base {
+public:
+    int own = 1;
+    int f() const override { return 1; }
+    ReadsField() : Base(own) {}
+};
+class ReadsInherited : public Base {
+public:
+    int f() const override { return 1; }
+    ReadsInherited() : Base(open) {}
+};
+class UsesThis : public Base {
+public:
+    int f() const override { return 1; }
+    int g() { return 1; }
+    UsesThis() : Base(g()) {}
+};
+class TooManyValues : public Base {
+public:
+    int f() const override { return 1; }
+    TooManyValues() : Base(1, 2) {}
+};
+class SetsInherited : public Base {
+public:
+    int f() const override { return 1; }
+    SetsInherited() : Base(1), open(2) {}
+};
+class NotItsBase : public Base {
+public:
+    int f() const override { return 1; }
+    NotItsBase() : Base(1), Other(1) {}
+};
+class AssignsOwn : public Base {
+public:
+    string own;
+    int f() const override { return 1; }
+    AssignsOwn() : Base(int((own = "lost").size())) {}
+};
+class AssignsInherited : public Base {
+public:
+    int f() const override { return 1; }
+    AssignsInherited() : Base(open = 2) {}
+};
+class Plain {
+public:
+    int a = 1;
+};
+class Derived : public Plain {
+public:
+    int b = 2;
+};
+class NeedsObject {
+public:
+    Plain p;
+};
+class MissingValue : public NeedsObject {};
+
+int main() {
+    Base b = Base(1);
+    Fine fine = Fine();
+    int x = fine.inner;
+    int y = fine.innerMethod();
+    int z = fine.hidden;
+    NotOverridden n = NotOverridden();
+    Derived d = Derived{1, 2};
+    Derived e = Derived(1);
+    Derived f = Derived{.b = 3};
+    MissingValue m = MissingValue();
+    Plain p = Plain();
+    Derived down = p;
+    Derived down2 = static_cast<Derived>(p);
+    Derived down3 = (Derived)p;
+    Derived* down4 = (Derived*)p;
+    vector<Plain> plains = vector<Derived>{};
+    Base::f();
+    int q = Base::open;
+    Other o = Other();
+    int w = o.Base::open;
+    int v = o.Base::f();
+    Other? c1 = dynamic_cast<Other?>(p);
+    Plain* c2 = dynamic_cast<Plain*>(p);
+    int c3 = dynamic_cast<int>(p);
+    Plain c4 = dynamic_cast<Plain>(3);
+    bool same = o == p;
+    return 0;
+}
+// error: 'hidden' is private in 'Base'
+// error: or under `protected:` to use it in classes that derive from it
+// error: 'hiddenMethod' is private in 'Base'
+// error: 'inner' is protected in 'Base'
+// error: 'innerMethod' is protected in 'Base'
+// error: 'Base::f' has no body, so it cannot be called directly
+// error: 'Other' is not 'Fine' or a base class of it
+// error: the constructor of 'Base' needs arguments, so 'NoCall' must pass them
+// error: the constructor of 'Base' needs arguments, so 'NoConstructor' must pass them
+// error: 'own' cannot be used while the base class 'Base' is being built
+// error: 'open' cannot be used while the base class 'Base' is being built
+// error: the object cannot be used while the base class 'Base' is being built
+// error: 'own' cannot be assigned to while the base class 'Base' is being built, because it gets its own value after that
+// error: 'open' cannot be assigned to while the base class 'Base' is being built
+// error: the constructor of 'Base' takes 1 argument but 2 were given
+// error: 'open' belongs to the base class 'Base', which sets its own fields
+// error: 'Other' is not the base class of 'NotItsBase'
+// error: cannot create a 'Base' object, because its method 'f' has no body
+// error: cannot create a 'NotOverridden' object, because its method 'f' from 'Base' has no body
+// error: 'Derived' has a base class, so it needs a constructor to take values
+// error: field 'p' of the base class 'NeedsObject' needs a value
+// error: expected 'Derived' to initialize 'down', but this is 'Plain'
+// error: this cast could not know whether the object really is a 'Derived'
+// error: a class variable is already a reference, so no pointer is needed
+// error: expected 'vector<Plain>' to initialize 'plains', but this is 'vector<Derived>'
+// error: 'Base::f' can only be called inside a method of a class that derives from 'Base'
+// error: 'Base::open' can only be used inside a method of a class that derives from 'Base'
+// error: 'Base' is not 'Other' or a base class of it
+// error: a 'Plain' can never be a 'Other', because neither class derives from the other
+// error: a class variable is already a reference, so write `dynamic_cast<Plain?>(x)`
+// error: dynamic_cast finds out whether an object is of a class, but this asks for 'int'
+// error: dynamic_cast needs a class object, but this is 'int'

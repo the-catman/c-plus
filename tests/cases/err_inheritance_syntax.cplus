@@ -1,0 +1,53 @@
+class Base {
+public:
+    int n = 0;
+};
+class NoPublic : Base {};
+class Private : private Base {};
+class Protected : protected Base {};
+class Virtual : public virtual Base {};
+class Many : public Base, public NoPublic {};
+class Final final : public Base {};
+struct Derived : public Base {};
+struct HasVirtual {
+    virtual int f() { return 1; }
+};
+class VirtualConstructor {
+    virtual VirtualConstructor() {}
+};
+class MissingBody {
+    virtual int f();
+};
+class NotZero {
+    virtual int f() = 1;
+};
+class NotVirtual {
+    int f() = 0;
+};
+class DefaultMethod {
+    int f() = default;
+};
+class FinalMethod : public Base {
+    virtual int f() final { return 1; }
+};
+class DeletedDestructor {
+    ~DeletedDestructor() = delete;
+};
+class NoBaseDestructor {
+    ~NoBaseDestructor() override {}
+};
+int main() { return 0; }
+// error: write `public` before the base class: `class NoPublic : public Base`
+// error: this compiler does not support private and protected base classes yet
+// error: C+ has no virtual inheritance
+// error: this compiler does not support multiple inheritance yet
+// error: this compiler does not support final classes yet
+// error: a struct cannot have a base class
+// error: only a class can have virtual methods
+// error: a constructor cannot be virtual
+// error: or write `virtual ... = 0;` for a method that deriving classes must write
+// error: a method can only be set to `= 0`, which means it has no body
+// error: only a virtual method can have no body
+// error: this compiler does not support final methods yet
+// error: a destructor can be set to `= default` only
+// error: 'NoBaseDestructor' has no base class, so its destructor overrides nothing

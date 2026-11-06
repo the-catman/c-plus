@@ -61,8 +61,10 @@ void Parser::syncTopLevel() {
     while (!check(Tok::Eof)) {
         Tok k = advance().kind;
         if (k == Tok::LBrace) ++depth;
-        else if (k == Tok::RBrace && --depth <= 0) return;
-        else if (k == Tok::Semi && depth == 0) return;
+        else if (k == Tok::RBrace && --depth <= 0) {
+            match(Tok::Semi);  // the end of `struct S { ... };`
+            return;
+        } else if (k == Tok::Semi && depth == 0) return;
     }
 }
 
@@ -847,7 +849,31 @@ void Parser::parseRecord() {
              std::string("remove this line; a ") + kw + " can be used before or after its definition. A C type used "
              "only through pointers is declared with `extern \"C\" struct " + name.text + ";`",
              spec::Structs);
-    if (check(Tok::Colon)) notYet(peek().loc, "inheritance");
+    if (check(Tok::Ident) && peek().text == "final") notYet(peek().loc, "final classes", "leave out `final`");
+    std::string baseName;
+    Loc baseLoc;
+    if (match(Tok::Colon)) {
+        if (!isClass)
+            fail(prev().loc, "a struct cannot have a base class",
+                 "a struct is a value, and copying one into a variable of its base type would lose part of it. Make "
+                 "both of them classes, or hold the other struct in a field",
+                 spec::Inheritance);
+        bool isPublic = match(Tok::KwPublic);
+        if (check(Tok::KwVirtual))
+            fail(peek().loc, "C+ has no virtual inheritance", "write `public " + std::string(peek(1).text) + "`",
+                 spec::Inheritance);
+        if (check(Tok::KwPrivate) || check(Tok::KwProtected))
+            notYet(peek().loc, "private and protected base classes",
+                   "derive with `: public Base`, or hold an object of the other class in a field");
+        const Token& base = expect(Tok::Ident, "for the name of the base class");
+        if (!isPublic)
+            fail(base.loc, "write `public` before the base class: `class " + name.text + " : public " + base.text + "`",
+                 "in C++ a class without it derives privately, which is not what it looks like, so C+ asks for it",
+                 spec::Inheritance);
+        if (check(Tok::Comma)) notYet(peek().loc, "multiple inheritance", "derive from one class for now");
+        baseName = base.text;
+        baseLoc = base.loc;
+    }
     StructDecl* sd = prog_->findStruct(name.text);  // created by the scan in parseProgram
     std::unique_ptr<StructDecl> duplicate;
     if (sd->defined || sd->opaque || sd->isClass != isClass) {
@@ -858,6 +884,8 @@ void Parser::parseRecord() {
         sd = duplicate.get();
     }
     sd->nameLoc = name.loc;
+    sd->baseName = baseName;
+    sd->baseLoc = baseLoc;
     expect(Tok::LBrace, "to start the body of " + std::string(kw) + " '" + name.text + "'");
     Access access = isClass ? Access::Private : Access::Public;  // as in C++
     while (!check(Tok::RBrace) && !check(Tok::Eof)) {
@@ -878,6 +906,20 @@ void Parser::parseRecord() {
 void Parser::parseMemberInits(FuncDecl& ctor) {
     do {
         const Token& field = expect(Tok::Ident, "for the field name in the initializer list");
+        if (field.text == ctor.owner->baseName) {  // `Animal(name, 3)`: what builds the base class
+            Tok close = match(Tok::LBrace) ? Tok::RBrace : Tok::RParen;
+            if (close == Tok::RParen) expect(Tok::LParen, "after '" + field.text + "' in the initializer list");
+            if (!check(close)) {
+                do ctor.baseArgs.push_back(parseExpr());
+                while (match(Tok::Comma));
+            }
+            expect(close, "to close the values for the base class '" + field.text + "'");
+            if (ctor.callsBase)
+                diags_.error(field.loc, "the base class " + field.text + " is built more than once", "", spec::Inheritance);
+            ctor.callsBase = true;
+            ctor.baseLoc = field.loc;
+            continue;
+        }
         FuncDecl::MemberInit init{field.text, field.loc, nullptr, -1};
         if (match(Tok::LBrace)) {
             init.value = parseInitList(field.loc, nullptr);  // `pos{1, 2}` takes the field's type
@@ -915,6 +957,15 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
                          spec::NewDelete);
         return;
     }
+    bool isVirtual = check(Tok::KwVirtual);
+    if (isVirtual) {
+        Loc loc = advance().loc;
+        if (!sd.isClass)
+            fail(loc, "only a class can have virtual methods",
+                 "a struct is a value, so its type is always known. Make it a class to derive from it", spec::Inheritance);
+        if (peek().kind == Tok::Ident && peek().text == sd.name && peek(1).kind == Tok::LParen)
+            fail(loc, "a constructor cannot be virtual", "remove `virtual`", spec::Inheritance);
+    }
     const Token& t = peek();
     switch (t.kind) {
         case Tok::KwPublic: case Tok::KwPrivate: case Tok::KwProtected:
@@ -926,7 +977,6 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
             rejectStructKeyword();
             notYet(t.loc, "nested type definitions", "define it at the top level instead");
         case Tok::KwStatic: notYet(t.loc, "static members");
-        case Tok::KwVirtual: notYet(t.loc, "virtual functions", "they arrive together with inheritance");
         case Tok::KwOperator: notYet(t.loc, "operator overloading");
         case Tok::KwTemplate: notYet(t.loc, "templates (generics)");
         default: break;
@@ -949,6 +999,19 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         dtor->access = Access::Public;
         expect(Tok::LParen, "after the destructor name");
         expect(Tok::RParen, "a destructor takes no parameters");
+        // A destructor always runs for what the object really is, so `virtual` and `override`
+        // change nothing. They are allowed, as C++ code is full of them.
+        if (match(Tok::KwOverride) && sd.baseName.empty())
+            fail(prev().loc, "'" + sd.name + "' has no base class, so its destructor overrides nothing",
+                 "remove `override`", spec::Inheritance);
+        if (match(Tok::Assign)) {  // `~Animal() = default;`, the same as having none
+            if (!check(Tok::KwDefault))
+                fail(peek().loc, "a destructor can be set to `= default` only", "write `{ ... }`, or leave the destructor out",
+                     spec::Classes);
+            advance();
+            expect(Tok::Semi, "after `= default`");
+            return;
+        }
         dtor->body = parseBlock();
         if (sd.destructor) {
             diags_.error(tildeLoc, "'" + sd.name + "' already has a destructor", "", spec::Classes);
@@ -1010,12 +1073,32 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         method->role = FuncDecl::Role::Method;
         method->owner = &sd;
         method->access = access;
+        method->isVirtual = isVirtual;
         parseParams(*method);
         method->isConst = match(Tok::KwConst);
-        if (check(Tok::KwOverride)) notYet(peek().loc, "override", "it arrives together with inheritance");
+        auto rejectFinal = [&] {
+            if (check(Tok::Ident) && peek().text == "final") notYet(peek().loc, "final methods", "leave out `final`");
+        };
+        rejectFinal();
+        method->isOverride = match(Tok::KwOverride);
+        rejectFinal();
+        if (match(Tok::Assign)) {  // `= 0`: no body, and a class that derives must write one
+            if (peek().kind != Tok::IntLit || peek().intValue != 0)
+                fail(peek().loc, "a method can only be set to `= 0`, which means it has no body",
+                     "write `{ ... }` for a body", spec::Inheritance);
+            if (!method->isVirtual && !method->isOverride)
+                fail(prev().loc, "only a virtual method can have no body", "write `virtual` before it", spec::Inheritance);
+            advance();
+            expect(Tok::Semi, "after `= 0`");
+            method->isPure = true;
+            sd.methods.push_back(std::move(method));
+            return;
+        }
         if (check(Tok::Semi))
             fail(peek().loc, "write the method body here",
-                 "C+ has no separate definitions; replace ';' with `{ ... }`", spec::Classes);
+                 "C+ has no separate definitions; replace ';' with `{ ... }`, or write `virtual ... = 0;` for a method "
+                 "that deriving classes must write",
+                 spec::Classes);
         method->body = parseBlock();
         sd.methods.push_back(std::move(method));
         return;
@@ -1531,16 +1614,26 @@ ExprPtr Parser::parseNew() {
 }
 
 // `.name` or `.name(args)` after `e`.
-ExprPtr Parser::parseMemberAccess(ExprPtr e, const char* after) {
-    const Token& name = expect(Tok::Ident, std::string("for the field or method name after '") + after + "'");
-    if (!match(Tok::LParen)) return std::make_unique<MemberExpr>(name.loc, std::move(e), name.text);
+ExprPtr Parser::parseMemberAccess(ExprPtr e, const char* after, std::string qualifier) {
+    const Token* name = &expect(Tok::Ident, std::string("for the field or method name after '") + after + "'");
+    if (qualifier.empty() && match(Tok::ColonColon)) {  // `d.Animal::speak()`
+        qualifier = name->text;
+        name = &expect(Tok::Ident, "after '" + qualifier + "::'");
+    }
+    if (!match(Tok::LParen)) {
+        auto member = std::make_unique<MemberExpr>(name->loc, std::move(e), name->text);
+        member->qualifier = qualifier;
+        return member;
+    }
     std::vector<ExprPtr> args;
     if (!check(Tok::RParen)) {
         do args.push_back(parseExpr());
         while (match(Tok::Comma));
     }
-    expect(Tok::RParen, "to close the argument list of '" + name.text + "'");
-    return std::make_unique<MethodCallExpr>(name.loc, std::move(e), name.text, std::move(args));
+    expect(Tok::RParen, "to close the argument list of '" + name->text + "'");
+    auto call = std::make_unique<MethodCallExpr>(name->loc, std::move(e), name->text, std::move(args));
+    call->qualifier = qualifier;
+    return call;
 }
 
 ExprPtr Parser::parsePostfix(ExprPtr e) {
@@ -1707,7 +1800,7 @@ ExprPtr Parser::parsePrimary() {
                     return std::make_unique<CastExpr>(loc, ty, parseUnary());
                 }
             }
-            if (isCastType(peek().kind) && peek(1).kind == Tok::RParen) {  // `(int)x`, as in C
+            if ((isCastType(peek().kind) || isTypeName(peek())) && peek(1).kind == Tok::RParen) {  // `(int)x`, as in C
                 Loc loc;
                 const Type* ty = parseBaseType(loc);
                 advance();
@@ -1721,7 +1814,7 @@ ExprPtr Parser::parsePrimary() {
         }
         case Tok::LBrace: return parseInitList(t.loc, nullptr);
         case Tok::Ident: {
-            if ((t.text == "static_cast" || t.text == "reinterpret_cast") && check(Tok::Less)) {  // `static_cast<int>(x)`
+            if ((t.text == "static_cast" || t.text == "reinterpret_cast" || t.text == "dynamic_cast") && check(Tok::Less)) {  // `static_cast<int>(x)`
                 advance();
                 Loc typeLoc;
                 const Type* ty = parseType(typeLoc);
@@ -1733,15 +1826,18 @@ ExprPtr Parser::parsePrimary() {
                 if (prev().loc.line == loc.line) loc.len = prev().loc.col + 1 - loc.col;
                 auto cast = std::make_unique<CastExpr>(loc, ty, std::move(operand));
                 cast->reinterpret = t.text == "reinterpret_cast";
+                cast->dynamic = t.text == "dynamic_cast";
                 return cast;
             }
-            if (t.text == "const_cast" || t.text == "dynamic_cast")
-                fail(t.loc, "C+ has no " + t.text,
-                     t.text == "dynamic_cast" ? "inheritance is planned; until then every object has exactly one type"
-                                              : "a const variable cannot be changed; copy it into a variable that is not const",
+            if (t.text == "const_cast")
+                fail(t.loc, "C+ has no const_cast", "a const variable cannot be changed; copy it into a variable that is not const",
                      spec::Casts);
             if (check(Tok::ColonColon)) {
                 if (t.text == "std") failStd(t.loc, peek(1));
+                if (isTypeName(t) && peek(1).kind == Tok::Ident) {  // `Animal::speak()`: a member of `this`
+                    advance();
+                    return parseMemberAccess(std::make_unique<ThisExpr>(t.loc), "::", t.text);
+                }
                 notYet(t.loc, "module members like '" + t.text + "::" + peek(1).text + "'");
             }
             if (isTypeName(t) && match(Tok::LBrace)) return parseInitList(t.loc, &prog_->findStruct(t.text)->type);

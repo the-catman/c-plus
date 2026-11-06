@@ -152,11 +152,12 @@ struct CharLitExpr : Expr {
 };
 
 // `int(x)`, `static_cast<int>(x)` or `(int)x`: an explicit conversion between numbers,
-// char and bool, or between pointer types.
+// char and bool, between pointer types, or from a class to its base class.
 struct CastExpr : Expr {
     const Type* target;
     ExprPtr operand;
     bool reinterpret = false;  // written `reinterpret_cast`, the one cast between numbers and pointers
+    bool dynamic = false;      // written `dynamic_cast`, which looks at what the object really is
     CastExpr(Loc l, const Type* t, ExprPtr e) : Expr(Kind::Cast, l), target(t), operand(std::move(e)) {}
 };
 
@@ -178,6 +179,7 @@ struct NameExpr : Expr {
     std::string name;
     VarDecl* decl = nullptr;  // set by Sema for a variable
     int implicitField = -1;   // set by Sema when the name is a field of `this`, inside a method
+    const StructDecl* fieldOwner = nullptr;  // set with implicitField: the type that declares the field
     NameExpr(Loc l, std::string n) : Expr(Kind::Name, l), name(std::move(n)) {}
 };
 
@@ -322,6 +324,7 @@ struct MethodCallExpr : Expr {
     VecMethod vecMethod = VecMethod::None;    // set by Sema for a vector or array method
     StrMethod strMethod = StrMethod::None;    // set by Sema for a string method
     OptMethod optMethod = OptMethod::None;    // set by Sema for an optional method
+    std::string qualifier;                    // `d.Animal::speak()`: that class's own version, without dispatch
     MethodCallExpr(Loc nameLoc, ExprPtr r, std::string n, std::vector<ExprPtr> a)
         : Expr(Kind::MethodCall, nameLoc), receiver(std::move(r)), name(std::move(n)), args(std::move(a)) {}
 };
@@ -330,7 +333,9 @@ struct MethodCallExpr : Expr {
 struct MemberExpr : Expr {
     ExprPtr base;
     std::string field;
-    int fieldIndex = -1;  // set by Sema
+    int fieldIndex = -1;  // set by Sema: the field's place in `fieldOwner`
+    const StructDecl* fieldOwner = nullptr;  // set by Sema: the type that declares the field
+    std::string qualifier;                   // `d.Animal::name`
     MemberExpr(Loc fieldLoc, ExprPtr b, std::string f) : Expr(Kind::Member, fieldLoc), base(std::move(b)), field(std::move(f)) {}
 };
 
@@ -510,8 +515,15 @@ struct FuncDecl {
     bool isConst = false;         // `int area() const`
     bool isExtern = false;        // `extern "C" int abs(int n);`, defined in C, with no body
     bool allowNewDelete = false;  // marked `[[allow(new_delete)]]`: no warning for new and delete
+    bool isVirtual = false;       // marked `virtual`, or overriding a virtual method
+    bool isOverride = false;      // marked `override`
+    bool isPure = false;          // `virtual int f() = 0;`, which has no body
+    int vtableSlot = -1;          // set by Sema for a virtual method
     Access access = Access::Public;
     std::vector<MemberInit> memberInits;
+    bool callsBase = false;       // `: Animal(args)` in a constructor
+    Loc baseLoc;
+    std::vector<ExprPtr> baseArgs;
     std::unique_ptr<VarDecl> thisDecl;  // stands for `this` in definite assignment; set by Sema
 };
 
@@ -534,6 +546,10 @@ struct StructDecl {
     bool defined = false;  // false if only referenced, or its definition failed to parse
     bool opaque = false;   // `extern "C" struct sqlite3;`: a C type known only by name
     bool externC = false;  // defined inside `extern "C"`: every field must be a C type
+    std::string baseName;  // `class Dog : public Animal`
+    Loc baseLoc;
+    StructDecl* base = nullptr;  // set by Sema
+    std::vector<FuncDecl*> vtable;  // set by Sema: by slot, the version of each virtual method this class uses
     std::vector<FieldDecl> fields;
     std::vector<std::unique_ptr<FuncDecl>> methods;
     FuncDecl* constructor = nullptr;
@@ -545,18 +561,39 @@ struct StructDecl {
         type.name = name.c_str();
     }
     const char* keyword() const { return isClass ? "class" : "struct"; }
+    // The method with this name, in this type or the nearest base class that has one.
     FuncDecl* findMethod(const std::string& methodName) const {
-        for (auto& m : methods)
-            if (m->role == FuncDecl::Role::Method && m->name == methodName) return m.get();
+        for (const StructDecl* d = this; d; d = d->base)
+            for (auto& m : d->methods)
+                if (m->role == FuncDecl::Role::Method && m->name == methodName) return m.get();
+        return nullptr;
+    }
+    // Whether this is `other`, or derives from it.
+    bool derivesFrom(const StructDecl* other) const {
+        for (const StructDecl* d = this; d; d = d->base)
+            if (d == other) return true;
+        return false;
+    }
+    // A virtual method without a body that this class still has, which makes it abstract.
+    const FuncDecl* firstPure() const {
+        for (const FuncDecl* m : vtable)
+            if (m->isPure) return m;
         return nullptr;
     }
     StructDecl(const StructDecl&) = delete;
     StructDecl& operator=(const StructDecl&) = delete;
 
+    // The place of a field declared in this type itself, not a base class.
     int fieldIndex(const std::string& fieldName) const {
         for (size_t i = 0; i < fields.size(); ++i)
             if (fields[i].name == fieldName) return (int)i;
         return -1;
+    }
+    // The type that declares this field: this one or a base class. Null if none does.
+    const StructDecl* fieldOwner(const std::string& fieldName) const {
+        for (const StructDecl* d = this; d; d = d->base)
+            if (d->fieldIndex(fieldName) >= 0) return d;
+        return nullptr;
     }
 };
 

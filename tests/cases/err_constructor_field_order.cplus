@@ -26,6 +26,11 @@ public:
     Self? other;
     Self() : a(1), other(this) {}
 };
+struct SetsLater {
+    int a;
+    string b;
+    SetsLater() : a(int((b = "lost").size())) {}
+};
 int main() {
     return 0;
 }
@@ -35,3 +40,4 @@ int main() {
 // error: the object cannot be used while 'a' is being set
 // error: the object cannot be used while 'other' is being set
 // error: do this in the constructor's body, where every field has its value
+// error: 'b' cannot be assigned to while 'a' is being set, because it gets its own value after that
