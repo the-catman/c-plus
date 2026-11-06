@@ -1,0 +1,141 @@
+// Redirects are followed as fetch follows them, and what is secret stays with the server it was meant for.
+import http;
+import json;
+
+extern "C" string? getenv(string name);
+
+string base() { return getenv("CPLUS_TEST_HTTP") ?? "missing"; }
+string other() { return getenv("CPLUS_TEST_HTTP_OTHER") ?? "missing"; }
+
+string redirect(int status, string to) { return base() + "/redirect/" + to_string(status) + "?to=" + http::encode(to); }
+
+string text(json::Value doc, string name) { return doc.get(name)?.text() ?? "(none)"; }
+string header(json::Value doc, string name) { return doc.get("headers")?.get(name)?.text() ?? "(none)"; }
+
+void follow(string method, int status) throws {
+    http::Request request;
+    request.method = method;
+    request.url = redirect(status, "/echo");
+    request.body = "the body";
+    request.headers["Content-Type"] = "text/plain";
+    json::Value doc = try json::parse<json::Value>((try http::send(request)).body);
+    println("{} {}: {} [{}] [{}]", method, status, text(doc, "method"), text(doc, "body"), header(doc, "content-type"));
+}
+
+string kindOf(string url) {
+    try {
+        http::Response r = http::get(url);
+        return "got " + to_string(r.status);
+    } catch (http::Error e) {
+        return e.kind + ": " + e.what();
+    } catch (Error e) {
+        return "another error";
+    }
+}
+
+int main() throws {
+    http::Response simple = try http::get(redirect(302, "/hello"));
+    println("{} {} {}", simple.status, simple.body, simple.url == base() + "/hello");
+    // expect: 200 hello true
+
+    // A POST becomes a GET on 301, 302 and 303, and its body goes with what describes it.
+    try follow("POST", 301);
+    // expect: POST 301: GET [] [(none)]
+    try follow("POST", 302);
+    // expect: POST 302: GET [] [(none)]
+    try follow("POST", 303);
+    // expect: POST 303: GET [] [(none)]
+    // 307 and 308 say to do the same thing again.
+    try follow("POST", 307);
+    // expect: POST 307: POST [the body] [text/plain]
+    try follow("POST", 308);
+    // expect: POST 308: POST [the body] [text/plain]
+    // Other methods only change on 303. Sending a PUT again to where a 303 points would change what was only to be read.
+    try follow("PUT", 301);
+    // expect: PUT 301: PUT [the body] [text/plain]
+    try follow("PUT", 302);
+    // expect: PUT 302: PUT [the body] [text/plain]
+    try follow("PUT", 303);
+    // expect: PUT 303: GET [] [(none)]
+    try follow("DELETE", 303);
+    // expect: DELETE 303: GET [] [(none)]
+    try follow("PUT", 307);
+    // expect: PUT 307: PUT [the body] [text/plain]
+
+    http::Request head;
+    head.method = "HEAD";
+    head.url = redirect(303, "/hello");
+    println("{}", (try http::send(head)).status);
+    // expect: 200
+
+    // Secrets go to the origin they were given for, and not to where it sends them.
+    http::Request secret;
+    secret.url = redirect(302, "/echo");
+    secret.headers["Authorization"] = "Bearer secret";
+    secret.headers["Cookie"] = "session=secret";
+    secret.headers["Proxy-Authorization"] = "Basic secret";
+    secret.headers["X-Harmless"] = "kept";
+    json::Value same = try json::parse<json::Value>((try http::send(secret)).body);
+    println("{} | {} | {} | {}", header(same, "authorization"), header(same, "cookie"), header(same, "proxy-authorization"), header(same, "x-harmless"));
+    // expect: Bearer secret | session=secret | Basic secret | kept
+
+    secret.url = redirect(302, other() + "/echo");
+    json::Value away = try json::parse<json::Value>((try http::send(secret)).body);
+    println("{} | {} | {} | {}", header(away, "authorization"), header(away, "cookie"), header(away, "proxy-authorization"), header(away, "x-harmless"));
+    // expect: (none) | (none) | (none) | kept
+
+    // And coming back to the first origin does not bring them back.
+    string thereAndBack = other() + "/redirect/302?to=" + http::encode(base() + "/echo");
+    secret.url = redirect(302, thereAndBack);
+    json::Value back = try json::parse<json::Value>((try http::send(secret)).body);
+    println("{} | {}", header(back, "authorization"), header(back, "x-harmless"));
+    // expect: (none) | kept
+
+    // A Host of the program's own is for the first server too.
+    http::Request host;
+    host.url = redirect(302, other() + "/echo");
+    host.headers["Host"] = "example.test";
+    json::Value hostDoc = try json::parse<json::Value>((try http::send(host)).body);
+    println("{}", header(hostDoc, "host") == "example.test");
+    // expect: false
+
+    // Exactly as many as allowed, and one more.
+    println("{}", (try http::get(base() + "/chain/20")).body);
+    // expect: the end
+    println("{}", kindOf(base() + "/chain/21"));
+    // expect: redirect: the server redirected this more than 20 times
+    println("{}", kindOf(base() + "/loop"));
+    // expect: redirect: the server redirected this more than 20 times
+
+    // A server cannot send this program to read a file, or to speak anything but HTTP.
+    println("{}", kindOf(redirect(302, "file:///etc/passwd")));
+    // expect: redirect: the server redirected this to something other than http or https
+    println("{}", kindOf(redirect(302, "ftp://127.0.0.1/")));
+    // expect: redirect: the server redirected this to something other than http or https
+    println("{}", kindOf(redirect(302, "gopher://127.0.0.1/")));
+    // expect: redirect: the server redirected this to something other than http or https
+
+    // A place that makes no sense. It is the server's mistake, so it does not say the program asked for something wrong.
+    println("{}", kindOf(redirect(302, "http://[not-an-address/")));
+    // expect: redirect: the server redirected this to a URL that is not valid
+    // A space is common enough in one that libcurl encodes it, and it is still only one path.
+    println("{}", kindOf(redirect(302, "/a b")));
+    // expect: got 404
+
+    // Without following, the redirect is the answer.
+    http::Request stay;
+    stay.url = redirect(302, "/hello");
+    stay.followRedirects = false;
+    http::Response stayed = try http::send(stay);
+    println("{} {} {} {}", stayed.status, stayed.ok, stayed.body, stayed.header("location") ?? "none");
+    // expect: 302 false go there /hello
+
+    // With nowhere to go, as is a status that does not ask to go anywhere.
+    http::Response nowhere = try http::get(base() + "/no-location");
+    println("{} {}", nowhere.status, nowhere.body);
+    // expect: 302 no place to go
+    http::Response modified = try http::get(redirect(304, "/hello"));
+    println("{}", modified.status);
+    // expect: 304
+    return 0;
+}

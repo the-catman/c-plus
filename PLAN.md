@@ -511,6 +511,15 @@ Decided 2026-11-05.
 - `json::Value` is for what has no known shape, and each step of looking through it gives an optional, so there is no way to stop
   the program with text from outside.
 
+### 2.26 HTTP — DECIDED
+`import http;`, with `http::get`, `post`, `put`, `patch`, `delete` and `send`, and WebSockets with `http::connect`, on libcurl, as in 2.15. Decided 2026-11-06.
+- A status such as 404 is an answer and not an error, as in `fetch`, so `r.ok` tells. Only what stopped there being an answer throws, an `http::Error` with a `kind`.
+- There is one function for each name, until overloading: `http::get(url)`, and `http::send(request)` for everything else. `post` must be told the type of what it sends, instead of guessing.
+- `timeout` starts at 30 seconds and `maxBytes` at 1 GiB, each set by request. Other languages have no such limits by default, and programs hang forever or run out of memory because of what one server does.
+- Certificates are always checked, and there is no way to turn it off: `caFile` trusts a server of one's own.
+- Redirects are followed by the runtime, as `fetch` follows them, rather than by libcurl. libcurl would send a PUT again after a 303.
+- WebSockets speak the protocol themselves, on the connection libcurl makes. `curl_ws_*` is left out of many builds of libcurl, such as those of Debian and Ubuntu.
+
 ## 3. Compiler architecture
 
 ```
@@ -554,7 +563,7 @@ a debug build with ASan, stack traces and a leak report. Every item of Phase 1 i
 criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
 `dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, generics with
 constraints, errors, `constexpr` with `if constexpr`, and `unique<T>` with `move`, which is every item of Phase 2.
-The leak report came with Phase 1. Phase 3 is in progress: `hashmap`, the descriptors of types, `json` and `reflect` work.
+The leak report came with Phase 1. Phase 3 is in progress: `hashmap`, the descriptors of types, `json`, `reflect` and `http` with WebSockets work.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -620,6 +629,9 @@ will confidently write C++ wherever the two differ.
   program when `X` is used, and `constexpr` reports it while compiling. They could become one rule.
 - Printing still goes by a function the compiler writes for each type, while 2.14 says it is built on descriptors. It works, and
   it costs a program nothing it does not print. Moving it would give one way of walking a value, at the cost of a slower `println`.
+- 2.15 says libcurl is linked statically, but programs link it as a shared library for now. The `libcurl.a` of a distribution still needs a dozen other
+  shared libraries, some with no static form, so linking it would not let a program run on any more machines. Programs that stand alone need a libcurl built
+  for that, with few features and its TLS library linked in too. One setting, `CPLUS_CURL_LIBRARY`, chooses which libcurl is used.
 - `main` takes its arguments as in C++, through raw pointers. A checked form, such as
   `int main(vector<string> args)`, could come later.
 - References (`T&`): whether C+ gets them, and in what form. They decide how

@@ -1,0 +1,7 @@
+import http;
+int main() {
+    auto r = http::fetch("http://localhost/");
+    return 0;
+}
+// error: this compiler does not support `http::fetch` yet, as it needs async
+// error: `try http::get(url)` does the same, waiting for the answer

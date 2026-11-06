@@ -115,7 +115,7 @@ struct Codegen::Impl {
     std::unordered_map<const Type*, llvm::Function*> hashFunctions;
     std::unordered_map<const Type*, llvm::GlobalVariable*> descriptors;
     std::map<std::pair<const Type*, bool>, llvm::Function*> countFunctions;
-    bool usesDescriptors = false;  // a program that imports a module: a class then says what it really is
+    bool usesDescriptors = false;  // a program that imports json or reflect: a class then says what it really is
 
     // A vector is a pointer to a buffer laid out as the runtime's cplus_vec: a header of
     // count, size and capacity, then the elements. Null is an empty vector.
@@ -4114,7 +4114,7 @@ struct Codegen::Impl {
         mod = std::make_unique<llvm::Module>(file.path, ctx);
         if (!setupTarget(error)) return false;
         if (opts.debug) setupLineTable();
-        usesDescriptors = !program.imports.empty();
+        usesDescriptors = program.usesDescriptors();
         stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy()}, "cplus.string");
         // Named types are created first and given bodies after, so they can refer to
         // each other in any order.

@@ -1,0 +1,110 @@
+// What a response holds, whichever way the server sent it.
+import http;
+
+extern "C" string? getenv(string name);
+
+string base() { return getenv("CPLUS_TEST_HTTP") ?? "missing"; }
+
+int main() throws {
+    http::Response r = try http::get(base() + "/hello");
+    println("{} {} {}", r.status, r.ok, r.body);
+    // expect: 200 true hello
+    println("{}", r.url == base() + "/hello");
+    // expect: true
+
+    // A header's name can be written in any case.
+    println("{}", r.header("x-mixed-case") ?? "none");
+    // expect: yes
+    println("{}", r.header("X-MIXED-CASE") ?? "none");
+    // expect: yes
+    println("{}", r.header("content-TYPE") ?? "none");
+    // expect: text/plain
+    println("{}", r.header("X-Not-There") ?? "none");
+    // expect: none
+
+    // A status that says something went wrong is still an answer, as in fetch: only `ok` tells.
+    for (int status : vector<int>{201, 299, 300, 400, 404, 500, 503}) {
+        http::Response s = try http::get(base() + "/status/" + to_string(status));
+        println("{} {} {}", s.status, s.ok, s.body);
+    }
+    // expect: 201 true status 201
+    // expect: 299 true status 299
+    // expect: 300 false status 300
+    // expect: 400 false status 400
+    // expect: 404 false status 404
+    // expect: 500 false status 500
+    // expect: 503 false status 503
+
+    http::Response empty = try http::get(base() + "/empty");
+    println("{} {} {}", empty.status, empty.ok, empty.body.empty());
+    // expect: 204 true true
+
+    // A body is bytes, null bytes among them.
+    http::Response binary = try http::get(base() + "/binary");
+    println("{} {} {} {}", binary.body.size(), int(binary.body[0]), int(binary.body[1]), int(binary.body[255]));
+    // expect: 256 0 1 255
+
+    // However it is sent, the body is the same.
+    println("{}", (try http::get(base() + "/chunked")).body);
+    // expect: in three pieces
+    http::Response zipped = try http::get(base() + "/gzip");
+    println("{} [{}]", zipped.body, zipped.header("content-encoding") ?? "none");
+    // expect: small once decoded [gzip]
+
+    // Headers that come more than once: all of them, in order, and joined when asked for by name.
+    http::Response cookies = try http::get(base() + "/cookies");
+    for (auto h : cookies.headers)
+        if (h.name == "Set-Cookie" || h.name == "X-Other") println("{}={}", h.name, h.value);
+    // expect: Set-Cookie=a=1
+    // expect: X-Other=between
+    // expect: Set-Cookie=b=2
+    println("{}", cookies.header("set-cookie") ?? "none");
+    // expect: a=1, b=2
+    println("{}", (try http::get(base() + "/many-values")).header("X-TAG") ?? "none");
+    // expect: one, two
+
+    // A header on two lines, which old servers still send.
+    println("{}", (try http::get(base() + "/folded")).header("x-folded") ?? "none");
+    // expect: first second
+
+    // Headers no server should send cannot stop the program.
+    http::Response odd = try http::get(base() + "/odd-headers");
+    println("{}", odd.status);
+    // expect: 200
+    println("{}", odd.header("x-good") ?? "none");
+    // expect: 1
+    println("[{}]", odd.header("x-spaces") ?? "none");
+    // expect: [spaced out]
+    println("[{}]", odd.header("x-empty") ?? "none");
+    // expect: []
+    println("{}", odd.header("x-colons") ?? "none");
+    // expect: a:b:c
+
+    http::Response noName = try http::get(base() + "/no-name");
+    println("{}", noName.header("x-after") ?? "none");
+    // expect: yes
+    println("{}", noName.header("") ?? "none");
+    // expect: no name
+
+    // Only the headers of the real response, and not of one that came ahead of it.
+    http::Response early = try http::get(base() + "/early-hints");
+    println("{} {} {} {}", early.status, early.body, early.header("x-final") ?? "none", early.header("x-early") ?? "none");
+    // expect: 200 after the hints yes none
+
+    // HEAD has no body, whatever its headers say about one.
+    http::Request head;
+    head.method = "HEAD";
+    head.url = base() + "/hello";
+    http::Response h = try http::send(head);
+    println("{} [{}] {}", h.status, h.body, h.header("content-length") ?? "none");
+    // expect: 200 [] 5
+
+    println("{}", (try http::get(base() + "/big?bytes=3000000")).body.size());
+    // expect: 3000000
+
+    // The name of the scheme can be in any case.
+    string upper = "HTTP" + base().substr(4, string::npos) + "/hello";
+    println("{}", (try http::get(upper)).body);
+    // expect: hello
+    return 0;
+}

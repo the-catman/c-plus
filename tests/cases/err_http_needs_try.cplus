@@ -1,0 +1,7 @@
+import http;
+int main() {
+    http::Response r = http::get("http://localhost/");
+    println("{}", r.status);
+    return 0;
+}
+// error: can fail

@@ -314,6 +314,256 @@ template<__JsonWritable T> string json::pretty(T value) {
 }
 )cplus";
 
+// The C side of this is runtime/http.c, which says why it is written as it is.
+inline constexpr const char* kHttpSource = R"cplus(
+extern "C" {
+    bool cplus_http_send(void* method, void* url, void* headers, void* body, double timeout, long maxBytes, bool follow, void* caFile,
+                         int* status, void* outBody, void* outUrl, void* outHeaders, void* kind, void* problem);
+    void* cplus_ws_connect(void* url, void* headers, double timeout, long maxBytes, void* caFile, void* kind, void* problem);
+    bool cplus_ws_send(void* socket, void* data, bool binary, double timeout, void* kind, void* problem);
+    int cplus_ws_receive(void* socket, void* out, double timeout, void* kind, void* problem);
+    void cplus_ws_close(void* socket);
+    void cplus_ws_free(void* socket);
+    int cplus_ws_close_code(void* socket);
+    void cplus_ws_close_reason(void* socket, void* out);
+}
+
+// Errors end up in logs, so what one says of a URL leaves out what is most likely to be secret: a name and password, and the query.
+string http::__urlForError(string url) {
+    long end = url.find("?");
+    string out = end >= 0 ? url.substr(0, end) : url;
+    end = out.find("#");
+    if (end >= 0) out = out.substr(0, end);
+    long scheme = out.find("://");
+    long start = scheme >= 0 ? scheme + 3 : 0;
+    long name = -1;
+    for (long i = start; i < out.size() && out[i] != '/'; i++)
+        if (out[i] == '@') name = i;
+    if (name < 0) return out;
+    return out.substr(0, start) + out.substr(name + 1, string::npos);
+}
+
+class http::Error : public Error {
+public:
+    string kind;
+    string url;
+    http::Error(string m, string k, string u) : Error(m), kind(k), url(http::__urlForError(u)) {}
+};
+
+struct http::Header {
+    string name;
+    string value;
+};
+
+struct http::Request {
+    string method = "GET";
+    string url;
+    hashmap<string, string> headers;
+    string body;
+    double timeout = 30;
+    long maxBytes = 1073741824;
+    bool followRedirects = true;
+    string caFile;
+};
+
+string http::__lower(string text) {
+    string out;
+    for (char c : text) out += tolower(c);
+    return out;
+}
+
+struct http::Response {
+    int status = 0;
+    bool ok = false;
+    string body;
+    string url;
+    vector<http::Header> headers;
+
+    // As in fetch: any case of the name, with the values of a header that came more than once joined.
+    string? header(string name) const {
+        string wanted = http::__lower(name);
+        string? found = null;
+        for (auto h : headers) {
+            if (http::__lower(h.name) == wanted) {
+                if (auto before = found) found = before + ", " + h.value;
+                else found = h.value;
+            }
+        }
+        return found;
+    }
+};
+
+struct http::Message {
+    string data;
+    bool isBinary;
+};
+
+// The characters HTTP allows in the name of a method or a header.
+bool http::__isToken(string text) {
+    const string others = "!#$%&'*+-.^_`|~";
+    if (text.empty()) return false;
+    for (char c : text)
+        if (!isalnum(c) && others.find(c) < 0) return false;
+    return true;
+}
+
+// `name: value` lines for the runtime, which can then trust them. A line break in a value is what would let text from
+// outside add a header, or a whole request, of its own.
+string http::__headerLines(http::Request request, bool forWebSocket) throws {
+    string lines;
+    for (auto e : request.headers) {
+        string name = http::__lower(e.first);
+        if (!http::__isToken(e.first))
+            throw http::Error(format("`{}` cannot be the name of a header: use letters, digits and - only", e.first), "bad-request", request.url);
+        for (char c : e.second)
+            if (c == '\r' || c == '\n' || c == '\0')
+                throw http::Error(format("the value of the header `{}` has a line break or a null byte in it, which could add a header of its own", e.first), "bad-request", request.url);
+        if (name == "content-length" || name == "transfer-encoding")
+            throw http::Error(format("the header `{}` comes from the body, so it cannot be set", e.first), "bad-request", request.url);
+        if (forWebSocket && (name == "host" || name == "upgrade" || name == "connection" || (name.starts_with("sec-websocket-") && name != "sec-websocket-protocol")))
+            throw http::Error(format("the header `{}` is part of opening a WebSocket, so it cannot be set", e.first), "bad-request", request.url);
+        lines += e.first + ": " + e.second + "\r\n";
+    }
+    return lines;
+}
+
+// From the `name:value` lines of the runtime.
+vector<http::Header> http::__parseHeaders(string raw) {
+    vector<http::Header> out;
+    long start = 0;
+    while (start < raw.size()) {
+        long end = raw.find("\n", start);
+        string line = raw.substr(start, end - start);
+        long colon = line.find(":");
+        out.push_back(http::Header{line.substr(0, colon), line.substr(colon + 1, string::npos)});
+        start = end + 1;
+    }
+    return out;
+}
+
+http::Response http::send(http::Request request) throws {
+    string method;
+    for (char c : request.method) method += toupper(c);  // as fetch does, and a lowercase `head` would otherwise wait for a body
+    if (!http::__isToken(method))
+        throw http::Error(format("`{}` cannot be a method: use a word like GET or POST", request.method), "bad-request", request.url);
+    string lines = try http::__headerLines(request, false);
+    http::Response response;
+    string rawHeaders;
+    string kind;
+    string problem;
+    if (!cplus_http_send((void*)&method, (void*)&request.url, (void*)&lines, (void*)&request.body, request.timeout, request.maxBytes,
+                         request.followRedirects, (void*)&request.caFile, &response.status, (void*)&response.body, (void*)&response.url,
+                         (void*)&rawHeaders, (void*)&kind, (void*)&problem))
+        throw http::Error(problem, kind, request.url);
+    response.ok = response.status >= 200 && response.status <= 299;
+    response.headers = http::__parseHeaders(rawHeaders);
+    return response;
+}
+
+http::Response http::get(string url) throws {
+    http::Request request;
+    request.url = url;
+    return try http::send(request);
+}
+
+http::Response http::__withBody(string method, string url, string body, string contentType) throws {
+    http::Request request;
+    request.method = method;
+    request.url = url;
+    request.body = body;
+    request.headers["Content-Type"] = contentType;
+    return try http::send(request);
+}
+
+http::Response http::post(string url, string body, string contentType) throws { return try http::__withBody("POST", url, body, contentType); }
+http::Response http::put(string url, string body, string contentType) throws { return try http::__withBody("PUT", url, body, contentType); }
+http::Response http::patch(string url, string body, string contentType) throws { return try http::__withBody("PATCH", url, body, contentType); }
+
+http::Response http::delete(string url) throws {
+    http::Request request;
+    request.method = "DELETE";
+    request.url = url;
+    return try http::send(request);
+}
+
+// For a part of a URL, as JavaScript's encodeURIComponent, so that text from outside stays that one part.
+string http::encode(string text) {
+    const string digits = "0123456789ABCDEF";
+    string out;
+    for (char c : text) {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out += c;
+        } else {
+            out += '%';
+            out += digits[int(c) / 16];
+            out += digits[int(c) % 16];
+        }
+    }
+    return out;
+}
+
+class http::WebSocket {
+    void* socket_;
+    string url_;
+
+public:
+    double timeout = 0;
+
+    http::WebSocket(void* socket, string url) : socket_(socket), url_(url) {}
+    ~http::WebSocket() { cplus_ws_free(socket_); }
+
+    void send(string text) throws {
+        string kind;
+        string problem;
+        if (!cplus_ws_send(socket_, (void*)&text, false, timeout, (void*)&kind, (void*)&problem))
+            throw http::Error(problem, kind, url_);
+    }
+    void sendBinary(string data) throws {
+        string kind;
+        string problem;
+        if (!cplus_ws_send(socket_, (void*)&data, true, timeout, (void*)&kind, (void*)&problem))
+            throw http::Error(problem, kind, url_);
+    }
+    // The next message, or null once the connection has closed as it should.
+    http::Message? receive() throws {
+        string data;
+        string kind;
+        string problem;
+        int got = cplus_ws_receive(socket_, (void*)&data, timeout, (void*)&kind, (void*)&problem);
+        if (got < 0) throw http::Error(problem, kind, url_);
+        if (got == 0) return null;
+        return http::Message{data, got == 2};
+    }
+    void close() { cplus_ws_close(socket_); }
+    int? closeCode() const {
+        int code = cplus_ws_close_code(socket_);
+        if (code == 0) return null;
+        return code;
+    }
+    string closeReason() const {
+        string out;
+        cplus_ws_close_reason(socket_, (void*)&out);
+        return out;
+    }
+};
+
+http::WebSocket http::connectWith(http::Request request) throws {
+    string lines = try http::__headerLines(request, true);
+    string kind;
+    string problem;
+    void* socket = cplus_ws_connect((void*)&request.url, (void*)&lines, request.timeout, request.maxBytes, (void*)&request.caFile,
+                                    (void*)&kind, (void*)&problem);
+    if (socket == null) throw http::Error(problem, kind, request.url);
+    return http::WebSocket(socket, http::__urlForError(request.url));
+}
+
+http::WebSocket http::connect(string url) throws {
+    http::Request request;
+    request.url = url;
+    return try http::connectWith(request);
+}
+)cplus";
+
 inline constexpr const char* kReflectSource = R"cplus(
 extern "C" {
     string cplus_type_name(void* type);

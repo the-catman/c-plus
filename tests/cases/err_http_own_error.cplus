@@ -1,0 +1,9 @@
+import http;
+class Error {
+public:
+    string text;
+};
+int main() {
+    return 0;
+}
+// error: 'http' uses the built-in class 'Error', but this program has its own

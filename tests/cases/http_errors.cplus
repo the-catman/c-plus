@@ -1,0 +1,206 @@
+// Every way a request can fail is an error the program can catch, and says which kind it is.
+import http;
+
+extern "C" string? getenv(string name);
+
+string base() { return getenv("CPLUS_TEST_HTTP") ?? "missing"; }
+
+void attempt(http::Request request) {
+    try {
+        http::Response r = http::send(request);
+        println("got {} of {} bytes", r.status, r.body.size());
+    } catch (http::Error e) {
+        println("{}: {}", e.kind, e.what());
+    } catch (Error e) {
+        println("another error: {}", e.what());
+    }
+}
+
+string kindOf(http::Request request) {
+    try {
+        http::Response r = http::send(request);
+        return "got " + to_string(r.status);
+    } catch (http::Error e) {
+        return e.kind;
+    } catch (Error e) {
+        return "another error";
+    }
+}
+
+string urlKind(string url) {
+    http::Request request;
+    request.url = url;
+    return kindOf(request);
+}
+
+http::Request withHeader(string name, string value) {
+    http::Request request;
+    request.url = base() + "/hello";
+    request.headers[name] = value;
+    return request;
+}
+
+http::Request withMethod(string method) {
+    http::Request request;
+    request.url = base() + "/hello";
+    request.method = method;
+    return request;
+}
+
+http::Request limited(string path, long maxBytes) {
+    http::Request request;
+    request.url = base() + path;
+    request.maxBytes = maxBytes;
+    return request;
+}
+
+http::Request timed(string path, double timeout) {
+    http::Request request;
+    request.url = base() + path;
+    request.timeout = timeout;
+    return request;
+}
+
+int main() throws {
+    // No server there, and no such name.
+    println("{}", urlKind("http://127.0.0.1:1/"));
+    // expect: connect
+    println("{}", urlKind("http://nothing-here.invalid/"));
+    // expect: dns
+
+    // What the error says, and where it was going.
+    try {
+        http::Response r = http::get("http://127.0.0.1:1/some/path?key=secret");
+        println("{}", r.status);
+    } catch (http::Error e) {
+        println("{} {} {}", e.what().starts_with("could not connect to the server: "), e.what().contains("secret"), e.url);
+    }
+    // expect: true false http://127.0.0.1:1/some/path
+
+    // A password in a URL stays out of what the error says, which ends up in logs.
+    try {
+        http::Response r = http::get("http://name:hunter2@127.0.0.1:1/");
+        println("{}", r.status);
+    } catch (http::Error e) {
+        println("{} {}", e.kind, e.what().contains("hunter2"));
+    }
+    // expect: connect false
+
+    // Nor is it in what is printed for an error that nothing catches, which is every field.
+    for (string secretUrl : vector<string>{"http://name:hunter2@127.0.0.1:1/path?key=hunter2#hunter2", "http://name:hun@ter2@127.0.0.1:1/?hunter2", "no-scheme:hunter2@host/?hunter2"}) {
+        try {
+            http::Response r = http::get(secretUrl);
+            println("{}", r.status);
+        } catch (http::Error e) {
+            string printed = format("{}", e);
+            println("{} {} {}", e.kind, printed.contains("hunter2") || printed.contains("ter2"), e.url);
+        }
+    }
+    // expect: connect false http://127.0.0.1:1/path
+    // expect: bad-request false http://127.0.0.1:1/
+    // expect: bad-request false host/
+
+    // It is an Error like any other.
+    try {
+        http::Response r = http::get("http://127.0.0.1:1/");
+        println("{}", r.status);
+    } catch (Error e) {
+        println("{}", e.what().contains("127.0.0.1"));
+    }
+    // expect: true
+
+    // The time a request can take.
+    attempt(timed("/slow?seconds=3", 0.1));
+    // expect: timeout: this took longer than its timeout of 0.1 seconds
+    println("{}", kindOf(timed("/slow?seconds=0.2", 0)));
+    // expect: got 200
+    println("{}", kindOf(timed("/slow?seconds=0.2", -1)));
+    // expect: got 200
+    println("{}", kindOf(timed("/slow?seconds=0.2", 5)));
+    // expect: got 200
+
+    // The time is for all of it, redirects included.
+    attempt(timed("/redirect/302?to=" + http::encode("/slow?seconds=3"), 0.1));
+    // expect: timeout: this took longer than its timeout of 0.1 seconds
+
+    // A server that does not do what it said it would.
+    println("{}", kindOf(timed("/truncated", 5)));
+    // expect: network
+    println("{}", kindOf(timed("/bad-gzip", 5)));
+    // expect: network
+    println("{}", kindOf(timed("/not-http", 5)));
+    // expect: network
+    println("{}", kindOf(timed("/no-colon", 5)));
+    // expect: network
+
+    // How much can come. Right up to the limit is fine.
+    attempt(limited("/big?bytes=2000", 1999));
+    // expect: too-large: the response is larger than maxBytes, which is 1999 bytes: raise maxBytes if you expected this
+    println("{}", kindOf(limited("/big?bytes=2000", 2000)));
+    // expect: got 200
+    // What counts is what the program would get, not the little that came over the wire.
+    println("{}", kindOf(limited("/bomb", 1000000)));
+    // expect: too-large
+    // Headers count too, so a server cannot send them forever.
+    println("{}", kindOf(limited("/hello", 10)));
+    // expect: too-large
+
+    // URLs that cannot be used. A URL from outside can never reach a file or another protocol.
+    attempt({.url = "example.com/no-scheme"});
+    // expect: bad-request: a URL for http must start with http:// or https://
+    println("{}", urlKind(""));
+    // expect: bad-request
+    println("{}", urlKind("file:///etc/passwd"));
+    // expect: bad-request
+    println("{}", urlKind("ftp://127.0.0.1/"));
+    // expect: bad-request
+    println("{}", urlKind("gopher://127.0.0.1/"));
+    // expect: bad-request
+    println("{}", urlKind("ws://127.0.0.1/"));
+    // expect: bad-request
+    println("{}", urlKind("http://"));
+    // expect: bad-request
+    println("{}", urlKind("http://[not-an-address/"));
+    // expect: bad-request
+    println("{}", urlKind(base() + "/with a space"));
+    // expect: bad-request
+    println("{}", urlKind(base() + "/hello\r\nX-Evil: 1"));
+    // expect: bad-request
+    attempt({.url = base() + "/hello" + string(1, '\0') + ".evil.example"});
+    // expect: bad-request: this URL has a null byte in it
+
+    // Text from outside cannot add a header, or a request, by way of a line break.
+    attempt(withHeader("X-Value", "a\r\nX-Evil: 1"));
+    // expect: bad-request: the value of the header `X-Value` has a line break or a null byte in it, which could add a header of its own
+    println("{}", kindOf(withHeader("X-Value", "a\nb")));
+    // expect: bad-request
+    println("{}", kindOf(withHeader("X-Value", "a\rb")));
+    // expect: bad-request
+    println("{}", kindOf(withHeader("X-Value", "a" + string(1, '\0') + "b")));
+    // expect: bad-request
+    attempt(withHeader("X Space", "1"));
+    // expect: bad-request: `X Space` cannot be the name of a header: use letters, digits and - only
+    println("{}", kindOf(withHeader("", "1")));
+    // expect: bad-request
+    println("{}", kindOf(withHeader("X:Colon", "1")));
+    // expect: bad-request
+    println("{}", kindOf(withHeader("X\r\nEvil", "1")));
+    // expect: bad-request
+
+    // These must match the body, which they come from.
+    attempt(withHeader("Content-Length", "5"));
+    // expect: bad-request: the header `Content-Length` comes from the body, so it cannot be set
+    println("{}", kindOf(withHeader("transfer-ENCODING", "chunked")));
+    // expect: bad-request
+
+    attempt(withMethod("GE T"));
+    // expect: bad-request: `GE T` cannot be a method: use a word like GET or POST
+    println("{}", kindOf(withMethod("")));
+    // expect: bad-request
+    println("{}", kindOf(withMethod("GET /x HTTP/1.1\r\nX-Evil: 1\r\n\r\nGET")));
+    // expect: bad-request
+
+    attempt({.url = base() + "/hello", .caFile = "a" + string(1, '\0') + "b"});
+    // expect: bad-request: caFile has a null byte in it
+    return 0;
+}

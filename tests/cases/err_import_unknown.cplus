@@ -2,4 +2,4 @@ import nothing;
 int main() {
     return 0;
 }
-// error: this compiler does not support modules yet, except for `json` and `reflect`, so 'nothing' cannot be imported
+// error: this compiler does not support modules yet, except for `http`, `json` and `reflect`, so 'nothing' cannot be imported

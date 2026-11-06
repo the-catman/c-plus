@@ -1,0 +1,50 @@
+// Sending to a server that has gone is an error. Unix would stop the program with a signal instead, unless told not to.
+import http;
+
+extern "C" {
+    string? getenv(string name);
+    int usleep(int microseconds);
+}
+
+string ws() { return getenv("CPLUS_TEST_WS") ?? "missing"; }
+string wss() { return getenv("CPLUS_TEST_WSS") ?? "missing"; }
+string ca() { return getenv("CPLUS_TEST_CA") ?? "missing"; }
+
+string keepSending(http::Request request) throws {
+    http::WebSocket socket = try http::connectWith(request);
+    usleep(50000);  // the server has gone by now, though this side cannot tell yet
+    string kind = "never failed";
+    for (int i = 0; i < 200; i++) {
+        try {
+            socket.send(string(10000, 'x'));
+            usleep(2000);
+        } catch (http::Error e) {
+            kind = e.kind;
+            break;
+        }
+    }
+    println("{}", socket.closeCode() ?? 0);
+    try {
+        socket.send("more");
+        println("sent");
+    } catch (http::Error e) {
+        println("{}", e.kind);
+    }
+    return kind;
+}
+
+int main() throws {
+    string plain = try keepSending({.url = ws() + "/ws/drop"});
+    // expect: 1006
+    // expect: closed
+    println("{}", plain);
+    // expect: network
+    string secure = try keepSending({.url = wss() + "/ws/drop", .caFile = ca()});
+    // expect: 1006
+    // expect: closed
+    println("{}", secure);
+    // expect: network
+    println("still here");
+    // expect: still here
+    return 0;
+}

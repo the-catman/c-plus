@@ -1,0 +1,31 @@
+// Asks a web API about a code repository, and reads the answer into a struct.
+// cplus run examples/repo_stars.cplus -- llvm/llvm-project
+import http;
+import json;
+
+struct Repo {
+    string full_name;
+    string? description;
+    long stargazers_count = 0;
+};
+
+int main(int argc, char** argv) {
+    string name = argc > 1 ? string(argv[1]) : "llvm/llvm-project";
+    try {
+        http::Response r = http::get("https://api.github.com/repos/" + name);
+        if (!r.ok) {
+            println("the server said {}", r.status);
+            return 1;
+        }
+        Repo repo = json::parse<Repo>(r.body);
+        println("{}: {} stars", repo.full_name, repo.stargazers_count);
+        println("{}", repo.description ?? "no description");
+    } catch (http::Error e) {
+        println("could not ask ({}): {}", e.kind, e.what());
+        return 1;
+    } catch (Error e) {
+        println("the answer was not what was expected: {}", e.what());
+        return 1;
+    }
+    return 0;
+}

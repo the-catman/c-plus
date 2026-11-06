@@ -1,0 +1,25 @@
+// Bytes at random from a server, many times over. Nothing to expect but no crash, which a debug build would catch.
+import http;
+
+extern "C" string? getenv(string name);
+
+int main() throws {
+    string base = getenv("CPLUS_TEST_WS") ?? "missing";
+    long messages = 0;
+    long errors = 0;
+    long closes = 0;
+    for (int seed = 0; seed < 300; seed++) {
+        http::WebSocket socket = try http::connect(base + "/ws/garbage?seed=" + to_string(seed));
+        socket.timeout = 1;
+        try {
+            while (auto m = socket.receive()) messages += m.data.size() >= 0 ? 1 : 0;
+            closes++;
+        } catch (http::Error e) {
+            if (e.kind != "protocol" && e.kind != "network" && e.kind != "too-large" && e.kind != "timeout") println("{}: {}", e.kind, e.what());
+            errors++;
+        }
+    }
+    println("{}", errors + closes);
+    // expect: 300
+    return 0;
+}

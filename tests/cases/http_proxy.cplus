@@ -1,0 +1,63 @@
+// Connections go through the proxy the environment names, WebSockets by a tunnel, since a proxy could not read them.
+import http;
+import json;
+
+extern "C" {
+    string? getenv(string name);
+    int setenv(string name, string value, int overwrite);
+    int unsetenv(string name);
+}
+
+string base() { return getenv("CPLUS_TEST_HTTP") ?? "missing"; }
+string ws() { return getenv("CPLUS_TEST_WS") ?? "missing"; }
+string wss() { return getenv("CPLUS_TEST_WSS") ?? "missing"; }
+string ca() { return getenv("CPLUS_TEST_CA") ?? "missing"; }
+
+long tunnels() throws { return try json::parse<long>((try http::get(base() + "/tunnels")).body); }
+
+int main() throws {
+    string proxy = base();
+    unsetenv("no_proxy");
+    unsetenv("NO_PROXY");
+    setenv("all_proxy", proxy, 1);
+
+    // A plain request asks the proxy for the whole URL, which is how the server can tell.
+    http::Response r = try http::get("http://127.0.0.1:1/echo");
+    json::Value doc = try json::parse<json::Value>(r.body);
+    println("{}", doc.get("path")?.text() ?? "none");
+    // expect: http://127.0.0.1:1/echo
+
+    // no_proxy says what does not go through one, and here nothing else would get anywhere.
+    setenv("all_proxy", "http://127.0.0.1:1", 1);
+    setenv("no_proxy", "127.0.0.1", 1);
+    println("{}", (try http::get(base() + "/hello")).body);
+    // expect: hello
+    unsetenv("no_proxy");
+    try {
+        http::Response gone = http::get(base() + "/hello");
+        println("{}", gone.status);
+    } catch (http::Error e) {
+        println("{}", e.kind);
+    }
+    // expect: connect
+    setenv("all_proxy", proxy, 1);
+
+    long before = try tunnels();
+    http::WebSocket socket = try http::connect(ws() + "/ws/echo");
+    try socket.send("through the proxy");
+    if (auto m = try socket.receive()) println("{}", m.data);
+    // expect: through the proxy
+    socket.close();
+    long after = try tunnels();
+    println("{}", after - before);
+    // expect: 1
+
+    http::WebSocket secure = try http::connectWith({.url = wss() + "/ws/echo", .caFile = ca()});
+    try secure.send("and with TLS");
+    if (auto m = try secure.receive()) println("{}", m.data);
+    // expect: and with TLS
+    secure.close();
+    println("{}", (try tunnels()) - after);
+    // expect: 1
+    return 0;
+}

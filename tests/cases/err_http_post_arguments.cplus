@@ -1,0 +1,8 @@
+import http;
+int main() throws {
+    http::Response r = try http::post("http://localhost/", "body");
+    println("{}", r.status);
+    return 0;
+}
+// error: 'http::post'
+// error: 3

@@ -1,0 +1,13 @@
+// An error that nothing catches stops the program with what it says.
+import http;
+
+int main() throws {
+    println("before");
+    http::Response r = try http::get("no-scheme");
+    println("{}", r.status);
+    return 0;
+}
+// expect: before
+// exit: 1
+// stderr: uncaught error: http::Error
+// stderr: a URL for http must start with http:// or https://

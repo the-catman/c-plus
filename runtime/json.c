@@ -15,25 +15,6 @@
 // back to itself is caught, if nothing else catches it first.
 enum { MAX_DEPTH = 512 };
 
-// How many bytes the valid UTF-8 character at `s` takes, or 0 if it is not one.
-static int utf8_length(const unsigned char* s, int64_t left) {
-    unsigned char c = s[0];
-    if (c < 0x80) return 1;
-    if (c < 0xC2) return 0;
-    if (c < 0xE0) return left >= 2 && (s[1] & 0xC0) == 0x80 ? 2 : 0;
-    if (c < 0xF0) {
-        if (left < 3 || (s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80) return 0;
-        if ((c == 0xE0 && s[1] < 0xA0) || (c == 0xED && s[1] >= 0xA0)) return 0;  // too long a form, or half a surrogate pair
-        return 3;
-    }
-    if (c < 0xF5) {
-        if (left < 4 || (s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 || (s[3] & 0xC0) != 0x80) return 0;
-        if ((c == 0xF0 && s[1] < 0x90) || (c == 0xF4 && s[1] >= 0x90)) return 0;  // too long a form, or past the last character
-        return 4;
-    }
-    return 0;
-}
-
 // ---- Writing ---------------------------------------------------------------
 
 typedef struct {
@@ -66,7 +47,7 @@ static void write_string(writer* w, const char* data, int64_t size) {
         unsigned char c = (unsigned char)data[i];
         const char* short_form = c == '"' ? "\\\"" : c == '\\' ? "\\\\" : c == '\n' ? "\\n" : c == '\r' ? "\\r" : c == '\t' ? "\\t"
                                  : c == '\b' ? "\\b" : c == '\f' ? "\\f" : NULL;
-        int length = short_form || c < 0x20 ? 0 : utf8_length((const unsigned char*)data + i, size - i);
+        int length = short_form || c < 0x20 ? 0 : cplus_utf8_length((const unsigned char*)data + i, size - i);
         if (length) {
             i += length;
             continue;
@@ -426,7 +407,7 @@ static bool read_string_into(reader* r, cplus_string* out) {
         }
         if (c < 0x20) return fail_at(r, r->at, "a string cannot hold a control character as it is; write it as \\n, \\t or \\u00XX");
         if (c != '\\') {
-            int length = utf8_length((const unsigned char*)r->at, r->end - r->at);
+            int length = cplus_utf8_length((const unsigned char*)r->at, r->end - r->at);
             if (!length) return fail_at(r, r->at, "this is not valid UTF-8, which all JSON text must be");
             r->at += length;
             continue;

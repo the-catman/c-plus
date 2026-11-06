@@ -1,0 +1,167 @@
+// WebSockets, against a server that sends what the protocol allows in every way it allows it.
+import http;
+import json;
+
+extern "C" string? getenv(string name);
+
+string ws() { return getenv("CPLUS_TEST_WS") ?? "missing"; }
+
+string received(http::WebSocket socket) throws {
+    if (auto m = try socket.receive()) return (m.isBinary ? "binary: " : "text: ") + m.data;
+    return "(closed)";
+}
+
+void afterClose(http::WebSocket socket) throws {
+    println("{}", try received(socket));
+    try {
+        socket.send("too late");
+        println("sent");
+    } catch (http::Error e) {
+        println("{}: {}", e.kind, e.what());
+    }
+}
+
+int main() throws {
+    http::WebSocket socket = try http::connect(ws() + "/ws/echo");
+    println("{}", socket.closeCode() == null);
+    // expect: true
+    try socket.send("hello");
+    println("{}", try received(socket));
+    // expect: text: hello
+    try socket.sendBinary("bytes");
+    println("{}", try received(socket));
+    // expect: binary: bytes
+    try socket.send("");
+    println("[{}]", try received(socket));
+    // expect: [text: ]
+    try socket.send("héllo wörld ✓");
+    println("{}", try received(socket));
+    // expect: text: héllo wörld ✓
+    string nulls = string(3, '\0') + "\xFF";
+    try socket.sendBinary(nulls);
+    if (auto m = try socket.receive()) println("{} {}", m.data == nulls, m.isBinary);
+    // expect: true true
+
+    // Every way of writing a frame's length, either side of where one becomes the next.
+    for (long size : vector<long>{1, 125, 126, 127, 65535, 65536, 1000000}) {
+        string message = string(size, 'x');
+        try socket.send(message);
+        if (auto m = try socket.receive()) println("{} {}", size, m.data == message);
+    }
+    // expect: 1 true
+    // expect: 125 true
+    // expect: 126 true
+    // expect: 127 true
+    // expect: 65535 true
+    // expect: 65536 true
+    // expect: 1000000 true
+
+    // Each frame has a mask of its own.
+    http::WebSocket masks = try http::connect(ws() + "/ws/mask-keys");
+    for (int i = 0; i < 8; i++) try masks.send("same text");
+    println("{}", try received(masks));
+    // expect: text: all different
+
+    // Closing, from this side.
+    socket.close();
+    println("{} [{}]", socket.closeCode() ?? 0, socket.closeReason());
+    // expect: 1000 []
+    socket.close();
+    try afterClose(socket);
+    // expect: (closed)
+    // expect: closed: this WebSocket is closed
+
+    // Closing, from the other side, with a code and a reason.
+    http::WebSocket closes = try http::connect(ws() + "/ws/closes");
+    println("{}", try received(closes));
+    // expect: text: hello
+    println("{}", try received(closes));
+    // expect: (closed)
+    println("{} [{}]", closes.closeCode() ?? 0, closes.closeReason());
+    // expect: 4001 [all done]
+    try afterClose(closes);
+    // expect: (closed)
+    // expect: closed: this WebSocket is closed
+
+    // A message in pieces, with a ping between them, whose pong is checked by the server.
+    http::WebSocket pieces = try http::connect(ws() + "/ws/fragments");
+    println("{}", try received(pieces));
+    // expect: text: one two three
+    println("{}", try received(pieces));
+    // expect: text: pong was right
+    println("{}", try received(pieces));
+    // expect: (closed)
+    println("{}", pieces.closeCode() ?? 0);
+    // expect: 1000
+
+    // However the bytes happen to arrive.
+    http::WebSocket slow = try http::connect(ws() + "/ws/slowly");
+    println("{}", try received(slow));
+    // expect: text: slowly
+    if (auto m = try slow.receive()) println("{}", m.data.size());
+    // expect: 300
+
+    http::WebSocket withHandshake = try http::connect(ws() + "/ws/leftover");
+    println("{}", try received(withHandshake));
+    // expect: text: came with the handshake
+    withHandshake.close();
+
+    // Many at once, read as the loop a program would write.
+    http::WebSocket many = try http::connect(ws() + "/ws/many");
+    long total = 0;
+    long count = 0;
+    while (auto m = try many.receive()) {
+        total += try json::parse<long>(m.data);
+        count++;
+    }
+    println("{} {} {}", count, total, many.closeCode() ?? 0);
+    // expect: 2000 1999000 1000
+
+    // Bytes that are not text, as bytes.
+    http::WebSocket binary = try http::connect(ws() + "/ws/binary");
+    if (auto m = try binary.receive()) println("{} {} {} {}", m.isBinary, m.data.size(), int(m.data[0]), int(m.data[255]));
+    // expect: true 256 0 255
+
+    // What opening one sends: its URL's path and query, and the program's own headers.
+    http::Request request;
+    request.url = ws() + "/ws/show-request?a=1&b=two";
+    request.headers["Authorization"] = "Bearer token";
+    request.headers["X-Empty"] = "";
+    http::WebSocket shows = try http::connectWith(request);
+    if (auto m = try shows.receive()) {
+        json::Value doc = try json::parse<json::Value>(m.data);
+        println("{}", doc.get("path")?.text() ?? "none");
+        json::Value? headers = doc.get("headers");
+        println("{}", headers?.get("authorization")?.text() ?? "none");
+        println("[{}]", headers?.get("x-empty")?.text() ?? "none");
+        println("{}", headers?.get("user-agent")?.text() ?? "none");
+        println("{}", headers?.get("sec-websocket-version")?.text() ?? "none");
+        println("{}", headers?.get("host")?.text() == ws().substr(5, string::npos));
+    }
+    // expect: /ws/show-request?a=1&b=two
+    // expect: Bearer token
+    // expect: []
+    // expect: cplus
+    // expect: 13
+    // expect: true
+
+    // A subprotocol the program offered.
+    http::WebSocket chat = try http::connectWith({.url = ws() + "/ws/protocol", .headers = {{"Sec-WebSocket-Protocol", "other, chat"}}});
+    try chat.send("yes");
+    println("{}", try received(chat));
+    // expect: text: yes
+
+    // Right up to the limit, in one frame.
+    http::WebSocket exact = try http::connectWith({.url = ws() + "/ws/large?bytes=5000", .maxBytes = 5000});
+    if (auto m = try exact.receive()) println("{}", m.data.size());
+    // expect: 5000
+
+    // Dropped without closing: the destructor closes it, which the leak check would notice if it did not free it.
+    {
+        http::WebSocket dropped = try http::connect(ws() + "/ws/echo");
+        try dropped.send("gone");
+    }
+    println("done");
+    // expect: done
+    return 0;
+}

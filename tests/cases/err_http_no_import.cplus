@@ -1,0 +1,6 @@
+int main() {
+    println("{}", http::encode("x"));
+    return 0;
+}
+// error: 'http::encode' is in the module 'http', which this program does not import
+// error: write `import http;` at the top of the file

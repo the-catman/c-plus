@@ -1,0 +1,106 @@
+// What goes out: the server answers with what it received, in JSON.
+import http;
+import json;
+
+extern "C" string? getenv(string name);
+
+string base() { return getenv("CPLUS_TEST_HTTP") ?? "missing"; }
+
+json::Value seen(http::Response r) throws { return try json::parse<json::Value>(r.body); }
+string text(json::Value doc, string name) { return doc.get(name)?.text() ?? "(none)"; }
+string header(json::Value doc, string name) { return doc.get("headers")?.get(name)?.text() ?? "(none)"; }
+
+void show(http::Response r) throws {
+    json::Value doc = try seen(r);
+    println("{} [{}] [{}]", text(doc, "method"), text(doc, "body"), header(doc, "content-type"));
+}
+
+struct Point { int x; int y; };
+
+int main() throws {
+    string url = base() + "/echo";
+    try show(try http::get(url));
+    // expect: GET [] [(none)]
+    try show(try http::post(url, "a=1", "application/x-www-form-urlencoded"));
+    // expect: POST [a=1] [application/x-www-form-urlencoded]
+    try show(try http::put(url, "{}", "application/json"));
+    // expect: PUT [{}] [application/json]
+    try show(try http::patch(url, "text", "text/plain"));
+    // expect: PATCH [text] [text/plain]
+    try show(try http::delete(url));
+    // expect: DELETE [] [(none)]
+
+    // Everything else goes through a request, with a { } list as anywhere else.
+    try show(try http::send({.method = "OPTIONS", .url = url}));
+    // expect: OPTIONS [] [(none)]
+    try show(try http::send({.method = "BREW", .url = url, .body = "coffee"}));
+    // expect: BREW [coffee] [(none)]
+    try show(try http::send({.method = "post", .url = url, .body = "lowercase"}));
+    // expect: POST [lowercase] [(none)]
+    try show(try http::send({.url = url, .body = "a GET with a body"}));
+    // expect: GET [a GET with a body] [(none)]
+
+    // No body still says so, for the methods that have one.
+    json::Value none = try seen(try http::post(url, "", "text/plain"));
+    println("{}", header(none, "content-length"));
+    // expect: 0
+
+    http::Request request;
+    request.url = url;
+    request.headers["X-One"] = "1";
+    request.headers["X-Empty"] = "";
+    request.headers["Authorization"] = "Bearer token";
+    json::Value doc = try seen(try http::send(request));
+    println("{} [{}] {}", header(doc, "x-one"), header(doc, "x-empty"), header(doc, "authorization"));
+    // expect: 1 [] Bearer token
+    println("{}", header(doc, "user-agent"));
+    // expect: cplus
+
+    json::Value own = try seen(try http::send({.url = url, .headers = {{"User-Agent", "mine"}, {"Accept", "text/plain"}}}));
+    println("{} {}", header(own, "user-agent"), header(own, "accept"));
+    // expect: mine text/plain
+
+    // A name and password in the URL.
+    string withUser = "http://name:pw@" + base().substr(7, string::npos) + "/echo";
+    println("{}", header(try seen(try http::get(withUser)), "authorization"));
+    // expect: Basic bmFtZTpwdw==
+
+    // Any bytes can be in a body, and the size of a large one is not held up by asking first.
+    string nulls = string(3, '\0') + "after";
+    json::Value binary = try seen(try http::post(url, nulls, "application/octet-stream"));
+    println("{}", text(binary, "body") == nulls);
+    // expect: true
+    string large = string(2000000, 'x');
+    json::Value big = try seen(try http::post(url, large, "text/plain"));
+    println("{} {} {}", text(big, "body").size(), header(big, "content-length"), header(big, "expect"));
+    // expect: 2000000 2000000 (none)
+
+    // Text from outside stays one part of a URL.
+    println("{}", http::encode("a b&c=d/e?f#g+h%"));
+    // expect: a%20b%26c%3Dd%2Fe%3Ff%23g%2Bh%25
+    println("{}", http::encode("Az09-_.~"));
+    // expect: Az09-_.~
+    println("{}", http::encode("é"));
+    // expect: %C3%A9
+    println("[{}]", http::encode(""));
+    // expect: []
+    println("{}", text(try seen(try http::get(url + "?q=" + http::encode("x&admin=1"))), "path"));
+    // expect: /echo?q=x%26admin%3D1
+
+    // With JSON, in both directions.
+    string sent = json::stringify(Point{1, 2});
+    json::Value echoed = try seen(try http::post(url, sent, "application/json"));
+    Point back = try json::parse<Point>(text(echoed, "body"));
+    println("{} {}", back.x, back.y);
+    // expect: 1 2
+
+    // A response is a value like any other.
+    http::Response r = try http::get(base() + "/hello");
+    http::Response copy = r;
+    copy.body = "changed";
+    println("{} {}", r.body, copy.body);
+    // expect: hello changed
+    println("{}", json::stringify(r.status));
+    // expect: 200
+    return 0;
+}

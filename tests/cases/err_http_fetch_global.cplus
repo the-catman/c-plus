@@ -1,0 +1,6 @@
+int main() {
+    auto r = fetch("http://localhost/");
+    return 0;
+}
+// error: there is no function named 'fetch'
+// error: `import http;`, then `try http::get(url)`

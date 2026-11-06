@@ -1,0 +1,271 @@
+// A server can do anything at all. Whatever it does is an error the program can catch, and the connection is then over.
+import http;
+
+extern "C" string? getenv(string name);
+
+string ws() { return getenv("CPLUS_TEST_WS") ?? "missing"; }
+
+// Connects, reads until something goes wrong, and shows what state that leaves.
+void broken(string script) {
+    try {
+        http::WebSocket socket = http::connect(ws() + "/ws/" + script);
+        try {
+            while (auto m = socket.receive()) println("{}: got [{}]", script, m.data);
+            println("{}: closed", script);
+        } catch (http::Error e) {
+            println("{}: {}: {}", script, e.kind, e.what());
+            bool stillNull = false;
+            if (auto m = socket.receive()) println("got {}", m.data);
+            else stillNull = true;
+            println("  {} {}", socket.closeCode() ?? 0, stillNull);
+        }
+    } catch (Error e) {
+        println("{}: failed to open or after: {}", script, e.what());
+    }
+}
+
+void opening(http::Request request) {
+    try {
+        http::WebSocket socket = http::connectWith(request);
+        println("opened");
+    } catch (http::Error e) {
+        println("{}: {}", e.kind, e.what());
+    } catch (Error e) {
+        println("another error: {}", e.what());
+    }
+}
+
+void opens(string script) {
+    opening({.url = ws() + "/ws/" + script});
+}
+
+http::Request withHeader(string name) {
+    http::Request request;
+    request.url = ws() + "/ws/echo";
+    request.headers[name] = "x";
+    return request;
+}
+
+int main() throws {
+    broken("masked");
+    // expect: masked: protocol: the server sent a masked frame, which only a client may do
+    // expect:   1002 true
+    broken("reserved");
+    // expect: reserved: protocol: the server sent a frame with reserved bits set, and none were agreed on
+    // expect:   1002 true
+    broken("unknown-opcode");
+    // expect: unknown-opcode: protocol: the server sent a frame of an unknown kind
+    // expect:   1002 true
+    broken("split-ping");
+    // expect: split-ping: protocol: the server sent a close, ping or pong in pieces, or longer than 125 bytes
+    // expect:   1002 true
+    broken("long-ping");
+    // expect: long-ping: protocol: the server sent a close, ping or pong in pieces, or longer than 125 bytes
+    // expect:   1002 true
+    broken("long-length-16");
+    // expect: long-length-16: protocol: the server wrote the length of a frame in more bytes than it takes
+    // expect:   1002 true
+    broken("long-length-64");
+    // expect: long-length-64: protocol: the server wrote the length of a frame in more bytes than it takes
+    // expect:   1002 true
+    broken("impossible-length");
+    // expect: impossible-length: protocol: the server sent a frame with an impossible length
+    // expect:   1002 true
+    broken("stray-continuation");
+    // expect: stray-continuation: protocol: the server continued a message it had not started
+    // expect:   1002 true
+    broken("second-start");
+    // expect: second-start: protocol: the server started a message before ending the last one
+    // expect:   1002 true
+    broken("bad-text");
+    // expect: bad-text: protocol: the server sent a text message that is not valid UTF-8
+    // expect:   1007 true
+    broken("bad-text-in-pieces");
+    // expect: bad-text-in-pieces: protocol: the server sent a text message that is not valid UTF-8
+    // expect:   1007 true
+    broken("short-close");
+    // expect: short-close: protocol: the server sent a close of one byte, which cannot hold a code
+    // expect:   1002 true
+    broken("bad-close-code");
+    // expect: bad-close-code: protocol: the server sent a close with a code that is not allowed
+    // expect:   1002 true
+    broken("bad-close-text");
+    // expect: bad-close-text: protocol: the server sent a close whose reason is not valid UTF-8
+    // expect:   1007 true
+
+    // Gone with no close at all, after what it did send.
+    broken("drop");
+    // expect: drop: got [before the drop]
+    // expect: drop: network: the connection ended without a WebSocket close
+    // expect:   1006 true
+
+    // A frame that says it is huge is turned down before there is any memory for it.
+    broken("huge");
+    // expect: huge: too-large: the server sent a message larger than maxBytes: raise maxBytes if you expected this
+    // expect:   1009 true
+
+    http::WebSocket small = try http::connectWith({.url = ws() + "/ws/large?bytes=5001", .maxBytes = 5000});
+    try {
+        http::Message? m = small.receive();
+        println("{}", m == null);
+    } catch (http::Error e) {
+        println("{} {}", e.kind, small.closeCode() ?? 0);
+    }
+    // expect: too-large 1009
+
+    // Pieces can add up to too much as well.
+    http::WebSocket pieces = try http::connectWith({.url = ws() + "/ws/pieces-over", .maxBytes = 1000});
+    try {
+        http::Message? m = pieces.receive();
+        println("{}", m == null);
+    } catch (http::Error e) {
+        println("{}", e.kind);
+    }
+    // expect: too-large
+
+    // Opening: what comes back is not a WebSocket.
+    opens("not-found");
+    // expect: handshake: the server answered with status 404 instead of opening a WebSocket
+    opens("no-upgrade");
+    // expect: handshake: the server answered with status 101, but not with an upgrade to a WebSocket
+    opens("wrong-accept");
+    // expect: handshake: the server's Sec-WebSocket-Accept does not match what was sent, so it may not understand WebSockets
+    opens("no-accept");
+    // expect: handshake: the server's Sec-WebSocket-Accept does not match what was sent, so it may not understand WebSockets
+    opens("extension");
+    // expect: handshake: the server chose an extension, and none were offered
+    opens("protocol");
+    // expect: handshake: the server chose a subprotocol that was not offered
+    opening({.url = ws() + "/ws/protocol", .headers = {{"Sec-WebSocket-Protocol", "other, another"}}});
+    // expect: handshake: the server chose a subprotocol that was not offered
+    opens("no-answer");
+    // expect: handshake: the server ended the connection instead of opening a WebSocket
+    opens("not-http");
+    // expect: handshake: the server's answer to opening a WebSocket is not HTTP
+    opens("endless-handshake");
+    // expect: handshake: the server's answer to opening a WebSocket is too long
+    opening({.url = ws() + "/ws/silent", .timeout = 0.1});
+    // expect: timeout: this took longer than its timeout of 0.1 seconds
+    try {
+        http::WebSocket socket = http::connect("ws://127.0.0.1:1/");
+        println("opened");
+    } catch (http::Error e) {
+        println("{} {}", e.kind, e.what().starts_with("could not connect to the server: "));
+    }
+    // expect: connect true
+
+    // URLs that cannot be used.
+    opening({.url = "http://127.0.0.1/"});
+    // expect: bad-request: a URL for a WebSocket must start with ws:// or wss://
+    opening({.url = "127.0.0.1/"});
+    // expect: bad-request: a URL for a WebSocket must start with ws:// or wss://
+    opening({.url = ""});
+    // expect: bad-request: a URL for a WebSocket must start with ws:// or wss://
+    opening({.url = ws() + "/a" + string(1, '\0') + "b"});
+    // expect: bad-request: this URL has a null byte in it
+    opening({.url = "ws://name:password@127.0.0.1/"});
+    // expect: bad-request: a URL for a WebSocket cannot hold a name and password, which nothing would send: use an Authorization header
+    try {
+        http::WebSocket socket = http::connect(ws() + "/a b");
+        println("opened");
+    } catch (http::Error e) {
+        println("{}", e.kind);
+    }
+    // expect: bad-request
+    try {
+        http::WebSocket socket = http::connect(ws() + "/a\r\nX-Evil: 1");
+        println("opened");
+    } catch (http::Error e) {
+        println("{}", e.kind);
+    }
+    // expect: bad-request
+
+    // What opening one is made of is not the program's to set.
+    opening(withHeader("Upgrade"));
+    // expect: bad-request: the header `Upgrade` is part of opening a WebSocket, so it cannot be set
+    opening(withHeader("connection"));
+    // expect: bad-request: the header `connection` is part of opening a WebSocket, so it cannot be set
+    opening(withHeader("Host"));
+    // expect: bad-request: the header `Host` is part of opening a WebSocket, so it cannot be set
+    opening(withHeader("Sec-WebSocket-Key"));
+    // expect: bad-request: the header `Sec-WebSocket-Key` is part of opening a WebSocket, so it cannot be set
+    opening(withHeader("SEC-WEBSOCKET-EXTENSIONS"));
+    // expect: bad-request: the header `SEC-WEBSOCKET-EXTENSIONS` is part of opening a WebSocket, so it cannot be set
+
+    // Waiting too long loses nothing: half a frame has come by the first timeout, and the rest by a later one.
+    http::WebSocket later = try http::connect(ws() + "/ws/later");
+    later.timeout = 0.05;
+    long timeouts = 0;
+    bool got = false;
+    while (!got) {
+        try {
+            if (auto m = later.receive()) {
+                println("{}", m.data);
+                got = true;
+            }
+        } catch (http::Error e) {
+            if (e.kind != "timeout") throw;
+            timeouts++;
+        }
+    }
+    // expect: worth the wait
+    println("{}", timeouts > 0);
+    // expect: true
+    later.timeout = 5;
+    try later.send("still works");
+    if (auto m = try later.receive()) println("{}", m.data);
+    // expect: still works
+
+    // A time limit, and no time limit, on waiting for a message.
+    http::WebSocket hanging = try http::connect(ws() + "/ws/hang");
+    hanging.timeout = 0.05;
+    try {
+        http::Message? m = hanging.receive();
+        println("{}", m == null);
+    } catch (http::Error e) {
+        println("{}: {}", e.kind, e.what());
+    }
+    // expect: timeout: nothing came in the 0.05 seconds of this WebSocket's timeout
+
+    // When sending takes too long the connection is over, as part of a message may have gone, and nothing can follow it.
+    http::WebSocket stuck = try http::connect(ws() + "/ws/hang");
+    stuck.timeout = 0.1;
+    try {
+        stuck.send(string(64000000, 'x'));
+        println("sent");
+    } catch (http::Error e) {
+        println("{}: {}", e.kind, e.what());
+    }
+    // expect: timeout: sending took longer than this WebSocket's timeout of 0.1 seconds
+    println("{}", stuck.closeCode() ?? 0);
+    // expect: 1006
+    try {
+        stuck.send("more");
+        println("sent");
+    } catch (http::Error e) {
+        println("{}", e.kind);
+    }
+    // expect: closed
+    println("{}", try stuck.receive() == null);
+    // expect: true
+
+    // Text that is not text is turned down here, before the server would have to, and the connection stays.
+    http::WebSocket mine = try http::connect(ws() + "/ws/echo");
+    try {
+        mine.send("\xFF\xFE");
+        println("sent");
+    } catch (http::Error e) {
+        println("{}: {}", e.kind, e.what());
+    }
+    // expect: bad-request: this text is not valid UTF-8, which a text message must be: use sendBinary for other bytes
+    try mine.send("fine");
+    if (auto m = try mine.receive()) println("{}", m.data);
+    // expect: fine
+
+    // Closing does not wait for long on a server that never answers.
+    http::WebSocket ignoring = try http::connect(ws() + "/ws/ignores-close");
+    ignoring.close();
+    println("{}", ignoring.closeCode() ?? 0);
+    // expect: 1006
+    return 0;
+}

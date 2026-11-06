@@ -1,0 +1,78 @@
+// Certificates are always checked, and caFile is the way to trust a server's own.
+import http;
+
+extern "C" string? getenv(string name);
+
+string https() { return getenv("CPLUS_TEST_HTTPS") ?? "missing"; }
+string byAddress() { return getenv("CPLUS_TEST_HTTPS_IP") ?? "missing"; }
+string wss() { return getenv("CPLUS_TEST_WSS") ?? "missing"; }
+string ca() { return getenv("CPLUS_TEST_CA") ?? "missing"; }
+
+string kindOf(string url, string caFile) {
+    try {
+        http::Response r = http::send({.url = url, .caFile = caFile});
+        return "got " + to_string(r.status) + " " + r.body;
+    } catch (http::Error e) {
+        return format("{} {}", e.kind, e.what().starts_with("could not make a secure connection: "));
+    } catch (Error e) {
+        return "another error";
+    }
+}
+
+string socketKind(string url, string caFile) {
+    try {
+        http::WebSocket ws = http::connectWith({.url = url, .caFile = caFile});
+        ws.send("over tls");
+        if (auto m = ws.receive()) return "got " + m.data;
+        return "nothing";
+    } catch (http::Error e) {
+        return format("{} {}", e.kind, e.what().starts_with("could not make a secure connection: "));
+    } catch (Error e) {
+        return "another error";
+    }
+}
+
+int main() throws {
+    // A certificate no one has vouched for.
+    println("{}", kindOf(https() + "/hello", ""));
+    // expect: tls true
+    println("{}", kindOf(byAddress() + "/hello", ""));
+    // expect: tls true
+
+    // Trusted, and for this name.
+    println("{}", kindOf(https() + "/hello", ca()));
+    // expect: got 200 hello
+
+    // Trusted, but for another name. This is the check that stops someone else's certificate from working.
+    println("{}", kindOf(byAddress() + "/hello", ca()));
+    // expect: tls true
+
+    // A file that is not there.
+    println("{}", kindOf(https() + "/hello", "no-such-file.pem"));
+    // expect: tls true
+
+    // Requests with other things to trust do not share a connection, which would skip the check.
+    println("{}", kindOf(https() + "/hello", ca()));
+    // expect: got 200 hello
+    println("{}", kindOf(https() + "/hello", ""));
+    // expect: tls true
+
+    // WebSockets are the same.
+    println("{}", socketKind(wss() + "/ws/echo", ""));
+    // expect: tls true
+    println("{}", socketKind(wss() + "/ws/echo", ca()));
+    // expect: got over tls
+    println("{}", socketKind("wss" + byAddress().substr(5, string::npos) + "/ws/echo", ca()));
+    // expect: tls true
+
+    // A message larger than one TLS record.
+    http::WebSocket ws = try http::connectWith({.url = wss() + "/ws/echo", .caFile = ca()});
+    string large = string(100000, 'L');
+    try ws.send(large);
+    if (auto m = try ws.receive()) println("{}", m.data == large);
+    // expect: true
+    ws.close();
+    println("{}", ws.closeCode() ?? 0);
+    // expect: 1000
+    return 0;
+}

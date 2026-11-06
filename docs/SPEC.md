@@ -964,6 +964,100 @@ long first = doc.get("ids")?.at(0)?.whole() ?? -1;
 
 Not yet: other names for fields in JSON, leaving out fields with a marker, and reading into a class that derives from the one that is asked for.
 
+### HTTP
+
+`import http;` is a client for HTTP and WebSockets, written on [libcurl](https://curl.se/libcurl/). Each call waits for its answer.
+
+```cpp
+import http;
+import json;
+
+http::Response r = try http::get("https://api.example.com/users/1");
+if (r.ok) {
+    User u = try json::parse<User>(r.body);
+    println("{}", u.name);
+} else {
+    println("the server said {}", r.status);
+}
+
+try http::post(url, json::stringify(user), "application/json");
+
+try http::send({.method = "PUT", .url = url, .headers = {{"Authorization", "Bearer " + token}}, .body = text, .timeout = 5});
+```
+
+| Function | Does |
+|----------|------|
+| `http::get(url)`, `http::delete(url)` | a request with no body |
+| `http::post(url, body, contentType)`, `http::put(...)`, `http::patch(...)` | a request with one. Saying what it is cannot be left out, since any guess would often be wrong |
+| `http::send(request)` | any request, with everything below |
+| `http::encode(text)` | text made safe to be one part of a URL, as `encodeURIComponent` in JavaScript: `url + "?q=" + http::encode(q)` |
+
+| Field of `http::Request` | Starts as | Is |
+|--------------------------|-----------|----|
+| `method` | `"GET"` | any method. It is sent in capitals |
+| `url` | | starts with `http://` or `https://`. No other kind of URL works, so one from outside cannot read a file |
+| `headers` | none | a `hashmap<string, string>`. `Content-Length` and `Transfer-Encoding` come from the body, and cannot be set |
+| `body` | none | any bytes |
+| `timeout` | `30` | seconds for all of the request, redirects included. `0` is no limit |
+| `maxBytes` | `1073741824` | how large the body can be once decoded, and also the headers, so a server cannot use up all memory |
+| `followRedirects` | `true` | whether to follow redirects, up to 20 |
+| `caFile` | none | a file of certificates to trust instead of the system's, for a server with its own |
+
+| Part of `http::Response` | Is |
+|--------------------------|----|
+| `status`, `ok` | the status as an `int`, and whether it is from 200 to 299 |
+| `body` | a `string` of bytes, decoded if it was compressed |
+| `url` | where the answer really came from, after redirects |
+| `header(name)` | a `string?`, for a name in any case. A header that came more than once has its values joined with `, ` |
+| `headers` | a `vector<http::Header>`, each with `name` and `value`, all of them in order. This is how to read each `Set-Cookie` |
+
+**A status is an answer.** A `404` or a `500` is not an error, as in `fetch`, since the server did answer: `r.ok` and `r.status` say what it answered.
+
+**Everything else that goes wrong is an `http::Error`**, with `what()`, `kind`, which is one of these, and `url`, which leaves out any name and password and the query, since those can be secret and errors end up in logs. So does what `what()` says.
+
+| `kind` | What happened |
+|--------|---------------|
+| `"bad-request"` | the program asked for what cannot be done, such as a URL that is not http or https, or a line break in a header's value, which could otherwise add a header of its own |
+| `"dns"` | no address for that name |
+| `"connect"` | no server answered at that address |
+| `"tls"` | the connection could not be made secure, usually because of the server's certificate |
+| `"timeout"` | it took longer than `timeout` |
+| `"too-large"` | more came than `maxBytes` |
+| `"redirect"` | too many redirects, or one to something other than http or https |
+| `"network"` | the connection failed, or the server did not send what it said it would |
+| `"handshake"`, `"protocol"`, `"closed"` | for WebSockets, below |
+
+**Redirects are followed as `fetch` follows them.** A 303 turns any method but `HEAD` into a `GET`, and a 301 or 302 turns a `POST` into one, and the body goes with them. A 307 or 308 repeats the request. On reaching another origin, meaning another scheme, host or port, `Authorization`, `Cookie`, `Proxy-Authorization` and `Host` stop being sent, even if a later redirect comes back.
+
+**Certificates are always checked**, along with the name they are for, and there is no way to turn that off. A server with a certificate of its own is trusted with `caFile`.
+
+**Requests on one thread share connections** to the same server, which is much quicker. The proxies of `http_proxy`, `https_proxy` and `all_proxy` are used if the environment names any, and `no_proxy` is respected.
+
+**WebSockets** speak [RFC 6455](https://www.rfc-editor.org/rfc/rfc6455) over `ws://` or `wss://`:
+
+```cpp
+http::WebSocket ws = try http::connect("wss://example.com/chat");
+try ws.send("hello");
+while (auto m = try ws.receive()) println("{}", m.data);
+println("closed with {}", ws.closeCode() ?? 0);
+```
+
+| Part of `http::WebSocket` | Does |
+|---------------------------|------|
+| `send(text)`, `sendBinary(bytes)` | send one message. `send` turns down what is not UTF-8, as the protocol requires |
+| `receive()` | waits for the next message, an `http::Message?`, with `data` and `isBinary`. It is null when the connection has closed as it should |
+| `close()` | sends a close, and waits up to 2 seconds for the other side's. Doing it twice is fine. The destructor does it too |
+| `timeout` | seconds that `send` and `receive` wait for, `0` to begin with, which is no limit. When `receive` runs out of time nothing is lost, and the connection still works. When `send` does, the connection is over, since part of a message may have gone |
+| `closeCode()`, `closeReason()` | an `int?`, null while open, and a `string`. `1006` means there was no close at all |
+
+`http::connectWith(request)` opens one with what is in an `http::Request`: `url`, `headers`, `timeout`, for opening it, `maxBytes`, for each message, and `caFile`. An offered `Sec-WebSocket-Protocol` header can be set, but the other headers of opening one cannot. Pings are answered without the program doing anything.
+
+Connecting fails with the same kinds as a request, and with `"handshake"` when the server does not open a WebSocket. A server that breaks the protocol ends the connection with `"protocol"`, and one that goes away without a close with `"network"`. After that, or after closing, `receive()` gives null and `send` throws an error of the kind `"closed"`.
+
+`import http;` needs a compiler built with libcurl, which comes from the development files of libcurl, such as `libcurl4-openssl-dev` on Debian or Ubuntu. Only a program that imports it links it, and that program then needs the libcurl of the machine it runs on.
+
+Not yet: `http::fetch`, which needs [async](#concurrency), a body that is sent or received in pieces instead of all at once, keeping cookies, and learning which subprotocol the server chose.
+
 ### Reflection
 
 `import reflect;` lets a running program ask about types. The compiler writes down what it knows of each type a program
@@ -1460,7 +1554,7 @@ extern "C" struct sqlite3;      // one type on its own
 
 ### Modules
 
-Partly planned: the modules that come with the language work, which are [`json`](#json) and [`reflect`](#reflection). There are no
+Partly planned: the modules that come with the language work, which are [`http`](#http), [`json`](#json) and [`reflect`](#reflection). There are no
 header files. One file is one module.
 
 ```cpp
@@ -2182,8 +2276,8 @@ JavaScript-style `async`/`await` with a built-in event loop.
 | `unique<T>` references and `move(x)` | implemented |
 | `local<T>` references | planned |
 | C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; reading C headers | planned |
-| Modules `json` and `reflect`, and raw strings | implemented |
-| HTTP, modules of your own | planned |
+| Modules `http`, `json` and `reflect`, and raw strings | implemented |
+| `http::fetch`, modules of your own | planned |
 | Threads, async | planned |
 
 Anything marked planned is reported by the compiler as "this compiler does not support ...

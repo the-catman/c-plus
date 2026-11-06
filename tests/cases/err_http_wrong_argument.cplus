@@ -1,0 +1,7 @@
+import http;
+int main() throws {
+    http::Response r = try http::get(5);
+    println("{}", r.status);
+    return 0;
+}
+// error: 'http::get'

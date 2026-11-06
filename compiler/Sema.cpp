@@ -533,10 +533,16 @@ void Sema::reportUnknownName(const NameExpr& n) {
 
 void Sema::check(Program& program) {
     program_ = &program;
-    for (auto& imp : program.imports)
-        if (imp.path != "json" && imp.path != "reflect")
-            diags_.error(imp.loc, "this compiler does not support modules yet, except for `json` and `reflect`, so '" + imp.path + "' cannot be imported",
+    for (auto& imp : program.imports) {
+        if (imp.path != "http" && imp.path != "json" && imp.path != "reflect")
+            diags_.error(imp.loc, "this compiler does not support modules yet, except for `http`, `json` and `reflect`, so '" + imp.path + "' cannot be imported",
                          "remove the import for now; built-ins like println need no import", spec::Status);
+#ifndef CPLUS_CURL_LINK
+        if (imp.path == "http")
+            diags_.error(imp.loc, "this compiler was built without libcurl, which `http` is written on",
+                         "install the development files of libcurl, such as `libcurl4-openssl-dev` on Debian or Ubuntu, then run cmake and build again", spec::Http);
+#endif
+    }
 
     adoptTypes();
 
@@ -642,7 +648,7 @@ void Sema::checkNewStructs() {
         if (sd.templateOf) diags_.popContext();
         if (isHashmap(&sd.type)) {
             mapMethod(&sd.type, "__same");  // for ==, wherever it is hidden in other types
-            if (!program_->imports.empty()) mapMethod(&sd.type, "__put");  // for reading JSON, which goes by descriptors
+            if (program_->usesDescriptors()) mapMethod(&sd.type, "__put");  // for reading JSON, which goes by descriptors
         }
         // A generic class's other methods wait until they are used, as in C++, so that it
         // can have methods that not all of its arguments allow.
@@ -3566,7 +3572,14 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         std::string help;
         const std::string& name = call.callee;
         std::string stem = name.size() > 3 ? name.substr(0, name.size() - 1) : "";
-        if (name == "printf" || name == "puts" || name == "putchar")
+        if (name == "http::fetch") {
+            diags_.error(nameLoc, "this compiler does not support `http::fetch` yet, as it needs async",
+                         "`try http::get(url)` does the same, waiting for the answer", spec::Http);
+            return Type::error();
+        }
+        if (name == "fetch")
+            help = "to get what is at a URL: `import http;`, then `try http::get(url)`";
+        else if (name == "printf" || name == "puts" || name == "putchar")
             help = "C+ prints with println: `printf(\"%d\\n\", x)` becomes `println(\"{}\", x)`";
         else if (std::string reader = cNumberReader(name); !reader.empty())
             help = (name.starts_with("sto") ? "this compiler cannot read a number from a string yet. Until then, "

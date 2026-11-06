@@ -140,6 +140,10 @@ static int build(const Options& opts, const std::string& exePath) {
     std::vector<std::string> link{CPLUS_LINKER, objPath, runtimeLib};
     if (opts.debug) link.push_back("-fsanitize=address");
     link.insert(link.end(), opts.linkArgs.begin(), opts.linkArgs.end());
+#ifdef CPLUS_CURL_LINK
+    for (auto& import : program.imports)
+        if (import.path == "http") link.insert(link.end(), {CPLUS_CURL_LINK, "-lpthread"});
+#endif
     link.push_back("-lm");  // the math functions, part of the C standard library
     link.insert(link.end(), {"-o", exePath});
     int rc = runProcess(link);

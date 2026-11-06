@@ -101,7 +101,7 @@ void Parser::addBuiltinSource(const SourceFile& source) {
 }
 
 // The modules that come with the language, which an import adds to the program.
-static const char* const kBuiltinModules[] = {"json", "reflect"};
+static const char* const kBuiltinModules[] = {"http", "json", "reflect"};
 
 static bool isBuiltinModule(const std::string& name) {
     for (const char* module : kBuiltinModules)
@@ -114,8 +114,9 @@ void Parser::joinModuleNames(const std::set<std::string>& modules) {
     std::vector<Token> joined;
     joined.reserve(toks_.size());
     for (size_t i = 0; i < toks_.size(); ++i) {
+        // `delete` is a word of the language, but HTTP has a method by that name.
         if (toks_[i].kind == Tok::Ident && modules.count(toks_[i].text) && i + 2 < toks_.size() && toks_[i + 1].kind == Tok::ColonColon &&
-            toks_[i + 2].kind == Tok::Ident) {
+            (toks_[i + 2].kind == Tok::Ident || (toks_[i].text == "http" && toks_[i + 2].kind == Tok::KwDelete))) {
             Token name = toks_[i];
             name.text += "::" + toks_[i + 2].text;
             if (toks_[i + 2].loc.line == name.loc.line) name.loc.len = toks_[i + 2].loc.col + toks_[i + 2].loc.len - name.loc.col;
@@ -131,13 +132,17 @@ void Parser::joinModuleNames(const std::set<std::string>& modules) {
 void Parser::addBuiltins() {
     bool usesError = false, definesError = false, usesMap = false, definesMap = false;
     std::set<std::string> modules;
-    Loc jsonLoc;
+    Loc errorModuleLoc;
+    std::string errorModule;  // a module that throws, and has objects in maps
     for (size_t i = 0; i < toks_.size(); ++i) {
         Tok k = toks_[i].kind;
         if (k == Tok::KwImport && i + 2 < toks_.size() && toks_[i + 1].kind == Tok::Ident && toks_[i + 2].kind == Tok::Semi &&
             isBuiltinModule(toks_[i + 1].text)) {
             modules.insert(toks_[i + 1].text);
-            if (toks_[i + 1].text == "json") jsonLoc = toks_[i + 1].loc;
+            if (toks_[i + 1].text == "json" || toks_[i + 1].text == "http") {
+                errorModule = toks_[i + 1].text;
+                errorModuleLoc = toks_[i + 1].loc;
+            }
         }
         usesError = usesError || k == Tok::KwTry || k == Tok::KwThrow || k == Tok::KwThrows || k == Tok::KwCatch ||
                     (k == Tok::Ident && toks_[i].text == "Error");
@@ -147,11 +152,11 @@ void Parser::addBuiltins() {
             definesMap = definesMap || toks_[i + 1].text == "hashmap";
         }
     }
-    if (modules.count("json")) {
+    if (!errorModule.empty()) {
         usesError = true;  // what it throws
-        usesMap = true;    // what a json::Value holds an object in
+        usesMap = true;    // what a json::Value holds an object in, and an http::Request its headers
         if (definesError)
-            diags_.error(jsonLoc, "'json' uses the built-in class 'Error', but this program has its own",
+            diags_.error(errorModuleLoc, "'" + errorModule + "' uses the built-in class 'Error', but this program has its own",
                          "rename your class, or derive it from the built-in one by leaving yours out of this name", spec::Errors);
     }
     if (usesError && !definesError) {
@@ -170,6 +175,10 @@ void Parser::addBuiltins() {
     }
     if (modules.count("json") && !definesError) {
         static const SourceFile builtin("<built-in>", kJsonSource);
+        addBuiltinSource(builtin);
+    }
+    if (modules.count("http") && !definesError) {
+        static const SourceFile builtin("<built-in>", kHttpSource);
         addBuiltinSource(builtin);
     }
     if (modules.count("reflect")) {

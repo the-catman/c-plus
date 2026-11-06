@@ -889,6 +889,13 @@ struct Program {
     std::vector<std::unique_ptr<TemplateDecl>> templates;
     bool allowNewDelete = false;  // `[[allow(new_delete)]];` at the top of the file
 
+    // Whether this program can ask about types while it runs, which only json and reflect do.
+    bool usesDescriptors() const {
+        for (auto& import : imports)
+            if (import.path == "json" || import.path == "reflect") return true;
+        return false;
+    }
+
     StructDecl* findStruct(const std::string& name) const {
         for (auto& s : structs)
             if (s->name == name) return s.get();

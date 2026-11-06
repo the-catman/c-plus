@@ -21,6 +21,10 @@ in its comments. A test can use these, one per line, anywhere in the file:
                        and linked into the program
   // args: <arguments>  the command-line arguments the program runs with
 
+A test that has `import http;` gets a local server, tests/http_server.py, whose addresses
+come as environment variables, so no test needs the network. These tests are left out,
+with a note, if the compiler was built without libcurl.
+
 A program that runs is built four ways, plain and as a debug build, each without and
 with -O, and must behave the same every time. It runs with CPLUS_CHECK_LEAKS=1, so a
 class object that is never freed, or one used after it was freed, fails the test. A
@@ -39,6 +43,7 @@ copies builds each case by itself, since one test file with many errors would pa
 of them missing.
 """
 import concurrent.futures
+import json
 import os
 import pathlib
 import re
@@ -214,6 +219,25 @@ def build_c_library(source, workdir):
     return None
 
 
+def imports_http(path):
+    return re.search(r"^import http;", path.read_text(), re.M) is not None
+
+
+def compiler_has_http(cplus, workdir):
+    source = workdir / "has_http.cplus"
+    source.write_text("import http;\nint main() { return 0; }\n")
+    run = subprocess.run([cplus, "check", str(source)], capture_output=True, text=True)
+    return "built without libcurl" not in run.stderr
+
+
+def start_http_server():
+    """It ends when this program does, when its input ends."""
+    server = subprocess.Popen([sys.executable, str(ROOT / "tests" / "http_server.py")], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    os.environ.update(json.loads(server.stdout.readline()))
+    os.environ["no_proxy"] = "*"  # whatever proxy this machine has, these connections do not go to it
+    return server
+
+
 def run_case(cplus, path, workdir):
     text = path.read_text()
     expect = re.findall(r"//[ \t]*expect:[ \t]?(.*)$", text, re.M)
@@ -306,7 +330,14 @@ def main():
         ok = check_examples(cplus) and ok
     passed = failed = 0
     paths = [p for p in sorted(CASES.glob("*.cplus")) if name_filter in p.name]
+    server = None
     with tempfile.TemporaryDirectory(prefix="cplus-tests-") as tmp:
+        if any(imports_http(p) for p in paths):
+            if compiler_has_http(cplus, pathlib.Path(tmp)):
+                server = start_http_server()
+            else:
+                print("note: leaving out the tests of http, since this compiler was built without libcurl")
+                paths = [p for p in paths if not imports_http(p)]
         if not name_filter:
             ok = check_nesting_limit(cplus, pathlib.Path(tmp)) and ok
             ok = check_unique_copies(cplus, pathlib.Path(tmp)) and ok
@@ -324,6 +355,9 @@ def main():
                     print(f"FAIL {path.relative_to(ROOT)}\n  " + problem.replace("\n", "\n  "))
                 else:
                     passed += 1
+    if server:
+        server.stdin.close()
+        server.wait()
     print(f"{passed} passed, {failed} failed")
     return 0 if ok and failed == 0 else 1
 

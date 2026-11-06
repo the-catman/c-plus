@@ -1,0 +1,38 @@
+// Requests to one server share a connection, which is what makes many of them quick.
+import http;
+
+extern "C" string? getenv(string name);
+
+string base() { return getenv("CPLUS_TEST_HTTP") ?? "missing"; }
+string other() { return getenv("CPLUS_TEST_HTTP_OTHER") ?? "missing"; }
+
+int main() throws {
+    string first = (try http::get(base() + "/connection")).body;
+    string second = (try http::get(base() + "/connection")).body;
+    string third = (try http::post(base() + "/connection", "with a body", "text/plain")).body;
+    println("{} {}", first == second, second == third);
+    // expect: true true
+
+    // Not when the server says it is closing.
+    string closing = (try http::get(base() + "/connection-closes")).body;
+    string after = (try http::get(base() + "/connection")).body;
+    println("{} {}", closing == third, after == closing);
+    // expect: true false
+
+    // Another name is another connection.
+    string away = (try http::get(other() + "/connection")).body;
+    println("{}", away == after);
+    // expect: false
+
+    // A failure along the way leaves the next request working.
+    try {
+        http::Response r = http::get("http://127.0.0.1:1/");
+        println("{}", r.status);
+    } catch (http::Error e) {
+        println("{}", e.kind);
+    }
+    // expect: connect
+    println("{}", (try http::get(base() + "/hello")).body);
+    // expect: hello
+    return 0;
+}

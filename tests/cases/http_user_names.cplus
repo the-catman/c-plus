@@ -1,0 +1,36 @@
+// What the module defines is under its own name, so it takes no names from a program.
+import http;
+
+extern "C" string? getenv(string name);
+
+struct Header { int size = 1; };
+struct Request { string what = "mine"; };
+struct Response { int code = 7; };
+struct Message { bool read = false; };
+class WebSocket { public: int id = 3; };
+
+string get(string url) { return "my get of " + url; }
+int send(int n) { return n + 1; }
+string encode(string s) { return s + "!"; }
+string connect() { return "my connect"; }
+
+int main() throws {
+    Header h;
+    Request q;
+    Response r;
+    Message m;
+    WebSocket w = WebSocket();
+    println("{} {} {} {} {}", h.size, q.what, r.code, m.read, w.id);
+    // expect: 1 mine 7 false 3
+    println("{} {} {} {}", get("x"), send(1), encode("e"), connect());
+    // expect: my get of x 2 e! my connect
+    int http = 5;
+    println("{}", http);
+    // expect: 5
+    println("{}", http::encode("a b"));
+    // expect: a%20b
+    http::Response real = try http::get((getenv("CPLUS_TEST_HTTP") ?? "missing") + "/hello");
+    println("{}", real.body);
+    // expect: hello
+    return 0;
+}
