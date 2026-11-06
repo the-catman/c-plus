@@ -41,6 +41,7 @@ private:
     void markAssigned(Flow& flow, const VarDecl* var, const std::string& path);
     void markDefaults(Flow& flow, const VarDecl* var, const Type* type, const std::string& path);
     void markConstructed(Flow& flow, const VarDecl* var, const Type* type, const std::string& path);
+    void markFieldConstructed(Flow& flow, const VarDecl* var, const FieldDecl& f, const std::string& path);
     void requireFullyBuilt(Flow& flow, Loc loc);  // at the end of a constructor
     void requireAssigned(Flow& flow, const VarDecl* var, const std::string& path, const Type* type, Loc loc);
 
@@ -127,6 +128,7 @@ private:
     std::vector<std::unordered_map<std::string, VarDecl*>> scopes_;
     std::vector<LoopContext> loops_;
     FuncDecl* fn_ = nullptr;
+    const FieldDecl* initField_ = nullptr;  // the field a constructor's initializer list is setting
     const StructDecl* defaultsOf_ = nullptr;  // the type whose field defaults are being checked
     StructDecl* owner() const { return fn_ ? fn_->owner : nullptr; }
     VarDecl* thisVar() const { return fn_ ? fn_->thisDecl.get() : nullptr; }

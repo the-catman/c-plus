@@ -1,0 +1,8 @@
+// Only the program's own main can reach its end without returning a value.
+struct S {
+    int main() { }
+};
+int main() {
+    return 0;
+}
+// error: function 'main' can reach its end without returning a value

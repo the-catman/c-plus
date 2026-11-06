@@ -508,7 +508,9 @@ public:
 
 - Before the body runs, every field gets its value from the initializer list, else its
   default, else zero (`0`, `false`, `""`, an empty vector). Fields are initialized in the order they are
-  declared, whatever the order of the list, as in C++.
+  declared, whatever the order of the list, as in C++. So a value in the list can read the
+  fields declared before its own, and reading a later field or calling a method there is an
+  error, which C++ leaves undefined. The body can read them all.
 - A class-typed field without a default must be set by the end of the constructor, in the
   initializer list or in the body. `this` cannot be used until every such field is set.
 - When a type has a constructor, every call or `{ }` list that builds it runs the
@@ -579,6 +581,11 @@ Building a vector:
 - `push_back`, `pop_back` and `clear` cannot be called on a temporary, such as
   `makeList().push_back(1)`, because the change would be lost.
 - A vector is not a [condition](#conditions); write `!v.empty()`.
+- A method that changes a struct in a vector, `v[0].move(1)`, works on that element in place.
+  If its body also writes to `v`, through a pointer or an object holding it, the program
+  stops when the method returns, since what the method did to the element would be lost. C++
+  leaves this undefined if `v` moves. Call the method on a copy of the element and store it
+  back.
 - Not yet: `insert`, `erase`, `resize`, `reserve`, iterators (`begin()`, `end()`), and
   `hashmap<K, V>`.
 
@@ -886,6 +893,7 @@ long square(long n) {
 - Every path through a non-`void` function must `return` a value. Falling off the end is
   a compile error, not undefined behavior.
 - A `void` function cannot return a value.
+- A `const` parameter cannot be changed in the function, as in C++.
 - Arguments are converted to parameter types under the
   [implicit conversion](#implicit-conversions) rules.
 - Overloading (several functions with one name) is planned. Until then, each name is
@@ -1147,7 +1155,8 @@ and the ordering operators compare them by address (see [Pointers](#pointers)).
 contents, structs field by field, vectors element by element, class references by
 identity, and pointers by address. They also compare an optional with a value or `null` (see
 [Optionals](#optionals)). Operands are evaluated left
-to right; in `v[i]`, `v` is evaluated before `i`, as in C++17.
+to right; in `v[i]`, `v` is evaluated before `i`, as in C++17. In `v[i].f(x)`, `i` is
+evaluated before `x`, and the element is found after `x`, so `x` can change `v`.
 
 Operator overloading is planned with C++ syntax, `Point operator+(Point other) const`,
 after function overloading. `&&`, `||` and the comma operator will not be overloadable.

@@ -438,6 +438,24 @@ bool Parser::isTypeStart(size_t ahead) const {
     }
 }
 
+// `int(x) > 3`, `string(a).size()`, `vector<int>{1} == v`: a type followed by '(' or '{'
+// makes a value, so what starts this way is an expression. A declaration has a name there.
+bool Parser::isValueOfType() const {
+    size_t after = 1;
+    switch (peek().kind) {
+        case Tok::KwInt: case Tok::KwLong: case Tok::KwBool: case Tok::KwDouble: case Tok::KwFloat:
+        case Tok::KwChar: case Tok::KwString:
+            break;
+        case Tok::Ident:
+            if (peek(1).kind != Tok::Less) return false;
+            after = afterAngles(1);
+            if (!after) return false;
+            break;
+        default: return false;
+    }
+    return peek(after).kind == Tok::LParen || peek(after).kind == Tok::LBrace;
+}
+
 bool Parser::isTypeAt(size_t ahead) const {
     const Token& t = peek(ahead);
     switch (t.kind) {
@@ -745,7 +763,7 @@ void Parser::parseParams(FuncDecl& fn) {
                      "parameters look like `int count`", spec::Functions);
             }
             Loc typeLoc;
-            bool isConst = false;  // const parameters are accepted; they are copies anyway
+            bool isConst = false;
             const Type* ty = parseType(typeLoc, &isConst);
             if (ty->is(Type::Kind::Auto)) notYet(typeLoc, "'auto' parameters", "write the parameter type");
             if (check(Tok::Amp) || check(Tok::AmpAmp))
@@ -757,6 +775,7 @@ void Parser::parseParams(FuncDecl& fn) {
             if (check(Tok::LBracket)) failCStyleArray(ty, pname.text);
             auto param = std::make_unique<VarDecl>(pname.loc, pname.text, ty, typeLoc);
             param->isParam = true;
+            param->isConst = isConst;
             if (check(Tok::Assign)) notYet(peek().loc, "default argument values");
             fn.params.push_back(std::move(param));
         } while (match(Tok::Comma));
@@ -1108,7 +1127,7 @@ StmtPtr Parser::parseStmt() {
             advance();
             expect(Tok::LParen, "after 'if'");
             std::optional<CondDecl> decl;
-            ExprPtr cond = isTypeStart() ? (decl = parseCondDecl("if"), nullptr) : parseExpr();
+            ExprPtr cond = isDeclarationStart() ? (decl = parseCondDecl("if"), nullptr) : parseExpr();
             expect(Tok::RParen, "after the if condition");
             StmtPtr thenS = parseStmt();
             StmtPtr elseS = match(Tok::KwElse) ? parseStmt() : nullptr;
@@ -1120,7 +1139,7 @@ StmtPtr Parser::parseStmt() {
             advance();
             expect(Tok::LParen, "after 'while'");
             std::optional<CondDecl> decl;
-            ExprPtr cond = isTypeStart() ? (decl = parseCondDecl("while"), nullptr) : parseExpr();
+            ExprPtr cond = isDeclarationStart() ? (decl = parseCondDecl("while"), nullptr) : parseExpr();
             expect(Tok::RParen, "after the while condition");
             auto st = std::make_unique<WhileStmt>(t.loc, std::move(cond), parseStmt());
             st->decl = std::move(decl);
@@ -1157,7 +1176,7 @@ StmtPtr Parser::parseStmt() {
                  spec::CFunctions);
         default: break;
     }
-    if (isTypeStart()) {
+    if (isDeclarationStart()) {
         StmtPtr decl = parseDeclaration();
         expect(Tok::Semi, "after the variable declaration");
         return decl;
@@ -1191,7 +1210,7 @@ StmtPtr Parser::parseFor() {
     expect(Tok::LParen, "after 'for'");
     if (match(Tok::Semi)) {
         // no init
-    } else if (isTypeStart()) {
+    } else if (isDeclarationStart()) {
         bool isConst = false;
         Loc typeLoc;
         const Type* ty = parseType(typeLoc, &isConst);

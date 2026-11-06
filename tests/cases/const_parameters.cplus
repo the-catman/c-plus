@@ -1,0 +1,28 @@
+// A const parameter can be read, and a const pointer parameter can still be moved if the
+// const is on what it points to.
+struct P {
+    int x = 1;
+    int doubled() const { return x * 2; }
+};
+
+int use(const int n, const P p, const vector<int> v, const string s) {
+    return n + p.x + p.doubled() + int(v.size()) + int(s.size());
+}
+
+int sum(const int* p, const int count) {
+    int total = 0;
+    for (int i = 0; i < count; i++) {
+        total += *p;
+        p++;
+    }
+    return total;
+}
+
+int main() {
+    println("{}", use(1, P{}, {1, 2}, "abc"));
+    array<int, 3> a = {1, 2, 3};
+    println("{}", sum(a.data(), 3));
+    return 0;
+}
+// expect: 9
+// expect: 6

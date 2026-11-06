@@ -322,11 +322,13 @@ void Sema::markDefaults(Flow& flow, const VarDecl* var, const Type* type, const 
 // set by the constructor.
 void Sema::markConstructed(Flow& flow, const VarDecl* var, const Type* type, const std::string& path) {
     if (tooDeep(path)) return;
-    for (auto& f : type->decl->fields) {
-        std::string fieldPath = join(path, f.name);
-        if (f.defaultValue || !needsValue(f.type)) markAssigned(flow, var, fieldPath);
-        else if (f.type->isStruct()) markConstructed(flow, var, f.type, fieldPath);
-    }
+    for (auto& f : type->decl->fields) markFieldConstructed(flow, var, f, path);
+}
+
+void Sema::markFieldConstructed(Flow& flow, const VarDecl* var, const FieldDecl& f, const std::string& path) {
+    std::string fieldPath = join(path, f.name);
+    if (f.defaultValue || !needsValue(f.type)) markAssigned(flow, var, fieldPath);
+    else if (f.type->isStruct()) markConstructed(flow, var, f.type, fieldPath);
 }
 
 void Sema::requireFullyBuilt(Flow& flow, Loc loc) {
@@ -357,7 +359,20 @@ Sema::Flow Sema::merge(const Flow& a, const Flow& b) const {
 void Sema::requireAssigned(Flow& flow, const VarDecl* var, const std::string& path, const Type* type, Loc loc) {
     if (!flow.reachable || isAssigned(flow, var, type, path)) return;
     std::string name = placeName(var, path);
-    if (type->isStruct() && anyPartAssigned(flow, var, path)) {
+    if (initField_ && var == thisVar()) {
+        const std::string& setting = initField_->name;
+        std::string field = path.substr(0, path.find('.'));
+        if (path.empty())
+            diags_.error(loc, "the object cannot be used while " + q(setting) + " is being set, since it does not have "
+                              "all of its fields yet",
+                         "do this in the constructor's body, where every field has its value", spec::Classes);
+        else
+            diags_.error(loc, q(field) + " has no value yet when " + q(setting) + " is set, since fields are set in the "
+                              "order they are declared",
+                         "declare " + q(field) + " before " + q(setting) + ", or set " + q(setting) +
+                             " in the constructor's body",
+                         spec::Classes);
+    } else if (type->isStruct() && anyPartAssigned(flow, var, path)) {
         std::string missing = firstUnassigned(flow, var, type, path);
         diags_.error(loc, q(name) + " is used before all of its fields have values: " + q(missing) + " has none yet",
                      "assign " + q(missing) + " on every path before this line, or give the field a default in "
@@ -700,8 +715,7 @@ void Sema::checkFunction(FuncDecl& fn) {
     if (fn.owner) {
         fn.thisDecl = std::make_unique<VarDecl>(fn.nameLoc, "this", &fn.owner->type, fn.nameLoc);
         fn.thisDecl->type = &fn.owner->type;
-        if (isCtor) markConstructed(flow, fn.thisDecl.get(), &fn.owner->type, "");
-        else markAssigned(flow, fn.thisDecl.get(), "");
+        if (!isCtor) markAssigned(flow, fn.thisDecl.get(), "");
     }
     // Parameters and the body's top level share one scope, as in C++.
     scopes_.emplace_back();
@@ -716,8 +730,12 @@ void Sema::checkFunction(FuncDecl& fn) {
     }
     if (isCtor) {
         // Fields are initialized in the order they are declared, whatever the order of
-        // the list, as in C++.
+        // the list, as in C++, so a value in the list can only read the fields before its own.
         const StructDecl& sd = *fn.owner;
+        size_t ready = 0;  // the fields before this one have their values
+        auto readyUpTo = [&](size_t end) {
+            for (; ready < end; ++ready) markFieldConstructed(flow, fn.thisDecl.get(), sd.fields[ready], "");
+        };
         for (auto& init : fn.memberInits) init.fieldIndex = sd.fieldIndex(init.field);
         std::stable_sort(fn.memberInits.begin(), fn.memberInits.end(),
                          [](auto& a, auto& b) { return a.fieldIndex < b.fieldIndex; });
@@ -731,18 +749,24 @@ void Sema::checkFunction(FuncDecl& fn) {
                 continue;
             }
             const FieldDecl& f = sd.fields[init.fieldIndex];
+            readyUpTo(init.fieldIndex);
             if (seen[init.fieldIndex])
                 diags_.error(init.loc, "field " + q(f.name) + " is initialized more than once", "", spec::Classes);
             seen[init.fieldIndex] = true;
+            initField_ = &f;
             checkValue(*init.value, flow, f.type, "for field " + q(f.name));
+            initField_ = nullptr;
             markAssigned(flow, fn.thisDecl.get(), f.name);
+            ready = std::max(ready, (size_t)init.fieldIndex + 1);
         }
+        readyUpTo(sd.fields.size());
     }
     for (auto& s : fn.body->stmts) checkStmt(*s, flow);
     if (isCtor) requireFullyBuilt(flow, fn.body->endLoc);
     scopes_.pop_back();
 
-    if (flow.reachable && !fn.retType->is(K::Void) && fn.name != "main") {
+    bool isMain = fn.role == FuncDecl::Role::Free && fn.name == "main";  // falling off main returns 0
+    if (flow.reachable && !fn.retType->is(K::Void) && !isMain) {
         diags_.error(fn.body->endLoc, "function " + q(fn.name) + " can reach its end without returning a value",
                      "add `return <" + std::string(fn.retType->name) + " value>;` before this closing brace",
                      spec::Functions);

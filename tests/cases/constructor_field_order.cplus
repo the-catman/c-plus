@@ -1,0 +1,25 @@
+// A value in the initializer list can read the fields before its own, set by the list, a
+// default or zero, and the constructor's body can read them all.
+struct S {
+    int zero;
+    int fromDefault = 5;
+    int fromList;
+    int last;
+    string text;
+    S(int x) : fromList(zero + fromDefault + x), last(fromList * 2), text("set") {
+        zero = last + 1;
+    }
+};
+class Node {
+public:
+    string name;
+    string copy;
+    Node(string n) : name(n), copy(name + "!") {}
+};
+int main() {
+    println("{}", S(1));
+    println("{}", Node("a").copy);
+    return 0;
+}
+// expect: {zero: 13, fromDefault: 5, fromList: 6, last: 12, text: "set"}
+// expect: a!

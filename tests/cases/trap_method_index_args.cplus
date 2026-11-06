@@ -1,0 +1,20 @@
+// The index of a method's receiver is still checked when its arguments run code first.
+struct C {
+    int n = 0;
+    void add(int x) { n += x; }
+};
+
+int one() {
+    println("arguments");
+    return 1;
+}
+
+int main() {
+    vector<C> v = {C{}};
+    int i = 5;
+    v[i].add(one());
+    return 0;
+}
+// expect: arguments
+// trap: index 5 is out of range for a vector of size 1
+// trap: trap_method_index_args.cplus:15:

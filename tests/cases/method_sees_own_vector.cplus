@@ -1,0 +1,34 @@
+// A method on a vector element can do what does not move the vector away from under it.
+struct C {
+    int n = 0;
+
+    // A const method only reads the element, which is the value it had when called.
+    int logTo(Log log) const {
+        log.lines.push_back(C{n});
+        return n;
+    }
+
+    // Reading the vector is fine, and so is writing to a different one.
+    void readFrom(Log log, vector<C>* other) {
+        n += int(log.lines.size());
+        other->push_back(C{n});
+    }
+};
+
+class Log {
+public:
+    vector<C> lines = {C{1}};
+};
+
+int main() {
+    Log log = Log();
+    println("{}", log.lines[0].logTo(log));
+    println("{}", log.lines);
+    vector<C> other;
+    log.lines[0].readFrom(log, &other);
+    println("{} {}", log.lines[0], other);
+    return 0;
+}
+// expect: 1
+// expect: [{n: 1}, {n: 1}]
+// expect: {n: 3} [{n: 3}]

@@ -1,0 +1,9 @@
+// size() of an array still checks the index that leads to it.
+int main() {
+    array<array<int, 2>, 3> a;
+    int j = 99;
+    println("{}", a[j].size());
+    return 0;
+}
+// trap: index 99 is out of range for an array of size 3
+// trap: trap_array_size_index.cplus:5:

@@ -68,6 +68,8 @@ private:
     StmtPtr parseDeclaration();  // one or more variables, without the trailing ';'
     StmtPtr parseDeclarators(bool isConst, const Type* ty, Loc typeLoc);  // the part after the type
     StmtPtr parseFor();
+    bool isValueOfType() const;
+    bool isDeclarationStart() const { return isTypeStart() && !isValueOfType(); }
     void checkUnknownType();
     void rejectStructKeyword();  // `struct tm t`, where C+ writes `tm t`
     void checkUnknownPointerType();  // `FILE* f = ...` where FILE is not declared

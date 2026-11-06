@@ -1,0 +1,37 @@
+// Fields are set in the order they are declared, so a value in the initializer list can
+// only read the fields before its own.
+struct Later {
+    int a;
+    int b = 5;
+    Later() : a(b) {}
+};
+struct Own {
+    int a;
+    Own() : a(a + 1) {}
+};
+struct ListOrder {
+    int a;
+    int b;
+    ListOrder() : b(1), a(b) {}
+};
+struct Method {
+    int a;
+    int b = 1;
+    Method() : a(get()) {}
+    int get() const { return b; }
+};
+class Self {
+public:
+    int a;
+    Self? other;
+    Self() : a(1), other(this) {}
+};
+int main() {
+    return 0;
+}
+// error: 'b' has no value yet when 'a' is set, since fields are set in the order they are declared
+// error: declare 'b' before 'a', or set 'a' in the constructor's body
+// error: 'a' has no value yet when 'a' is set
+// error: the object cannot be used while 'a' is being set
+// error: the object cannot be used while 'other' is being set
+// error: do this in the constructor's body, where every field has its value

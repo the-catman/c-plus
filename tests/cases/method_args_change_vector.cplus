@@ -1,0 +1,78 @@
+// A struct method called on a vector element sees what its arguments did to that vector.
+struct C {
+    int n = 0;
+    void add(int x) { n += x; }
+    int bump() { n += 1; return n; }
+    int plus(int x) const { return n + x; }
+};
+
+int grow(vector<C>* v) {
+    for (int i = 0; i < 100; i++) v->push_back(C{});
+    return 1;
+}
+
+struct Holder {
+    vector<C> items;
+    void addFirst(int x) { items[0].add(x); }
+};
+
+class Box {
+public:
+    vector<C> items = {C{}};
+};
+
+int main() {
+    vector<C> v = {C{}, C{}};
+
+    // The argument changes another element, and then the same one.
+    v[0].add(v[1].bump());
+    println("{}", v);
+    v[0].add(v[0].bump());
+    println("{}", v[0]);
+
+    // The index comes before the arguments, as in C++.
+    int i = 0;
+    v[i++].add(i);
+    println("{} {}", v[0], i);
+
+    // The argument moves the vector.
+    v[0].add(grow(&v));
+    println("{} {}", v[0], v.size());
+
+    // A const method reads what the argument wrote.
+    println("{}", v[1].plus(v[1].bump()));
+
+    // A copy of the vector is not touched.
+    vector<C> copy = v;
+    v[0].add(v[1].bump());
+    println("{} {}", v[0], copy[0]);
+
+    // Deeper places, with the element behind a field, an array, a pointer and an object.
+    Holder h = Holder{{C{}, C{}}};
+    h.items[0].add(h.items[1].bump());
+    println("{}", h.items[0]);
+    array<vector<C>, 2> a = {vector<C>{C{}, C{}}, vector<C>{C{}}};
+    a[0][0].add(a[0][1].bump());
+    println("{}", a[0][0]);
+    vector<C>* p = &v;
+    (*p)[1].add((*p)[0].bump());
+    println("{} {}", v[0], v[1]);
+    Box box = Box();
+    box.items[0].add(box.items[0].bump());
+    println("{}", box.items);
+    vector<vector<C>> rows = {{C{}}, {C{}}};
+    rows[0][0].add(rows[1][0].bump());
+    println("{}", rows);
+    return 0;
+}
+// expect: [{n: 1}, {n: 1}]
+// expect: {n: 4}
+// expect: {n: 5} 1
+// expect: {n: 6} 102
+// expect: 4
+// expect: {n: 9} {n: 6}
+// expect: {n: 1}
+// expect: {n: 1}
+// expect: {n: 10} {n: 13}
+// expect: [{n: 2}]
+// expect: [[{n: 1}], [{n: 1}]]

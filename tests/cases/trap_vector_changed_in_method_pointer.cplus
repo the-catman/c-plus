@@ -1,0 +1,17 @@
+// The same through a pointer to the vector, and for a vector lying inside another one.
+struct C {
+    int n = 0;
+    void touch(vector<vector<C>>* rows) {
+        (*rows)[1].push_back(C{});
+        n += 1;
+    }
+};
+
+int main() {
+    vector<vector<C>> rows = {{C{}}, {}};
+    rows[0][0].touch(&rows);
+    println("{}", rows);
+    return 0;
+}
+// trap: a vector was changed while a method of one of its elements was running
+// trap: trap_vector_changed_in_method_pointer.cplus:12:

@@ -1,0 +1,25 @@
+// A method changing an element while the same vector is written to, here through an object
+// holding it, would lose its change to the element, so the program stops.
+struct C {
+    int n = 0;
+    void touch(Box b) {
+        b.items[1].n = 5;
+        n += 1;
+    }
+};
+
+class Box {
+public:
+    vector<C> items = {C{}, C{}};
+};
+
+int main() {
+    Box box = Box();
+    println("before");
+    box.items[0].touch(box);
+    println("{}", box.items);
+    return 0;
+}
+// expect: before
+// trap: a vector was changed while a method of one of its elements was running
+// trap: trap_vector_changed_in_method.cplus:19:

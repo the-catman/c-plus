@@ -1,0 +1,15 @@
+// size() and empty() of an array are known without looking at it, but what leads to it
+// still runs.
+int main() {
+    array<array<int, 2>, 3> a;
+    int i = 0;
+    println("{}", a[i++].size());
+    println("{}", i);
+    println("{}", a[i++].empty());
+    println("{}", i);
+    return 0;
+}
+// expect: 2
+// expect: 1
+// expect: false
+// expect: 2

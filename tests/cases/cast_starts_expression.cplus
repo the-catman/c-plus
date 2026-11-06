@@ -1,0 +1,59 @@
+// A condition or a statement can start with a cast, or with a value made from a type.
+int? none() {
+    return null;
+}
+
+int main() {
+    long x = 5;
+    if (int(x) > 3) println("int");
+    if (long(x) == 5) println("long");
+    if (bool(x)) println("bool");
+    if (char(65) == 'A') println("char");
+    if (float(x) > 1.5f) println("float");
+    if (double(x) * 2 == 10.0) println("double");
+
+    array<char, 3> a = {'h', 'i'};
+    if (string(a) == "hi") println("string");
+    if (string(2, 'x').size() == 2) println("string with a count");
+
+    vector<int> v = {1};
+    if (vector<int>{1} == v) println("vector");
+    if (vector<int>(2).size() == 2) println("vector with a count");
+    if (array<int, 2>{1, 2}.size() == 2) println("array");
+
+    int n = 0;
+    while (double(n) < 1.5) n++;
+    println("{}", n);
+    do n--; while (long(n) > 0);
+    println("{}", n);
+
+    for (int(x); n < 1; n++) println("for");
+
+    // As a statement of its own.
+    string(a).size();
+    int(x);
+    vector<int>{1, 2}.size();
+
+    // These are still declarations.
+    if (auto w = none()) println("not this one");
+    while (auto w = none()) println("nor this one");
+    int y = 1;
+    string s = "z";
+    println("{}{}", y, s);
+    return 0;
+}
+// expect: int
+// expect: long
+// expect: bool
+// expect: char
+// expect: float
+// expect: double
+// expect: string
+// expect: string with a count
+// expect: vector
+// expect: vector with a count
+// expect: array
+// expect: 2
+// expect: 0
+// expect: for
+// expect: 1z

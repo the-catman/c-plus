@@ -1,0 +1,42 @@
+// Values are read from left to right, even one printed in place before a later value
+// changes it with ++ or --.
+struct P {
+    array<int, 2> a;
+};
+
+int main() {
+    array<int, 2> a = {1, 2};
+    println("{} {}", a, a[0]++);
+    println("{} {}", a, --a[1]);
+    P p = P{{5, 6}};
+    println("{} {}", p, p.a[1]++);
+    array<int, 2> b = {1, 2};
+    println("{}", b == (b[0]++ == 1 ? b : a));  // the old b against the new one
+    string s = "abc";
+    println("{} {}", s, s[0]++);
+    println("{}", s);
+
+    // What leads to a method's receiver comes before its arguments, as in C++.
+    vector<vector<int>> m = {{}, {}};
+    int i = 0;
+    m[i++].push_back(i);
+    println("{} {}", m, i);
+    vector<string> w = {"", ""};
+    i = 0;
+    w[i++].push_back(char(i + 64));
+    println("{}", w);
+    array<array<int, 2>, 2> g;
+    i = 0;
+    g[i++].fill(i);
+    println("{}", g);
+    return 0;
+}
+// expect: [1, 2] 1
+// expect: [2, 2] 1
+// expect: {a: [5, 6]} 6
+// expect: false
+// expect: abc a
+// expect: bbc
+// expect: [[1], []] 1
+// expect: ["A", ""]
+// expect: [[1, 1], [0, 0]]

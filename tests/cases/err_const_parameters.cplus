@@ -1,0 +1,23 @@
+// A const parameter cannot be changed, as in C++ and as with a const variable.
+struct P {
+    int x = 0;
+    void move() { x += 1; }
+};
+
+void f(const int n, const P p, const vector<int> v, const string s) {
+    n = 2;
+    n++;
+    p.x = 3;
+    p.move();
+    v.push_back(1);
+    v[0] = 1;
+    s = "changed";
+}
+
+int main() {
+    return 0;
+}
+// error: 'n' is const and cannot be
+// error: 'p' is const, so its fields cannot be
+// error: 'v' is const
+// error: 's' is const and cannot be
