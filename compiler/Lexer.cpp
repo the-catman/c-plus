@@ -99,6 +99,9 @@ void Lexer::skipSpaceAndComments() {
                 help += " Built-ins like println, string and vector need no include; use `import name;` for modules";
             else if (directive.rfind("#define", 0) == 0)
                 help += " Use a `const` variable or a function instead of #define";
+            else if (const size_t lineStart = src_.rfind('\n', pos_ == 0 ? 0 : pos_ - 1);
+                     src_.find_first_not_of(" \t", lineStart == std::string::npos ? 0 : lineStart + 1) != pos_)
+                help = "C+ comments start with `//`: write `//` in place of `#`";  // after code on the same line
             else
                 help += " Remove this line: there are no headers to guard. For `#if`, keep only the code you want";
             diags_.error(start, "'#' directives are not part of C+", help, spec::Preprocessor);
@@ -361,6 +364,10 @@ Token Lexer::lexNumber() {
         loc.len = (uint32_t)written.size();
         std::string fixed = written;
         std::replace(fixed.begin(), fixed.end(), '_', '\'');
+        if (fixed.size() > 2 && fixed[0] == '0' && std::strchr("xXbBoO", fixed[1]) && fixed[2] == '\'') fixed.erase(2, 1);  // none just after the prefix
+        const bool isHex = fixed.size() > 1 && (fixed[1] == 'x' || fixed[1] == 'X');
+        if (!isHex && (fixed.back() == 'f' || fixed.back() == 'F') && fixed.find_first_of(".eE") == std::string::npos)
+            fixed.insert(fixed.size() - 1, ".0");  // a float needs a point
         diags_.error(loc, "digits are separated with ', as in C++, not with _", "write `" + fixed + "`",
                      spec::IntegerLiterals);
     } else if (std::isalpha((unsigned char)peek()) || peek() == '_') {

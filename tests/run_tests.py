@@ -957,6 +957,8 @@ def check_command_line(cplus, workdir):
         (["build", g, "-o", str(workdir / "out")], "CPLUS_LINKER_FOR_TESTS", str(workdir / "no-such-compiler"), "could not run"),
         (["run", g], "CPLUS_LINKER_FOR_TESTS", "true", "could not run"),  # it says all went well, and leaves no program to run
         (["build", g, "-o", str(workdir / "out")], "CPLUS_TARGET_FOR_TESTS", "no-such-machine", "this is about the machine"),
+        (["build", g, "-o", str(workdir / "out")], "CPLUS_INVALID_IR_FOR_TESTS", "1", "this is a mistake in the compiler, and not in the program"),
+        (["build", g, "-o", str(workdir / "out")], "CPLUS_NO_OBJECT_FILES_FOR_TESTS", "1", "this target cannot emit object files"),
     ]
     for args, name, value, message in pretending:
         run = subprocess.run([cplus, *args], capture_output=True, text=True, cwd=workdir, env=dict(os.environ, **{name: value}))

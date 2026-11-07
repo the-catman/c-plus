@@ -4463,8 +4463,13 @@ struct Codegen::Impl {
 
         std::string verifyErrors;
         llvm::raw_string_ostream os(verifyErrors);
+        if (std::getenv("CPLUS_INVALID_IR_FOR_TESTS")) {  // so the tests can reach what a mistake of the compiler reports
+            llvm::Function* broken = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(ctx), false), llvm::Function::InternalLinkage, "__broken", *mod);
+            llvm::BasicBlock::Create(ctx, "entry", broken);  // a block with no end
+        }
         if (llvm::verifyModule(*mod, &os)) {
-            error = "internal compiler error: generated invalid LLVM IR\n" + os.str();
+            const std::string first = os.str().substr(0, os.str().find('\n'));  // what LLVM says first; the rest is the code it was about
+            error = "internal compiler error: generated invalid LLVM IR (" + first + ")";
             return false;
         }
         if (opts.optimize || opts.debug || opts.race) runPasses();
@@ -4518,7 +4523,7 @@ bool Codegen::writeObjectFile(const std::string& path, std::string& error) {
         return false;
     }
     llvm::legacy::PassManager pm;
-    if (impl_->tm->addPassesToEmitFile(pm, out, nullptr, llvm::CodeGenFileType::ObjectFile)) {
+    if (std::getenv("CPLUS_NO_OBJECT_FILES_FOR_TESTS") || impl_->tm->addPassesToEmitFile(pm, out, nullptr, llvm::CodeGenFileType::ObjectFile)) {
         error = "this target cannot emit object files";
         return false;
     }

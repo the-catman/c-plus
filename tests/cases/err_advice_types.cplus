@@ -195,10 +195,10 @@ void unwrapping() {
 void arrowOnAVector() {
     vector<int> v;
     println("{}", v->size());
-    // error: write `v.size()`, or a field of what it holds: only a pointer is followed with '->'
+    // error: only a pointer is followed with '->': write `v.size()`
     int a = 1;
     println("{}", a->x);
-    // error: 'a' is not a pointer: remove the `->`
+    // error: remove `->x`: 'a' is a 'int', which has no fields
     P s;
     println("{}", *s);
     // error: this is already the value

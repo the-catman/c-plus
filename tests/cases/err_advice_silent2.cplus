@@ -72,7 +72,7 @@ void classes() {
 }
 void thrown() throws {
     throw "a \"q\"";
-    // error: wrap the string in `Error(...)`
+    // error: write `throw Error("a \"q\"");`
 }
 template<typename T> void inAGeneric(T x) {
     try thrown();

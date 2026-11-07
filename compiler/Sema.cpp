@@ -141,6 +141,35 @@ static bool showsAsWritten(const std::string& text) {
 
 static std::string spelled(const Expr& e, const std::string& fallback = "opt");
 
+// A char as a literal would write it: `'a'`, `'\n'`, `'\''`, or `char(7)` for one that has no escape.
+static std::string charLiteral(unsigned char c) {
+    switch (c) {
+        case '\n': return "'\\n'";
+        case '\t': return "'\\t'";
+        case '\r': return "'\\r'";
+        case '\0': return "'\\0'";
+        case '\'': return "'\\''";
+        case '\\': return "'\\\\'";
+        default: return c >= 0x20 && c < 0x7f ? "'" + std::string(1, (char)c) + "'" : "char(" + std::to_string(c) + ")";
+    }
+}
+
+// A string as a literal would write it, with its escapes.
+static std::string stringLiteral(const std::string& text) {
+    std::string out = "\"";
+    for (unsigned char c : text) {
+        if (c == '"' || c == '\\') out += std::string("\\") + (char)c;
+        else if (c == '\n') out += "\\n";
+        else if (c == '\t') out += "\\t";
+        else if (c == '\r') out += "\\r";
+        else if (c < 0x20 || c == 0x7f) {
+            static const char* digits = "0123456789abcdef";
+            out += std::string("\\x") + digits[c >> 4] + digits[c & 15];
+        } else out += (char)c;
+    }
+    return out + "\"";
+}
+
 static bool namesOnePlace(const Expr& e);
 
 // A key or an index that means the same each time it is written: a literal or the name of a place. Nothing when it is more than that.
@@ -782,6 +811,7 @@ static std::string zeroOf(const Type* t) {
 
 // A declaration that gives a variable of this type a value, which would compile.
 static std::string declarationOf(const Type* t, const std::string& name) {
+    if (t->decl && t->decl->name == "reflect::Type") return "`reflect::Type " + name + " = reflect::type<int>();`";  // its constructor is the language's own
     if (t->isClass()) {
         const StructDecl& sd = *t->decl;
         if (sd.isInterface || sd.firstPure()) return "`" + std::string(t->name) + " " + name + " = SomeClass(...);`, with a class that derives from it";
@@ -1145,13 +1175,15 @@ void Sema::reportUnknownName(const NameExpr& n) {
         diags_.error(n.loc, q(n.name) + " is a function, not a value", "call it, as in `" + n.name + "(x)`: functions can only be called for now", spec::Functions);
         return;
     }
-    if (program_->findTemplate(n.name) && program_->findTemplate(n.name)->kind != TemplateDecl::Kind::Function) {
-        diags_.error(n.loc, q(n.name) + " is a generic type, not a value", "to build one, write it with its arguments: `" + n.name + "<int>(...)`", spec::Generics);
-        return;
-    }
     if (n.name == "vector" || n.name == "array" || n.name == "hashmap") {
         diags_.error(n.loc, q(n.name) + " needs the types it holds", n.name == "vector" ? "write `vector<int>`" : n.name == "array" ? "write `array<int, 3>`" : "write `hashmap<string, int>`",
                      n.name == "vector" ? spec::Vectors : n.name == "array" ? spec::Arrays : spec::HashMaps);
+        return;
+    }
+    if (const TemplateDecl* tmpl = program_->findTemplate(n.name); tmpl && tmpl->kind != TemplateDecl::Kind::Function) {
+        std::string args;  // one for each of its parameters
+        for (const TemplateParam& p : tmpl->params) args += (args.empty() ? "" : ", ") + std::string(p.valueType ? "3" : "int");
+        diags_.error(n.loc, q(n.name) + " is a generic type, not a value", "to build one, write it with its arguments: `" + n.name + "<" + args + ">(...)`", spec::Generics);
         return;
     }
     if (false) {}
@@ -2294,7 +2326,7 @@ void Sema::checkThrow(ThrowStmt& st, Flow& flow) {
         const StructDecl* error = errorClass();
         if (!t->isError() && (!error || !canConvert(t, &error->type)))
             diags_.error(st.value->loc, "only an object of `Error`, or of a class deriving from it, can be thrown, but this is " + q(t),
-                         t->is(K::String) ? (st.value->kind == Expr::Kind::StringLit && static_cast<const StringLitExpr&>(*st.value).value.find_first_of("\"\\\n\t") == std::string::npos ? "write `throw Error(\"" + static_cast<const StringLitExpr&>(*st.value).value + "\");`"
+                         t->is(K::String) ? (st.value->kind == Expr::Kind::StringLit ? "write `throw Error(" + stringLiteral(static_cast<const StringLitExpr&>(*st.value).value) + ");`"
                                                                      : "wrap the string in `Error(...)`: `throw Error(" + spelled(*st.value, "...") + ");`")
                          : t->isOptional() && error && canConvert(t->elem, &error->type)
                              ? "it may be null. Write `throw " + spelled(*st.value, "e") + ".value();`"
@@ -2417,6 +2449,7 @@ static bool usableAsCondition(const Type* t) {
 
 // How to read a number of this type from text, which there is no way to do but C's for now.
 static std::string readingNumberHelp(const Type* t) {
+    if (t->is(K::Float)) return "declare `extern \"C\" double atof(string text);`, then call `float(atof(s))`";
     if (t->isFloating()) return "declare `extern \"C\" double atof(string text);`, then call `atof(s)`";
     if (t->is(K::Long)) return "declare `extern \"C\" long atol(string text);`, then call `atol(s)`";
     return "declare `extern \"C\" int atoi(string text);`, then call `atoi(s)`";
@@ -2735,6 +2768,8 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
 // ---- Expressions -----------------------------------------------------------
 
 // Help for a value of type `from` where a `to` is expected, when one of them is a pointer.
+static bool insideContainer(const Expr& e);
+
 static std::string pointerHelp(const Expr& e, const Type* from, const Type* to) {
     std::string n = spelled(e, "x");
     if (to->isPointer()) {
@@ -2746,10 +2781,12 @@ static std::string pointerHelp(const Expr& e, const Type* from, const Type* to) 
                 return "a void* becomes another pointer only with a cast: `static_cast<" + std::string(to->name) + ">(" + n +
                        ")`";
             return "pointers to different types do not convert into each other. If the memory really holds " +
-                   q(to->elem) + " values, cast it: `(" + to->name + ")" + n + "`";
+                   q(to->elem) + " values, cast it: `(" + to->name + ")" + (hasOperator(n) ? "(" + n + ")" : n) + "`";
         }
         if (e.kind == Expr::Kind::IntLit && static_cast<const IntLitExpr&>(e).value == 0) return "a pointer to nothing is `null`";
         if (e.kind == Expr::Kind::This) return "a method cannot get a pointer to its own object. Use `this` as a value: a method can return it, which gives a copy of a struct, or the same object of a class";
+        if (from == to->elem && isPlaceKind(e) && insideContainer(e))
+            return "this compiler does not support pointers into vectors and strings yet, as their elements move when they grow. Copy it into a variable, `auto x = " + n + ";`, and use `&x`";
         if (from == to->elem && isPlaceKind(e)) return "write `&" + n + "` for the address of " + q(n);
         if (from->isInteger()) return "a number is not a pointer. To make one from a number, write `reinterpret_cast<" + std::string(to->name) + ">(n)`";
         if (from->isArray() && from->elem == to->elem) return "an array does not turn into a pointer by itself: write `" + n + ".data()`";
@@ -2761,8 +2798,8 @@ static std::string pointerHelp(const Expr& e, const Type* from, const Type* to) 
     if (to->is(K::Bool)) return "compare it with null: `" + n + " != null`";
     if (to->is(K::String) && from->elem->is(K::Char))
         return "write `string(" + n + ")` to copy the text it points to, up to its zero byte";
-    if (canConvert(from->elem, to)) return "write `*" + n + "` for the value it points to";
-    if (to->isInteger()) return "a pointer does not convert to a number";
+    if (canConvert(from->elem, to)) return "write `*" + (hasOperator(n) ? "(" + n + ")" : n) + "` for the value it points to";
+    if (to->isInteger()) return "a pointer does not convert to a number. For the address it holds, write `reinterpret_cast<long>(" + n + ")`";
     return "";
 }
 
@@ -2888,8 +2925,8 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
                                               "stops the program if the value does not fit";
     } else if (target->is(K::Char) && (from->isInteger() || from->is(K::String) || from->isFloating())) {
         if (e.kind == Expr::Kind::StringLit && static_cast<const StringLitExpr&>(e).value.size() == 1)
-            help = "write '" + static_cast<const StringLitExpr&>(e).value + "', in single quotes, for a char. \"" +
-                   static_cast<const StringLitExpr&>(e).value + "\" is a string";
+            help = "write " + charLiteral((unsigned char)static_cast<const StringLitExpr&>(e).value[0]) + ", in single quotes, for a char. " +
+                   stringLiteral(static_cast<const StringLitExpr&>(e).value) + " is a string";
         else if (from->is(K::String))
             help = "a string does not convert to a char; `s[i]` is the char at position i";
         else
@@ -2913,19 +2950,24 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         help = std::string("a bool does not convert to a number by itself; write `") + to->name + "(flag)` for 0 "
                "or 1";
     } else if (from->isOptional() && !to->isOptional() && canConvert(from->elem, to)) {
-        help = unwrapHelp(spelled(e));
+        help = spelled(e, "").empty() ? std::string("it may be null. Store it in a variable first and unwrap that with `if (auto v = x) ...`, or give a fallback with `?? value`")
+                                      : unwrapHelp(spelled(e, ""));
     } else if (from->isOptional() && to->isOptional()) {
         help = "an optional only converts to an optional of the same type. Unwrap it first: `if (auto v = " +
-               spelled(e) + ") ...` gives the " + std::string(from->elem->name) + " inside";
+               spelled(e, "x") + ") ...` gives the " + std::string(from->elem->name) + " inside";
     } else if (from->isNull()) {
         help = "only an optional or a pointer can be null; make the type `" + std::string(to->name) + "?`";
     }
     if (help.empty() && to->is(K::String) && from->isNumber()) help = "turn it into a string: `to_string(x)`";
     if (help.empty() && to->is(K::String) && from->is(K::Bool)) help = "turn it into a string: `format(\"{}\", b)`";
     if (help.empty() && from->is(K::String) && to->isNumber()) help = "this compiler cannot read a number from a string yet: " + readingNumberHelp(to);
+    if (help.empty() && to->isStruct() && !isHashmap(to) && from->isNumber() && to->decl->constructor)
+        help = "build one with its constructor: `" + std::string(to->name) + "(...)`";
     if (help.empty() && to->isStruct() && !isHashmap(to) && from->isNumber() && !to->decl->fields.empty() && canConvert(from, to->decl->fields[0].type))
         help = "build one from it: `" + std::string(to->name) + "{" + (e.kind == Expr::Kind::IntLit ? std::to_string(static_cast<const IntLitExpr&>(e).value) : spelled(e, "...")) + "}`";
-    if (help.empty() && to->isClass() && from->isClass() && to->decl->derivesFrom(from->decl)) help = "write `dynamic_cast<" + std::string(to->name) + "?>(" + spelled(e, "x") + ")`, which gives null when it is not one";
+    if (help.empty() && to->isClass() && from->isClass() && to->decl->derivesFrom(from->decl))
+        help = "write `dynamic_cast<" + std::string(to->name) + ">(" + spelled(e, "x") + ")`, which stops the program when it is not one, or test it with `if (auto d = dynamic_cast<" +
+               std::string(to->name) + "?>(" + spelled(e, "x") + "))`";
     if (help.empty() && to->isClass()) help = "give it a value such as " + declarationOf(to, "x");
     if (help.empty()) help = "write a value of type " + q(to) + " here, or change the type that is expected";
     diags_.error(e.loc, "expected " + q(to) + " " + context + ", but this is " + q(from), help,
@@ -3567,11 +3609,22 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
         if (t->isOptional())
             help = "write `" + n + "?." + u.arrowMember + "`, which is null when " + n + " is, or unwrap it first: `if (auto v = " +
                    n + ") ... v." + u.arrowMember + "`";
-        else if (t->hasFields() || t->isUnique() || t->isLocal())
+        else if (t->isVector() || t->isArray() || t->is(K::String) || isHashmap(t)) {
+            // A method of the container, or a field of what it holds
+            static const char* const listMethods[] = {"size", "empty", "push_back", "pop_back", "front", "back", "clear", "data", "fill", "length",
+                                                      "substr", "find", "contains", "starts_with", "ends_with"};
+            const bool isMethod = isHashmap(t) ? t->decl->findMethod(u.arrowMember) != nullptr || u.arrowMember == "at"
+                                               : std::find_if(std::begin(listMethods), std::end(listMethods), [&](const char* m) { return u.arrowMember == m; }) != std::end(listMethods);
+            const bool takesNothing = u.arrowMember == "size" || u.arrowMember == "empty" || u.arrowMember == "clear" || u.arrowMember == "pop_back" ||
+                                      u.arrowMember == "front" || u.arrowMember == "back" || u.arrowMember == "length" || u.arrowMember == "data";
+            help = isMethod ? "only a pointer is followed with '->': write `" + n + "." + u.arrowMember + (takesNothing ? "()" : "(...)") + "`"
+                 : t->is(K::String) ? q(n) + " is a string, which has no fields: only a pointer is followed with '->'"
+                 : "only a pointer is followed with '->'. For a field of what it holds, write `" + n + (isHashmap(t) ? "[key]." : "[i].") + u.arrowMember + "`";
+        } else if (t->hasFields() || t->isUnique() || t->isLocal())
             help = std::string(t->isClass() ? "a class reference is used directly, so " : t->isUnique() ? "a unique reference is used directly, so " : t->isLocal() ? "a local reference is used directly, so " : "") +
                    "fields and methods are reached with '.': write `" + n + "." + u.arrowMember + "`";
         else
-            help = t->isVector() || t->isArray() || t->is(K::String) || isHashmap(t) ? "write `" + n + "." + u.arrowMember + "()`, or a field of what it holds: only a pointer is followed with '->'" : q(n) + " is not a pointer: remove the `->`";
+            help = "remove `->" + u.arrowMember + "`: " + q(n) + " is a " + q(t) + ", which has no fields, and only a pointer is followed with '->'";
         diags_.error(u.loc, "'->' follows a pointer, but " + q(n) + " is " + q(t), help, spec::Pointers);
         return;
     }
@@ -3691,7 +3744,7 @@ const Type* Sema::checkAddressOf(UnaryExpr& u, Flow& flow) {
         if (found && found->isTopLevel && !fieldHides(found->name)) {
             checkExpr(target, flow);
             diags_.error(u.loc, q(found->name) + " is a constant, which has no address",
-                         "copy it into a variable first: `auto copy = " + found->name + ";`, then `&copy`",
+                         "copy it into a variable first: `auto " + freshName(found->name, {"copy", "value", "held"}) + " = " + found->name + ";`, then `&" + freshName(found->name, {"copy", "value", "held"}) + "`",
                          spec::Constants);
             return Type::error();
         }
@@ -3713,9 +3766,7 @@ const Type* Sema::checkAddressOf(UnaryExpr& u, Flow& flow) {
     if (var && flow.reachable && !isAssigned(flow, var, t, path)) {
         std::string name = placeName(var, path);
         diags_.error(target.loc, "'&" + name + "' points to " + q(name) + ", which has no value yet",
-                     (path.empty() ? "give it a value first, e.g. `" + std::string(t->name) + " " + name + " = " + zeroOf(t) +
-                                         ";`"
-                                   : "assign it first") +
+                     (path.empty() ? "give it a value first, e.g. " + declarationOf(t, name) : std::string("assign it first")) +
                          ". C+ cannot tell whether code that gets the pointer writes through it before reading",
                      spec::Pointers);
         markAssigned(flow, var, path);
@@ -4021,17 +4072,24 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 }
                 const Expr* other = lStr ? b.rhs.get() : b.lhs.get();
                 const Type* ot = lStr ? r : l;
+                const std::string str = spelled(lStr ? *b.lhs : *b.rhs, "s");
+                auto inOrder = [&](const std::string& fixed) {  // the string where it was, and the other side as it should be
+                    return lStr ? str + " " + sym + " " + fixed : fixed + " " + sym + " " + str;
+                };
                 if (b.op == BinOp::Add)
                     diags_.error(other->loc, "'+' joins a string with a string or a char, but this is " + q(ot),
-                                 textHelp(ot, "+", spelled(*other, "opt")), spec::Strings);
+                                 ot->isNumber() ? "turn the number into a string first: `" + inOrder("to_string(" + spelled(*other, "n") + ")") +
+                                                      "`. Unlike C++, a number is never added as a character code"
+                                                : textHelp(ot, "+", spelled(*other, "opt")),
+                                 spec::Strings);
                 else
                     diags_.error(other->loc, std::string("'") + sym + "' compares two strings, but this is " + q(ot),
                                  ot->isNumber()    ? "turn the number into a string first with `to_string(n)`"
                                  : ot->is(K::Char) ? "compare chars with chars, e.g. `s[0] == 'a'`, or strings with "
                                                      "strings: `s == \"a\"`"
                                  : ot->isNull() ? std::string("a string is never null. Write `s.empty()` for no text, or make it `string?`")
-                                 : ot->isOptional() && ot->elem->is(K::String) ? "give it a fallback: `s " + std::string(sym) + " (" + spelled(*other, "o") + " ?? \"\")`"
-                                                   : "turn it into a string: `s " + std::string(sym) + " format(\"{}\", x)`",
+                                 : ot->isOptional() && ot->elem->is(K::String) ? "give it a fallback: `" + inOrder("(" + spelled(*other, "o") + " ?? \"\")") + "`"
+                                                   : "turn it into a string: `" + inOrder("format(\"{}\", " + spelled(*other, "x") + ")") + "`",
                                  spec::Strings);
                 if (comparison) result = Type::boolTy();
                 break;
@@ -5190,7 +5248,11 @@ const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type
         if (call.name == m.name) info = &m;
     if (!isCopyable(vecType->elem) && (call.name == "front" || call.name == "back"))
         diags_.error(call.loc, call.name + "() gives a copy, but a " + q(vecType->elem) + " cannot be copied",
-                     "read the element in place, as in `v[0].name`, or take it with `move(v[0])`", spec::Unique);
+                     [&] {
+                         const std::string v = asBase(spelled(*call.receiver, "v"));
+                         const std::string at = call.name == "back" ? v + "[" + v + ".size() - 1]" : v + "[0]";
+                         return "read the element in place, as in `" + at + ".name`, or take it with `move(" + at + ")`";
+                     }(), spec::Unique);
     if (!info) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         std::string help;
@@ -5545,7 +5607,7 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
         else if ((spec.type || spec.precision >= 0) && !t->isFloating() && !t->isError())
             diags_.error(call.args[i]->loc, specTexts[i - 1] + " formats a float or a double, but this is " + q(t),
                          t->isInteger() ? "write {} for an integer, or convert it first: `double(n)`"
-                         : t->isOptional() && t->elem->isFloating() ? "give it a fallback: `println(\"" + specTexts[i - 1] + "\", " + spelled(*call.args[i], "d") + " ?? " + (t->elem->is(K::Float) ? "0.0f" : "0.0") + ")`"
+                         : t->isOptional() && t->elem->isFloating() ? "give it a fallback where it is passed: `" + asBase(spelled(*call.args[i], "d")) + " ?? " + (t->elem->is(K::Float) ? "0.0f" : "0.0") + "`"
                                         : "write {} to print it as it is",
                          spec::Printing);
     }
@@ -5572,7 +5634,8 @@ const Type* Sema::checkToString(CallExpr& call, Flow& flow) {
                      t->is(K::String) ? "remove `to_string`: it is already a string"
                      : t->is(K::Char) ? "in C++, to_string(c) gives the code of the char, such as \"97\". Write "
                                         "`string(1, c)` for the char itself, or `to_string(int(c))` for its code"
-                                      : textHelp(t),
+                     : t->is(K::Void) ? "the call gives nothing to turn into text. Call it on a line of its own, and pass `to_string` a number"
+                                      : textHelp(t, "+", spelled(*call.args[0], "x")),
                      spec::Strings);
     return Type::stringTy();
 }
@@ -5837,6 +5900,11 @@ const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
                          n == "c_str" || n == "data" ? "pass `s` itself: a `string` parameter of a C function converts at each call"
                          : n == "erase" ? "build it from what stays: `s = s.substr(0, pos) + s.substr(pos + n);`"
                          : n == "insert" ? "build it: `s = s.substr(0, pos) + t + s.substr(pos);`"
+                         : n == "replace" ? "build it: `s = s.substr(0, pos) + t + s.substr(pos + n);`"
+                         : n == "resize" ? "build it: `s = s.substr(0, n);` to shorten it, or `s += string(k, ' ');` to add k spaces"
+                         : n == "rfind" ? "go back from the end: `for (long i = s.size() - 1; i >= 0; i--) if (s[i] == 'x') { ...; break; }`"
+                         : n == "find_first_of" || n == "find_last_of" || n == "find_first_not_of" || n == "find_last_not_of"
+                             ? "go over it and test each char: `for (long i = 0; i < s.size(); i++) if (chars.contains(string(1, s[i]))) { ...; break; }`"
                          : n == "compare" ? "compare with `a < b` and `a == b`"
                          : n == "begin" || n == "end" ? "go over it with `for (char c : s)`"
                          : n == "reserve" ? "remove the call: a string grows by itself"

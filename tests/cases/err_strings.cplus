@@ -49,7 +49,8 @@ int main() {
 }
 // error: 'format' is a built-in function and cannot be redefined
 // error: '+' joins a string with a string or a char, but this is 'int'
-// error: turn the number into a string first: `s + to_string(n)`
+// error: turn the number into a string first: `s + to_string(1)`
+// error: turn the number into a string first: `to_string(1) + s`
 // error: Unlike C++, a number is never added as a character code
 // error: '+' joins a string with a string or a char, but this is 'bool'
 // error: `format("{}", b)` turns a bool into "true" or "false"

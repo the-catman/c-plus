@@ -141,7 +141,9 @@ static int build(const Options& opts, const std::string& exePath) {
     Codegen codegen(file, CodegenOptions{opts.optimize, opts.debug, opts.race});
     std::string error;
     if (!codegen.generate(program, error)) {
-        toolError(error, "this is about the machine the program is being built for, and not the program. Build it on Linux, on x86-64 or aarch64, which are what this compiler has been written for");
+        toolError(error, error.rfind("internal compiler error", 0) == 0
+                             ? "this is a mistake in the compiler, and not in the program. Keep the program that caused it to report it, and change the code near what was last edited to go on"
+                             : "this is about the machine the program is being built for, and not the program. Build it on Linux, on x86-64 or aarch64, which are what this compiler has been written for");
         return 1;
     }
     if (opts.emitLLVM) {
@@ -150,8 +152,9 @@ static int build(const Options& opts, const std::string& exePath) {
     }
     std::string objPath = exePath + ".o";
     if (!codegen.writeObjectFile(objPath, error)) {
-        toolError(error, opts.command == "run" ? "set the environment variable TMPDIR to a folder that can be written to"
-                                               : "check that the folder of the output exists and can be written to, or choose another with -o");
+        toolError(error, error.rfind("this target", 0) == 0 ? "this is about the machine the program is being built for, and not the program. Build it on Linux, on x86-64 or aarch64, which are what this compiler has been written for"
+                         : opts.command == "run" ? "set the environment variable TMPDIR to a folder that can be written to"
+                                                 : "check that the folder of the output exists and can be written to, or choose another with -o");
         std::error_code ignored;
         fs::remove(objPath, ignored);  // what there is of it is of no use
         return 1;

@@ -1,0 +1,8 @@
+// A reflect::Type is made by `reflect::type<T>()`, and never by its constructor.
+import reflect;
+int main() {
+    reflect::Type b;
+    reflect::Type* p = &b;
+    // error: give it a value first, e.g. `reflect::Type b = reflect::type<int>();`
+    return 0;
+}

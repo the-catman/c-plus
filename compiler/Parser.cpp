@@ -33,7 +33,8 @@ Loc Parser::afterPrev() const {
 }
 
 void Parser::fail(Loc loc, const std::string& message, const std::string& help, const std::string& spec) {
-    diags_.error(loc, message, help, spec);
+    // In what comes with the language, after the program's own names have clashed with it: only what follows from that
+    if (!(gaveUp_ && loc.line == 0)) diags_.error(loc, message, help, spec);
     throw ParseError{};
 }
 
@@ -1009,6 +1010,17 @@ void Parser::rejectOtherLanguages() {
         return;
     const std::string& w = t.text;
     if (w == "typedef") fail(t.loc, "C+ has no typedef", "write the type itself. A struct or a class already goes by its name", spec::Variables);
+    if (w == "using" && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Assign) {  // `using Id = long;`
+        std::string type;
+        for (size_t at = 3; at < 40 && peek(at).kind != Tok::Semi && peek(at).kind != Tok::Eof; ++at) {
+            const std::string piece = peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text;
+            const bool word = !piece.empty() && (std::isalnum((unsigned char)piece[0]) || piece[0] == '_');
+            if (word && !type.empty() && (std::isalnum((unsigned char)type.back()) || type.back() == '_')) type += " ";
+            type += piece;
+            if (peek(at).kind == Tok::Comma) type += " ";
+        }
+        fail(t.loc, "C+ has no type aliases", "write the type itself, `" + (type.empty() ? std::string("long") : type) + "`, wherever `" + peek(1).text + "` is used", spec::Variables);
+    }
     if (w == "using") fail(t.loc, "C+ has no 'using' declarations", "built-ins like println, string and vector need no std:: prefix, so `using` has nothing to do", spec::Modules);
     if (w == "inline") fail(t.loc, "C+ has no 'inline'", "remove it: with -O, the compiler decides what to inline", spec::Functions);
     if (w == "goto") fail(t.loc, "C+ has no goto", "use a loop with `break` or `continue`, or a function with `return`", spec::ControlFlow);
@@ -1105,9 +1117,20 @@ void Parser::parseTopLevel(Program& prog) {
             }
             return parseConstants(prog, type, typeLoc, true);
         }
-        case Tok::KwStatic:
-            fail(t.loc, "C+ has no 'static' outside a type", "remove it, which leaves a constant or a function as it was",
+        case Tok::KwStatic: {
+            // A variable, `static int counter = 0;`, is not one of what removing it leaves as it was
+            size_t at = 1;
+            while (peek(at).kind == Tok::KwConst || peek(at).kind == Tok::KwConstexpr) ++at;
+            const bool isConstant = at > 1;
+            size_t name = at;
+            while (name < at + 12 && peek(name).kind != Tok::Ident && peek(name).kind != Tok::Eof) ++name;
+            while (peek(name + 1).kind == Tok::Ident || peek(name + 1).kind == Tok::Star || peek(name + 1).kind == Tok::Less || peek(name + 1).kind == Tok::Greater) ++name;
+            const bool isFunction = peek(name + 1).kind == Tok::LParen;
+            fail(t.loc, "C+ has no 'static' outside a type",
+                 isConstant || isFunction ? std::string("remove it, which leaves a constant or a function as it was")
+                                          : "remove it, and make it a constant if it never changes: `const ... = ...;`. A variable that changes is not supported outside functions yet, so pass it to the functions that use it",
                  spec::Constants);
+        }
         case Tok::KwExtern: parseExtern(prog); return;
         case Tok::KwNamespace:
             fail(t.loc, "C+ has no namespaces; each file is a module", "remove the `namespace ... {` line and its closing `}`, and keep what is inside", spec::Modules);
@@ -1350,7 +1373,10 @@ const Type* Parser::parseCType(Loc& loc, bool isReturn) {
         if (!use.empty()) {
             if (n == "unsigned" && peek(isConst ? 2 : 1).kind == Tok::KwLong)
                 use = "long", why = "it passes the same 64 bits; C+ has no unsigned types yet";
-            fail(t.loc, "'" + n + "' is a C type; write `" + use + "` here", "write `" + use + "`: " + why, spec::CFunctions);
+            const Token& after = peek(isConst ? 2 : 1);
+            const bool twoWords = (n == "unsigned" || n == "signed") && (after.kind == Tok::KwInt || after.kind == Tok::KwLong || after.kind == Tok::KwChar);
+            const std::string whole = twoWords ? n + " " + tokSpelling(after.kind) : n;
+            fail(t.loc, "'" + whole + "' is a C type; write `" + use + "` here", "write `" + use + "` in place of `" + whole + "`: " + why, spec::CFunctions);
         }
     }
     if (base.kind == Tok::KwStruct) {
@@ -1377,6 +1403,13 @@ static const char* cIntegerEquivalent(const std::string& n);
 
 void Parser::failStd(Loc loc, const Token& name) {
     std::string n = name.text.empty() ? tokSpelling(name.kind) : name.text;
+    if (n == "make_unique" || n == "make_shared") {  // at `std`, or just after it: move to the `<`, as for `make_unique<T>()` without std::
+        for (size_t at = 0; at < 3; ++at)
+            if (&peek(at) == &name && peek(at + 1).kind == Tok::Less) {
+                pos_ += at + 1;
+                failMakePointer(toks_[pos_ - 1]);
+            }
+    }
     if (n == "string" || n == "vector" || n == "array" || n == "to_string" || n == "format" || n == "println" || n == "print")
         fail(loc, "C+ has no std:: namespace", "built-ins need no prefix: write `" + n + "` instead of `std::" + n + "`",
              spec::Modules);
@@ -1727,7 +1760,7 @@ void Parser::checkUnknownType() {
         const Token& next = peek(1);
         bool sign = n == "unsigned" || n == "signed";
         if (n == "short" || n == "int16_t" || n == "uint16_t" || (sign && next.kind == Tok::Ident && next.text == "short"))
-            notYet(peek().loc, std::string("16-bit integer types such as '") + (sign ? "unsigned " : "") + (sign && next.kind == Tok::Ident ? next.text : n) + "'",
+            notYet(peek().loc, std::string("16-bit integer types such as '") + (sign ? n + " " : "") + (sign && next.kind == Tok::Ident ? next.text : n) + "'",
                    inExternStruct_ ? "`int` would change its layout. Declare the struct by name, `extern \"C\" struct name;`, and use it through pointers"
                                    : "write `int`. A C struct with such a field can still be used through pointers, by declaring it by name: "
                                      "`extern \"C\" struct name;`");
@@ -2440,8 +2473,15 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         parseParams(*ctor);
         if (check(Tok::KwThrows))
             notYet(peek().loc, "constructors that can fail",
-                   "write a function that can fail and makes the object: `" + ownName + " make(int x) throws { ...; return " +
-                       ownName + "(x); }`");
+                   [&] {
+                       std::string type = ownName;  // a generic's own name, with its parameters
+                       if (currentTemplate_ && !currentTemplate_->params.empty()) {
+                           type += "<";
+                           for (size_t i = 0; i < currentTemplate_->params.size(); ++i) type += (i ? ", " : "") + currentTemplate_->params[i].name;
+                           type += ">";
+                       }
+                       return "write a function that can fail and makes the object: `" + std::string(currentTemplate_ ? "template <...> " : "") + type + " make(int x) throws { ...; return " + type + "(x); }`";
+                   }());
         if (match(Tok::Colon)) parseMemberInits(*ctor);
         if (check(Tok::Semi))
             fail(peek().loc, "write the constructor body here", "C+ has no separate definitions; add `{ ... }`",
@@ -2655,8 +2695,8 @@ void Parser::parseLaterStars(const Type* ty, const std::string& firstName, const
         ++got;
         if (check(Tok::KwConst))
             fail(peek().loc, std::string("a const pointer ") + what + " is declared on its own",
-                 "declare it separately, e.g. `" + std::string(ty->name) + " const " +
-                     (check(Tok::Ident) ? peek().text : std::string("p")) + " = ...;`",
+                 std::string(what) == "field" ? "declare it on its own line, without `const`: `" + std::string(ty->name) + " " + (peek(1).kind == Tok::Ident ? peek(1).text : std::string("p")) + ";`. A field cannot be const yet"
+                                            : "declare it separately, e.g. `" + std::string(ty->name) + " const " + (peek(1).kind == Tok::Ident ? peek(1).text : std::string("p")) + " = ...;`",
                  spec::PointerDeclarations);
     }
     if (got == want) return;
@@ -3305,7 +3345,9 @@ ExprPtr Parser::parsePrimary() {
                     fail(member.loc,
                          member.kind == Tok::Ident ? "'string' has no member named '" + member.text + "'"
                                                    : "expected a name after 'string::', found " + describeToken(member),
-                         "the only one is `string::npos`, the value find() returns when nothing is found",
+                         member.kind == Tok::Ident && (member.text == "size_type" || member.text == "difference_type")
+                             ? "write `long`, or `auto`: sizes and positions in a string are a `long`"
+                             : "the only one is `string::npos`, the value find() returns when nothing is found",
                          spec::Strings);
                 advance();
                 Loc loc = t.loc;

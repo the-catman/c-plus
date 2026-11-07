@@ -1,0 +1,10 @@
+// What the lexer says about a `#` after code and about `_` in numbers that are not integers.
+int main() {
+    int x = 1; # set x
+    // error: C+ comments start with `//`: write `//` in place of `#`
+    auto y = 1_000f;
+    // error: write `1'000.0f`
+    auto z = 0x_FF;
+    // error: write `0xFF`
+    return 0;
+}

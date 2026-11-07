@@ -8,7 +8,7 @@ public:
 void pointers() {
     int n = 1;
     println("{}", n->x);
-    // error: 'n' is not a pointer: remove the `->`
+    // error: remove `->x`: 'n' is a 'int', which has no fields
     int* p = &n;
     long big = 1;
     long* q = &big;

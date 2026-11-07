@@ -33,7 +33,7 @@ void printing() {
     // error: or `(const void*)p` to print the address
     double? d = 1;
     println("{:.2f}", d);
-    // error: give it a fallback: `println("{:.2f}", d ?? 0.0)`
+    // error: give it a fallback where it is passed: `d ?? 0.0`
     int x = 1;
     println("{ x: {} }", x);
     // error: a placeholder is `{}`, with the value after the format string: `println("{}", name)`. A literal brace is written {{

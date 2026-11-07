@@ -1,0 +1,6 @@
+// A program's own `hashmap` with `import json`: one error, about the clash, and nothing from inside the language's own code.
+struct hashmap { int x; };
+import json;
+// error: 'json' uses the built-in type 'hashmap', but this program has its own
+// not-error: unknown type 'hashmap'
+int main() { return 0; }

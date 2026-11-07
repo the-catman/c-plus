@@ -1,0 +1,4 @@
+// `static` before a variable at the top of a file, which removing it would not fix.
+static int counter = 0;
+// error: remove it, and make it a constant if it never changes: `const ... = ...;`. A variable that changes is not supported outside functions yet
+int main() { return 0; }

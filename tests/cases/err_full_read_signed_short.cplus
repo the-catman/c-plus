@@ -1,0 +1,4 @@
+// The type is named as it was written.
+extern "C" struct S { signed short a; };
+// error: 16-bit integer types such as 'signed short'
+int main() { return 0; }

@@ -1,0 +1,77 @@
+// What the help found by the full reading says to write, which must compile and do what it says.
+import reflect;
+extern "C" double atof(string text);
+struct Pt { int x = 0; };
+class Node { public: int n = 0; };
+class Dog : public Node { };
+template <typename K, typename V>
+struct Pair { K k; V v; };
+int work() { return 4; }
+
+int main() {
+    array<int, 3> values = {10, 20, 30};
+    int* p = values.data();
+    println("{}", *(p + 1));
+    // expect: 20
+    vector<int> v = {7};
+    auto x = v[0];
+    int* q = &x;
+    println("{}", *q);
+    // expect: 7
+    println("{} {} {}", int('\n'), int('\''), int('\\'));
+    // expect: 10 39 92
+    Node nd = Dog();
+    Dog dg = dynamic_cast<Dog>(nd);
+    if (auto d = dynamic_cast<Dog?>(nd)) println("a dog");
+    // expect: a dog
+    float f = float(atof("2.5"));
+    println("{}", f);
+    // expect: 2.5
+    auto pair = Pair<int, int>(1, 2);
+    println("{}", pair.v);
+    // expect: 2
+    string name = "m";
+    string? maybe = "a";
+    println("{} {}", (maybe ?? "") < name, format("{}", true) < name);
+    // expect: true false
+    int count = 3;
+    println("{}", to_string(count) + " items");
+    // expect: 3 items
+    vector<Pt> pts = {Pt{}, Pt{.x = 5}};
+    println("{}", pts[1].x);
+    // expect: 5
+    double? od = null;
+    println("{}", format("{:.1f} and {}", od ?? 0.0, 1));
+    // expect: 0.0 and 1
+    int? o = null;
+    println("{}", to_string(o ?? 0));
+    // expect: 0
+    string s = "hello";
+    long pos = 1;
+    long n = 2;
+    string t = "EY";
+    s = s.substr(0, pos) + t + s.substr(pos + n);
+    println("{}", s);
+    // expect: hEYlo
+    long last = -1;
+    for (long i = s.size() - 1; i >= 0; i--) if (s[i] == 'l') { last = i; break; }
+    println("{}", last);
+    // expect: 3
+    string chars = "lo";
+    long first = -1;
+    for (long i = 0; i < s.size(); i++) if (chars.contains(string(1, s[i]))) { first = i; break; }
+    println("{}", first);
+    // expect: 3
+    s = s.substr(0, 2);
+    s += string(2, ' ');
+    println("[{}]", s);
+    // expect: [hE  ]
+    reflect::Type r = reflect::type<int>();
+    long size = s.size();
+    println("{}", size);
+    // expect: 4
+    Task<int> task = spawn work();
+    println("{}", task.wait());
+    // expect: 4
+    return 0;
+}

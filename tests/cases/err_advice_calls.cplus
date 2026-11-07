@@ -65,7 +65,7 @@ void strings() {
     bool b = true;
     int? o = 1;
     println("{}", s == b);
-    // error: turn it into a string: `s == format("{}", x)`
+    // error: turn it into a string: `s == format("{}", b)`
     println("{}", s == null);
     // error: a string is never null. Write `s.empty()` for no text, or make it `string?`
     string? t = "x";

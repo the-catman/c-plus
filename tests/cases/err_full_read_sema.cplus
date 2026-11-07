@@ -1,0 +1,106 @@
+// What the full reading of the help found in Sema: pointers, chars, throwing text, conversions, generics, `->`, and strings.
+struct Pt { int x = 0; };
+struct P {
+    int x;
+    int y;
+    P(string s, int b) { x = b; y = 0; }
+};
+class Node { public: int n = 0; };
+class Dog : public Node { };
+interface Speaker { string speak() const; };
+template <typename K, typename V>
+struct Pair { K k; V v; };
+template <typename T, int N>
+struct Buf { array<T, N> a; };
+string text() { return "t"; }
+void nothing() { }
+const int K = 3;
+
+void pointers(int* p, double* dp, vector<int> v, string s) {
+    int x = p + 1;
+    // error: write `*(p + 1)` for the value it points to
+    double* d = p + 1;
+    // error: cast it: `(double*)(p + 1)`
+    int* q = v[0];
+    // error: Copy it into a variable, `auto x = v[0];`, and use `&x`
+    int w = dp;
+    // error: For the address it holds, write `reinterpret_cast<long>(dp)`
+}
+void chars() {
+    char a = "\n";
+    // error: write '\n', in single quotes, for a char. "\n" is a string
+    char b = "'";
+    // error: write '\'', in single quotes, for a char
+    char c = "\\";
+    // error: write '\\', in single quotes, for a char. "\\" is a string
+}
+void throwing() throws {
+    throw "a\rb";
+    // error: write `throw Error("a\rb");`
+}
+void conversions(Node nd) {
+    P p = 5;
+    // error: build one with its constructor: `P(...)`
+    Dog dg = nd;
+    // error: write `dynamic_cast<Dog>(nd)`, which stops the program when it is not one, or test it with `if (auto d = dynamic_cast<Dog?>(nd))`
+    float f = text();
+    // error: then call `float(atof(s))`
+}
+void generics() {
+    auto a = Pair;
+    // error: write it with its arguments: `Pair<int, int>(...)`
+    auto b = Buf;
+    // error: write it with its arguments: `Buf<int, 3>(...)`
+    auto c = hashmap;
+    // error: write `hashmap<string, int>`
+}
+void arrows(vector<Pt> v, hashmap<string, Pt> m) {
+    int a = v->x;
+    // error: For a field of what it holds, write `v[i].x`
+    v->push_back(Pt{});
+    // error: only a pointer is followed with '->': write `v.push_back(...)`
+    int c = m->x;
+    // error: For a field of what it holds, write `m[key].x`
+}
+void addresses() {
+    int copy = 1;
+    int* p = &K;
+    // error: copy it into a variable first: `auto value = K;`, then `&value`
+    Speaker sp;
+    Speaker* q = &sp;
+    // error: give it a value first, e.g. `Speaker sp = SomeClass(...);`, with a class that derives from it
+    Task<int> t;
+    Task<int>* r = &t;
+    // error: give it a value first, e.g. `Task<int> t = spawn f();`
+}
+void comparing(string name, string? maybe, bool flag, int count) {
+    bool r = maybe < name;
+    // error: give it a fallback: `(maybe ?? "") < name`
+    bool r3 = flag < name;
+    // error: turn it into a string: `format("{}", flag) < name`
+    string t = count + " items";
+    // error: turn the number into a string first: `to_string(count) + " items"`
+}
+void uniques(vector<unique<Node>> vu) {
+    auto b = vu.back();
+    // error: read the element in place, as in `vu[vu.size() - 1].name`, or take it with `move(vu[vu.size() - 1])`
+}
+void formats(double? od, int x, int? o) {
+    string q = format("{:.1f} and {}", od, x);
+    // error: give it a fallback where it is passed: `od ?? 0.0`
+    string w = to_string(o);
+    // error: `to_string(o ?? 0)` for a number
+    string z = to_string(nothing());
+    // error: the call gives nothing to turn into text. Call it on a line of its own, and pass `to_string` a number
+}
+void strings(string s) {
+    s.replace(0, 1, "x");
+    // error: build it: `s = s.substr(0, pos) + t + s.substr(pos + n);`
+    long i = s.rfind("x");
+    // error: go back from the end: `for (long i = s.size() - 1; i >= 0; i--) if (s[i] == 'x') { ...; break; }`
+    s.resize(3);
+    // error: build it: `s = s.substr(0, n);` to shorten it, or `s += string(k, ' ');` to add k spaces
+    long j = s.find_first_of("ab");
+    // error: go over it and test each char: `for (long i = 0; i < s.size(); i++) if (chars.contains(string(1, s[i]))) { ...; break; }`
+}
+int main() { return 0; }

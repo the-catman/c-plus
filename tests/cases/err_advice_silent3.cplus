@@ -12,18 +12,18 @@ void conversions() {
     // error: `Task<int> x = spawn f();`
     Animal a = Cat();
     Cat c = a;
-    // error: write `dynamic_cast<Cat?>(a)`, which gives null when it is not one
+    // error: write `dynamic_cast<Cat>(a)`, which stops the program when it is not one, or test it with `if (auto d = dynamic_cast<Cat?>(a))`
     double* d = (double*)vector<double>{1.5};
     // error: Copy it into an `array<double, N>` and use `a.data()`
     string s2 = reinterpret_cast<string>(1);
     // error: to turn a number into text, write `to_string(x)`
     float? f = 1;
     println("{:.2f}", f);
-    // error: `println("{:.2f}", f ?? 0.0f)`
+    // error: give it a fallback where it is passed: `f ?? 0.0f`
     string text = "a";
     int? o = 1;
     println("{}", text < o);
-    // error: turn it into a string: `s < format("{}", x)`
+    // error: turn it into a string: `text < format("{}", o)`
 }
 void conditions() {
     hashmap<string, int> m;

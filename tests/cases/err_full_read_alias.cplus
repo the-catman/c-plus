@@ -1,0 +1,5 @@
+// A type alias, which C+ does not have.
+using Id = long;
+// error: C+ has no type aliases
+// error: write the type itself, `long`, wherever `Id` is used
+int main() { return 0; }
