@@ -116,7 +116,7 @@ void newOnAClass() {
 }
 void makeShared() {
     Node n = make_shared<Node>();
-    // error: write `Node(...)`. A class variable is already a counted reference
+    // error: write `Node(...)`: a class variable is already a counted reference
 }
 void textInParentheses() {
     string s("a");

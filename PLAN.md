@@ -367,7 +367,7 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
 - `size()` returns `long`, since there are no unsigned types.
 - An index out of range, and `pop_back`, `front` or `back` on an empty vector, stop the
   program with the file and line.
-- `front()` and `back()` give copies, as there are no references yet. Changing what they give, `v.back().x = 1` or a method that
+- `front()` and `back()` give copies, as there are no references yet. Changing what they give or a field of it, `v.back().x = 1`, `v.back().p.set()` or a method that
   changes a struct, is an error, since in C++ it would change the element, and here it would quietly do nothing. Decided 2026-11-07.
 - A range-based `for` loops over the vector as it was when the loop started, so changing
   the vector in the body is safe. `for (auto& x : v)` waits for references.
@@ -516,6 +516,7 @@ Decided 2026-11-05.
 - Any type with `==` can be a key, if that `==` looks at what can be hashed, with no hash to write. A hash function of
   your own waits for function overloading.
 - `m.at(k)` and `m.get(k)` give copies too, so changing what they give is an error for the same reason, and `m[k]` is the place.
+- A help text gives code only for a shape it can be sure of: a place that means the same each time it is written, with a key that is a literal or a name. Anything else, such as `v.back().items.back()` or `m.get(keyOf())`, gets a sentence and no code, since code that compiles and changes only a copy is worse than none. `tests/advice_grid.py` follows the code it gives, and checks that what was meant to change did.
 - Strings hash with SipHash-1-3 and a seed chosen at each start, as HTTP brings input from anyone. Since the order does not
   come from the hash, the seed cannot change what a program does.
 - It is written in C+, on top of `vector`, in `compiler/Builtins.h`, and only added to programs that use it. Copies,

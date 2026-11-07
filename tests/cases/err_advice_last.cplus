@@ -11,18 +11,18 @@ void nested() {
 void fromAMap() {
     hashmap<string, P> m;
     m.get("a")?.set();
-    // error: write `if (m.contains("a")) m["a"].set(...);`, which changes it in the map
+    // error: write `if (m.contains("a")) m["a"].set();`, which changes it in the map
 }
 void fromBack() {
     vector<P?> w;
     w.back()?.set();
-    // error: `if (auto v = w[w.size() - 1]) { v.set(...); w[w.size() - 1] = v; }`
+    // error: `if (auto v = w[w.size() - 1]) { v.set(); w[w.size() - 1] = v; }`
 }
 struct WithV { P? o; };
 void namedV() {
     WithV v;
     v.o?.set();
-    // error: `if (auto inner = v.o) { inner.set(...); v.o = inner; }`
+    // error: `if (auto inner = v.o) { inner.set(); v.o = inner; }`
     vector<P?> w;
     w[0]?.set();
 }
@@ -62,7 +62,7 @@ void newUnique() {
 void keyToEscape() {
     hashmap<string, int> q;
     q.at("a\"b") = 1;
-    // error: `at()` gives a copy. Change it in place: `q[key] = ...`
+    // error: this value is a temporary copy, so changing it would have no effect
 }
 void floatRemainder() {
     float x = 1;

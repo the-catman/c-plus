@@ -792,9 +792,11 @@ SPEC_REJECTED = {
     "Node n = a;": 'local<Node> a = local<Node>("x"); Node n = a;', "local<Node> a = n;": 'Node n = Node("x"); local<Node> a = n;', "weak<Node>?": "weak<Node>? w = null;",
     "w == null": 'weak<Node> w; println("{}", w == null);', "largest(1, 2.5)": "auto x = largest(1, 2.5);", "Stack(1)": "auto s = Stack(1);", "spawn f(x).wait()": "int x = 1; spawn given(x).wait();",
     "v.back().x = 1": "vector<Point> v = {Point{}}; v.back().x = 1;", "v.back().set()": "vector<Settable> v = {Settable{}}; v.back().set();",
+    "v.back().p.set()": "vector<HoldsSettable> v = {HoldsSettable{}}; v.back().p.set();",
     "for (auto [k, v] : m)": "hashmap<string, int> m; for (auto [k, v] : m) {}", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
 }
 SPEC_REJECT_PRELUDE = """struct Settable { int x = 0; void set() { x = 1; } };
+struct HoldsSettable { Settable p; };
 class Base { public: int id = 0; };
 class LeftOf : public Base {};
 class RightOf : public Base {};
@@ -1020,6 +1022,18 @@ def check_json_of_direct(cplus, workdir):
     return True
 
 
+def check_advice_grid(cplus, workdir):
+    """What the errors about copies say to write must compile, and must change what was meant to change."""
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    import advice_grid
+    grid = workdir / "grid"
+    grid.mkdir(exist_ok=True)
+    count, found = advice_grid.problems(cplus, grid)
+    for p in found:
+        print(f"FAIL advice grid: {p}")
+    return not found
+
+
 def check_source_rules(root=ROOT):
     """What the review of the code found twice over, and which no behavior would show: one of a thing, in one place."""
     def text(name):
@@ -1238,6 +1252,7 @@ def main():
             ok = check_threads_linked(cplus, pathlib.Path(tmp)) and ok
             ok = check_reflect_alone(cplus, pathlib.Path(tmp)) and ok
             ok = check_json_of_direct(cplus, pathlib.Path(tmp)) and ok
+            ok = check_advice_grid(cplus, pathlib.Path(tmp)) and ok
             ok = check_source_rules() and ok
             ok = check_command_line(cplus, pathlib.Path(tmp)) and ok
             ok = check_spec_code(cplus, pathlib.Path(tmp)) and ok

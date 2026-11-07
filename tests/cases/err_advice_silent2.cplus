@@ -9,12 +9,12 @@ void optionalNamedV() {
 void nestedOptional() {
     P? o = P{};
     o?.set();
-    // error: `if (auto v = o) { v.set(...); o = v; }`
+    // error: `if (auto v = o) { v.set(); o = v; }`
 }
 P? findIt() { return null; }
 void notAVariable() {
     findIt()?.set();
-    // error: store it in a variable first, as this only exists as a copy: `auto opt = findIt();`. Then unwrap the optional, change the copy and store it back: `if (auto v = opt) { v.set(...); opt = v; }`
+    // error: store it in a variable first, as this only exists as a copy: `auto opt = findIt();`. Then unwrap the optional, change the copy and store it back: `if (auto v = opt) { v.set(); opt = v; }`
 }
 void copies() {
     string s = "a";
@@ -32,10 +32,10 @@ void copies() {
     vector<P> v = {P{}};
     v.back().set();
     // error: 'set' may change the struct, but 'back()' gives a copy of it
-    // error: `back()` gives a copy. Change it in place: `v[v.size() - 1].set(...)`
+    // error: `back()` gives a copy. Change it in place: `v[v.size() - 1].set()`
     vector<int>? w = vector<int>{1};
     w[0] = 1;
-    // error: To change an element, unwrap it, change the copy and store it back: `if (auto v = w) { v[i] = ...; w = v; }`
+    // error: To change an element, unwrap it, change the copy and store it back: `if (auto inner = w) { inner[i] = ...; w = inner; }`
 }
 void strings() {
     string s = "hello";

@@ -76,11 +76,11 @@ int main() {
 // error: expected 'int?' to initialize 'd', but this is 'long?'
 // error: an optional only converts to an optional of the same type. Unwrap it first: `if (auto v = wide) ...` gives the long inside
 // error: 'vector<int>?' may be null, so it cannot be indexed directly
-// error: unwrap it first: `if (auto v = list) ... v[i]`
+// error: unwrap it first: `if (auto inner = list) ... inner[i]`
 // error: 'User?' may be null, so '.name' cannot be used on it directly
 // error: write `u?.name`, which is null when u is, or unwrap it: `if (auto v = u) ... v.name`
 // error: 'User?' may be null, so 'greet' cannot be called on it directly
-// error: write `u?.greet(...)`, which does nothing when u is null, or unwrap it: `if (auto v = u) v.greet(...);`
+// error: write `u?.greet()`, which does nothing when u is null, or unwrap it: `if (auto inner = u) inner.greet();`
 // error: 'int?' may be null, so 'reset' cannot be called on it directly
 // error: value() takes no arguments but 1 was given
 // error: value_or() takes one argument but 0 were given
@@ -89,7 +89,7 @@ int main() {
 // error: a value reached through '?.' cannot be incremented
 // error: '?.' only reads. Unwrap it, change the value and store it back: `if (auto u = opt) { u.field = ...; opt = u; }`
 // error: 'move' may change the struct, but '?.' works on a copy of it
-// error: unwrap the optional, change the copy and store it back: `if (auto v = p) { v.move(...); p = v; }`
+// error: unwrap the optional, change the copy and store it back: `if (auto inner = p) { inner.move(); p = inner; }`
 // error: push_back() changes the vector, but '?.' works on a copy of it
 // error: clear() changes the string, but '?.' works on a copy of it
 // error: it may be null; unwrap it first: `if (auto v = list) for (auto x : v) ...`

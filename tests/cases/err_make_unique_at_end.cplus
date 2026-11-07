@@ -1,0 +1,4 @@
+// A file that ends before the type does, which must not print "end of file" as part of a type.
+int main() {
+    auto a = make_unique<Thing
+// error: write `unique<T>(...)`, which builds a new T

@@ -1,6 +1,7 @@
 // Where what a method gave a copy of really is, so that following the help changes that place, and not a copy nobody reads.
 struct S {
     int x = 0;
+    vector<int> items;
     void set() { x = 1; }
 };
 struct Holder { vector<int> items; };
@@ -10,6 +11,7 @@ class N {
 public:
     void go() { }
 };
+vector<int>? makeMaybe() { return null; }
 hashmap<string, S> makeMap() {
     hashmap<string, S> m;
     return m;
@@ -23,9 +25,9 @@ void inTheMap() {
     m.get("a")[0] = 5;
     // error: To change an element, write `if (m.contains("a")) m["a"][i] = ...;`, which changes it in the map
     ms.get("a").set();
-    // error: To change it, write `if (ms.contains("a")) ms["a"].set(...);`, which changes it in the map
+    // error: To change it, write `if (ms.contains("a")) ms["a"].set();`, which changes it in the map
     ms.get("a")?.set();
-    // error: write `if (ms.contains("a")) ms["a"].set(...);`, which changes it in the map, or mark 'set' `const`
+    // error: write `if (ms.contains("a")) ms["a"].set();`, which changes it in the map, or mark 'set' `const`
 }
 void inTheVector() {
     vector<vector<int>?> vs;
@@ -40,7 +42,7 @@ void anOptionalInTheMap() {
     m.at("a").push_back(2);
     // error: unwrap it, change the copy and store it back: `if (auto v = m["a"]) { v.push_back(...); m["a"] = v; }`
     ms.at("k")?.set();
-    // error: unwrap the optional, change the copy and store it back: `if (auto v = ms["k"]) { v.set(...); ms["k"] = v; }`
+    // error: unwrap the optional, change the copy and store it back: `if (auto v = ms["k"]) { v.set(); ms["k"] = v; }`, which adds the key if it is missing
 }
 void aTemporary() {
     makeMap().at("a").set();
@@ -56,25 +58,108 @@ void namesThatMustKeepTheirMeaning() {
     vector<int>? o;
     int v = 2;
     o.push_back(v);
-    // error: `if (auto inner = o) { inner.push_back(...); o = inner; }`
+    // error: `if (auto item = o) { item.push_back(...); o = item; }`
 }
 void whatCannotBeCopied() {
     unique<N>? o;
     o.go();
-    // error: write `o?.go(...)`, which does nothing when o is null, or unwrap it: `if (auto v = o) v.go(...);`
+    // error: write `o?.go()`, which does nothing when o is null
     vector<unique<N>>? vs;
     vs.clear();
-    // error: to change it, move it out and back: `auto v = move(vs).value(); v.clear(...); vs = move(v);`
+    // error: To change it, move it out and back: `auto v = move(vs).value(); v.clear(); vs = move(v);`
     vs[0].go();
-    // error: to reach an element, move it out and back: `auto v = move(vs).value(); v[i]...; vs = move(v);`
+    // error: To reach an element, move it out and back: `auto v = move(vs).value(); v[i] = ...; vs = move(v);`
 }
 void constMaps() {
     const hashmap<string, vector<int>> m = {};
     m.at("a").push_back(1);
-    // error: 'm' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change `x`
+    // error: 'm' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change that
     const hashmap<string, S> ms = {};
     ms.at("a").x = 1;
-    // error: 'ms' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change `x`
+    // error: 'ms' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change that
+}
+
+struct Plain {
+    int y = 0;
+    S p;
+};
+class Counter {
+public:
+    int n = 0;
+    int next() { n = n + 1; return n; }
+};
+string keyOf() { return "a"; }
+void throughACopy() {
+    vector<Plain> ps = {Plain{}};
+    ps.back().p.set();
+    // error: 'set' may change the struct, but 'back()' gives a copy of it
+    // error: `back()` gives a copy. Change it in place: `ps[ps.size() - 1].p.set()`
+    ps.back().p.x = 9;
+    // error: `back()` gives a copy. Change it in place: `ps[ps.size() - 1].p.x = ...`
+    vector<Holder> hs;
+    hs.back().items.push_back(1);
+    // error: `back()` gives a copy. Change it in place: `hs[hs.size() - 1].items.push_back(...)`
+}
+void partsThatRunEachTimeTheyAreWritten() {
+    vector<vector<S>> vv;
+    Counter c = Counter();
+    vv[c.next()].back().x = 5;
+    // error: this value is a temporary copy, so changing it would have no effect. Store it in a variable first
+    hashmap<string, S> m;
+    m.get(keyOf())?.set();
+    // error: reach it with `[ ]`, and not with `back()`, `at()` or `get()`, which give copies, then unwrap it, change the copy and store it back there
+}
+void keysOfOtherKinds() {
+    hashmap<int, S> byNumber;
+    hashmap<char, S> byChar;
+    byNumber.get(1)?.set();
+    // error: write `if (byNumber.contains(1)) byNumber[1].set();`, which changes it in the map
+    byChar.get('a')?.set();
+    // error: write `if (byChar.contains('a')) byChar['a'].set();`, which changes it in the map
+    hashmap<string, S> m;
+    m.at("a\rb").x = 1;
+    // error: this value is a temporary copy, so changing it would have no effect
+    m.at("b").x = 1;
+    // error: `at()` gives a copy. Change it in place: `m["b"].x = ...`, which adds the key if it is missing
+}
+void anOptionalInGet() {
+    hashmap<string, S?> m;
+    m.get("a")?.items.clear();
+    // error: `if (auto v = m["a"]) { v.items.clear(); m["a"] = v; }`, which adds the key if it is missing
+}
+void nameOfAMapThroughAt() {
+    hashmap<string, N?> nm;
+    hashmap<string, vector<int>?> vm;
+    nm.at("a").go();
+    // error: write `nm.at("a")?.go()`, which does nothing when nm.at("a") is null
+    vm.at("a")[0] = 1;
+    // error: unwrap it first: `if (auto v = vm.at("a")) ... v[i]`
+}
+void namesAlreadyTaken() {
+    int opt = 1;
+    makeMaybe().push_back(5);
+    // error: `auto copy = makeMaybe();`. Then unwrap it, change the copy and store it back: `if (auto v = copy) { v.push_back(...); copy = v; }`
+    const vector<S> x;
+    x.back().x = 5;
+    // error: 'x' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto copy = ...;`, and change that
+}
+void constThroughOptionals() {
+    const S? o = S{};
+    o?.items.clear();
+    // error: 'o' is const, so what is in it cannot change
+    const hashmap<string, vector<int>> m = {};
+    m.get("a").push_back(1);
+    // error: 'm' is const, so what is in it cannot change
+}
+struct WithMethod {
+    S? held;
+    void reader() const { held?.items.clear(); }
+    // error: const method 'reader' cannot change fields. Remove `const` from it, or change a copy: `auto x = ...;`, and change that
+};
+vector<unique<N>>? makeUniques() { return null; }
+void temporariesThatCannotBeCopied() {
+    makeUniques().clear();
+    // error: To change it, store it in a variable first, as this only exists as a copy: `auto opt = makeUniques();`. Then move it out and back: `auto v = move(opt).value(); v.clear(); opt = move(v);`
 }
 
 int main() { return 0; }

@@ -61,6 +61,7 @@ private:
     std::string operatorHelp(size_t ahead = 0) const;
     [[noreturn]] void failUnknownGeneric(size_t at);
     bool isValueArgument(const Token& k);
+    [[noreturn]] void failMakePointer(const Token& t);
     std::string writtenBetweenAngles(size_t at, size_t& end) const;
     Loc afterPrev() const;
     [[noreturn]] void fail(Loc loc, const std::string& message, const std::string& help, const std::string& spec);

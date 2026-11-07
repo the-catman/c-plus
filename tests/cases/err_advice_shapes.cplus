@@ -45,7 +45,7 @@ void wholeTypes() {
     optional<const int> c = null;
     // error: write `const int?`, which holds a value of that type, or `null`
     auto d = make_shared<P>();
-    // error: write `P(...)`. A class variable is already a counted reference. A struct is a value, which is copied, so to share one make it a class
+    // error: write `P(...)`. A struct is a value, which is copied, so to share one make it a class
     auto e = make_shared<vector<int>>();
     // error: write `vector<int>(...)`. It is a value, which is copied, so to share one hold it in a class
     auto f = make_shared<St<int>>();
@@ -55,6 +55,33 @@ void wholeTypes() {
     Bar<X> h;
     // error: define it first: `template<int N> class Bar { ... };`
 }
+void nestedAngles() {
+    Foo<vector<int>, 3> a;
+    // error: define it first: `template<typename T, int N2> class Foo { ... };`
+    Foo<vector<int>> b;
+    int c = 1, d = 2;
+    // error: define it first: `template<typename T> class Foo { ... };`
+    optional<std::string> e;
+    // error: write `string?`, which holds a value of that type, or `null`
+    optional<const void*> f;
+    // error: write `const void*`, which can already be null
+    auto g = make_shared<std::string>();
+    // error: write the value itself, as in `int(3)`: a value needs no pointer
+    auto h = make_unique<int>();
+    // error: write the value itself, as in `int(3)`: a value needs no pointer
+    auto i = make_unique<P>();
+    // error: write `P(...)`. A struct is a value, which is copied, so to have one owner make it a class
+    auto j = make_unique<vector<int>>();
+    // error: write `vector<int>(...)`. It is a value, which is copied, so to share one hold it in a class
+    auto k = make_unique<int[]>(3);
+    // error: write `vector<int>(count, value)`: a vector is a value that needs no pointer
+}
+void moreArrays() {
+    char grid[2][3] = {{'a', 'b', 'c'}, {'d', 'e', 'f'}};
+    // error: write an array of arrays: `array<array<char, 3>, 2> grid`
+}
+void sizesThatAreVariables(int n, int m, int a[n][m]) { }
+// error: write `vector<vector<int>> a`, which is a copy. To change the caller's, write `vector<vector<int>>* a`, called with `&x`, and use `(*a)[0][0]`
 void json_() {
     AddressOnly s = {};
     println("{}", json::stringify(s));

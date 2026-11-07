@@ -1582,25 +1582,60 @@ bool Parser::isValueArgument(const Token& k) {
     return k.kind == Tok::Ident && !isTypeName(k) && !classTemplate(k.text) && constHooks().constant(k.text);
 }
 
-// The tokens from `at` as they would be written, up to the `>` of the `<` before them. `end` is left at that `>`.
+// The tokens from `at` as they would be written, up to the `>` of the `<` before them, without any `std::`. `end` is left at that `>`.
+// Empty when there is no such `>`.
 std::string Parser::writtenBetweenAngles(size_t at, size_t& end) const {
     std::string out;
     int depth = 1;
     for (end = at; end < toks_.size() && end < at + 64; ++end) {
         const Token& k = toks_[end];
+        if (k.kind == Tok::Eof || k.kind == Tok::Semi || k.kind == Tok::LBrace || k.kind == Tok::RBrace) return "";
+        if (k.kind == Tok::Ident && k.text == "std" && end + 1 < toks_.size() && toks_[end + 1].kind == Tok::ColonColon) {
+            ++end;
+            continue;
+        }
         if (k.kind == Tok::Less) ++depth;
-        else if (k.kind == Tok::Greater && --depth == 0) break;
+        else if (k.kind == Tok::Greater && --depth == 0) return out;
         else if (k.kind == Tok::Shr && (depth -= 2) <= 0) {
             if (depth == 0) out += ">";  // the first of the two closes what is inside
-            break;
+            return depth == 0 ? out : "";
         }
         const std::string text = k.text.empty() ? tokSpelling(k.kind) : k.text;
-        const bool isWord = k.kind == Tok::Ident || k.kind == Tok::KwConst || k.kind == Tok::KwInt || k.kind == Tok::KwLong || k.kind == Tok::KwString || k.kind == Tok::KwBool || k.kind == Tok::KwChar || k.kind == Tok::KwDouble || k.kind == Tok::KwFloat;
+        const bool isWord = !text.empty() && (std::isalnum((unsigned char)text[0]) || text[0] == '_');
         if (isWord && !out.empty() && (std::isalnum((unsigned char)out.back()) || out.back() == '_')) out += " ";
         out += text;
         if (k.kind == Tok::Comma) out += " ";
     }
-    return out;
+    return "";
+}
+
+// `make_unique<T>()` or `make_shared<T>()`, at the `<`. What takes its place depends on what T is.
+void Parser::failMakePointer(const Token& t) {
+    const bool wantsUnique = t.text == "make_unique";
+    const size_t at = peek(1).kind == Tok::Ident && peek(1).text == "std" && peek(2).kind == Tok::ColonColon ? 3 : 1;
+    const Token& first = peek(at);
+    size_t closing = 0;
+    std::string whole = writtenBetweenAngles(pos_ + 1, closing);
+    if (whole.empty()) whole = "T";
+    const char* anchor = wantsUnique ? spec::Unique : spec::Classes;
+    const std::string message = "C+ has no " + t.text;
+    if (whole.size() > 2 && whole.compare(whole.size() - 2, 2, "[]") == 0)
+        fail(t.loc, message, "write `vector<" + whole.substr(0, whole.size() - 2) + ">(count, value)`: a vector is a value that needs no pointer", anchor);
+    if (first.kind != Tok::Ident)
+        fail(t.loc, message, "write the value itself, as in `int(3)`: a value needs no pointer", anchor);
+    const bool isGeneric = peek(at + 1).kind == Tok::Less;
+    StructDecl* named = !isGeneric && isTypeName(first) ? prog_->findStruct(first.text) : nullptr;
+    const TemplateDecl* tmpl = isGeneric ? classTemplate(first.text) : nullptr;
+    const bool isLibraryValue = isGeneric && !tmpl;  // `vector<int>`, `hashmap<string, int>`
+    const std::string asValue = "write `" + whole + "(...)`. It is a value, which is copied, so to share one hold it in a class";
+    if (isLibraryValue) fail(t.loc, message, asValue, anchor);
+    if (named && !named->isClass)
+        fail(t.loc, message, "write `" + whole + "(...)`. A struct is a value, which is copied, so to " + (wantsUnique ? "have one owner" : "share one") + " make it a class", anchor);
+    if (wantsUnique) fail(t.loc, message, "write `unique<" + whole + ">(...)`, which builds a new " + whole, anchor);
+    fail(t.loc, message,
+         named ? "write `" + whole + "(...)`: a class variable is already a counted reference"
+               : "write `" + whole + "(...)`. A class variable is already a counted reference. A struct is a value, which is copied, so to share one make it a class",
+         anchor);
 }
 
 // `Foo<int>`, at the position of its name, where Foo is nothing that has been defined.
@@ -1611,11 +1646,11 @@ void Parser::failUnknownGeneric(size_t at) {
     int count = 0, depth = 0;
     size_t i = at + 1;
     for (; i < toks_.size() && i < at + 64; ++i) {
-        if (toks_[i].kind == Tok::Less && ++depth == 1) {
-            params = isValueArgument(toks_[i + 1]) ? "int N" : "typename T";
-            count = 1;
-        } else if (toks_[i].kind == Tok::Less) {
-            ++depth;
+        if (toks_[i].kind == Tok::Less) {
+            if (++depth == 1) {
+                params = isValueArgument(toks_[i + 1]) ? "int N" : "typename T";
+                count = 1;
+            }
         } else if (toks_[i].kind == Tok::Greater && --depth == 0) {
             break;
         } else if (toks_[i].kind == Tok::Shr && (depth -= 2) <= 0) {
@@ -1627,7 +1662,8 @@ void Parser::failUnknownGeneric(size_t at) {
     }
     const bool built = i + 1 < toks_.size() && toks_[i + 1].kind == Tok::LParen;
     size_t closing = 0;
-    const std::string inside = writtenBetweenAngles(at + 2, closing);
+    std::string inside = writtenBetweenAngles(at + 2, closing);
+    if (inside.empty()) inside = "T";
     const bool isPointer = !inside.empty() && inside.back() == '*';
     fail(name.loc, "unknown type '" + n + "'",
          n == "optional" && isPointer ? "write `" + inside + "`, which can already be null"
@@ -2026,8 +2062,13 @@ void Parser::failCStyleArray(const Type* elem, const std::string& name, ArrayPla
     }
     const std::string note = anyMissing ? ", with N the number of rows" : "";
     std::string help;
-    if (sizes.size() > 1 && elem->is(Type::Kind::Char) && peek(past).kind == Tok::Assign && peek(past + 1).kind == Tok::LBrace)
+    bool anyVariable = false;
+    for (size_t at = 0; at < past; ++at)
+        anyVariable = anyVariable || (peek(at).kind == Tok::Ident && !constHooks().constant(peek(at).text));
+    if (sizes.size() > 1 && elem->is(Type::Kind::Char) && peek(past).kind == Tok::Assign && peek(past + 1).kind == Tok::LBrace && peek(past + 2).kind == Tok::StringLit)
         help = "write `array<string, " + sizes[0] + "> " + name + " = {...};`" + note;
+    else if (place == ArrayPlace::Parameter && sizes.size() > 1 && anyVariable)
+        help = "write `" + nestedVectors + " " + name + "`, which is a copy. To change the caller's, write `" + nestedVectors + "* " + name + "`, called with `&x`, and use `(*" + name + ")[0][0]`";
     else if (place == ArrayPlace::Parameter && sizes.size() > 1)
         help = "write `" + nested + " " + name + "`, or `" + nestedVectors + " " + name + "`, which are copies. To change the caller's, write `" + nested + "* " + name + "`, called with `&x`, and use `(*" + name + ")[0][0]`" + note;
     else if (place != ArrayPlace::Field && sizes.size() > 1 && anyName)
@@ -3441,22 +3482,7 @@ ExprPtr Parser::parsePrimary() {
                 return call;
             }
             if (isTypeName(t) && match(Tok::LBrace)) return parseInitList(t.loc, &prog_->findStruct(t.text)->type);
-            if (t.text == "make_unique" && check(Tok::Less)) {
-                size_t closing = 0;
-                const std::string whole = writtenBetweenAngles(pos_ + 1, closing);
-                fail(t.loc, "C+ has no make_unique", "write `unique<" + whole + ">(...)`, which builds a new " + whole, spec::Unique);
-            }
-            if (t.text == "make_shared" && check(Tok::Less))
-            {
-                size_t closing = 0;
-                const std::string whole = writtenBetweenAngles(pos_ + 1, closing);
-                fail(t.loc, "C+ has no make_shared",
-                     peek(1).kind == Tok::Ident && peek(2).kind == Tok::Less && classTemplate(peek(1).text) == nullptr
-                         ? "write `" + whole + "(...)`. It is a value, which is copied, so to share one hold it in a class"
-                     : peek(1).kind == Tok::Ident ? "write `" + whole + "(...)`. A class variable is already a counted reference. A struct is a value, which is copied, so to share one make it a class"
-                                                : std::string("write the value itself, as in `int(3)`: a value needs no pointer"),
-                     spec::Classes);
-            }
+            if ((t.text == "make_unique" || t.text == "make_shared") && check(Tok::Less)) failMakePointer(t);
             // With a name that is no type, what can only be this goes on, so that the error can say so.
             if ((t.text == "unique" || t.text == "local") && check(Tok::Less) &&
                 (isTypeAt(1) || (peek(1).kind == Tok::Ident && peek(2).kind == Tok::Greater && peek(3).kind == Tok::LParen))) {  // `unique<Node>(args)`

@@ -129,6 +129,10 @@ private:
     void checkCanFail(const FuncDecl& callee, Loc loc, const Expr* receiver = nullptr);
     std::string whereAnErrorCanGo() const;
     std::string copyHelp(const Expr& target, const std::string& change);
+    std::string freshName(const std::string& avoid, std::initializer_list<const char*> names = {"v", "inner", "item", "held", "unwrapped"});
+    std::string constHolderHelp(const Expr& e);
+    std::string changeForm(const Expr& base, const std::string& change, const std::string& opening, const std::string& how);
+    std::string storeItBack(const Expr& recv, const std::string& method, bool hasArguments);
     const Type* checkSpawn(SpawnExpr& s, Flow& flow);
     const Expr* spawned_ = nullptr;  // the call `spawn` is on, whose error goes in the task
     const Type* checkExpr(Expr& e, Flow& flow);
@@ -195,7 +199,7 @@ private:
     bool checkAssignable(Expr& target, Flow& flow, const char* action, const VarDecl*& var, std::string& path);
     // Reports an error when the resolved place `target` cannot be changed: it is const,
     // a field of `this` in a const method, or part of a temporary value.
-    bool checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path);
+    bool checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path, const std::string& change = " = ...");
     const VarDecl* rootVariable(const Expr& root);
     void reportUnknownName(const NameExpr& n);
 
