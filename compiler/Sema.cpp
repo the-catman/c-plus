@@ -977,6 +977,11 @@ void Sema::checkMembers(StructDecl& sd) {
     std::unordered_map<std::string, FuncDecl*> seen;
     for (auto& m : sd.methods) {
         if (m->role != FuncDecl::Role::Method) continue;
+        if (m->name == sd.name || m->name == sd.templateName) {
+            diags_.error(m->nameLoc, q(m->name) + " is the name of its type, which only a constructor can have",
+                         "for a constructor, leave out the return type: `" + m->name + "() { ... }`. For a method, give it another name", spec::Classes);
+            continue;
+        }
         if (int f = sd.fieldIndex(m->name); f >= 0) {
             diags_.error(m->nameLoc, q(sd.name) + " already has a field named " + q(m->name),
                          "rename one of them: a method and a field cannot share a name", spec::Methods);

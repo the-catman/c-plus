@@ -152,6 +152,8 @@ static int build(const Options& opts, const std::string& exePath) {
     if (!codegen.writeObjectFile(objPath, error)) {
         toolError(error, opts.command == "run" ? "set the environment variable TMPDIR to a folder that can be written to"
                                                : "check that the folder of the output exists and can be written to, or choose another with -o");
+        std::error_code ignored;
+        fs::remove(objPath, ignored);  // what there is of it is of no use
         return 1;
     }
     const char* linkerForTests = std::getenv("CPLUS_LINKER_FOR_TESTS");

@@ -61,6 +61,8 @@ import json
 import os
 import pathlib
 import re
+import resource
+import signal
 import subprocess
 import sys
 import tempfile
@@ -930,6 +932,15 @@ def check_command_line(cplus, workdir):
         lacking = errors_without_help(run.stderr)
         if run.returncode != code or message not in run.stderr or lacking:
             print(f"FAIL cplus {' '.join(args)}: exit code {run.returncode}, expected {code}, and '{message}'. {lacking}\n  " + run.stderr[:300])
+            ok = False
+    # A disk with no room, which is not pretending: the system says that no file can grow.
+    def no_room():
+        resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    for args, advice in ((["build", g, "-o", str(workdir / "out")], "choose another with -o"), (["run", g], "set the environment variable TMPDIR")):
+        run = subprocess.run([cplus, *args], capture_output=True, text=True, preexec_fn=no_room)
+        if run.returncode != 1 or "cannot write" not in run.stderr or advice not in run.stderr or errors_without_help(run.stderr):
+            print(f"FAIL cplus {' '.join(args)} with no room for the object file: exit code {run.returncode}\n  " + run.stderr[:400])
             ok = False
     # What a machine without these would report, by pretending.
     c_struct = workdir / "c_struct.cplus"

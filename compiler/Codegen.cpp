@@ -4523,7 +4523,12 @@ bool Codegen::writeObjectFile(const std::string& path, std::string& error) {
         return false;
     }
     pm.run(*impl_->mod);
-    out.flush();
+    out.close();
+    if (out.has_error()) {  // a full disk, say. The stream would stop the compiler if this were left unasked
+        error = "cannot write " + path + ": " + out.error().message();
+        out.clear_error();
+        return false;
+    }
     return true;
 }
 

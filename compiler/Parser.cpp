@@ -3240,6 +3240,13 @@ ExprPtr Parser::parsePrimary() {
         case Tok::KwNull: return std::make_unique<NullLitExpr>(t.loc);
         case Tok::KwThis: return std::make_unique<ThisExpr>(t.loc);
         case Tok::LParen: {
+            size_t close = 0;
+            for (int depth = 1; depth > 0 && close < 256 && peek(close).kind != Tok::Eof; ++close) {
+                if (peek(close).kind == Tok::LParen) ++depth;
+                else if (peek(close).kind == Tok::RParen) --depth;
+            }
+            if (peek(close).kind == Tok::Assign && peek(close + 1).kind == Tok::Greater)  // `(a, b) => a + b`
+                notYet(t.loc, "lambdas", "write a function at the top level of the file, and call it by name");
             // `(char*)p` or `(const Node*)p`: a type with stars, then ')'.
             size_t i = peek().kind == Tok::KwConst ? 1 : 0;
             bool baseType = isCastType(peek(i).kind) || peek(i).kind == Tok::KwVoid || isTypeName(peek(i));
@@ -3291,6 +3298,14 @@ ExprPtr Parser::parsePrimary() {
             if (t.text == "const_cast")
                 fail(t.loc, "C+ has no const_cast", "a const variable cannot be changed; copy it into a variable that is not const",
                      spec::Casts);
+            if ((t.text == "function" || t.text == "func" || t.text == "fn") && check(Tok::LParen)) {  // `function(a) { ... }`
+                size_t close = 1;
+                for (int depth = 1; depth > 0 && close < 256 && peek(close).kind != Tok::Eof; ++close) {
+                    if (peek(close).kind == Tok::LParen) ++depth;
+                    else if (peek(close).kind == Tok::RParen) --depth;
+                }
+                if (peek(close).kind == Tok::LBrace) notYet(t.loc, "lambdas", "write a function at the top level of the file, and call it by name");
+            }
             if (check(Tok::ColonColon)) {
                 if (t.text == "std") failStd(t.loc, peek(1));
                 if ((isTypeName(t) || classTemplate(t.text)) && peek(1).kind == Tok::Ident) {  // `Animal::speak()`: a member of `this`

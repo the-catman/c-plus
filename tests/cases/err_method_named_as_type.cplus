@@ -1,0 +1,23 @@
+// In C++ a method cannot have the name of its type, which only a constructor can. With a return type, it would be easy to take for one.
+class U {
+public:
+    int v = 0;
+    int U() { return 1; }
+    // error: 'U' is the name of its type, which only a constructor can have
+    // error: for a constructor, leave out the return type: `U() { ... }`. For a method, give it another name
+};
+struct S {
+    int v = 0;
+    void S() {}
+    // error: 'S' is the name of its type, which only a constructor can have
+};
+template<typename T> class Box {
+public:
+    T v;
+    T Box() { return v; }
+};
+void uses() {
+    Box<int> b = Box<int>{1};
+    // error: 'Box' is the name of its type, which only a constructor can have
+}
+int main() { return 0; }

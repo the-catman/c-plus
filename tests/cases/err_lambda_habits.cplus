@@ -1,0 +1,20 @@
+// Functions written where a value goes, as other languages have them.
+void arrowWithTwo() {
+    auto f = (a, b) => a + b;
+    // error: this compiler does not support lambdas yet
+}
+void arrowWithOne() {
+    int a = 1;
+    auto f = a => a + 1;
+    // error: this compiler does not support lambdas yet
+}
+void javaScript() {
+    auto f = function(a) { return a; };
+    // error: this compiler does not support lambdas yet
+    // error: write a function at the top level of the file, and call it by name
+}
+void cPlusPlus() {
+    auto f = [](int x) { return x; };
+    // error: this compiler does not support lambdas yet
+}
+int main() { return 0; }
