@@ -32,7 +32,7 @@ int main() {
 // error: list the elements after '=': `array<int, 3> b6 = {...};`
 // error: write `array<int, 3> values`
 // error: a fixed-size array is written with its size in the type: `array<int, 5> values`
-// error: For a size known only while the program runs, use `vector<int> values`
+// error: For a size known only while the program runs, write `auto values = vector<int>(n);`
 // error: write `array<int, 4> cells`
 // error: array needs an element type and a size
 // error: write e.g. `array<int, 5>`
@@ -48,8 +48,8 @@ int main() {
 // error: For rows and columns, use an array of arrays: `array<array<int, 3>, 2>`
 // error: C+ has no C-style arrays
 // error: write `array<int, 5> c1`
-// error: a fixed-size array is written with its size in the type: `array<int, 5> c2`
-// error: a fixed-size array is written with its size in the type: `array<int, 5> c3`
+// error: write `vector<int> c2 = {...};`, or `array<int, N> c2 = {...};`, with N the number of elements
+// error: write `array<int, n> c3` if n is a constant, or `auto c3 = vector<int>(n);` if it is only known while the program runs
 // error: expected '{' or '(' after 'array<int, 3>'
 // error: write `array<int, 3>{1, 2, 3}` to list the elements, or `array<int, 3>()` for default values
 // error: 'array<int, 3>(...)' takes no values

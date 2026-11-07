@@ -28,5 +28,5 @@ int main() {
 // error: To refer to another variable, use a pointer: `int* p = &x;`
 // error: 'const' cannot be used here
 // error: unknown type 'FILE'
-// error: if 'FILE' is a C type used through pointers, declare it first, at the top level: `extern "C" struct FILE;`
+// error: check the spelling, or define it. If 'FILE' is a C type used through pointers, declare it first, at the top level: `extern "C" struct FILE;`
 // error: 'fixed' is const and cannot be assigned to

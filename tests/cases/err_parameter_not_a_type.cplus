@@ -1,4 +1,4 @@
 void f(1) {}
 int main() { return 0; }
 // error: expected a parameter type, found
-// error: parameters look like `int count`
+// error: write a type and a name, like `int count`

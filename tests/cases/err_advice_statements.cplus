@@ -1,0 +1,142 @@
+// Advice that is about what was actually written, inside a function. advice_followed has the forms it gives.
+void commaInFor() {
+    int i = 0;
+    int j = 0;
+    for (i = 0, j = 1; i < 3; i++) {}
+    // error: assign one before the loop: `i = 0; for (j = 1; ...)`, or declare both: `for (int i = 0, j = 1; ...)`
+}
+int commaInReturn() {
+    return 1, 2;
+    // error: a function returns one value. To return several, return a struct: `return {1, 2};`
+}
+void cStyle() {
+    int a[2][3];
+    // error: write an array of arrays: `array<array<int, 3>, 2> a`
+}
+void cText() {
+    char s[] = "hello";
+    // error: write `string s = ...;`, as text is a string
+}
+void cList() {
+    int a[] = {1, 2, 3};
+    // error: write `vector<int> a = {...};`, or `array<int, N> a = {...};`, with N the number of elements
+}
+void cSized() {
+    int n = 3;
+    int a[n];
+    // error: write `array<int, n> a` if n is a constant, or `auto a = vector<int>(n);` if it is only known while the program runs
+}
+void declared() {
+    int** a = null, * b = null;
+    // error: declare them separately, e.g. `int** a;` and `int* b;`
+}
+class Node { public: int x = 0; };
+void refInLoop() {
+    Node n = Node();
+    vector<int> items;
+    for (auto& x : items) {}
+    // error: drop the '&': `for (auto x : items)` copies each element
+}
+void sizeOfGeneric() {
+    long s = sizeof vector<int>;
+    // error: put the whole type in parentheses, as in `sizeof(vector<int>)`
+}
+void queueOfIntegers() {
+    queue<int> q;
+    // error: use a `vector<T>` with `push_back`, and an index for the next one to take: `v[head]; head++;`
+}
+void multimapOfIntegers() {
+    multimap<int, int> q;
+    // error: use a `hashmap<K, vector<V>>`, with `m[k].push_back(v)`
+}
+void multisetOfIntegers() {
+    multiset<int> q;
+    // error: use a `hashmap<T, int>`, with `m[x]++` for how many of each
+}
+void priorityQueueOfIntegers() {
+    priority_queue<int> q;
+    // error: use a `vector<T>`, and a loop to find the largest
+}
+void listInBrackets() {
+    vector<int> v = [1, 2, 3];
+    // error: C+ writes a list in braces, as C++ does
+}
+void unknownGeneric() {
+    Foo<int> x;
+    // error: unknown type 'Foo'
+}
+void unknownGenericOfTwo() {
+    Foo<int, string> x;
+    // error: unknown type 'Foo'
+}
+void optionalOfStd() {
+    optional<int> x;
+    // error: write `int?`, which is an int or `null`
+}
+void stdOptional() {
+    std::optional<int> x;
+    // error: write `int?`, which is an int or `null`
+}
+void stdRuntimeError() {
+    throw std::runtime_error("x");
+    // error: write `Error("why")`, or derive a class from `Error`
+}
+void stdSort() {
+    std::sort(1, 2);
+    // error: write the loop: this compiler has no sorting yet, nor the other algorithms of C++
+}
+void stdUnknown() {
+    std::something(1);
+    // error: write what C+ has instead of `std::something`: `cplus explain` lists it
+}
+void withAwait() {
+    await withAwait();
+    // error: remove `await`: a call waits for its result
+}
+void callACall() {
+    int g = 1;
+    println("{}", (g)(1));
+    // error: write a function and call it by name, `f(x)`: C+ has no function values yet, so a value cannot be called
+}
+void strayElse() {
+    else {}
+    // error: an `else` comes right after the body of an `if`
+}
+void strayCase() {
+    case 1:
+    // error: this compiler does not support switch statements yet
+}
+void newOnAClass() {
+    Node* n = new Node();
+    // error: write `Node n = Node(...);`, with no `*`: the object is reference-counted and freed automatically
+}
+void makeShared() {
+    Node n = make_shared<Node>();
+    // error: write `Node(...)`: a class variable is already a counted reference
+}
+void textInParentheses() {
+    string s("a");
+    // error: write `string s = string(3, 'a');`, or `string s = "text";`
+}
+void objectInParentheses() {
+    Node n(1);
+    // error: write `Node n = Node(...);`
+}
+void structInParentheses() {
+    Point p(1, 2);
+    // error: write `Point p = {1, 2};`
+}
+void listOfText() {
+    auto v = vector<string>;
+    // error: write `vector<string>{...}` to list the elements
+}
+void fooOfModule() {
+    foo::bar(1);
+    // error: write the name without `foo::`
+}
+struct Point { int x = 0; int y = 0; };
+template<typename T> void withConstexpr() {
+    if constexpr (int x = 1) {}
+    // error: write `constexpr int x = ...;` before the `if`. For a value only known while the program runs, use a plain `if`
+}
+int main() { return 0; }

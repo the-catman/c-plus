@@ -1,0 +1,24 @@
+// What the lexer says to do, for mistakes where the obvious advice would not work.
+#pragma once
+// error: Remove this line: there are no headers to guard
+int main() {
+    int a = 09;
+    // error: 8 and 9 are not octal digits, which is what a leading 0 means in C and C++. Write 9
+    int b = 0xFF_FF;
+    // error: write `0xFF'FF`
+    float c = 0b1f;
+    // error: leave out the f, since an int converts to a float
+    string d = "\033[0m";
+    // error: C and C++ read '\033' as one byte, in octal, which C+ does not have. For that byte, write it in hex: '\x1B'
+    string e = "\u00e9";
+    // error: write the character itself, as in `"é"`: strings are UTF-8
+    string f = "one \
+two";
+    // error: a string cannot continue on the next line
+    int g = 1 $ 2;
+    // error: unexpected character '$' in source
+    // error: remove it: names use letters, digits and `_`. Text goes in double quotes
+    string h = "never closed;
+    // error: add a closing " on the same line, or use a raw string, `R"(...)"`, for text of several lines
+    return 0;
+}

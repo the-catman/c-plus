@@ -2,7 +2,7 @@
 extern "C" int errno;
 // error: write a small function in C that returns it, and declare that function
 extern "C" void takesSmall(int8_t x);
-// error: write a small wrapper in C that takes an `int`, and declare that
+// error: write `char`, one byte from 0 to 255, or `char*` for a buffer of bytes
 struct WithDestructor {
     int x = 0;
     ~WithDestructor() {}

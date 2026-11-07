@@ -1,4 +1,4 @@
 123;
 int main() { return 0; }
 // error: expected a function or an import, found
-// error: top-level code looks like
+// error: write what goes at the top of a file

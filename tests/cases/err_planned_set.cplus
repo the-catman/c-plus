@@ -3,4 +3,4 @@ int main() {
     return 0;
 }
 // error: this compiler does not support sets yet
-// error: `hashmap<int, bool>`
+// error: `hashmap<T, bool>`

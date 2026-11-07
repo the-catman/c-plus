@@ -1,0 +1,63 @@
+// What the errors tell a reader to write, which must compile and do what they say. err_advice_* has the errors.
+class Node {
+public:
+    string name = "n";
+    Node? next;
+};
+struct Pair { int a = 1; int b = 2; };
+Pair both() { return {1, 2}; }
+extern "C" long strlen(string s);
+
+void takesManyTexts(vector<string> many) {}
+
+int main() {
+    // "assign one before the loop"
+    int i = 0;
+    int j = 0;
+    i = 0; for (j = 1; i < 2; i++) j++;
+    for (int k = 0, m = 1; k < 2; k++) m++;
+    println("{} {}", i, j);
+    // expect: 2 3
+    // "To return several, return a struct"
+    println("{}", both());
+    // expect: {a: 1, b: 2}
+    // "an array of arrays"
+    array<array<int, 3>, 2> a;
+    println("{}", a.size() * a[0].size());
+    // expect: 6
+    // "as text is a string"
+    string s = "hello";
+    println("{}", strlen(s));
+    // expect: 5
+    // "or auto a = vector<int>(n)"
+    int n = 3;
+    auto many = vector<int>(n);
+    println("{}", many);
+    // expect: [0, 0, 0]
+    // "with an index for the next one to take"
+    vector<int> queue = {1, 2};
+    long head = 0;
+    println("{}", queue[head]);
+    head++;
+    println("{}", queue[head]);
+    // expect: 1
+    // expect: 2
+    // "a hashmap<K, vector<V>>", and "m[x]++"
+    hashmap<int, vector<int>> several;
+    several[1].push_back(2);
+    println("{}", several);
+    // expect: {1: [2]}
+    hashmap<int, int> counts;
+    counts[7]++;
+    counts[7]++;
+    println("{}", counts);
+    // expect: {7: 2}
+    // "a constant"
+    const auto x = 1;
+    println("{}", x);
+    // expect: 1
+    return 0;
+}
+
+const auto TOP = 1;
+const string NAME = "x";

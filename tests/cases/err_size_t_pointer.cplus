@@ -3,4 +3,4 @@ int main() {
     return 0;
 }
 // error: unknown type 'size_t'
-// error: use int (32-bit) or long (64-bit)
+// error: which has the same size

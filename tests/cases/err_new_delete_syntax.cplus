@@ -19,7 +19,7 @@ int main() {
     return 0;
 }
 // error: class objects are created without 'new'
-// error: write `User(...)`; the object is reference-counted and freed automatically
+// error: write `User n = User(...);`, with no `*`: the object is reference-counted and freed automatically
 // error: C+ has no placement new
 // error: unknown type 'Foo'
 // error: `new int(...)` takes one value

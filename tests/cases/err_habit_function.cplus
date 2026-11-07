@@ -4,4 +4,4 @@ int main() {
     return 0;
 }
 // error: C+ writes a function with its return type
-// error: write `void f() { ... }`
+// error: write `int f(int a) { ... }`

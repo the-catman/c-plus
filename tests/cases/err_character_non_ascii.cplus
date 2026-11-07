@@ -2,5 +2,5 @@ int main() {
     int é = 1;
     return 0;
 }
-// error: unexpected character a non-ASCII character in source
+// error: unexpected non-ASCII character in source
 // error: put other text inside a string

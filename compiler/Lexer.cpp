@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cfloat>
 #include <cmath>
 #include <cstdlib>
@@ -98,6 +99,8 @@ void Lexer::skipSpaceAndComments() {
                 help += " Built-ins like println, string and vector need no include; use `import name;` for modules";
             else if (directive.rfind("#define", 0) == 0)
                 help += " Use a `const` variable or a function instead of #define";
+            else
+                help += " Remove this line: there are no headers to guard. For `#if`, keep only the code you want";
             diags_.error(start, "'#' directives are not part of C+", help, spec::Preprocessor);
             while (pos_ < src_.size() && peek() != '\n') advance();
         } else {
@@ -137,9 +140,11 @@ Token Lexer::next() {
     }
 
     Loc loc = locHere();
-    std::string shown = (unsigned char)c >= 0x80 ? "a non-ASCII character" : std::string("'") + c + "'";
-    diags_.error(loc, "unexpected character " + shown + " in source",
-                 "write names and operators in ASCII, and put other text inside a string", spec::SourceFiles);
+    const bool ascii = (unsigned char)c < 0x80;
+    diags_.error(loc, ascii ? std::string("unexpected character '") + c + "' in source" : "unexpected non-ASCII character in source",
+                 ascii ? "remove it: names use letters, digits and `_`. Text goes in double quotes"
+                       : "write names and operators in ASCII, and put other text inside a string",
+                 spec::SourceFiles);
     advance();
     while (pos_ < src_.size() && ((unsigned char)peek() & 0xC0) == 0x80) advance();  // rest of a UTF-8 sequence
     return next();
@@ -323,8 +328,9 @@ Token Lexer::lexNumber() {
         size_t firstDigit = text.find_first_not_of("0'");
         std::string digitsOnly = firstDigit == std::string::npos ? "0" : text.substr(firstDigit);
         diags_.error(loc, "numbers cannot start with 0 in C+",
-                     "C and C++ silently read '" + text + "' as octal. Write 0o" + digitsOnly +
-                         " for octal, or " + digitsOnly + " for decimal",
+                     digitsOnly.find_first_of("89") != std::string::npos
+                         ? "8 and 9 are not octal digits, which is what a leading 0 means in C and C++. Write " + digitsOnly
+                         : "C and C++ silently read '" + text + "' as octal. Write 0o" + digitsOnly + " for octal, or " + digitsOnly + " for decimal",
                      spec::IntegerLiterals);
     } else if (overflow) {
         diags_.error(loc, "the number " + text + " is too large for any integer type",
@@ -347,7 +353,7 @@ Token Lexer::lexNumber() {
         loc.len = (uint32_t)(pos_ - start);
         diags_.error(loc, "C+ has no hexadecimal floating-point numbers",
                      "write the number in decimal, e.g. 1.5 or 1e-3", spec::FloatingPointTypes);
-    } else if (peek() == '_' && std::isdigit((unsigned char)peek(1))) {  // `1_000`
+    } else if (peek() == '_' && (std::isdigit((unsigned char)peek(1)) || (base == 16 && std::isxdigit((unsigned char)peek(1))))) {  // `1_000`
         while (std::isalnum((unsigned char)peek()) || peek() == '_' ||
                (peek() == '.' && std::isdigit((unsigned char)peek(1))))
             advance();
@@ -376,7 +382,8 @@ Token Lexer::lexNumber() {
                          "use a plain number, or L for a long", spec::Status);
         else if (upper == "F")
             diags_.error(suffixLoc, "a float needs a decimal point or an exponent, as in C++",
-                         "write `" + text + ".0f`, or leave out the f, since an int converts to a float",
+                         base == 10 ? "write `" + text + ".0f`, or leave out the f, since an int converts to a float"
+                                    : "leave out the f, since an int converts to a float",
                          spec::FloatingPointTypes);
         else
             diags_.error(suffixLoc, "'" + suffix + "' is not a number suffix",
@@ -392,7 +399,7 @@ Token Lexer::lexString() {
     std::string value;
     while (true) {
         if (pos_ >= src_.size() || peek() == '\n') {
-            diags_.error(loc, "this string is never closed", "add a closing \" on the same line",
+            diags_.error(loc, "this string is never closed", "add a closing \" on the same line, or use a raw string, `R\"(...)\"`, for text of several lines",
                          spec::StringLiterals);
             break;
         }
@@ -446,10 +453,19 @@ bool Lexer::lexEscape(std::string& value, const char* anchor) {
         case 'r': value += '\r'; return true;
         case '0':
             if (std::isdigit((unsigned char)peek())) {
+                // What C and C++ would read: up to three octal digits, the first being this 0.
+                int octal = 0, digits = 0;
+                std::string written = "0";
+                for (size_t at = 0; at < 2 && peek(at) >= '0' && peek(at) <= '7'; ++at, ++digits) {
+                    octal = octal * 8 + (peek(at) - '0');
+                    written += peek(at);
+                }
+                char hex[8];
+                std::snprintf(hex, sizeof hex, "%02X", octal);
                 diags_.error(escLoc, "'\\0' cannot be followed by a digit",
-                             "C and C++ read '\\012' as one byte, in octal, which C+ does not have. For that byte, "
-                             "write it in hex: '\\x0A'. For a zero byte and then digits, write '\\x00' and then the "
-                             "digits",
+                             digits ? "C and C++ read '\\" + written + "' as one byte, in octal, which C+ does not have. For that byte, write it in hex: '\\x" + hex +
+                                          "'. For a zero byte and then digits, write '\\x00' and then the digits"
+                                    : std::string("for a zero byte and then digits, write '\\x00' and then the digits"),
                              anchor);
                 return false;
             }
@@ -472,6 +488,14 @@ bool Lexer::lexEscape(std::string& value, const char* anchor) {
             value += (char)v;
             return true;
         }
+        case 'u': case 'U':
+            diags_.error(escLoc, std::string("C+ has no escape sequence '\\") + e + "'",
+                         "write the character itself, as in `\"é\"`: strings are UTF-8", anchor);
+            return false;
+        case '\0':  // what a backslash at the end of a line gives
+            diags_.error(escLoc, "a string cannot continue on the next line",
+                         "write `\"one \" \"two\"`, or a raw string, `R\"(...)\"`", anchor);
+            return false;
         default:
             diags_.error(escLoc, std::string("unknown escape sequence '\\") + e + "'",
                          "write one of the valid escapes: \\n \\t \\r \\0 \\\\ \\\" \\' and \\xHH", anchor);

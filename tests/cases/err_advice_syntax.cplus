@@ -1,0 +1,133 @@
+// Advice that is about what was actually written, and works if it is followed. advice_followed has the forms it gives.
+class A { public: int x = 0; };
+class VirtualBase : virtual public A {};
+// error: write `public A`. A diamond holds the shared base class twice
+template<typename T = int> T withDefault(T x) { return x; }
+// error: remove `= ...`, and give the arguments wherever it is used
+int defaultArgument(int a = 1) { return a; }
+// error: remove `= ...`, and write the value at each call
+extern "C" int defaultInC(int a = 1);
+// error: remove `= ...`, and write the value at each call
+extern "C" void arrayOfText(string v[]);
+// error: write `char** v`: C passes an array of text as a pointer to its first `char*`
+extern "C" void arrayOfConstText(const char* v[]);
+// error: write `char** v`: C passes an array of text as a pointer to its first `char*`
+extern "C" void bytes(uint8_t b);
+// error: write `char`, one byte from 0 to 255, or `char*` for a buffer of bytes
+extern "C" void unsignedByte(unsigned char b);
+// error: 'unsigned char' is a C type; write `char` here
+extern "C" void wide(uint16_t b);
+// error: write a small wrapper in C that takes an `int`, and declare that. A pointer to them can be a `void*`
+int32_t* pointerToInt = null;
+// error: write `int* pointerToInt`, which has the same size
+Nod* misspelled = null;
+// error: check the spelling, or define it. If 'Nod' is a C type used through pointers
+namespace other { int inside() { return 1; } }
+// error: remove the `namespace ... {` line and its closing `}`, and keep what is inside
+[[nodiscard]] int attribute() { return 1; }
+// error: remove it. The one attribute C+ has is `[[allow(new_delete)]]`
+auto topLevelAuto = 1;
+// error: this compiler does not support global variables yet
+// error: for a value that never changes, write a constant: `const auto topLevelAuto = 1;`
+int topLevelArray[5];
+// error: An array is written `array<int, 5>`
+char* topLevelText = "x";
+// error: for text that never changes, write `const string topLevelText = ...;`
+let topLevelLet = 1;
+// error: write `const auto x = 1;`: variables that change are not supported outside functions yet
+function withParameters(a, b) { }
+// error: write `int withParameters(int a) { ... }`: a return type first, `void` if none, and a type for each parameter
+int f() { return 1; };
+// error: remove this ';': the `}` of a function needs none
+template<typename T> concept NoTemplate = 1;
+// error: write `template<typename T> concept NoTemplate = requires(T a) { ... };`
+struct { int a; } unnamed;
+// error: write a name for the struct
+void takesAny(int a, ...) {}
+// error: a C+ function cannot take any number of arguments
+void throwList() throw() {}
+// error: remove it: a function that is not marked `throws` cannot fail
+void throwsTypes() throws(int) {}
+// error: `throws` takes no types
+void throwsThenConst() throws const {}
+// error: write `const` before `throws`, on a method: `int f() const throws { ... }`. A function outside a type cannot be const
+void stdParameter(std::string s) {}
+// error: built-ins need no prefix: write `string` instead of `std::string`
+void moduleParameter(json::Value v) {}
+// error: 'json::Value' is in the module 'json', which this program does not import
+void stdElement(vector<std::string> v) {}
+// error: built-ins need no prefix: write `string` instead of `std::string`
+class StdBase : public std::exception {};
+// error: write `Error("why")`, or derive a class from `Error`
+Foo<int> topLevelUnknown() { return null; }
+// error: check the spelling, or define it first: `template<typename T> class Foo { ... };`
+int const constAfter = 1;
+// error: write `const int x`, or `const char* s`
+int operator+(int a, int b) { return a; }
+// error: write a method for now, such as `Point add(Point other)`
+struct WithEquals {
+    int x = 0;
+    bool operator==(WithEquals other) const { return true; }
+    // error: remove it: every struct already has `==` and `!=`, field by field
+};
+class WithAssign {
+public:
+    int x = 0;
+    WithAssign& operator=(WithAssign o) { return this; }
+    // error: this compiler does not support operator overloading yet
+};
+class ConstructorDefault {
+public:
+    int x = 0;
+    ConstructorDefault() = default;
+    // error: a constructor cannot be set to `= default` or `= delete`
+};
+class ConstructorNoexcept {
+public:
+    int x = 0;
+    ConstructorNoexcept() noexcept {}
+    // error: remove it: a constructor cannot fail
+};
+class DestructorNoexcept {
+public:
+    int x = 0;
+    ~DestructorNoexcept() noexcept {}
+    // error: remove it: a destructor cannot fail
+};
+interface WithDestructor {
+    virtual ~WithDestructor() = default;
+    // error: remove it: a destructor always runs for what the object really is
+};
+class DeletedMethod {
+public:
+    void gone() = delete;
+    // error: write `{ ... }` for a body, or remove the method
+};
+class ManyValues {
+public:
+    vector<int> v;
+    ManyValues() : v(3, 0) {}
+    // error: For a vector or a string, build the value: `v(vector<int>(3, 0))`, `v(string(3, 'a'))`
+};
+class Mutable {
+public:
+    mutable int x = 0;
+    // error: remove `mutable`, and take `const` off the method that changes it
+};
+class Explicit {
+public:
+    int x = 0;
+    explicit Explicit(int a) : x(a) {}
+    // error: remove it: a plain value never converts to a class by itself
+};
+template<Number T> struct OnlyNumbers { T x; };
+OnlyNumbers noArguments() { return null; }
+// error: write e.g. `OnlyNumbers<int>`
+class Speaks { public: int x = 0; };
+template<Speaks T> struct NeedsSpeaker { T x; };
+NeedsSpeaker alsoNoArguments() { return null; }
+// error: write e.g. `NeedsSpeaker<...>`, with a type that has what 'Speaks' requires
+template<Floating T> struct NeedsDouble { T x; };
+NeedsDouble noFloating() { return null; }
+// error: write e.g. `NeedsDouble<double>`
+int main() { return 0; }
