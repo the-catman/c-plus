@@ -1,0 +1,5 @@
+// `struct` before the type of a parameter.
+struct Point { int x = 0; };
+void show(struct Point p) { }
+// error: write just `Point`, as in C++
+int main() { return 0; }

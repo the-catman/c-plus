@@ -13,7 +13,7 @@ void pointers() {
     long big = 1;
     long* q = &big;
     println("{}", p == q);
-    // error: pointers to different types cannot be compared; convert one first
+    // error: pointers to different types cannot be compared; convert both first, e.g. `(void*)p == (void*)q`
     println("{}", p == 1);
     // error: write `*p == ...` to compare the value it points to
     println("{}", true & false);

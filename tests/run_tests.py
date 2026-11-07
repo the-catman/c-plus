@@ -960,6 +960,12 @@ def check_command_line(cplus, workdir):
         (["build", g, "-o", str(workdir / "out")], "CPLUS_INVALID_IR_FOR_TESTS", "1", "this is a mistake in the compiler, and not in the program"),
         (["build", g, "-o", str(workdir / "out")], "CPLUS_NO_OBJECT_FILES_FOR_TESTS", "1", "this target cannot emit object files"),
     ]
+    folder = workdir / "folder.cplus"  # a folder named like a source file, which reads as nothing
+    folder.mkdir(exist_ok=True)
+    run = subprocess.run([cplus, "check", str(folder)], capture_output=True, text=True, cwd=workdir)
+    if run.returncode == 0 or "it is a folder" not in run.stderr or errors_without_help(run.stderr):
+        print(f"FAIL cplus check of a folder: exit code {run.returncode}\n  " + run.stderr[:300])
+        ok = False
     for args, name, value, message in pretending:
         run = subprocess.run([cplus, *args], capture_output=True, text=True, cwd=workdir, env=dict(os.environ, **{name: value}))
         if run.returncode == 0 or message not in run.stderr or errors_without_help(run.stderr):

@@ -93,10 +93,10 @@ int main() {
 // error: push_back() changes the vector, but '?.' works on a copy of it
 // error: clear() changes the string, but '?.' works on a copy of it
 // error: it may be null; unwrap it first: `if (auto v = list) for (auto x : v) ...`
-// error: the if condition must be a bool, a number, a pointer or an optional, but this is 'bool?'
+// error: the if condition cannot be a `bool?`, as it could mean true or that it holds a value
 // error: it could mean true, or that it has a value: write `flag == true`, or `flag != null` to check that it holds a bool
 // error: null never holds a value, so this if would never run
-// error: the variable declared in the if condition must be an optional, a bool, a number or a pointer, but 'k' is 'bool?'
+// error: the variable declared in the if condition cannot be a `bool?`, as it could mean true or that it holds a value
 // error: the variable declared in the if condition must be an optional, a bool, a number or a pointer, but 'k' is 'string'
 // error: '?.' reads from an optional, but this is 'string', which is never null
 // error: write '.' instead of '?.'

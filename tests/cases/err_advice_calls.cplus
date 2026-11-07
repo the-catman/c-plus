@@ -54,7 +54,7 @@ void generics() {
     array<int, 2> x;
     array<int, 3> y;
     println("{}", two(x, y));
-    // error: 'N' must be the same for both. Give them arrays of one size
+    // error: 'N' must be the same for both. Give both arguments the same 'N'
     println("{}", conv(1));
     // error: arguments are written in order, so write all up to it: `conv<int, int>(...)`
     println("{}", sized(1));

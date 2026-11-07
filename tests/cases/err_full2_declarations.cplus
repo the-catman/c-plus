@@ -1,0 +1,11 @@
+// What a unique reference and a weak one are declared with, and `_` after a decimal point.
+class Node { public: string n; Node(string s) { n = s; } };
+int main() {
+    unique<Node> u("x");
+    // error: write `unique<Node> u = unique<Node>(...);`
+    weak parent;
+    // error: write `weak<Node>`, with the class it refers to in the brackets
+    double d = 1.000_5;
+    // error: write `1.000'5`
+    return 0;
+}

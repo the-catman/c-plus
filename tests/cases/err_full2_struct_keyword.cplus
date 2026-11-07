@@ -1,0 +1,7 @@
+// `struct` written before a struct's name, as C writes its type.
+struct Point { int x = 0; };
+struct Point make() { return Point{}; }
+// error: C+ writes the type of a struct or class without the word 'struct'
+// error: write just `Point`, as in C++
+// not-error: rename one of them
+int main() { return 0; }

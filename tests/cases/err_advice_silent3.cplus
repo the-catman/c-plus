@@ -30,7 +30,7 @@ void conditions() {
     if (m) {}
     // error: to check whether it has elements, write `!m.empty()`
     if (C c = C()) {}
-    // error: declare it before the `if`, and write the test as the condition. For this one, write a comparison, or call a method that gives a bool
+    // error: declare it before the `if`, and write the test as the condition. For this one, a class reference is never empty, so there is nothing to test
     int? n = 1;
     println("{}", -n);
     // error: 'n' may be null

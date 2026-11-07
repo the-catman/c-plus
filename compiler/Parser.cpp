@@ -379,6 +379,38 @@ void Parser::scanTemplate(Program& prog, size_t& i) {
     t->start = pos_;
     const Token& head = peek();
     size_t end = pos_;
+    auto passOver = [&](Loc loc, const std::string& message, const std::string& help, const char* anchor) {  // reported, and the declaration left out
+        diags_.error(loc, message, help, anchor);
+        size_t last = pos_;
+        while (last + 1 < toks_.size() && toks_[last].kind != Tok::LBrace && toks_[last].kind != Tok::Semi) ++last;
+        last = toks_[last].kind == Tok::LBrace ? afterBraces(last) : (last + 1 < toks_.size() ? last + 1 : last);
+        skipTemplate_[first] = last;
+        i = last;
+    };
+    if (head.kind == Tok::Ident && head.text == "using") {  // `template<typename T> using Vec = std::vector<T>;`
+        passOver(head.loc, "C+ has no type aliases",
+                 "write the type itself wherever `" + (peek(1).kind == Tok::Ident ? peek(1).text : std::string("it")) + "` is used, with the type you mean in place of each parameter",
+                 spec::Variables);
+        return;
+    }
+    for (size_t at = pos_; at < toks_.size() && at < pos_ + 64; ++at) {  // `Box<T>::Box(T x)`, `T Box<T>::get()`
+        const Tok k = toks_[at].kind;
+        if (k == Tok::LParen || k == Tok::LBrace || k == Tok::Semi || k == Tok::Eof) break;
+        if (k != Tok::ColonColon || at == pos_) continue;
+        size_t nameAt = at - 1;
+        if (toks_[nameAt].kind == Tok::Greater) {  // back to the `<` and the name before it
+            int depth = 0;
+            for (size_t back = nameAt; back > pos_; --back) {
+                if (toks_[back].kind == Tok::Greater) ++depth;
+                else if (toks_[back].kind == Tok::Less && --depth == 0) { nameAt = back - 1; break; }
+            }
+        }
+        if (toks_[nameAt].kind == Tok::Ident && (classTemplate(toks_[nameAt].text) || isTypeName(toks_[nameAt]))) {
+            passOver(toks_[nameAt].loc, "methods and constructors are defined inside their class",
+                     "move this definition into the body of '" + toks_[nameAt].text + "'; C+ has no headers, so there is no separate declaration to match", spec::Classes);
+            return;
+        }
+    }
     if (head.kind == Tok::KwStruct || head.kind == Tok::KwClass || head.kind == Tok::KwInterface) {
         t->kind = TemplateDecl::Kind::Record;
         t->nameLoc = peek(1).loc;
@@ -1183,6 +1215,12 @@ void Parser::parseTopLevel(Program& prog) {
         }
         case Tok::KwStruct:
         case Tok::KwClass:
+            if (peek(1).kind == Tok::Ident &&
+                (peek(2).kind == Tok::Star || peek(2).kind == Tok::Amp ||
+                 (peek(2).kind == Tok::Ident && peek(2).text != "final" && (peek(3).kind == Tok::LParen || peek(3).kind == Tok::Semi || peek(3).kind == Tok::Assign))))
+                rejectStructKeyword();  // `struct Point make()`, as C writes a struct's type
+            parseRecord();
+            return;
         case Tok::KwInterface: parseRecord(); return;
         case Tok::LBracket: {
             if (!atAttribute()) break;
@@ -1258,9 +1296,9 @@ void Parser::parseTopLevel(Program& prog) {
         case Tok::KwNamespace:
             fail(t.loc, "C+ has no namespaces; each file is a module", "remove the `namespace ... {` line and its closing `}`, and keep what is inside", spec::Modules);
         case Tok::Ident:
-            if (peek(1).kind == Tok::ColonColon && isTypeName(t))
+            if (peek(1).kind == Tok::ColonColon && (isTypeName(t) || classTemplate(t.text)))
                 fail(t.loc, "methods and constructors are defined inside their " +
-                                std::string(prog_->findStruct(t.text)->keyword()),
+                                std::string(isTypeName(t) ? prog_->findStruct(t.text)->keyword() : "class"),
                      "move this definition into the body of '" + t.text + "'; C+ has no headers, so there is no "
                      "separate declaration to match",
                      spec::Classes);
@@ -1281,8 +1319,8 @@ void Parser::parseTopLevel(Program& prog) {
     Loc retLoc;
     bool isConst = false;
     const Type* ret = parseType(retLoc, &isConst);
-    if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && isTypeName(peek()))
-        fail(peek().loc, "methods are defined inside their " + std::string(prog_->findStruct(peek().text)->keyword()),
+    if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && (isTypeName(peek()) || classTemplate(peek().text)))
+        fail(peek().loc, "methods are defined inside their " + std::string(isTypeName(peek()) ? prog_->findStruct(peek().text)->keyword() : "class"),
              "move this definition into the body of '" + peek().text + "'; C+ has no headers, so there is no "
              "separate declaration to match",
              spec::Classes);
@@ -1998,7 +2036,7 @@ const Type* Parser::parseBaseType(Loc& loc) {
         case Tok::KwWeak: {
             if (!check(Tok::Less))
                 fail(t.loc, "weak is written with the class it refers to: `weak<Node> parent;`",
-                     "it is a type of its own, with no `?`. Read it with `parent.lock()`, which gives a `Node?`", spec::Weak);
+                     "write `weak<Node>`, with the class it refers to in the brackets. It is a type of its own, with no `?`: read it with `parent.lock()`, which gives a `Node?`", spec::Weak);
             advance();
             Loc inner;
             const Type* target = parseType(inner);
@@ -2284,6 +2322,7 @@ void Parser::parseParams(FuncDecl& fn) {
     if (check(Tok::KwVoid) && peek(1).kind == Tok::RParen) advance();  // C-style f(void)
     if (!check(Tok::RParen)) {
         do {
+            if (check(Tok::KwStruct) || check(Tok::KwClass)) rejectStructKeyword();  // `void show(struct Point p)`
             if (!isTypeStart()) {
                 checkUnknownType();
                 if (check(Tok::Dot))
@@ -2893,7 +2932,7 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
             }
             std::string help = "write `" + std::string(ty->name) + " " + name.text + " = ...;`, with the same value";
             if (ty->is(Type::Kind::String)) help = "write `string " + name.text + " = string(3, 'a');`, or `string " + name.text + " = \"text\";`";
-            if (ty->isClass()) help = "write `" + std::string(ty->name) + " " + name.text + " = " + ty->name + "(...);`";
+            if (ty->isClass() || ty->isUnique() || ty->isLocal()) help = "write `" + std::string(ty->name) + " " + name.text + " = " + ty->name + "(...);`";
             if (ty->isStruct() && !isHashmap(ty)) help = "write `" + std::string(ty->name) + " " + name.text + " = {...};`, with the same values";
             if (isHashmap(ty)) help = "write `" + std::string(ty->name) + " " + name.text + " = {...};`";
             if (ty->isVector())

@@ -247,7 +247,11 @@ Token Lexer::lexFloat() {
             diags_.error(suffixLoc, "C+ has no long double type",
                          "remove the L: a number with a fraction is a double, which has 64 bits",
                          spec::FloatingPointTypes);
-        else
+        else if (suffix[0] == '_' && suffix.size() > 1 && std::isdigit((unsigned char)suffix[1])) {  // `1.000_5`
+            std::string fixed = src_.substr(start, pos_ - start);
+            std::replace(fixed.begin(), fixed.end(), '_', '\'');
+            diags_.error(suffixLoc, "digits are separated with ', as in C++, not with _", "write `" + fixed + "`", spec::IntegerLiterals);
+        } else
             diags_.error(suffixLoc, "'" + suffix + "' is not a suffix for a floating-point number",
                          "the only suffix is f, which makes the number a float, e.g. `1.5f`",
                          spec::FloatingPointTypes);

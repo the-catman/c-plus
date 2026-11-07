@@ -1,0 +1,80 @@
+// What the second full reading of Sema's help found.
+import json;
+template <typename T> concept Addable = requires(T a, T b) { a + b; };
+extern "C" struct FILE;
+class K {
+public:
+    int n = 0;
+    int size() { return n; }
+    bool empty() { return size == 0; }
+    // error: 'size' is a method, not a value
+    // error: call it with `size()`
+};
+class U { public: int f() throws { return 1; } };
+class N { public: int n = 0; };
+class Dog { public: int a = 0; };
+template <typename T> T big(T a, T b) { return a > b ? a : b; }
+template <typename T> struct Box { T x; };
+template <typename T> void g(Box<T> a, Box<T> b) { }
+template <typename T, int Q> struct Buf { array<T, Q> a; };
+template <typename T, int Q> void h(Buf<T, Q> a, Buf<T, Q> b) { }
+bool? ready() { return true; }
+void nothing() { }
+constexpr int OVERFLOW = 2147483647 + 1;
+// error: make the value fit: write the numbers as `long`, as in `2147483647L + 1`, or use smaller ones
+constexpr char WIDE = char(300);
+// error: use a value from 0 to 255, which is what a char holds
+
+void values(json::Value doc, U? o, U u) throws {
+    doc.set("a", 5);
+    // error: make one with `json::of`: `json::of(5)`
+    json::Value s = "x";
+    // error: make one with `json::of`: `json::of("x")`
+    hashmap<int, int> m = {1, 2};
+    // error: each entry of a hashmap's { } list is in braces of its own
+    // error: write each entry as `{key, value}`: `{{1, 2}}`
+    auto x = Addable;
+    // error: 'Addable' is a concept, not a value
+    auto fl = FILE;
+    // error: 'FILE' is a C type, not a value
+    o?.f();
+    // error: write `try o?.f(...)`, which passes the error on
+    char c = "\x01";
+    // error: write `char(1)` for a char
+    if (u) { }
+    // error: a class reference is never empty, so there is nothing to test. For one that can be, make it `U?`
+}
+void more(N n, local<Dog> l, unique<Dog> ud, float fl, double d, char c, const int* ca, long* lp, int* a, char* cp, string s) {
+    bool x1 = n == null;
+    // error: 'n' is a 'N', which is never null: remove the test, or declare it `N?` if it may hold nothing
+    double b1 = big(fl, d);
+    // error: `big<double>(...)`
+    int b2 = big(c, 1);
+    // error: `big<int>(...)`
+    g(Box<int>{}, Box<long>{});
+    // error: 'T' cannot be both 'int' and 'long'. Convert an argument, so that both have the same type
+    h(Buf<int, 2>{}, Buf<int, 3>{});
+    // error: 'Q' must be the same for both. Give both arguments the same 'Q'
+    bool x3 = ca == lp;
+    // error: convert both first, e.g. `(const void*)ca == (const void*)lp`
+    bool x4 = a + 1 == 5;
+    // error: write `*(a + 1) == ...` to compare the value it points to
+    void* v = reinterpret_cast<void*>(d);
+    // error: turn it into a long first: `reinterpret_cast<void*>(long(x))`
+    array<unique<N>?, 2> au;
+    au.fill(null);
+    // error: set each one: `a[i] = unique<N>(...)`, or `a[i] = null`
+    if (bool? r = ready()) { }
+    // error: unwrap it with `if (auto r = ready())`, which runs when it holds a value
+    auto ol = static_cast<local<Dog>?>(l);
+    // error: no cast is needed: `local<Dog>? x = l;`
+    auto ou = static_cast<unique<Dog>?>(move(ud));
+    // error: no cast is needed: `unique<Dog>? x = move(ud);`
+    bool x5 = cp == "abc";
+    // error: turn the text it points to into a string first: `string(cp) == ...`
+    string t = s + cp;
+    // error: turn the text it points to into a string first: `string(cp)`
+    bool x6 = nothing() == 1;
+    // error: this call gives nothing to compare or use. Call it on a line of its own
+}
+int main() { return 0; }

@@ -103,6 +103,8 @@ static bool frontEnd(const SourceFile& file, Diagnostics& diags, Program& progra
 }
 
 static bool readFile(const std::string& path, std::string& out) {
+    std::error_code isFolder;
+    if (fs::is_directory(path, isFolder)) return false;  // it opens, and reads as nothing
     std::ifstream in(path, std::ios::binary);
     if (!in) return false;
     std::ostringstream ss;
@@ -115,7 +117,11 @@ static bool readFile(const std::string& path, std::string& out) {
 static int build(const Options& opts, const std::string& exePath) {
     std::string text;
     if (!readFile(opts.input, text)) {
-        toolError("cannot read " + opts.input + ": " + std::strerror(errno), "check the name of the file, which is relative to the folder this runs in");
+        std::error_code isFolder;
+        if (fs::is_directory(opts.input, isFolder))
+            toolError("cannot read " + opts.input + ": it is a folder", "give the path of a .cplus file, such as `" + opts.input + "/main.cplus`");
+        else
+            toolError("cannot read " + opts.input + ": " + std::strerror(errno), "check the name of the file, which is relative to the folder this runs in");
         return 1;
     }
     SourceFile file(opts.input, std::move(text));
@@ -141,7 +147,9 @@ static int build(const Options& opts, const std::string& exePath) {
     Codegen codegen(file, CodegenOptions{opts.optimize, opts.debug, opts.race});
     std::string error;
     if (!codegen.generate(program, error)) {
-        toolError(error, error.rfind("internal compiler error", 0) == 0
+        toolError(error, error.find("pass a pointer to the struct") != std::string::npos
+                             ? "declare the C function to take a pointer to the struct, `T* p`, and pass `&x`, or build the program on x86-64 or aarch64, where structs pass by value"
+                         : error.rfind("internal compiler error", 0) == 0
                              ? "this is a mistake in the compiler, and not in the program. Keep the program that caused it to report it, and change the code near what was last edited to go on"
                              : "this is about the machine the program is being built for, and not the program. Build it on Linux, on x86-64 or aarch64, which are what this compiler has been written for");
         return 1;

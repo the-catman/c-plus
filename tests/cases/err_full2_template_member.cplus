@@ -1,0 +1,11 @@
+// Members of a generic class defined outside it, and aliases of generics, which C+ has neither of.
+template <typename T>
+class Box { public: T v; };
+string Box::name() { return "x"; }
+// error: move this definition into the body of 'Box'
+template <typename T> Box<T>::Box(T x) : v(x) {}
+template <typename T> T Box<T>::get() { return v; }
+template <typename T> using Vec = std::vector<T>;
+// error: write the type itself wherever `Vec` is used, with the type you mean in place of each parameter
+// not-error: rename one of them
+int main() { return 0; }
