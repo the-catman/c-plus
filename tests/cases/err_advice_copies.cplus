@@ -3,9 +3,12 @@ class N { public: int x = 0; };
 long position() { return 0; }
 void copies() {
     vector<unique<N>> v;
-    unique<N> taken = v[position() + 1];
+    bool first = true;
+    unique<N> taken = v[first ? 0 : 1];
     // error: this cannot be copied, since a 'unique<N>' has one owner
     // error: write `move(...)` around it to hand it over, after which it has no value, or `.get()` on it to lend the object
+    unique<N> next = v[position() + 1];
+    // error: write `move(v[position() + 1])` to hand it over, after which v[position() + 1] has no value, or `v[position() + 1].get()` to lend the object
 }
 constexpr float TOO_LARGE_FOR_FLOAT = 1e300;
 // error: this number is too large for a float

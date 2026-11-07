@@ -15,11 +15,24 @@ public:
     int n = 1;
 };
 vector<int>? gives() { return vector<int>{1}; }
+struct Risky {
+    int x = 0;
+    void risky() throws { x = 2; }
+};
 struct Wrapped {
     unique<N> held = unique<N>();
     int n = 1;
     void bump() { n = 2; }
 };
+int tryIt() {
+    try {
+        Risky? o = Risky{};
+        if (auto v = o) { try v.risky(); o = v; }
+        return o?.x ?? 0;
+    } catch (Error e) {
+        return -1;
+    }
+}
 const int X = 2;
 const int R = 2;
 const int C = 3;
@@ -98,6 +111,22 @@ int main() {
     out.bump();
     wrapped = move(out);
     println("{}", wrapped?.n);
+    // expect: 2
+    // Through `?:`, each in place
+    S left = {};
+    S right = {};
+    bool pickLeft = true;
+    if (pickLeft) left.set(); else right.set();
+    println("{} {}", left.x, right.x);
+    // expect: 1 0
+    // A loop with an index changes the element
+    vector<S?> elements = {S{}, S{}};
+    for (long i = 0; i < elements.size(); ++i) {
+        if (auto e = elements[i]) { e.set(); elements[i] = e; }
+    }
+    println("{} {}", elements[0]?.x, elements[1]?.x);
+    // expect: 1 1
+    println("{}", tryIt());
     // expect: 2
     // What takes the place of make_shared
     auto node = Node();

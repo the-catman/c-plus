@@ -167,7 +167,7 @@ long square(long n) { return n * n; }
 | `auto p = {1, 2};` | `auto p = Point{1, 2};`, since a bare `{ }` needs a known type |
 | `int n = v.size();` | error: `size()` is a `long`, since there are no unsigned types. Write `long n` or `auto n`; `i < v.size()` with an `int i` is fine |
 | `v[i]` past the end is UB | every index is checked and a bad one **stops the program** with file:line; so do `pop_back()`, `front()`, `back()` on an empty vector |
-| `v.back().x = 1`, `v.back().set()`, `v.back().p.set()`, `m.at(k) = 1` | error: `back()`, `front()` and `at()` give copies. Write `v[v.size() - 1].x = 1`, `m[k] = 1` |
+| `v.back().x = 1`, `v.back().set()`, `v.back().p.set()`, `m.at(k) = 1`, `(first ? a : b).set()` | error: `back()`, `front()`, `at()` and `?:` give copies. Write `v[v.size() - 1].x = 1`, `m[k] = 1`, `if (first) a.set(); else b.set();` |
 | `v.push_back(...)` inside `for (x : v)` is UB | safe: the loop goes over `v` as it was when the loop started |
 | `for (auto& x : v)`, `const vector<int>& v` | no references yet: `for (auto x : v)` and `vector<int> v` copy cheaply. Change elements with `v[i] = ...` |
 | `void f(int& n)` | no references yet: `void f(int* n)`, called as `f(&x)` |

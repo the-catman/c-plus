@@ -516,6 +516,8 @@ Decided 2026-11-05.
 - Any type with `==` can be a key, if that `==` looks at what can be hashed, with no hash to write. A hash function of
   your own waits for function overloading.
 - `m.at(k)` and `m.get(k)` give copies too, so changing what they give is an error for the same reason, and `m[k]` is the place.
+  So are `?:`, `??`, `value_or()`, `values()` and `items()`: `(f ? a : b).set()` would change `a` in C++. Through a pointer or a class
+  object the change is real, so `ps.back()[0].set()` and `ps.back()->set()` stay allowed. Decided 2026-11-07.
 - A help text gives code only for a shape it can be sure of: a place that means the same each time it is written, with a key that is a literal or a name. Anything else, such as `v.back().items.back()` or `m.get(keyOf())`, gets a sentence and no code, since code that compiles and changes only a copy is worse than none. `tests/advice_grid.py` follows the code it gives, and checks that what was meant to change did.
 - Strings hash with SipHash-1-3 and a seed chosen at each start, as HTTP brings input from anyone. Since the order does not
   come from the hash, the seed cannot change what a program does.

@@ -15,6 +15,7 @@ struct S {
     void set() { x = 7; }
     void add(int n) { x = x + n; }
     void merge(S other) { x = x + other.x; }
+    int read() const { return x; }
 };
 struct H {
     vector<int> items;
@@ -29,6 +30,11 @@ public:
     void go() { n = n + 1; }
 };
 struct Plain { int y = 0; S p; };
+class KS {
+public:
+    S? o;
+};
+struct WithPointer { S* p; };
 vector<int>? gives() { return vector<int>{1}; }
 S? givesS() { return S{}; }
 """
@@ -94,6 +100,13 @@ SAME = [  # (declared, wrong, printed, expected)
     ("vector<O?> vo = {O{.h = H{}}};", "vo.back()?.h?.items.push_back(N);", "vo[0]?.h?.items", "[5]"),
     ('hashmap<string, O?> mo = {{"a", O{.h = H{}}}};', 'mo.at("a")?.h?.items.push_back(N);', 'mo["a"]?.h?.items', "[5]"),
     ("vector<unique<C>>? u = vector<unique<C>>{};", "u.clear();", "u?.size()", "0"),
+    ("S a = {};\nS b = {};\nbool f = true;", "(f ? a : b).set();", "a.x", "7"),
+    ("S a = {};\nS b = {};\nbool f = false;", "(f ? a : b).x = N;", "b.x", "5"),
+    ("Plain a = {};\nPlain b = {};\nbool f = true;", "(f ? a : b).p.set();", "a.p.x", "7"),
+    ("vector<unique<C>?> w;\nw.push_back(unique<C>());", "w[w.size() - 1].go();", "w[0]?.n", "2"),
+    # The value is a class object, so only the optionals of values are stored back, and `const` on the root does not matter
+    ("KS made = KS();\nmade.o = S{};\nconst KS? k = made;", "k?.o?.set();", "made.o?.x", "7"),
+    ("KS made = KS();\nmade.o = S{};\nconst vector<KS?> w = {made};", "w[0]?.o?.set();", "made.o?.x", "7"),
     ("vector<unique<C>>? u = vector<unique<C>>{};", "u?.clear();", "u?.size()", "0"),
 ]
 
@@ -104,6 +117,14 @@ TEMPORARY = [
     ("", "givesS()?.set();"),
     ("", "givesS().set();"),
     ("", "givesS()?.items.push_back(N);"),
+]
+
+# Methods that only read: there is nothing to store back, so the help must not say how to change it.
+READ_ONLY = [
+    ("vector<S>? o = vector<S>{S{}};", "o.back().x = N;"),
+    ("vector<int>? o = vector<int>{1};", "long n = o.size();"),
+    ('hashmap<string, vector<int>> m = {{"a", vector<int>{1}}};', 'long n = m.get("a").size();'),
+    ("S? o = S{};", "int r = o.read();"),
 ]
 
 # Shapes the compiler cannot be sure of: it must either give no code, or give code that does what was meant. What it
@@ -118,6 +139,10 @@ NOT_SIMPLE = [
     ("vector<H> w = {H{}};", "w.back().items.back() = N;"),
     ("vector<H> w = {H{}};", "w.back().os?.items.clear();"),
     ("O? o = O{.h = H{}};", "o.value().h.value().items.clear();"),
+    ("S? o = null;\nS d = {};", "o.value_or(d).set();"),
+    ("vector<S?> w = {S{}};", "w[w.size() - 1].set();"),
+    ("S? o = null;\nS d = {};", "(o ?? d).set();"),
+    ('hashmap<string, S> m = {{"a", S{}}};', "m.values()[0].set();"),
 ]
 
 # Outside main: the line that is wrong goes where the @ is, and main shows what it did.
@@ -158,12 +183,15 @@ ELSEWHERE = [  # (definitions, wrong, main, expected)
 VALID = [  # (definitions, main, expected)
     ("", "S a = {};\nvector<S*> ps = {&a};\nps.back()[0].set();\nprintln(\"{}\", a.x);", "7"),
     ("", "S a = {};\nvector<S*> ps = {&a};\nps.back()->set();\nprintln(\"{}\", a.x);", "7"),
-    ("struct WithPointer { S* p; };", "S a = {};\nvector<WithPointer> v = {WithPointer{.p = &a}};\nv.back().p[0].set();\nprintln(\"{}\", a.x);", "7"),
+    ("", "S a = {};\nvector<WithPointer> v = {WithPointer{.p = &a}};\nv.back().p[0].set();\nprintln(\"{}\", a.x);", "7"),
     ("", "S a = {};\nhashmap<string, S*> m = {{\"k\", &a}};\nm.at(\"k\")[0].set();\nprintln(\"{}\", a.x);", "7"),
     ("class Box { public: S s; void set() { s.x = 7; } };", "vector<Box> v = {Box()};\nv.back().set();\nprintln(\"{}\", v[0].s.x);", "7"),
     ("class Box { public: S s; };", "vector<Box> v = {Box()};\nv.back().s.set();\nprintln(\"{}\", v[0].s.x);", "7"),
     ("class Box { public: S s; };\nstruct InABox { Box b; };", "vector<InABox> v = {InABox{.b = Box()}};\nv.back().b.s.set();\nprintln(\"{}\", v[0].b.s.x);", "7"),
     ("struct Reader { int x = 3; int area() const { return x * x; } };", "vector<Reader> v = {Reader{}};\nprintln(\"{}\", v.back().area());", "9"),
+    ("", "S a = {};\nWithPointer? o = WithPointer{.p = &a};\no?.p[0].set();\nprintln(\"{}\", a.x);", "7"),
+    ("", "S a = {};\nWithPointer? o = WithPointer{.p = &a};\no?.p->set();\nprintln(\"{}\", a.x);", "7"),
+    ("", "S a = {};\nhashmap<string, WithPointer> m = {{\"a\", WithPointer{.p = &a}}};\nm.get(\"a\")?.p[0].set();\nprintln(\"{}\", a.x);", "7"),
     ("", "S a = {};\nH h = {};\nh.os = S{};\nH* const p = &h;\nif (auto v = p[0].os) { v.set(); p[0].os = v; }\nprintln(\"{}\", p[0].os?.x);", "7"),
 ]
 
@@ -180,6 +208,8 @@ CONST = [
     ("H h = {};\nconst H* p = &h;", "p->os?.set();"),
     ("vector<S> w = {S{}};\nconst vector<S>* p = &w;", "p->back().set();"),
     ("H h = {};\nconst H* p = &h;", "p->ov.push_back(N);"),
+    ("const unique<C>? u = unique<C>();", "auto c = u.value();"),
+    ("const vector<unique<C>>? u = vector<unique<C>>{};", "u?.clear();"),
 ]
 
 # Names of the program's own that what is suggested must not hide.
@@ -234,6 +264,12 @@ def run_case(cplus, workdir, index, declared, wrong, kind, printed=None, expecte
     if kind == "const":
         if "const" not in text:
             return f"{shown}: the help does not say what is const: {text}"
+        if "cannot be copied" not in text and "change a copy" in text and ("unique" in declared):
+            return f"{shown}: says to change a copy of what cannot be copied: {text}"
+        return None
+    if kind == "read_only":
+        if "change" in text.lower():
+            return f"{shown}: says how to change it, but the method only reads: {text}"
         return None
     if kind != "temporary" and claims_temporary:
         return f"{shown}: says this only exists as a copy, but the program can reach it: {text}"
@@ -245,7 +281,7 @@ def run_case(cplus, workdir, index, declared, wrong, kind, printed=None, expecte
         if kind == "simple":
             return f"{shown}: no code to follow in: {text}"
         return None
-    if kind == "not_simple" and ("[ ]" in text or "temporary copy" in text):
+    if kind == "not_simple" and ("[ ]" in text or "temporary copy" in text or "store it in a variable first, change that" in text):
         return None
     code = followed(codes[-1], wrong.replace("N", value_text), value_text)
     if kind == "temporary":  # the variable it says to store it in comes first
@@ -324,6 +360,8 @@ def problems(cplus, workdir):
         cases.append((declared, wrong, "not_simple", None, None, ""))
     for declared, wrong in CONST:
         cases.append((declared, wrong, "const", None, None, ""))
+    for declared, wrong in READ_ONLY:
+        cases.append((declared, wrong, "read_only", None, None, ""))
 
     def one(item):
         index, (declared, wrong, kind, printed, expected, extra) = item

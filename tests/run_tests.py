@@ -602,6 +602,7 @@ SHEET_PRELUDE = """import json;
 import http;
 import reflect;
 struct Point { int x = 0; int y = 0; };
+struct Settable { int x = 0; void set() { x = 1; } };
 struct P { int x = 0; int y = 0; };
 class U { public: string name = "a"; int age = 0; U(string n) : name(n) {} int area() const { return 1; } };
 class User { public: string name = "a"; int age = 0; User(string n) : name(n) {} };
@@ -636,6 +637,7 @@ SHEET_BODY = """    int n = 1; long someLong = 1; double someDouble = 1; double 
     %s
 """
 SHEET_VARIANTS = [
+    'Settable a = {}; Settable b = {}; bool first = true;',
     'int* p = &n; int* q = &n; User u = User("a"); User? opt = null; hashmap<string, int> m; int a = 1; int b = 2;',
     'Point p; Point* q = &p; User? u = null; User? user = null; int? opt = 1; unique<Node> a = unique<Node>("x"); unique<Node> b = unique<Node>("y"); weak<Node> w; Node node = Node("x");',
     'char* p = null; Both d = Both(); local<Node> a = local<Node>("x"); local<Node> b = a; bool? opt = null; Mutex m = Mutex(); Task<long> r = spawn sum(v);',
@@ -793,6 +795,7 @@ SPEC_REJECTED = {
     "w == null": 'weak<Node> w; println("{}", w == null);', "largest(1, 2.5)": "auto x = largest(1, 2.5);", "Stack(1)": "auto s = Stack(1);", "spawn f(x).wait()": "int x = 1; spawn given(x).wait();",
     "v.back().x = 1": "vector<Point> v = {Point{}}; v.back().x = 1;", "v.back().set()": "vector<Settable> v = {Settable{}}; v.back().set();",
     "v.back().p.set()": "vector<HoldsSettable> v = {HoldsSettable{}}; v.back().p.set();",
+    "(f ? a : b).set()": "Settable a = {}; Settable b = {}; bool f = true; (f ? a : b).set();",
     "for (auto [k, v] : m)": "hashmap<string, int> m; for (auto [k, v] : m) {}", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
 }
 SPEC_REJECT_PRELUDE = """struct Settable { int x = 0; void set() { x = 1; } };

@@ -1609,9 +1609,6 @@ std::string Parser::writtenBetweenAngles(size_t at, size_t& end) const {
     return "";
 }
 
-// A generic that comes with the language, such as `hashmap`, which is a value.
-static bool comesWithLanguageTemplate(const TemplateDecl& tmpl) { return tmpl.nameLoc.line == 0; }
-
 // `make_unique<T>()` or `make_shared<T>()`, at the `<`. What takes its place depends on what T is.
 void Parser::failMakePointer(const Token& t) {
     const bool wantsUnique = t.text == "make_unique";
@@ -1624,6 +1621,14 @@ void Parser::failMakePointer(const Token& t) {
     const std::string message = "C+ has no " + t.text;
     if (whole.size() > 2 && whole.compare(whole.size() - 2, 2, "[]") == 0)
         fail(t.loc, message, "write `vector<" + whole.substr(0, whole.size() - 2) + ">(count, value)`: a vector is a value that needs no pointer", anchor);
+    if (!whole.empty() && whole.back() == '*')
+        fail(t.loc, message, "a pointer is not made, it points at something: write `&x` for the address of a variable `x`, or `null`", anchor);
+    if (!whole.empty() && whole.back() == '?')
+        fail(t.loc, message, "write the value itself, as in `" + whole + " x = null;`: an optional needs no pointer", anchor);
+    if (first.kind == Tok::Ident && first.text == "Task")
+        fail(t.loc, message, "start a task with `spawn`: `auto t = spawn f(...);` gives a `" + whole + "`, which is already a counted reference", anchor);
+    if (first.kind == Tok::Ident && (first.text == "unique" || first.text == "local" || first.text == "weak"))
+        fail(t.loc, message, "write `" + whole + "(...)` itself: it already refers to its own object", anchor);
     if (first.kind != Tok::Ident)
         fail(t.loc, message, "write the value itself, as in `int(3)`: a value needs no pointer", anchor);
     const bool isGeneric = peek(at + 1).kind == Tok::Less;
@@ -1631,7 +1636,7 @@ void Parser::failMakePointer(const Token& t) {
     // A value of the language, such as `vector<int>`, or a struct, which is copied
     const TemplateDecl* tmpl = isGeneric ? classTemplate(first.text) : nullptr;
     StructDecl* named = !isGeneric && isTypeName(first) ? prog_->findStruct(first.text) : nullptr;
-    const bool knownClass = (named && named->isClass) || (tmpl && !comesWithLanguageTemplate(*tmpl) && tmpl->start < toks_.size() && toks_[tmpl->start].kind != Tok::KwStruct);
+    const bool knownClass = (named && named->isClass) || (tmpl && tmpl->start < toks_.size() && toks_[tmpl->start].kind == Tok::KwClass);
     if (isGeneric && !knownClass)
         fail(t.loc, message, "write `" + whole + "(...)`. It is a value, which is copied, so to " + keep + " hold it in a class", anchor);
     if (named && !named->isClass)
@@ -2056,6 +2061,7 @@ void Parser::failCStyleArray(const Type* elem, const std::string& name, ArrayPla
             ++close;
         }
         anyMissing = anyMissing || written.empty();
+        if (written.find_first_of("<>") != std::string::npos) written = "(" + written + ")";  // `1 << 2` would end the `<`
         sizes.push_back(written.empty() ? "N" : written);
         past = close + 1;
     }

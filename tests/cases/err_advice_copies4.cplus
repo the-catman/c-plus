@@ -1,0 +1,78 @@
+// The last of the advice about copies: what `?:` and `??` give, loops, methods that can fail or only read, and what make_shared is given.
+struct S {
+    int x = 0;
+    void set() { x = 1; }
+    void risky() throws { x = 2; }
+    int read() const { return x; }
+};
+class C {
+public:
+    int n = 0;
+    void go() { n = 1; }
+};
+
+void whatOperatorsGive() {
+    S a = {};
+    S b = {};
+    bool f = true;
+    (f ? a : b).set();
+    // error: 'set' may change the struct, but '?:' gives a copy of it
+    // error: `?:` gives a copy of what it chose. Change each in place: `if (f) a.set(); else b.set();`
+    S? o;
+    (o ?? a).set();
+    // error: 'set' may change the struct, but '??' gives a copy of it
+    o.value_or(a).set();
+    // error: 'set' may change the struct, but 'value_or()' gives a copy of it
+    hashmap<string, S> m;
+    m.values()[0].set();
+    // error: 'set' may change the struct, but 'values()' gives a copy of it
+}
+void loops() {
+    vector<S?> w;
+    for (auto e : w) {
+        e?.set();
+        // error: `if (auto v = e) { v.set(); e = v; }`. 'e' is a copy of the element, so to change the element, loop with an index, `for (long i = 0; i < w.size(); ++i)`, and change `w[i]`
+    }
+}
+void canFail() throws {
+    S? o = S{};
+    o?.risky();
+    // error: `if (auto v = o) { try v.risky(); o = v; }`
+    o.risky();
+    // error: `if (auto v = o) { try v.risky(); o = v; }`
+}
+void onlyReads() {
+    vector<S>? o;
+    o.back().x = 5;
+    // error: read with `o?.back()`, which is null when o is
+    S? s;
+    int r = s.read();
+    // error: read with `s?.read()`, which is null when s is
+}
+void cannotBeSpelled() {
+    vector<unique<C>?> w;
+    bool f = true;
+    w[f ? 0 : 1].go();
+    // error: write `?.` in place of `.` before 'go', which does nothing when it is null
+    auto c = w[f ? 0 : 1].value();
+    // error: read through it with `?.` in place of `.`, or store it in a variable first and move it out of that with `move(x).value()`
+    const unique<C>? u = unique<C>();
+    auto d = u.value();
+    // error: read through it with `u?.field`. To take it out: 'u' is const, so what is in it cannot change. Remove `const` from its declaration
+}
+void notMade() {
+    auto a = make_shared<C*>();
+    // error: a pointer is not made, it points at something: write `&x` for the address of a variable `x`, or `null`
+    auto b = make_unique<C?>();
+    // error: write the value itself, as in `C? x = null;`: an optional needs no pointer
+    auto c = make_unique<unique<C>>();
+    // error: write `unique<C>(...)` itself: it already refers to its own object
+    auto d = make_shared<Task<int>>();
+    // error: start a task with `spawn`: `auto t = spawn f(...);` gives a `Task<int>`, which is already a counted reference
+    auto e = make_shared<hashmap<string, int>>();
+    // error: write `hashmap<string, int>(...)`. It is a value, which is copied, so to share one hold it in a class
+}
+void shifted(int m[1 << 2][3]) { }
+// error: write `array<array<int, 3>, (1 << 2)> m`
+
+int main() { return 0; }

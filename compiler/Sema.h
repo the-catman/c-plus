@@ -130,9 +130,10 @@ private:
     std::string whereAnErrorCanGo() const;
     std::string copyHelp(const Expr& target, const std::string& change);
     std::string freshName(const std::string& avoid, std::initializer_list<const char*> names = {"v", "inner", "item", "held", "unwrapped"});
-    std::string constHolderHelp(const Expr& e);
-    std::string changeForm(const Expr& base, const std::string& change, const std::string& opening, const std::string& how);
-    std::string storeItBack(const Expr& recv, const std::string& method, bool hasArguments);
+    std::string constHolderHelp(const Expr& e, bool canCopy = true);
+    std::string loopCopyNote(const Expr& e);
+    std::string changeForm(const Expr& base, const std::string& change, const std::string& opening, const std::string& how, const std::string& before = "");
+    std::string storeItBack(const Expr& recv, const std::string& method, bool hasArguments, const std::string& before = "");
     const Type* checkSpawn(SpawnExpr& s, Flow& flow);
     const Expr* spawned_ = nullptr;  // the call `spawn` is on, whose error goes in the task
     const Type* checkExpr(Expr& e, Flow& flow);
@@ -204,6 +205,7 @@ private:
     void reportUnknownName(const NameExpr& n);
 
     VarDecl* lookup(const std::string& name);
+    std::map<const VarDecl*, std::string> loopCopies_;  // the variable of each `for (auto x : list)`, and the list as written
     void declare(VarDecl& v);
     std::string suggestName(const std::string& name);
 
