@@ -789,9 +789,11 @@ SPEC_REJECTED = {
     "{:x}": 'println("{:x}", 1);', 'throw "text"': '^void f2() throws { throw "text"; }', "const Error& e": "try { } catch (const Error& e) { }", "try f() + g()": "int x = try f() + g();",
     "Node n = a;": 'local<Node> a = local<Node>("x"); Node n = a;', "local<Node> a = n;": 'Node n = Node("x"); local<Node> a = n;', "weak<Node>?": "weak<Node>? w = null;",
     "w == null": 'weak<Node> w; println("{}", w == null);', "largest(1, 2.5)": "auto x = largest(1, 2.5);", "Stack(1)": "auto s = Stack(1);", "spawn f(x).wait()": "int x = 1; spawn given(x).wait();",
+    "v.back().x = 1": "vector<Point> v = {Point{}}; v.back().x = 1;", "v.back().set()": "vector<Settable> v = {Settable{}}; v.back().set();",
     "for (auto [k, v] : m)": "hashmap<string, int> m; for (auto [k, v] : m) {}", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
 }
-SPEC_REJECT_PRELUDE = """class Base { public: int id = 0; };
+SPEC_REJECT_PRELUDE = """struct Settable { int x = 0; void set() { x = 1; } };
+class Base { public: int id = 0; };
 class LeftOf : public Base {};
 class RightOf : public Base {};
 class Twice : public LeftOf, public RightOf {};
