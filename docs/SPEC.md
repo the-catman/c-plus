@@ -2324,7 +2324,7 @@ fatal error: two threads used the same memory at the same time, and at least one
 
 - It finds what happens on the run it watches, so run what the threads really do.
 - Code that mostly uses memory can be about 15 times slower with it, and take about 8 times the memory, while code that mostly computes is hardly slowed. It cannot go with `--debug`, as each watches memory in its own way. It needs the same libraries as `--debug`, such as `libclang-rt-18-dev` on Debian or Ubuntu.
-- ThreadSanitizer keeps a stack of its own, which very deep recursion can overrun. Reports of running out of stack may then be cut short, or, rarely, be only the system's own. Such a program is out of stack in every build.
+- It can only follow 60000 calls at once, since ThreadSanitizer has room for no more. A program that goes deeper stops with an error that says so, even if it would run without `--race`.
 
 Not yet: `async` and `await`, waiting with a time limit, atomic values, condition variables and channels, and starting a C function directly.
 

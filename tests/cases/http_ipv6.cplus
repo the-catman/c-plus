@@ -1,0 +1,29 @@
+// A server at an IPv6 address, which is written in brackets in a URL, and goes in brackets in the Host header too.
+import http;
+import json;
+
+extern "C" string? getenv(string name);
+
+int main() throws {
+    string base = getenv("CPLUS_TEST_HTTP6") ?? "missing";
+    string ws = getenv("CPLUS_TEST_WS6") ?? "missing";
+
+    http::Response r = try http::get(base + "/hello");
+    println("{} {}", r.status, r.body);
+    // expect: 200 hello
+
+    http::WebSocket socket = try http::connect(ws + "/ws/echo");
+    try socket.send("over IPv6");
+    if (auto m = try socket.receive()) println("{}", m.data);
+    // expect: over IPv6
+    socket.close();
+
+    http::WebSocket shows = try http::connect(ws + "/ws/show-request");
+    if (auto m = try shows.receive()) {
+        json::Value doc = try json::parse<json::Value>(m.data);
+        json::Value? headers = doc.get("headers");
+        println("{}", headers?.get("host")?.text() == ws.substr(5, string::npos));
+    }
+    // expect: true
+    return 0;
+}

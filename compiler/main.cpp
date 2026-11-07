@@ -154,7 +154,12 @@ static int build(const Options& opts, const std::string& exePath) {
     }
     std::vector<std::string> link{CPLUS_LINKER, objPath, runtimeLib};
     if (opts.debug) link.push_back("-fsanitize=address");
-    if (opts.race) link.push_back("-fsanitize=thread");
+    if (opts.race) {
+        link.push_back("-fsanitize=thread");
+#ifndef __APPLE__
+        link.insert(link.end(), {"-Wl,--wrap=__tsan_func_entry", "-Wl,--wrap=__tsan_func_exit"});  // runtime/race_stack.c
+#endif
+    }
     link.insert(link.end(), opts.linkArgs.begin(), opts.linkArgs.end());
 #ifdef CPLUS_CURL_LINK
     for (auto& import : program.imports)

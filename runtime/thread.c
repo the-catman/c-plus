@@ -136,7 +136,7 @@ bool cplus_task_was_waited_for(task_state* task) {
 // An error that no one can ever see any more, since nothing waited for its task. As with one that gets out of main, the
 // program fails: `text` is what the error prints as. Nothing else is cleaned up, as other threads may be using it.
 void cplus_task_lost_error(const cplus_string* text) {
-    fflush(stdout);
+    cplus_fatal_begin();
     fprintf(stderr, "uncaught error in a task that nothing waited for: %.*s\n  = help: keep the task, and catch it with `try { t.wait(); } catch (Error e) { ... }`\n",
             (int)text->length, text->data);
     fflush(stderr);

@@ -1,0 +1,10 @@
+// Calls as deep as --race can follow, and a stack can hold, work in every build, on a thread and on the main thread.
+long down(long n) { return n == 0 ? 0 : down(n - 1) + 1; }
+
+int main() {
+    println("{}", (spawn down(30000)).wait());
+    // expect: 30000
+    println("{}", down(30000));
+    // expect: 30000
+    return 0;
+}

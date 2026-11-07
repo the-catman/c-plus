@@ -8,4 +8,3 @@ int main() {
 }
 // expect: before
 // trap: ran out of stack
-// no-race: very deep recursion can overrun what ThreadSanitizer keeps for itself, which then cannot report anything

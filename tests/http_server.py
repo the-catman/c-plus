@@ -11,6 +11,8 @@ to programs as environment variables:
   CPLUS_TEST_CA          the file with that certificate, for caFile
   CPLUS_TEST_WS          ws://127.0.0.1:port
   CPLUS_TEST_WSS         wss://localhost:port
+  CPLUS_TEST_HTTP6       http://[::1]:port, if this machine has IPv6
+  CPLUS_TEST_WS6         ws://[::1]:port, if this machine has IPv6
 """
 import base64
 import gzip
@@ -442,6 +444,10 @@ class Server(http.server.ThreadingHTTPServer):
         pass  # clients that go away, and tests that do it on purpose
 
 
+class ServerOnIpv6(Server):
+    address_family = socket.AF_INET6
+
+
 class TlsServer(Server):
     def __init__(self, address, handler, context):
         super().__init__(address, handler)
@@ -471,7 +477,16 @@ def main():
         for server in (plain, secure):
             threading.Thread(target=server.serve_forever, daemon=True).start()
         p, s = plain.server_address[1], secure.server_address[1]
+        addresses = {}
+        try:  # only what a machine with an IPv6 address has
+            on_ipv6 = ServerOnIpv6(("::1", 0), Handler)
+            threading.Thread(target=on_ipv6.serve_forever, daemon=True).start()
+            addresses["CPLUS_TEST_HTTP6"] = f"http://[::1]:{on_ipv6.server_address[1]}"
+            addresses["CPLUS_TEST_WS6"] = f"ws://[::1]:{on_ipv6.server_address[1]}"
+        except OSError:
+            pass
         print(json.dumps({
+            **addresses,
             "CPLUS_TEST_HTTP": f"http://127.0.0.1:{p}",
             "CPLUS_TEST_HTTP_OTHER": f"http://localhost:{p}",
             "CPLUS_TEST_HTTPS": f"https://localhost:{s}",

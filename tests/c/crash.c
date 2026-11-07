@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 static int stops_by_abort;
 
@@ -21,3 +22,17 @@ void break_output(int by_abort) {
 }
 
 void crash(void) { *(volatile int*)8 = 1; }
+
+static ssize_t write_that_never_ends(void* cookie, const char* data, size_t size) {
+    (void)cookie;
+    (void)data;
+    (void)size;
+    for (;;) pause();
+    return 0;
+}
+
+// An output that a thread gets stuck in, as with a reader that stopped reading, holding what stdio locks it with.
+void stick_output(void) {
+    cookie_io_functions_t functions = {.write = write_that_never_ends};
+    stdout = fopencookie(NULL, "w", functions);
+}

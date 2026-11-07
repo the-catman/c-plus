@@ -1,0 +1,8 @@
+// Calls deeper than --race can follow stop the program, before they damage what it needs. This one would run without --race.
+long down(long n) { return n == 0 ? 0 : down(n - 1) + 1; }
+
+int main() {
+    println("{}", (spawn down(70000)).wait());
+    return 0;
+}
+// race: the program ran out of stack, as --race can only follow 60000 calls at once

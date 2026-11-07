@@ -64,6 +64,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CASES = ROOT / "tests" / "cases"
@@ -351,6 +352,89 @@ def check_crash_in_output(cplus, workdir):
         run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10)
         if run.returncode != 134 or "the program used memory it does not own" not in run.stderr:
             print(f"FAIL {what} while flushing: exit code {run.returncode}\n  " + run.stderr[:500])
+            ok = False
+    return ok
+
+
+def check_crash_paths(cplus, workdir):
+    """A fatal error says so once, however many threads stop at once, and whatever another thread is stuck in."""
+    if not sys.platform.startswith("linux"):
+        return True  # tests/c/crash.c builds its output with fopencookie
+    problem = build_c_library(ROOT / "tests" / "c" / "crash.c", workdir)
+    if problem:
+        print("FAIL crash paths: " + problem)
+        return False
+    ok = True
+    source = workdir / "crash_paths.cplus"
+    exe = workdir / "crash_paths"
+    builds = [[]] + ([["--race"], ["--race", "-O"]] if HAS_RACE[0] else [])
+    def build_and_run(what, text, flags, times, expect_code, expect_text):
+        nonlocal ok
+        source.write_text(text)
+        build = subprocess.run([cplus, "build", str(source), "-o", str(exe), "-L", str(workdir), "-lcrash"] + flags, capture_output=True, text=True)
+        if build.returncode != 0:
+            print(f"FAIL {what} did not compile:\n  " + build.stderr[:500])
+            ok = False
+            return
+        for _ in range(times):
+            try:
+                run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30, errors="replace")
+            except subprocess.TimeoutExpired:
+                print(f"FAIL {what}, built with {flags}: it never ended")
+                ok = False
+                return
+            reports = len(re.findall(r"^(?:fatal|uncaught) error", run.stderr, re.M))
+            if run.returncode != expect_code or expect_text not in run.stderr or reports != 1:
+                print(f"FAIL {what}, built with {flags}: exit code {run.returncode}, {reports} reports\n  " + run.stderr[:600])
+                ok = False
+                return
+    stopping = {
+        "the same check fails": ("n + 2147483647", "does not fit in 'int'"),
+        "a crash": ("crashes()", "the program used memory it does not own"),
+    }
+    # Threads held back, and let go together.
+    for what, (expression, message) in stopping.items():
+        text = ('extern "C" void crash();\nextern "C" int usleep(int microseconds);\n'
+                'int crashes() { crash(); return 0; }\n'
+                f'int stops(Mutex gate, int n) {{ gate.lock(); gate.unlock(); return {expression}; }}\n'
+                'int main() {\n    Mutex gate = Mutex();\n    gate.lock();\n    vector<Task<int>> tasks;\n'
+                '    for (int i = 1; i <= 16; i++) tasks.push_back(spawn stops(gate, i));\n'
+                '    usleep(20000);\n    gate.unlock();\n    for (auto t : tasks) println("{}", t.wait());\n    return 0;\n}\n')
+        for flags in builds:
+            build_and_run(f"threads at once when {what}", text, flags, 25, 134, message)
+    # A thread stuck in the output, holding its lock.
+    endings = {
+        "a crash": ("crash();", 134, "the program used memory it does not own"),
+        "a failed check": ("println(\"{}\", big() + 1);", 134, "does not fit in 'int'"),
+        "a stop": ("Mutex m = Mutex();\n    m.lock();\n    m.lock();", 134, "it would wait for itself"),
+    }
+    for what, (statement, code, message) in endings.items():
+        text = ('extern "C" void stick_output();\nextern "C" void crash();\nextern "C" int usleep(int microseconds);\n'
+                'int big() { return 2147483647; }\nvoid prints() { println("{}", string(1000000, \'x\')); }\n'
+                'int main() throws {\n    stick_output();\n    spawn prints();\n    usleep(100000);\n'
+                f'    {statement}\n    return 0;\n}}\n')
+        for flags in builds:
+            build_and_run(f"{what} while a thread is stuck in the output", text, flags, 2, code, message)
+    # An error out of main is reported, and then the program waits for its threads, as it does when main returns.
+    text = ('extern "C" void stick_output();\nextern "C" int usleep(int microseconds);\n'
+            'void prints() { println("{}", string(1000000, \'x\')); }\n'
+            'int main() throws {\n    stick_output();\n    spawn prints();\n    usleep(100000);\n    throw Error("from main");\n}\n')
+    for flags in builds:
+        source.write_text(text)
+        build = subprocess.run([cplus, "build", str(source), "-o", str(exe), "-L", str(workdir), "-lcrash"] + flags, capture_output=True, text=True)
+        if build.returncode != 0:
+            print("FAIL an error from main while a thread is stuck did not compile:\n  " + build.stderr[:500])
+            ok = False
+            continue
+        program = subprocess.Popen([str(exe)], stderr=subprocess.PIPE, text=True, errors="replace")
+        watchdog = threading.Timer(30, program.kill)
+        watchdog.start()
+        line = program.stderr.readline()
+        watchdog.cancel()
+        program.kill()
+        program.communicate()
+        if not line.startswith("uncaught error") or "from main" not in line:
+            print(f"FAIL an error from main while a thread is stuck in the output, built with {flags}: [{line[:200]}]")
             ok = False
     return ok
 
@@ -656,6 +740,9 @@ def main():
         if any(imports_http(p) for p in paths):
             if compiler_has_http(cplus, pathlib.Path(tmp)):
                 server = start_http_server()
+                if "CPLUS_TEST_WS6" not in os.environ:
+                    print("note: leaving out the tests of IPv6, since this machine has no address for it")
+                    paths = [p for p in paths if "ipv6" not in p.name]
             else:
                 print("note: leaving out the tests of http, since this compiler was built without libcurl")
                 paths = [p for p in paths if not imports_http(p)]
@@ -663,6 +750,7 @@ def main():
             ok = check_nesting_limit(cplus, pathlib.Path(tmp)) and ok
             ok = check_unique_copies(cplus, pathlib.Path(tmp)) and ok
             ok = check_crash_in_output(cplus, pathlib.Path(tmp)) and ok
+            ok = check_crash_paths(cplus, pathlib.Path(tmp)) and ok
             ok = check_print_lines(cplus, pathlib.Path(tmp)) and ok
             ok = check_what_is_linked(cplus, pathlib.Path(tmp)) and ok
             ok = check_source_rules() and ok

@@ -19,6 +19,28 @@
 void __sanitizer_print_stack_trace(void);
 #endif
 
+// One thread reports a fatal error. If another stops too, it waits for the first to end the program, so there is one message.
+static void claim_the_report(void) {
+    static _Thread_local char this_thread;
+    static char* reporting = NULL;
+    char* first = NULL;
+    if (!__atomic_compare_exchange_n(&reporting, &first, &this_thread, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) && first != &this_thread)
+        for (;;) pause();
+}
+
+// What was printed comes before the message. Another thread may have the output and be stuck, so this does not wait for it
+// for long. It keeps the output locked if it got it, as nothing else should be printed after a fatal error.
+static void flush_the_output(void) {
+    int tries = 0;
+    while (ftrylockfile(stdout) != 0 && ++tries < 100) usleep(10000);
+    if (tries < 100) fflush(stdout);
+}
+
+void cplus_fatal_begin(void) {
+    claim_the_report();
+    flush_the_output();
+}
+
 // A third copy is built with CPLUS_RACE_RUNTIME too, under ThreadSanitizer, for programs built with --race.
 #ifdef CPLUS_RACE_RUNTIME
 // ThreadSanitizer cannot see what a fence does, so it takes this to be a race on what was just freed. The stronger form costs
@@ -55,7 +77,7 @@ void __tsan_on_report(void* report) {
         message = "memory was used by one thread after another had freed it";
         help = "the report above shows both places";
     }
-    fflush(stdout);
+    cplus_fatal_begin();
     fprintf(stderr, "fatal error: %s\n  = help: %s\n", message, help);
 }
 #else
@@ -110,7 +132,7 @@ __attribute__((no_sanitize("address"))) void __asan_on_error(void) {
             help = meanings[i].help;
             break;
         }
-    fflush(stdout);
+    cplus_fatal_begin();
     fprintf(stderr, "fatal error: %s\n  = help: %s\n", message, help);
 }
 #endif
@@ -136,19 +158,7 @@ _Noreturn static void stop_program(void) {
 // its own signal, and the message still gets out: only the flush uses stdio, and the message
 // goes through write().
 //
-// ThreadSanitizer keeps a stack of its own, which very deep recursion can fill before the real one, and then run over what it
-// keeps next to that, without a word. From there on, whatever goes through it can crash: each function it checks and each C
-// function it watches, as nearly all are. A crash inside the handler ends the program at once, since it blocks signals there.
-// So in such a build the handler is not checked, and uses only what ThreadSanitizer has nothing to do with.
-#ifdef CPLUS_RACE_RUNTIME
-#include <sys/syscall.h>
-#define NOT_CHECKED __attribute__((disable_sanitizer_instrumentation))
-void __tsan_func_entry(void* caller);
-#else
-#define NOT_CHECKED
-#endif
-
-NOT_CHECKED static void write_error(const char* message) {
+static void write_error(const char* message) {
     size_t left = strlen(message);
     while (left) {
         ssize_t wrote = write(STDERR_FILENO, message, left);
@@ -166,14 +176,9 @@ static const char bad_memory[] =
     "fatal error: the program used memory it does not own\n"
     "  = help: a pointer may be wrong; run with --debug to see where\n";
 
-NOT_CHECKED static void on_crash(int signal_number, siginfo_t* info, void* context) {
+static void on_crash(int signal_number, siginfo_t* info, void* context) {
     (void)signal_number;
-    // One thread reports. If another crashes too, it waits for the first to end the program.
-    static _Thread_local char this_thread;
-    static char* crashing = NULL;
-    char* first = NULL;
-    if (!__atomic_compare_exchange_n(&crashing, &first, &this_thread, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) && first != &this_thread)
-        for (;;) pause();
+    claim_the_report();
     // Where the handler got to: nowhere yet, flushing, or past that.
     static volatile sig_atomic_t state = 0;
     static const char* volatile message = NULL;
@@ -192,16 +197,6 @@ NOT_CHECKED static void on_crash(int signal_number, siginfo_t* info, void* conte
 #endif
     const uintptr_t near = 64 * 1024;
     message = stack && address + near >= stack && address <= stack + near ? out_of_stack : bad_memory;
-#if defined(CPLUS_RACE_RUNTIME) && defined(__linux__)
-    bool in_its_stack = false;
-#ifdef __x86_64__
-    in_its_stack = (uintptr_t)((ucontext_t*)context)->uc_mcontext.gregs[REG_RIP] - (uintptr_t)__tsan_func_entry < 128;
-#endif
-    fflush_unlocked(stdout);
-    if (in_its_stack || message == out_of_stack) syscall(SYS_write, STDERR_FILENO, out_of_stack, sizeof out_of_stack - 1);
-    else syscall(SYS_write, STDERR_FILENO, bad_memory, sizeof bad_memory - 1);
-    syscall(SYS_exit_group, 134);
-#endif
     struct sigaction again;
     memset(&again, 0, sizeof again);
     again.sa_sigaction = on_crash;
@@ -209,10 +204,7 @@ NOT_CHECKED static void on_crash(int signal_number, siginfo_t* info, void* conte
     sigemptyset(&again.sa_mask);
     sigaction(SIGABRT, &again, NULL);
     state = 1;
-    // Another thread may have the output and be stuck, so the message does not wait for it for long.
-    int tries = 0;
-    while (ftrylockfile(stdout) != 0 && ++tries < 100) usleep(10000);
-    if (tries < 100) fflush(stdout);
+    flush_the_output();
     state = 2;
     write_error(message);
     stop_program();
@@ -292,14 +284,14 @@ void cplus_start(void) {
 // Called when a runtime check fails (integer overflow, division by zero, ...).
 // Output printed so far is flushed first so the error appears after it.
 _Noreturn void cplus_trap(const char* message, const char* file, int32_t line, int32_t column) {
-    fflush(stdout);
+    cplus_fatal_begin();
     fprintf(stderr, "fatal error: %s\n  --> %s:%" PRId32 ":%" PRId32 "\n", message, file, line, column);
     stop_program();
 }
 
 // Called for a mistake in the program that was found where no line of it is known.
 _Noreturn void cplus_stop(const char* message, const char* help) {
-    fflush(stdout);
+    cplus_fatal_begin();
     fprintf(stderr, "fatal error: %s\n", message);
     if (*help) fprintf(stderr, "  = help: %s\n", help);
     stop_program();
@@ -307,7 +299,7 @@ _Noreturn void cplus_stop(const char* message, const char* help) {
 
 // The same, for a message that was worked out and may hold anything.
 _Noreturn void cplus_trap_text(const char* message, int64_t size, const char* file, int32_t line, int32_t column) {
-    fflush(stdout);
+    cplus_fatal_begin();
     fprintf(stderr, "fatal error: %.*s\n  --> %s:%" PRId32 ":%" PRId32 "\n", (int)size, message, file, line, column);
     stop_program();
 }
@@ -372,7 +364,7 @@ static int leak_checking(void) {
 }
 
 _Noreturn static void bad_count(void) {
-    fflush(stdout);
+    cplus_fatal_begin();
     fputs("internal error: an object was used after it was freed; this is a bug in the C+ compiler\n", stderr);
     stop_program();
 }
@@ -380,7 +372,7 @@ _Noreturn static void bad_count(void) {
 void* cplus_alloc(int64_t size) {
     int64_t* object = calloc(1, (size_t)size);
     if (!object) {
-        fflush(stdout);
+        cplus_fatal_begin();
         fputs("fatal error: out of memory\n", stderr);
         stop_program();
     }
@@ -455,7 +447,7 @@ static const int64_t weak_mask = (int64_t)0x3fffffff << 32;
 static const int64_t destroying = (int64_t)1 << 62;
 
 _Noreturn static void too_many_references(void) {
-    fflush(stdout);
+    cplus_fatal_begin();
     fputs("fatal error: there are too many references to one object\n", stderr);
     stop_program();
 }
@@ -542,7 +534,7 @@ void* cplus_weak_alive(void* part) {
 }
 
 _Noreturn static void out_of_memory(void) {
-    fflush(stdout);
+    cplus_fatal_begin();
     fputs("fatal error: out of memory\n", stderr);
     stop_program();
 }
@@ -667,7 +659,13 @@ void cplus_str_release(void* owner) {
 
 // An error that got out of main: what it is, already printed into `text`, which is used up here.
 void cplus_uncaught(cplus_string* text) {
-    fflush(stdout);
+    // The program goes on to wait for its threads, which may print, and whose errors are still to be reported.
+    int tries = 0;
+    while (ftrylockfile(stdout) != 0 && ++tries < 100) usleep(10000);
+    if (tries < 100) {
+        fflush(stdout);
+        funlockfile(stdout);
+    }
     fprintf(stderr, "uncaught error: %.*s\n  = help: catch it with `try { ... } catch (Error e) { ... }`\n", (int)text->length, text->data);
     cplus_str_release(text->owner);
 }
