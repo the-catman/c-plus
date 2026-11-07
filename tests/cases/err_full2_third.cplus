@@ -1,0 +1,19 @@
+// The last re-read: a cast to an optional of the same kind of reference around an unrelated class, a function declared
+// with `class` and a pointer type, one placeholder for one pair, and a method that takes arguments reached with `.`.
+class A { public: int n = 0; void twice(int x) { } };
+class C { };
+class P { };
+class P* mk() { return null; }
+// error: write just `P`, as in C++
+// not-error: there is no function named 'mk'
+void f(local<A> l, unique<A> u, A k) {
+    auto o = static_cast<local<C>?>(l);
+    // error: this cannot become a 'local<C>?': build a new object, as in `local<C>(...)`
+    auto w = static_cast<unique<C>?>(move(u));
+    // error: this cannot become a 'unique<C>?': build a new object, as in `unique<C>(...)`
+    hashmap<double, int> m = {1.5, 2};
+    // error: write each entry as `{key, value}`: `{{key, value}}`
+    auto t = k.twice;
+    // error: 'twice' is a method; call it with `twice(...)`
+}
+int main() { P* p = mk(); return 0; }

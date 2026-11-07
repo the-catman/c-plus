@@ -1240,7 +1240,11 @@ void Parser::parseTopLevel(Program& prog) {
             if (peek(1).kind == Tok::Ident &&
                 (peek(2).kind == Tok::Star || peek(2).kind == Tok::Amp ||
                  (peek(2).kind == Tok::Ident && peek(2).text != "final" && (peek(3).kind == Tok::LParen || peek(3).kind == Tok::Semi || peek(3).kind == Tok::Assign)))) {
-                if (peek(2).kind == Tok::Ident && peek(3).kind == Tok::LParen) prog.unreadFunctions.insert(peek(2).text);  // its calls say nothing more
+                for (size_t at = 2; at < 8; ++at)  // `class Node make()` or `class P* mk()`: its calls say nothing more
+                    if (peek(at).kind == Tok::Ident && peek(at + 1).kind == Tok::LParen) {
+                        prog.unreadFunctions.insert(peek(at).text);
+                        break;
+                    }
                 rejectStructKeyword();  // `struct Point make()`, as C writes a struct's type
             }
             parseRecord();

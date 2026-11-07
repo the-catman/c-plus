@@ -3087,7 +3087,11 @@ void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
                 example += (example.empty() ? "" : ", ") + std::string("{") + k + ", " + v + "}";
             }
             diags_.error(list.loc, "each entry of a hashmap's { } list is in braces of its own",
-                         "write each entry as `{key, value}`: `{" + (example.empty() ? std::string("{key, value}, {key, value}") : example) + "}`", spec::HashMaps);
+                         "write each entry as `{key, value}`: `{" + (example.empty() ? [&] {
+                             std::string pairs;
+                             for (size_t i = 0; i + 1 < list.elements.size(); i += 2) pairs += std::string(pairs.empty() ? "" : ", ") + "{key, value}";
+                             return pairs;
+                         }() : example) + "}`", spec::HashMaps);
             for (auto& el : list.elements) checkLooseValue(*el.value, flow);
             list.type = Type::error();
             return;
@@ -3470,7 +3474,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     BasePath found = findMember(*toStart.back(), m.field, e.loc);
     if (found.empty() || found.back()->fieldIndex(m.field) < 0) {
         std::string help;
-        if (sd.findMethod(m.field)) help = q(m.field) + " is a method; call it with `" + m.field + "()`";
+        if (const FuncDecl* method = sd.findMethod(m.field)) help = q(m.field) + " is a method; call it with `" + m.field + (method->params.empty() ? "()" : "(...)") + "`";
         else if (std::string guess = suggestField(sd, m.field); !guess.empty()) help = "did you mean " + q(guess) + "?";
         else help = listFields(sd, m.field);
         diags_.error(e.loc, q(sd.name) + " has no field named " + q(m.field), help, spec::Structs);
@@ -5858,7 +5862,9 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     }
     if (from->isLocal() || to->isLocal()) {
         diags_.error(c.loc, "a cast cannot change a reference that only this thread counts, as this one from " + q(from) + " to " + q(to) + " would",
-                     from->isLocal() && to->isOptional() && to->elem->isObjectRef() && (to->elem->isLocal() || (to->elem->isClass() && (to->elem->decl == from->elem->decl || from->elem->decl->derivesFrom(to->elem->decl))))
+                     from->isLocal() && to->isOptional() && to->elem->isObjectRef() &&
+                             ((to->elem->isLocal() && to->elem->elem && (to->elem->elem->decl == from->elem->decl || from->elem->decl->derivesFrom(to->elem->elem->decl))) ||
+                              (to->elem->isClass() && (to->elem->decl == from->elem->decl || from->elem->decl->derivesFrom(to->elem->decl))))
                          ? (to->elem->isLocal() ? "no cast is needed: `" + std::string(to->name) + " x = " + asBase(spelled(*c.operand, "l")) + ";`"
                                                 : "`" + std::string(to->name) + " x = " + asBase(spelled(*c.operand, "l")) + ".get();` lends the object")
                      : from->isLocal() && to->isOptional() && to->elem->isObjectRef()
@@ -5873,7 +5879,8 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     if (from->isUnique() || to->isUnique()) {
         diags_.error(c.loc, "a cast cannot change who owns an object, as this one from " + q(from) + " to " + q(to) + " would",
                      from->isUnique() && to->isOptional() && to->elem->isObjectRef() &&
-                             !(to->elem->isUnique() || (to->elem->isClass() && (to->elem->decl == from->elem->decl || from->elem->decl->derivesFrom(to->elem->decl))))
+                             !((to->elem->isUnique() && to->elem->elem && (to->elem->elem->decl == from->elem->decl || from->elem->decl->derivesFrom(to->elem->elem->decl))) ||
+                               (to->elem->isClass() && (to->elem->decl == from->elem->decl || from->elem->decl->derivesFrom(to->elem->decl))))
                          ? "this cannot become a " + q(to) + ": build a new object, as in `" + std::string(to->elem->name) + "(...)`"
                      : from->isUnique() && to->isOptional() && to->elem->isObjectRef()
                          ? (to->elem->isUnique() ? "no cast is needed: `" + std::string(to->name) + " x = " +
