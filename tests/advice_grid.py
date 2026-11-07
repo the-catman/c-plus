@@ -114,6 +114,8 @@ SAME = [  # (declared, wrong, printed, expected)
     ("S a = {};\nS b = {};\nbool f = true;", "(f ? a : b).x++;", "a.x", "2"),
     ("vector<S> ws = {S{}};", "ws.back().x -= N;", "ws[0].x", "-4"),
     ("vector<S> ws = {S{}};", "++ws.back().x;", "ws[0].x", "2"),
+    ("O? a = O{.h = H{.os = S{}}};", "int? r = a?.h?.os?.bump();", "a?.h?.os?.x", "2"),
+    ("O? a = O{.h = H{}};", "int r = a?.h?.s.bump() ?? 0;", "a?.h?.s.x", "2"),
     ("S a = {};\nbool f = true;", "(f ? a : makeS(2)).set();", "a.x", "7"),
     ("S b = {};\nbool f = false;", "(f ? makeS(2) : b).set();", "b.x", "7"),
     ("vector<S> ws = {S{}, S{}};\nbool f = false;", "(f ? ws.back() : ws.front()).x = N;", "ws[0].x", "5"),

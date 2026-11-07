@@ -1,0 +1,44 @@
+// What a `?:` statement throws away, a branch that is a place after all, `try` deeper in, and results through several `?.`.
+struct S {
+    int x = 0;
+    void set() { x = 1; }
+    int bump() { x = x + 1; return x; }
+};
+struct H { S? os; };
+struct O { H? h; };
+class W {
+public:
+    S? s;
+    S? g() { return s; }
+};
+W makeW() throws { return W(); }
+S? maybeS(bool f) { if (f) return S{}; return null; }
+
+void thrownAwayByOperators() {
+    S? o = null;
+    S d = {};
+    bool f = true;
+    f ? (o ?? d).bump() : 0;
+    // error: 'bump' may change the struct, but '??' gives a copy of it
+    (o ?? d).bump() + 1;
+    // error: 'bump' may change the struct, but '??' gives a copy of it
+    f ? maybeS(f)?.bump() : null;
+    // error: 'bump' may change the struct, but '?.' works on a copy of it
+}
+void aBranchThatIsAPlace(hashmap<string, S> m) {
+    S a = {};
+    bool f = true;
+    (f ? a : m.at("k")).set();
+    // error: `?:` gives a copy of what it chose. Change each in place, with `if` and `else`
+}
+void tryDeeperIn() throws {
+    try makeW().g()?.set();
+    // error: `auto opt = try makeW().g();`
+}
+void keptThroughSeveral() {
+    O? a = O{.h = H{.os = S{}}};
+    int? r = a?.h?.os?.bump();
+    // error: unwrap each optional, change the copy, keep what it gives, and store each one back: `int? result = null; if (auto b = a) { if (auto c = b.h) { if (auto d = c.os) { result = d.bump(); c.os = d; } b.h = c; } a = b; }`
+}
+
+int main() { return 0; }

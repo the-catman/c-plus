@@ -133,10 +133,10 @@ private:
     std::string constHolderHelp(const Expr& e, bool canCopy = true);
     std::string loopCopyNote(const Expr& e);
     std::string changeForm(const Expr& base, const std::string& change, const std::string& opening, const std::string& how, const std::string& before = "");
-    std::string storeItBack(const Expr& recv, const std::string& method, bool hasArguments, const std::string& before = "");
+    std::string storeItBack(const Expr& recv, const std::string& method, bool hasArguments, const std::string& before = "", const std::string& keepAs = "");
     const Type* checkSpawn(SpawnExpr& s, Flow& flow);
     const Expr* spawned_ = nullptr;  // the call `spawn` is on, whose error goes in the task
-    const Expr* discarded_ = nullptr;  // the expression of the statement being checked, whose value goes nowhere
+    std::vector<const Expr*> discarded_;  // what the statement being checked throws away, whose values go nowhere
     const Type* checkExpr(Expr& e, Flow& flow);
     // Checks `e` where a value of type `expected` is needed. A `{ }` list takes that type.
     void checkValue(Expr& e, Flow& flow, const Type* expected, const std::string& context);

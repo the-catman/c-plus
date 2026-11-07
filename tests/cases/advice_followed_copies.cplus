@@ -52,6 +52,7 @@ int fromGenerics() {
     if (auto v = opt) { v.bump(); opt = v; }
     return opt?.n ?? 0;
 }
+struct Deep { Counted? inner; };
 struct Wrapped {
     unique<N> held = unique<N>();
     int n = 1;
@@ -198,6 +199,12 @@ int main() {
     if (moved) { auto v = move(moved).value(); kept = v.bumped(); moved = move(v); }
     println("{} {}", kept, moved?.n);
     // expect: 3 3
+    // Keeping what it gives, through several optionals
+    Deep? deep = Deep{.inner = Counted{}};
+    int? deepResult = null;
+    if (auto b = deep) { if (auto c = b.inner) { deepResult = c.bump(); b.inner = c; } deep = b; }
+    println("{} {}", deepResult, deep?.inner?.n);
+    // expect: 1 1
     // What takes the place of make_shared
     auto node = Node();
     println("{}", node.value);

@@ -346,12 +346,42 @@ static CopiedFrom copiedFrom(const Expr& e) {
 // Whether what `e` gives only exists as what it gave: the result of a function, and not a copy of something the program can reach.
 static bool isProgramsOwnMethod(const MethodCallExpr& call) { return call.method && !comesWithTheLanguage(*call.method->owner); }
 
-// `try ` for a call that can fail, which has to be written before it wherever it goes.
-static std::string tryIfItFails(const Expr& e) {
-    if (e.kind == Expr::Kind::Call && static_cast<const CallExpr&>(e).target && static_cast<const CallExpr&>(e).target->isThrows) return "try ";
-    if (e.kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr&>(e).method && static_cast<const MethodCallExpr&>(e).method->isThrows) return "try ";
-    return "";
+// Whether a call that can fail is anywhere in `e`, so that `try` has to be written before it wherever it goes.
+static bool hasFailingCall(const Expr& e) {
+    switch (e.kind) {
+        case Expr::Kind::Call: {
+            auto& c = static_cast<const CallExpr&>(e);
+            if (c.target && c.target->isThrows) return true;
+            for (auto& a : c.args)
+                if (hasFailingCall(*a)) return true;
+            return false;
+        }
+        case Expr::Kind::MethodCall: {
+            auto& c = static_cast<const MethodCallExpr&>(e);
+            if (c.method && c.method->isThrows) return true;
+            if (c.receiver && hasFailingCall(*c.receiver)) return true;
+            if (c.lowered && hasFailingCall(*c.lowered)) return true;
+            for (auto& a : c.args)
+                if (hasFailingCall(*a)) return true;
+            return false;
+        }
+        case Expr::Kind::Member: return hasFailingCall(*static_cast<const MemberExpr&>(e).base);
+        case Expr::Kind::Index: return hasFailingCall(*static_cast<const IndexExpr&>(e).base) || hasFailingCall(*static_cast<const IndexExpr&>(e).index);
+        case Expr::Kind::Unary: return hasFailingCall(*static_cast<const UnaryExpr&>(e).operand);
+        case Expr::Kind::Binary: return hasFailingCall(*static_cast<const BinaryExpr&>(e).lhs) || hasFailingCall(*static_cast<const BinaryExpr&>(e).rhs);
+        case Expr::Kind::OptChain: return hasFailingCall(*static_cast<const OptChainExpr&>(e).base) || hasFailingCall(*static_cast<const OptChainExpr&>(e).body);
+        case Expr::Kind::OptValue: return false;  // the chain's base, already looked at
+        case Expr::Kind::Ternary: {
+            auto& t = static_cast<const TernaryExpr&>(e);
+            return hasFailingCall(*t.cond) || hasFailingCall(*t.thenExpr) || hasFailingCall(*t.elseExpr);
+        }
+        case Expr::Kind::Coalesce: return hasFailingCall(*static_cast<const CoalesceExpr&>(e).lhs) || hasFailingCall(*static_cast<const CoalesceExpr&>(e).rhs);
+        case Expr::Kind::Borrow: return hasFailingCall(*static_cast<const BorrowExpr&>(e).operand);
+        default: return false;
+    }
 }
+
+static std::string tryIfItFails(const Expr& e) { return hasFailingCall(e) ? "try " : ""; }
 
 static bool isTemporaryResult(const Expr& e) {
     if (e.kind == Expr::Kind::Call) return true;
@@ -489,7 +519,7 @@ static std::string pathTo(const Expr*& e) {
 }
 
 // How to change what is at `recv` in an optional with this method: unwrap each `?.` on the way to it, and store each back.
-std::string Sema::storeItBack(const Expr& recv, const std::string& method, bool hasArguments, const std::string& before) {
+std::string Sema::storeItBack(const Expr& recv, const std::string& method, bool hasArguments, const std::string& before, const std::string& keepAs) {
     const std::string args = hasArguments ? "(...)" : "()";
     std::vector<std::string> paths;  // from each value inside to the next, the last one first
     std::vector<bool> shared;        // whether the value at that level is a class object, which needs no storing back
@@ -533,15 +563,23 @@ std::string Sema::storeItBack(const Expr& recv, const std::string& method, bool 
     for (auto& p : paths) used += " " + p;
     std::string open, close;
     std::string outer = name;
+    std::string keep;  // `result = `, when what it gives is used
+    if (!keepAs.empty()) {
+        const std::string r = freshName(used, {"result", "got", "made"});
+        used += " " + r;
+        open = keepAs + " " + r + " = null; ";
+        keep = r + " = ";
+    }
     for (size_t i = paths.size(); i-- > 0;) {
         const std::string inner = freshName(used, {"a", "b", "c", "d", "e", "f", "g", "h"});
         used += " " + inner;
         open += "if (auto " + inner + " = " + outer + ") { ";
         close = (shared[i] ? std::string() : " " + outer + " = " + inner + ";") + " }" + close;
         outer = inner + (i ? paths[i] : "");
-        if (i == 0) open += before + inner + paths[0] + "." + method + args + ";";
+        if (i == 0) open += keep + before + inner + paths[0] + "." + method + args + ";";
     }
-    return "unwrap each optional, change the copy and store each one back: `" + open + close + "`" + (from.map.empty() || !storesInRoot ? "" : kKeyMayBeAdded) + (storesInRoot ? loopCopyNote(*root) : "");
+    return std::string(keep.empty() ? "unwrap each optional, change the copy and store each one back: `" : "unwrap each optional, change the copy, keep what it gives, and store each one back: `") + open + close + "`" +
+           (from.map.empty() || !storesInRoot ? "" : kKeyMayBeAdded) + (storesInRoot ? loopCopyNote(*root) : "");
 }
 
 static const char* const kCopyingMethods[] = {"back", "front", "at", "get", "value", "value_or", "values", "items", "keys"};
@@ -591,13 +629,27 @@ static bool reachesAPlace(const Expr& e) {
     }
 }
 
-// The call whose result a statement throws away: `f()` in `try f();` or in `o?.f();`.
-static const Expr* thrownAway(const Expr& e) {
-    const Expr* x = &e;
-    while (true) {
-        if (x->kind == Expr::Kind::Try) x = static_cast<const TryExpr*>(x)->operand.get();
-        else if (x->kind == Expr::Kind::OptChain) x = static_cast<const OptChainExpr*>(x)->body.get();
-        else return x;
+// What a statement throws away: `f()` in `try f();`, in `o?.f();`, and both sides of `c ? f() : g();` or `f() + 1;`.
+static void thrownAway(const Expr& e, std::vector<const Expr*>& out) {
+    switch (e.kind) {
+        case Expr::Kind::Try: thrownAway(*static_cast<const TryExpr&>(e).operand, out); return;
+        case Expr::Kind::OptChain: thrownAway(*static_cast<const OptChainExpr&>(e).body, out); return;
+        case Expr::Kind::Ternary:
+            thrownAway(*static_cast<const TernaryExpr&>(e).thenExpr, out);
+            thrownAway(*static_cast<const TernaryExpr&>(e).elseExpr, out);
+            return;
+        case Expr::Kind::Coalesce:
+            thrownAway(*static_cast<const CoalesceExpr&>(e).lhs, out);
+            thrownAway(*static_cast<const CoalesceExpr&>(e).rhs, out);
+            return;
+        case Expr::Kind::Binary:
+            thrownAway(*static_cast<const BinaryExpr&>(e).lhs, out);
+            thrownAway(*static_cast<const BinaryExpr&>(e).rhs, out);
+            return;
+        case Expr::Kind::Unary:
+            if (!isDeref(e)) thrownAway(*static_cast<const UnaryExpr&>(e).operand, out);
+            return;
+        default: out.push_back(&e);
     }
 }
 
@@ -2421,10 +2473,11 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
             for (auto& v : static_cast<DeclGroupStmt&>(s).decls) checkVarDecl(*v, flow);
             return;
         case Stmt::Kind::Expr: {
-            const Expr* outer = discarded_;
-            discarded_ = thrownAway(*static_cast<ExprStmt&>(s).expr);  // what it gives goes nowhere
+            std::vector<const Expr*> outer = std::move(discarded_);
+            discarded_.clear();
+            thrownAway(*static_cast<ExprStmt&>(s).expr, discarded_);  // what it gives goes nowhere
             checkExpr(*static_cast<ExprStmt&>(s).expr, flow);
-            discarded_ = outer;
+            discarded_ = std::move(outer);
             return;
         }
         case Stmt::Kind::Block: {
@@ -2509,10 +2562,11 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
             // If the step can never run, stepFlow is unreachable: types are still
             // checked, but definite assignment is not.
             for (auto& step : st.steps) {
-                const Expr* outer = discarded_;
-                discarded_ = thrownAway(*step);
+                std::vector<const Expr*> outer = std::move(discarded_);
+                discarded_.clear();
+                thrownAway(*step, discarded_);
                 checkExpr(*step, stepFlow);
-                discarded_ = outer;
+                discarded_ = std::move(outer);
             }
             checkMovedInLoop(head, movesBefore, stepFlow);
             Flow after = flow;
@@ -2717,7 +2771,13 @@ std::string Sema::copyHelp(const Expr& target, const std::string& change, bool g
         if (!c.empty() && !a.empty() && !b.empty())
             return givesValue ? "`?:` gives a copy of what it chose. Call it on each in place: `(" + c + " ? " + before + a + path + " : " + before + b + path + ")`"
                               : "`?:` gives a copy of what it chose. Change each in place: `if (" + c + ") " + before + a + path + "; else " + before + b + path + ";`";
-        if (!c.empty() && !givesValue && (!a.empty() || !b.empty()))  // the other is a value made here, which nothing keeps
+        auto holdsAPlace = [](const Expr& branch) {  // `g ? b : make()` holds `b`
+            if (branch.kind != Expr::Kind::Ternary) return reachesAPlace(branch);
+            auto& inner = static_cast<const TernaryExpr&>(branch);
+            return reachesAPlace(*inner.thenExpr) || reachesAPlace(*inner.elseExpr);
+        };
+        const bool otherIsMadeHere = a.empty() ? !holdsAPlace(*t.thenExpr) : b.empty() ? !holdsAPlace(*t.elseExpr) : false;
+        if (!c.empty() && !givesValue && (!a.empty() || !b.empty()) && otherIsMadeHere)  // the other is a value made here, which nothing keeps
             return "`?:` gives a copy of what it chose, so this changes nothing. Change " + q(!a.empty() ? a : b) + " itself when it is chosen: `if (" +
                    (!a.empty() ? c : "!(" + c + ")") + ") " + before + (!a.empty() ? a : b) + path + ";`";
         return "`?:` gives a copy of what it chose. Change each in place, with `if` and `else`";
@@ -5013,11 +5073,12 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         diags_.error(call.loc, q(m->owner->name + "::" + m->name) + " has no body, so it cannot be called directly",
                      q(m->owner->name) + " only declares it, so there is nothing to call. Inside an override, write what the method does here. Elsewhere, `x." + m->name + "(...)` calls the version the object really has", spec::Inheritance);
     const bool givesValue = m->retType && !m->retType->is(K::Void);
-    const bool resultUsed = givesValue && &call != discarded_;
+    const bool resultUsed = givesValue && std::find(discarded_.begin(), discarded_.end(), &call) == discarded_.end();
     const std::string tryFirst = m->isThrows ? "try " : "";
     // `spawn` runs a method of a struct on a copy of it anyway, and what a function gave changes nothing the program has
     if (&call != spawned_ && !m->isConst && t->isStruct() && inOptionalCopy(recv) && (isReferenceInCpp(recv) || !resultUsed)) {
-        std::string help = storeItBack(recv, m->name, !call.args.empty(), tryFirst);
+        const std::string keepType = std::string(m->retType->name) + (m->retType->isOptional() || m->retType->isPointer() ? "" : "?");
+        std::string help = storeItBack(recv, m->name, !call.args.empty(), tryFirst, resultUsed ? keepType : "");
         const Expr* chainBase = recv.kind == Expr::Kind::OptValue ? static_cast<const OptValueExpr&>(recv).chain->base.get() : nullptr;
         if (resultUsed && chainBase && chainBase->type && constHolderHelp(*chainBase).empty() && loopCopyNote(*chainBase).empty()) {
             // Keep what it gives, which the store-back form would lose
