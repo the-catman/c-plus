@@ -3,6 +3,9 @@ class Node { };
 struct Pt { int x = 0; };
 void uses(weak<Node> w, array<int, 3> a, Node? n, hashmap<string, vector<Pt>> m, const int* p, Mutex mu) { }
 void more(Task<long, throws> a, vector<Task<int, throws>> b, char* bytes) { }
+template <typename T>
+class Box { public: T x; };
+void boxes(Box<int>? a, vector<Box<int>?> b) { }
 int main() {
     long size = 3;
     int? maybe = null;

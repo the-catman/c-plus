@@ -1,0 +1,21 @@
+// A pointer to a class, generic or not, is what a class variable already is, and may be null; a const one, a pointer to
+// a pointer, and a signed byte have no C+ form.
+class Node { public: int v = 0; };
+template <typename T>
+class Box { public: T x; };
+using A1 = const Node*;
+// error: write the type itself wherever `A1` is used, as C+ writes it
+using A2 = Box<int>*;
+// error: write the type itself, `Box<int>?`, wherever `A2` is used
+using A3 = Box<int>**;
+// error: write the type itself wherever `A3` is used, as C+ writes it
+using A4 = std::vector<Box<int>*>;
+// error: write the type itself, `vector<Box<int>?>`, wherever `A4` is used
+using A6 = signed char;
+// error: write the type itself wherever `A6` is used, as C+ writes it
+using A7 = unsigned char;
+// error: write the type itself, `char`, wherever `A7` is used
+using B1 = LaterClass*;
+// error: write the type itself, `LaterClass?`, wherever `B1` is used
+class LaterClass { };
+int main() { return 0; }

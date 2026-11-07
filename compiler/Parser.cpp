@@ -1010,8 +1010,10 @@ void Parser::rejectOtherLanguages() {
         }
         size_t pos = 0;
         bool known = !cutShort;
-        auto isClassName = [&](const std::string& name) {
-            const StructDecl* sd = typeNames_.count(name) ? prog_->findStruct(name) : nullptr;
+        auto isClassName = [&](const std::string& name) {  // a class of the program's own, generic or not
+            const std::string base = name.substr(0, name.find('<'));
+            if (const TemplateDecl* tmpl = classTemplate(base)) return tmpl->start < toks_.size() && toks_[tmpl->start].kind == Tok::KwClass;
+            const StructDecl* sd = typeNames_.count(base) ? prog_->findStruct(base) : nullptr;
             return sd && sd->isClass;
         };
         // What a word can stand for: a type of C+, a C++ name C+ has another form of, or a type of the program's own
@@ -1035,6 +1037,7 @@ void Parser::rejectOtherLanguages() {
             }
             const bool isStd = fromStd[pos];
             std::string w = words[pos++];
+            if (w == "signed" && pos < words.size() && words[pos] == "char") known = false;  // a char is 0 to 255, and C+ has no signed byte
             if (w == "unsigned" || w == "signed") {  // the C+ type of the same size
                 w = pos < words.size() && (words[pos] == "long" || words[pos] == "char") ? words[pos] : "int";
                 if (pos < words.size() && (words[pos] == "int" || words[pos] == "long" || words[pos] == "char")) ++pos;
@@ -1084,8 +1087,8 @@ void Parser::rejectOtherLanguages() {
                 out = w + (args.empty() ? "" : "<" + joined() + ">");
                 size_t stars = 0;
                 while (pos < words.size() && words[pos] == "*") ++stars, ++pos;
-                if (stars == 1 && isClassName(w)) out += "?";  // a pointer to an object is what a class variable already is, and may be null
-                else if (stars > 0 && isClassName(w)) known = false;
+                if (stars > 0 && isClassName(w) && (stars > 1 || !prefix.empty())) known = false;  // a class object can always be changed through its variable
+                else if (stars == 1 && isClassName(w)) out += "?";  // a pointer to an object is what a class variable already is, and may be null
                 else out += std::string(stars, '*');
                 if (pos < words.size() && (words[pos] == "[" || words[pos] == "&")) known = false;
                 return prefix + out;
