@@ -10,4 +10,4 @@ int main() {
     auto q = try json::parse<Q>("{}");
     return 0;
 }
-// error: 'list', a 'P', has a constructor that needs arguments
+// error: each element of 'list', a 'P', has a constructor that needs arguments

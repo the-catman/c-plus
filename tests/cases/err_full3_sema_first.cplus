@@ -1,0 +1,24 @@
+// The third full reading, Sema's first half: a cycle through a struct, moving out of a call's result, a class field in an
+// initializer list, how a task is made, and a list with more values than fields.
+class C { public: int n = 0; };
+struct Link { Node to; int weight = 0; };
+class Node { public: Link next; Node() {} };
+// error: make the field optional, `Link? next;`, so it can start out null
+struct Hh { unique<C> c; };
+Hh getH() { return Hh{.c = unique<C>()}; }
+class Named { public: string s; Named(string x) { s = x; } };
+class Holder { public: Named n; Holder() : n("x") {} };
+// error: build it in the initializer list: `: n(Named(...))`
+struct P { int x = 0; int y = 0; };
+void f(unique<C> u) {
+    auto c = getH().c;
+    // error: store `getH()` in a variable first, and take the field from it: `auto held = getH();`, then `move(held.c)`
+    unique<C>* p = &u;
+    auto y = *p;
+    // error: or `(*p).get()` to lend the object
+    Task<int> t = Task<int>();
+    // error: a task comes from `spawn`: `Task<int> t = spawn f();`
+    P q = {1, 2, 3};
+    // error: remove the values past the last field, 2 at most
+}
+int main() { return 0; }

@@ -1,6 +1,7 @@
 #include "Sema.h"
 
 #include <algorithm>
+#include <cstring>
 #include <cctype>
 #include <cfloat>
 #include <cmath>
@@ -773,7 +774,15 @@ static const char* kChainOnlyReads =
 
 // How to turn a value of type `t` into text, for errors about joining it to a string
 // with `op` (+ or +=).
+// Whether `e` is a number made from a char, as `'0' + d` is, where the char it makes is what is meant.
+static bool fromCharArithmetic(const Expr& e) {
+    if (e.kind != Expr::Kind::Binary) return false;
+    auto& b = static_cast<const BinaryExpr&>(e);
+    return (b.op == BinOp::Add || b.op == BinOp::Sub) && ((b.lhs->type && b.lhs->type->is(K::Char)) || (b.rhs->type && b.rhs->type->is(K::Char)));
+}
+
 static std::string textHelp(const Type* t, const char* op = "+", const std::string& n = "opt") {
+    if (t->isPointer() && t->elem->is(K::Char)) return "turn the text it points to into a string first: `string(" + n + ")`";
     if (t->isNumber())
         return std::string("turn the number into a string first: `s ") + op +
                " to_string(n)`, or build the whole text with `format(\"{}{}\", s, n)`. Unlike C++, a number is "
@@ -1027,7 +1036,7 @@ void Sema::requireFullyBuilt(Flow& flow, Loc loc) {
                  (missingType->isArray() ? q(missing) + " needs a value because of its elements. Set it in the initializer list, e.g. `: " + missing.substr(0, missing.find('.')) + "({...})`"
                                          : "a " + q(missingType) + " reference cannot be empty. Set it in the initializer list, e.g. `: " +
                                                missing.substr(0, missing.find('.')) + "(value)`, or give the field a default") +
-                     cycleHelp(missingType, missing.substr(0, missing.find('.')), *owner()),
+                     cycleHelp(typeAtPath(self, missing.substr(0, missing.find('.'))), missing.substr(0, missing.find('.')), *owner()),
                  spec::Classes);
     markAssigned(flow, self, "");
 }
@@ -1539,7 +1548,9 @@ bool Sema::canAccess(const StructDecl& sd, Access access, const StructDecl* thro
 void Sema::reportAccess(const StructDecl& sd, const std::string& member, bool isMethod, Access access, Loc loc) {
     std::string what = isMethod ? "method" : "field";
     if (!isHashmap(&sd.type) && comesWithTheLanguage(sd)) {
-        diags_.error(loc, q(member) + " is private in " + q(sd.name), "it is part of how " + q(sd.name) + " works inside. " + listFields(sd), spec::Status);
+        const bool isTask = sd.templateOf && sd.templateOf->nameLoc.line == 0 && sd.role == StructDecl::Role::Opaque;
+        diags_.error(loc, q(member) + " is private in " + q(sd.name),
+                     isTask ? "a task comes from `spawn`: " + declarationOf(&sd.type, "t") : "it is part of how " + q(sd.name) + " works inside. " + listFields(sd), spec::Status);
         return;
     }
     if (isHashmap(&sd.type)) {
@@ -2934,12 +2945,19 @@ void Sema::rejectCopy(const Expr& e) {
                      "write `move(...)` around it to hand it over, after which it has no value" +
                          std::string(e.type->isUnique() ? ", or `.get()` on it to lend the object" : ""),
                      spec::Unique);
-    else
-    diags_.error(x->loc, q(n) + " cannot be copied, since a " + q(e.type) +
-                             (e.type->isUnique() ? " has one owner" : " holds what has one owner"),
-                 "write `move(" + n + ")` to hand it over, after which " + n + " has no value" +
-                     (e.type->isUnique() ? ", or `" + n + ".get()` to lend the object, as a `" + e.type->elem->name + "`" : ""),
-                 spec::Unique);
+    else {
+        const Expr* root = x;  // what the fields are reached from: a call's result is a value of its own, which is not moved from
+        while (root->kind == Expr::Kind::Member) root = static_cast<const MemberExpr*>(root)->base.get();
+        const bool fromACall = root != x && (root->kind == Expr::Kind::Call || root->kind == Expr::Kind::MethodCall);
+        const std::string from = fromACall ? spelled(*root, "") : "";
+        diags_.error(x->loc, q(n) + " cannot be copied, since a " + q(e.type) +
+                                 (e.type->isUnique() ? " has one owner" : " holds what has one owner"),
+                     fromACall && !from.empty()
+                         ? "store `" + from + "` in a variable first, and take the field from it: `auto held = " + from + ";`, then `move(held" + n.substr(from.size()) + ")`"
+                         : "write `move(" + n + ")` to hand it over, after which " + n + " has no value" +
+                               (e.type->isUnique() ? ", or `" + asBase(n) + ".get()` to lend the object, as a `" + e.type->elem->name + "`" : ""),
+                     spec::Unique);
+    }
 }
 
 void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& context) {
@@ -3040,6 +3058,8 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
     if (help.empty() && to->isClass() && from->isClass() && to->decl->derivesFrom(from->decl))
         help = "write `dynamic_cast<" + std::string(to->name) + ">(" + spelled(e, "x") + ")`, which stops the program when it is not one, or test it with `if (auto d = dynamic_cast<" +
                std::string(to->name) + "?>(" + spelled(e, "x") + "))`";
+    if (help.empty() && to->isClass() && initField_)  // `: n("x")`, which builds nothing by itself
+        help = "build it in the initializer list: `: " + initField_->name + "(" + std::string(to->name) + "(...))`";
     if (help.empty() && to->isClass()) help = "give it a value such as " + declarationOf(to, "x");
     if (help.empty()) help = "write a value of type " + q(to) + " here, or change the type that is expected";
     diags_.error(e.loc, "expected " + q(to) + " " + context + ", but this is " + q(from), help,
@@ -3232,7 +3252,7 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
                                  (sd.fields.size() == 1 ? "" : "s") + " but " +
                                  (a.fieldIndex ? "the list has " + std::to_string(args.size()) + " values"
                                                : std::to_string(args.size()) + " values were given"),
-                             listFields(sd), spec::Structs);
+                             "remove the values past the last field, " + std::to_string(sd.fields.size()) + " at most. " + listFields(sd), spec::Structs);
             }
         } else {
             idx = sd.fieldIndex(a.designator);
@@ -4194,7 +4214,9 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 };
                 if (b.op == BinOp::Add)
                     diags_.error(other->loc, "'+' joins a string with a string or a char, but this is " + q(ot),
-                                 ot->isNumber() ? (otherName.empty() ? std::string("turn the number into a string first: put it in `to_string(...)`")
+                                 ot->isNumber() && fromCharArithmetic(*other) && !otherName.empty()
+                                     ? "to add the character it makes, write `" + inOrder("char(" + otherName + ")") + "`; for the number as text, `to_string(" + otherName + ")`"
+                                 : ot->isNumber() ? (otherName.empty() ? std::string("turn the number into a string first: put it in `to_string(...)`")
                                                                      : "turn the number into a string first: `" + inOrder("to_string(" + otherName + ")") + "`") +
                                                       ". Unlike C++, a number is never added as a character code"
                                                 : textHelp(ot, "+", spelled(*other, "opt")),
@@ -4281,7 +4303,10 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 if (t->is(K::String) && *a.op == BinOp::Add) {
                     if (!vt->isError() && !vt->is(K::String) && !vt->is(K::Char))
                         diags_.error(a.value->loc, "'+=' on a string adds a string or a char, but this is " + q(vt),
-                                     textHelp(vt, "+=", spelled(*a.value, "opt")), spec::Strings);
+                                     fromCharArithmetic(*a.value) && !spelled(*a.value, "").empty()
+                                         ? "to add the character it makes, write `" + std::string("char(") + spelled(*a.value, "") + ")`; for the number as text, `to_string(" + spelled(*a.value, "") + ")`"
+                                         : textHelp(vt, "+=", spelled(*a.value, "opt")),
+                                     spec::Strings);
                 } else if (t->is(K::Char)) {
                     // `c += 1` and `c -= 1` step through the characters; the result must be a char.
                     if (*a.op != BinOp::Add && *a.op != BinOp::Sub)
@@ -4559,6 +4584,8 @@ const Type* Sema::checkMath(CallExpr& call, Flow& flow) {
         if (!t->isArithmetic()) {  // a char counts as its code, as in C++
             std::string help = t->isOptional()   ? unwrapHelp(spelled(*a))
                                : t->is(K::Bool)   ? "a bool is not a number here; write `int(b)` for 1 or 0"
+                               : t->is(K::String) && (call.callee == "min" || call.callee == "max")
+                                   ? std::string("for strings, which compare by their bytes, write `a ") + (call.callee == "min" ? "<" : ">") + " b ? a : b`"
                                : t->is(K::String) ? "this compiler cannot read a number from a string yet. Declare C's: `extern \"C\" double atof(string text);`, and call `atof(s)`"
                                                   : "pass an int, a long, a float or a double";
             diags_.error(a->loc, call.callee + "() takes " + (m.args == 1 ? "a number" : "numbers") + ", but this is " +
@@ -4692,6 +4719,10 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             help = "this compiler has no sorting yet, nor the other algorithms of C++. Write the loop";
         else if (name == "swap")
             help = "write it with a third variable: `auto t = a; a = b; b = t;`";
+        else if (name == "fmin" || name == "fmax" || name == "fminf" || name == "fmaxf")
+            help = "write `" + std::string(name.compare(0, 4, "fmin") == 0 ? "min" : "max") + "(a, b)`, which works for doubles and floats too";
+        else if (name == "log1p") help = "write `log(1 + x)`";
+        else if (name == "expm1") help = "write `exp(x) - 1`";
         else if (name == "printf" || name == "puts" || name == "putchar")
             help = "C+ prints with println: `printf(\"%d\\n\", x)` becomes `println(\"{}\", x)`";
         else if (std::string reader = cNumberReader(name); !reader.empty())
@@ -4951,7 +4982,7 @@ bool Sema::checkConstraints(TemplateDecl& t, const std::vector<TemplateArg>& arg
 // Why a value of this type cannot be turned into JSON, or made from it. `path` is how it was reached, and `seen` stops
 // at a struct or class already looked at, since a type can lead back to itself. A private field is left out of JSON.
 static std::string jsonProblem(const Program& program, const Type* t, bool reading, const std::string& path, std::vector<const StructDecl*>& seen, bool inList = false) {
-    std::string where = path.empty() ? q(t) : q(path) + ", a " + q(t) + ",";
+    std::string where = path.empty() ? q(t) : inList ? "each element of " + q(path) + ", a " + q(t) + "," : q(path) + ", a " + q(t) + ",";
     if (t->isNumber() || t->is(K::Bool) || t->is(K::Char) || t->is(K::String) || t->isWeak()) return "";
     if (t->isOptional() || t->isVector() || t->isArray() || t->isUnique() || t->isLocal()) return jsonProblem(program, t->elem, reading, path, seen, inList || t->isVector() || t->isArray());
     if (isJsonValue(t)) return "";
@@ -4994,7 +5025,7 @@ static std::string jsonProblem(const Program& program, const Type* t, bool readi
         }
         ++shown;
         if (!names.insert(f->name).second)
-            return where + " has two fields named " + q(f->name) + ", from two base classes, and JSON could not tell them apart";
+            return where + " has two fields named " + q(f->name) + ", from two base classes, and JSON could not tell them apart. Rename one of them";
         if (std::string problem = jsonProblem(program, f->type, reading, inner, seen); !problem.empty()) return problem;
     }
     if (!fields.empty() && !shown)
@@ -5246,7 +5277,19 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
             diags_.error(call.loc, std::string("this compiler does not support ") + planned + " yet", until, sd.name.rfind("reflect::", 0) == 0 ? spec::Reflection : spec::Concurrency);
             return Type::error();
         }
+        const Expr* held = call.receiver.get();  // a unique or local reference, which is lent for the call
+        while (held && held->kind == Expr::Kind::Borrow) held = static_cast<const BorrowExpr*>(held)->operand.get();
+        const Type* recvType = held ? held->type : nullptr;
+        const std::string recv = call.receiver ? asBase(spelled(*call.receiver, "x")) : "x";
         if (sd.fieldOwner(call.name)) help = q(call.name) + " is a field; read it without parentheses";
+        else if (recvType && (recvType->isUnique() || recvType->isLocal()) && call.name == "reset")
+            help = std::string("a ") + (recvType->isUnique() ? "unique" : "local") + " reference is never empty: to be able to empty one, declare it `" + recvType->name + "?` and write `" + recv + " = null`";
+        else if (sd.name == "http::Response" && call.name == "json") help = "read the body as JSON: `try json::parse<T>(" + recv + ".body)`, with `import json;`";
+        else if (sd.name == "http::Response" && call.name == "text") help = "the text of the response is `" + recv + ".body`";
+        else if (sd.templateOf && sd.templateOf->nameLoc.line == 0 && sd.role == StructDecl::Role::Opaque && call.name == "detach")
+            help = "remove it: a task left alone keeps running, and the program waits for it before it ends";
+        else if (sd.name == "LockGuard" && (call.name == "unlock" || call.name == "lock"))
+            help = "it unlocks when the block it is in ends: put it in a block of its own, `{ LockGuard g = LockGuard(m); ... }`";
         else if (isHashmap(t) && (call.name == "emplace" || call.name == "try_emplace"))
             help = "write `m.insert({key, value})`, which also keeps the value that is there";
         else if (isHashmap(t) && (call.name == "insert_or_assign" || call.name == "set" || call.name == "put"))
@@ -5424,6 +5467,11 @@ const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type
             std::string guess = closest(call.name, names);
             help = guess.empty() ? "use one of the vector methods: size, empty, push_back, pop_back, front, back and clear"
                                  : "did you mean " + q(guess) + "?";
+            if (call.receiver && call.receiver->kind == Expr::Kind::Member && static_cast<const MemberExpr&>(*call.receiver).field == "headers") {
+                const Expr& response = *static_cast<const MemberExpr&>(*call.receiver).base;
+                if (response.type && response.type->decl && response.type->decl->name == "http::Response")
+                    help = "write `" + asBase(spelled(response, "resp")) + ".header(name)`, which gives the value of a header, or null";
+            }
         }
         diags_.error(call.loc, q(vecType) + " has no method named " + q(call.name), help, spec::Vectors);
         return Type::error();
@@ -5734,7 +5782,33 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
         diags_.error(call.loc, "the format string has " + std::to_string(placeholders) + " {} placeholder" +
                                    (placeholders == 1 ? "" : "s") + " but " + std::to_string(values) + " value" +
                                    (values == 1 ? " was" : "s were") + " given",
-                     "use one {} for each value after the format string", spec::Printing);
+                     [&] {
+                         const Expr& format = *call.args[0];
+                         const std::string text = format.kind == Expr::Kind::StringLit ? static_cast<const StringLitExpr&>(format).value : "";
+                         if (text.find('%') == std::string::npos) return std::string("use one {} for each value after the format string");
+                         std::string out;  // `%d` as `{}`, `%.2f` as `{:.2f}`
+                         for (size_t i = 0; i < text.size(); ++i) {
+                             if (text[i] != '%') { out += text[i]; continue; }
+                             if (i + 1 < text.size() && text[i + 1] == '%') { out += '%'; ++i; continue; }
+                             size_t j = i + 1;
+                             while (j < text.size() && std::strchr("-+ 0#", text[j])) ++j;
+                             while (j < text.size() && std::isdigit((unsigned char)text[j])) ++j;
+                             std::string precision;
+                             if (j < text.size() && text[j] == '.') {
+                                 size_t k = j + 1;
+                                 while (k < text.size() && std::isdigit((unsigned char)text[k])) ++k;
+                                 precision = text.substr(j, k - j);
+                                 j = k;
+                             }
+                             while (j < text.size() && std::strchr("hlzjtL", text[j])) ++j;
+                             const char kind = j < text.size() ? text[j] : 'd';
+                             out += kind == 'f' || kind == 'F' ? (precision.empty() ? "{}" : "{:" + precision + "f}")
+                                  : kind == 'e' || kind == 'g' || kind == 'x' || kind == 'X' || kind == 'o' ? "{:" + precision + std::string(1, kind) + "}"
+                                  : std::string("{}");
+                             i = j;
+                         }
+                         return "C+ marks each value with `{}`, as C++'s `std::format` does, where C writes `%d`: write " + stringLiteral(out);
+                     }(), spec::Printing);
         return result;
     }
     for (size_t i = 1; i < call.args.size(); ++i) {
@@ -6265,6 +6339,15 @@ const Type* Sema::checkWeakMethod(MethodCallExpr& call, Flow& flow, const Type* 
     else if (call.name == "expired") call.weakMethod = WeakMethod::Expired;
     else if (call.name == "reset") call.weakMethod = WeakMethod::Reset;
     else {
+        bool exists = false;
+        for (const StructDecl* d = weak->elem ? weak->elem->decl : nullptr; d && !exists; d = d->bases.empty() ? nullptr : d->bases[0]) exists = d->findMethod(call.name) != nullptr;
+        if (!exists) {
+            diags_.error(call.loc, q(weak) + " has no method named " + q(call.name),
+                         "a weak reference has `lock()`, `expired()` and `reset()`, and " + q(weak->elem) + " has no method named " + q(call.name) +
+                             ". Its object, reached with `" + n + ".lock()?.`, has the methods of " + q(weak->elem),
+                         spec::Weak);
+            return Type::error();
+        }
         diags_.error(call.loc, "the object of a " + q(weak) + " may be gone, so " + q(call.name) + " cannot be called on it directly",
                      "write `" + n + ".lock()?." + call.name + "(...)`, which does nothing when the object is gone. A weak "
                      "reference itself has `lock()`, `expired()` and `reset()`",
@@ -6309,6 +6392,25 @@ const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Ty
             else if (isHashmap(inner) && call.name == "at") changes = false;  // read where it is, by the compiler
         }
         const std::string tryFirst = fails ? "try " : "";
+        bool exists = true;  // what is inside has a method of that name
+        if (inner->isVector() || inner->isArray() || inner->is(K::String)) {
+            static const char* const known[] = {"size", "empty", "push_back", "pop_back", "front", "back", "clear", "data", "fill", "length", "substr", "find",
+                                                "contains", "starts_with", "ends_with", "at", "insert", "erase", "resize", "append", "swap", "rfind"};
+            exists = std::find_if(std::begin(known), std::end(known), [&](const char* m) { return call.name == m; }) != std::end(known);
+        } else if (owner) {
+            exists = (isHashmap(inner) && call.name == "at") || ((inner->isUnique() || inner->isLocal()) && call.name == "get");
+            for (const StructDecl* d = owner; d && !exists; d = d->bases.empty() ? nullptr : d->bases[0]) exists = d->findMethod(call.name) != nullptr;
+        } else {
+            exists = false;  // a number, a bool or a char has no methods
+        }
+        if (!exists) {
+            diags_.error(call.loc, q(opt) + " has no method named " + q(call.name),
+                         call.name == "reset" ? "to empty it, write `" + n + " = null`"
+                         : call.name == "emplace" ? "to give it a value, write `" + n + " = value`"
+                         : "check the name: a " + q(inner) + " has no method named " + q(call.name) + ", and the optional itself has `has_value()`, `value()` and `value_or(x)`",
+                         spec::Optionals);
+            return Type::error();
+        }
         const bool needsAPlace = call.name == "data" && inner->isArray();
         const bool noPointerYet = call.name == "data" && (inner->isVector() || inner->is(K::String));
         diags_.error(call.loc, q(opt) + " may be null, so " + q(call.name) + " cannot be called on it directly",

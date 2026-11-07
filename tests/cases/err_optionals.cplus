@@ -81,7 +81,7 @@ int main() {
 // error: write `u?.name`, which is null when u is, or unwrap it: `if (auto v = u) ... v.name`
 // error: 'User?' may be null, so 'greet' cannot be called on it directly
 // error: write `u?.greet()`, which does nothing when u is null, or unwrap it: `if (auto inner = u) inner.greet();`
-// error: 'int?' may be null, so 'reset' cannot be called on it directly
+// error: 'int?' has no method named 'reset'
 // error: value() takes no arguments but 1 was given
 // error: value_or() takes one argument but 0 were given
 // error: write `n.value_or(fallback)`

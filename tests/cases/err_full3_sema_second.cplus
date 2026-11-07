@@ -1,0 +1,49 @@
+// The third full reading, Sema's second half: methods that are not there, chars made from numbers, text a char* points
+// to, habits of C++ and of JavaScript libraries, and a format string written as printf writes it.
+import http;
+import json;
+class Node { public: int n = 0; void go() { } };
+long work() { return 1; }
+struct Ptrs { vector<int*> ps; };
+void f(weak<Node> w, string s, int d, char* p, unique<Node> u, http::Response resp, Mutex m, double x, string s1, string s2) {
+    int? n = 1;
+    n.reset();
+    // error: to empty it, write `n = null`
+    Node? on;
+    on.sizee();
+    // error: check the name: a 'Node' has no method named 'sizee'
+    int c = w.use_count();
+    // error: a weak reference has `lock()`, `expired()` and `reset()`, and 'Node' has no method named 'use_count'
+    s += '0' + d;
+    // error: to add the character it makes, write `char('0' + d)`; for the number as text, `to_string('0' + d)`
+    s += p;
+    // error: turn the text it points to into a string first: `string(p)`
+    u.reset();
+    // error: a unique reference is never empty: to be able to empty one, declare it `unique<Node>?` and write `u = null`
+    auto j = resp.json();
+    // error: read the body as JSON: `try json::parse<T>(resp.body)`, with `import json;`
+    auto tx = resp.text();
+    // error: the text of the response is `resp.body`
+    auto h = resp.headers.get("x");
+    // error: write `resp.header(name)`, which gives the value of a header, or null
+    Task<long> tk = spawn work();
+    tk.detach();
+    // error: remove it: a task left alone keeps running, and the program waits for it before it ends
+    LockGuard g = LockGuard(m);
+    g.unlock();
+    // error: it unlocks when the block it is in ends: put it in a block of its own
+    println("x = %d, y = %.2f", d, x);
+    // error: C+ marks each value with `{}`, as C++'s `std::format` does, where C writes `%d`: write "x = {}, y = {:.2f}"
+    auto mx = max(s1, s2);
+    // error: for strings, which compare by their bytes, write `a > b ? a : b`
+    double lp = log1p(x);
+    // error: write `log(1 + x)`
+    double em = expm1(x);
+    // error: write `exp(x) - 1`
+    double fm = fmin(x, 2.0);
+    // error: write `min(a, b)`, which works for doubles and floats too
+    Ptrs pp = {};
+    println("{}", json::stringify(pp));
+    // error: each element of 'ps', a 'int*', is a pointer
+}
+int main() { return 0; }

@@ -1,0 +1,18 @@
+// The third full reading of the parser: loops written as in JavaScript, pairs and atomics as values, and printing with <<.
+struct P { int x = 0; };
+ostream& operator<<(ostream& os, P p) { return os; }
+// error: for printing, remove it: `println("{}", p)` already prints a struct's fields
+void show(std::ostream o) { }
+// error: C+ has no streams: print with `println("{}", x)`, and build text with `format("{}", x)`
+int main() {
+    vector<int> v = {1};
+    for (auto x in v) { }
+    // error: write `for (auto x : v)`
+    for (const y of v) { }
+    // error: write `for (const auto y : v)`
+    auto p = pair<int, string>(1, "a");
+    // error: write a struct with a name for each part
+    auto a = atomic<int>(0);
+    // error: use a field of a class, and a `Mutex` around what changes it
+    return 0;
+}

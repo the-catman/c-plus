@@ -1,0 +1,11 @@
+// A block left open, with what comes with the language read after the program: one error, at the end.
+import json;
+int main() {
+    hashmap<string, int> m = {{"a", 1}};
+    if (m.size() > 0) {
+        println("{}", m);
+    return 0;
+}
+// error: expected '}' to close the block, found end of file
+// not-error: unknown type 'hashmap'
+// not-error: expected an expression

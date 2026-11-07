@@ -117,11 +117,7 @@ static bool readFile(const std::string& path, std::string& out) {
 static int build(const Options& opts, const std::string& exePath) {
     std::string text;
     if (!readFile(opts.input, text)) {
-        std::error_code isFolder;
-        if (fs::is_directory(opts.input, isFolder))
-            toolError("cannot read " + opts.input + ": it is a folder", "give the path of a .cplus file, such as `" + opts.input + "/main.cplus`");
-        else
-            toolError("cannot read " + opts.input + ": " + std::strerror(errno), "check the name of the file, which is relative to the folder this runs in");
+        toolError("cannot read " + opts.input + ": " + std::strerror(errno), "check the name of the file, which is relative to the folder this runs in");  // a folder is caught before
         return 1;
     }
     SourceFile file(opts.input, std::move(text));
@@ -264,6 +260,10 @@ static int compilerMain(int argc, char** argv) {
     if (opts.debug && opts.race)
         return usageError("--debug and --race cannot be used together, as each watches the program's memory in its own way; build once with each");
     if (opts.input.empty()) return usageError("no source file given");
+    if (std::error_code isFolder; fs::is_directory(opts.input, isFolder)) {
+        toolError("cannot read " + opts.input + ": it is a folder", "give the path of a .cplus file, such as `" + opts.input + "/main.cplus`");
+        return 2;
+    }
     if (fs::path(opts.input).extension() != ".cplus") {
         toolError(opts.input + " is not a C+ source file", "give it a name that ends in .cplus, as C+ source files do");
         return 2;

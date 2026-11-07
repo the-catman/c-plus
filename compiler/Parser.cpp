@@ -64,6 +64,8 @@ const Token& Parser::expectNewName(const std::string& context) {
 // What to do instead of writing an operator, which the token after `operator` decides.
 std::string Parser::operatorHelp(size_t ahead) const {
     Tok op = peek(ahead + 1).kind;
+    if (op == Tok::Shl)  // `ostream& operator<<(ostream& os, P p)`
+        return "for printing, remove it: `println(\"{}\", p)` already prints a struct's fields. For text of your own, write a method, `string str() const { ... }`, and print `p.str()`";
     if (op == Tok::EqEq || op == Tok::NotEq)
         return "for a struct, remove it: every struct already has `==` and `!=`, field by field. For a class, `==` means the same object, so write a method: `bool same(User other) const { ... }`";
     return "write a method for now, such as `Point add(Point other)`";
@@ -299,9 +301,29 @@ void Parser::addBuiltins() {
     if (!modules.empty()) joinModuleNames(modules);
 }
 
+// What comes with the language is read after the program, so a `{` the program leaves open would take it in. Each one is
+// closed where the program ends, with the error that would be reported there without it.
+void Parser::closeProgramBlocks() {
+    size_t end = 0;  // where the program's own tokens end
+    while (end + 1 < toks_.size() && toks_[end].loc.line != 0) ++end;
+    if (end + 1 >= toks_.size()) return;  // nothing comes after it
+    int depth = 0;
+    for (size_t i = 0; i < end; ++i) {
+        if (toks_[i].kind == Tok::LBrace) ++depth;
+        else if (toks_[i].kind == Tok::RBrace && depth > 0) --depth;  // one that closes nothing is reported where it is
+    }
+    if (depth == 0) return;
+    diags_.error(toks_.back().loc, "expected '}' to close the block, found end of file", "write '}' to close the block", spec::Grammar);
+    Token close = toks_.back();
+    close.kind = Tok::RBrace;
+    close.text.clear();
+    toks_.insert(toks_.begin() + (std::ptrdiff_t)end, (size_t)depth, close);
+}
+
 void Parser::parseProgram(Program& prog) {
     prog_ = &prog;
     addBuiltins();
+    closeProgramBlocks();
     try {
         scanDeclarations(prog);
         for (auto& t : prog.templates) readTemplate(*t);
@@ -333,7 +355,9 @@ void Parser::parseProgram(Program& prog) {
 // declarations, so their names are found before anything else is read.
 void Parser::scanDeclarations(Program& prog) {
     int depth = 0;
+    bool inBuiltins = false;
     for (size_t i = 0; i + 1 < toks_.size();) {
+        if (!inBuiltins && toks_[i].loc.line == 0) inBuiltins = true, depth = 0;  // a `}` of the program's that closes nothing does not reach it
         Tok kind = toks_[i].kind;
         if (kind == Tok::LBrace) ++depth;
         else if (kind == Tok::RBrace) --depth;
@@ -1617,6 +1641,8 @@ void Parser::failStd(Loc loc, const Token& name) {
         fail(loc, "C+ has no std:: namespace", n == "nullopt" ? "write `null`" : "write `T?`, such as `int?`, which is an int or `null`. A value converts to it by itself, so there is nothing to build", spec::Optionals);
     if (n == "function")
         fail(loc, "C+ has no std:: namespace", "write a function, and call it by name: C+ has no function values yet", spec::Functions);
+    if (n == "ostream" || n == "istream")
+        fail(loc, "C+ has no std:: namespace", "C+ has no streams: print with `println(\"{}\", x)`, and build text with `format(\"{}\", x)`", spec::Printing);
     if (n == "stringstream" || n == "ostringstream" || n == "istringstream")
         fail(loc, "C+ has no std:: namespace", "build the text with `format(\"{}: {}\", a, b)`", spec::Printing);
     if (n == "hex" || n == "oct")
@@ -3103,6 +3129,14 @@ CondDecl Parser::parseCondDecl(const char* stmt) {
 StmtPtr Parser::parseFor() {
     auto loop = std::make_unique<ForStmt>(advance().loc);
     expect(Tok::LParen, "after 'for'");
+    // `for (const x of v)` or `for (let x in v)`, as JavaScript writes it
+    if ((check(Tok::KwConst) || (check(Tok::Ident) && (peek().text == "let" || peek().text == "var"))) && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Ident &&
+        (peek(2).text == "in" || peek(2).text == "of")) {
+        std::string range;
+        for (size_t at = 3; at < 32 && peek(at).kind != Tok::RParen && peek(at).kind != Tok::Eof; ++at) range += peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text;
+        fail(peek(2).loc, "C+ goes over a list with ':', as C++ does, and not with '" + peek(2).text + "'",
+             "write `for (" + std::string(check(Tok::KwConst) ? "const " : "") + "auto " + peek(1).text + " : " + (range.empty() ? "v" : range) + ")`", spec::RangeFor);
+    }
     if (match(Tok::Semi)) {
         // no init
     } else if (isDeclarationStart()) {
@@ -3137,6 +3171,14 @@ StmtPtr Parser::parseFor() {
             expect(Tok::RParen, "to close the for header");
             StmtPtr body = parseStmt();
             return std::make_unique<ForEachStmt>(loop->loc, std::move(var), std::move(range), std::move(body));
+        }
+        if (peek().kind == Tok::Ident && peek(1).kind == Tok::Ident && (peek(1).text == "in" || peek(1).text == "of")) {  // `for (auto x in v)`
+            std::string range;
+            for (size_t at = 2; at < 32 && peek(at).kind != Tok::RParen && peek(at).kind != Tok::Eof; ++at)
+                range += peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text;
+            fail(peek(1).loc, "C+ goes over a list with ':', as C++ does, and not with '" + peek(1).text + "'",
+                 "write `for (" + std::string(isConst ? "const " : "") + (ty->is(Type::Kind::Auto) ? "auto" : std::string(ty->name)) + " " + peek().text + " : " + (range.empty() ? "v" : range) + ")`",
+                 spec::RangeFor);
         }
         loop->init = parseDeclarators(isConst, ty, typeLoc);
         expect(Tok::Semi, "after the loop's first clause");
@@ -3584,7 +3626,11 @@ ExprPtr Parser::parsePrimary() {
             }
             // `auto x = Foo<int>()`, which has been read as a comparison up to here.
             if (pos_ >= 3 && toks_[pos_ - 2].kind == Tok::Less && toks_[pos_ - 3].kind == Tok::Ident && !classTemplate(toks_[pos_ - 3].text)) {
-                if (isOtherContainer(toks_[pos_ - 3].text)) notYet(toks_[pos_ - 3].loc, "'" + toks_[pos_ - 3].text + "'", "use a `vector<T>` or a `hashmap<K, V>` for now");
+                const std::string& kind = toks_[pos_ - 3].text;
+                if (kind == "pair" || kind == "tuple")
+                    notYet(toks_[pos_ - 3].loc, "'" + kind + "'", "write a struct with a name for each part, as in `struct NameAge { string name; int age; };`, and build it with `NameAge{\"a\", 1}`");
+                if (kind == "atomic") notYet(toks_[pos_ - 3].loc, "atomic values", "use a field of a class, and a `Mutex` around what changes it");
+                if (isOtherContainer(kind)) notYet(toks_[pos_ - 3].loc, "'" + kind + "'", "use a `vector<T>` or a `hashmap<K, V>` for now");
                 failUnknownGeneric(pos_ - 3);
             }
             fail(t.loc, "expected an expression, found " + describeToken(t),
