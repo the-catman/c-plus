@@ -166,7 +166,7 @@ static std::string spelled(const Expr& e, const std::string& fallback) {
         auto& m = static_cast<const MemberExpr&>(e);
         if (m.base->kind == Expr::Kind::Unary && static_cast<const UnaryExpr&>(*m.base).isArrow()) {
             std::string base = spelled(*static_cast<const UnaryExpr&>(*m.base).operand, "");
-            if (!base.empty()) return base + "->" + m.field;
+            if (!base.empty()) return asBase(base) + "->" + m.field;
         }
         std::string base = spelled(*m.base, "");
         if (!base.empty()) return asBase(base) + "." + m.field;
@@ -312,12 +312,23 @@ static const char* const kKeyMayBeAdded = ", which adds the key if it is missing
 
 // Why what is reached through `e` cannot change, when that is because of a `const` on the way to it. Empty when it is not.
 std::string Sema::constHolderHelp(const Expr& e) {
+    const std::string copy = "change a copy: `auto " + freshName("", {"x", "copy", "item", "held"}) + " = ...;`, and change that";
+    auto throughPointer = [&](const Expr& pointer) {
+        if (!pointer.type || !pointer.type->isPointer() || !pointer.type->constElem) return std::string();
+        return q(spelled(pointer, "the pointer")) + " is a " + q(pointer.type->name) + ", so what it points to cannot change. Use a pointer that is not const, or " + copy;
+    };
     const Expr* x = &e;
     for (bool walking = true; walking;) {
+        if (x->kind == Expr::Kind::This) break;
         if (x->type && x->type->isClass()) return "";  // the object lives on its own, and `const` does not reach it
+        if (isDeref(*x)) return throughPointer(*static_cast<const UnaryExpr*>(x)->operand);
         switch (x->kind) {
             case Expr::Kind::Member: x = static_cast<const MemberExpr*>(x)->base.get(); break;
-            case Expr::Kind::Index: x = static_cast<const IndexExpr*>(x)->base.get(); break;
+            case Expr::Kind::Index: {
+                x = static_cast<const IndexExpr*>(x)->base.get();
+                if (x->type && x->type->isPointer()) return throughPointer(*x);
+                break;
+            }
             case Expr::Kind::OptChain: x = static_cast<const OptChainExpr*>(x)->base.get(); break;
             case Expr::Kind::OptValue: x = static_cast<const OptValueExpr*>(x)->chain->base.get(); break;
             case Expr::Kind::Borrow: x = static_cast<const BorrowExpr*>(x)->operand.get(); break;
@@ -332,7 +343,6 @@ std::string Sema::constHolderHelp(const Expr& e) {
             default: walking = false;
         }
     }
-    const std::string copy = "change a copy: `auto " + freshName("", {"x", "copy", "item", "held"}) + " = ...;`, and change that";
     const bool inThis = x->kind == Expr::Kind::This || (x->kind == Expr::Kind::Name && static_cast<const NameExpr*>(x)->implicitField >= 0);
     if (inThis && fn_ && fn_->isConst) return "const method " + q(fn_->name) + " cannot change fields. Remove `const` from it, or " + copy;
     if (x->kind != Expr::Kind::Name) return "";
@@ -341,6 +351,31 @@ std::string Sema::constHolderHelp(const Expr& e) {
     if (holder && holder->isConst) return q(name) + " is const, so what is in it cannot change. Remove `const` from its declaration, or " + copy;
     return "";
 }
+
+// Whether a method of a container gave a copy on the way to `e`, so that `[ ]` reaches what it gave a copy of.
+static bool throughContainerMethod(const Expr& e) {
+    const Expr* x = &e;
+    while (true) {
+        switch (x->kind) {
+            case Expr::Kind::Member: x = static_cast<const MemberExpr*>(x)->base.get(); continue;
+            case Expr::Kind::Index: x = static_cast<const IndexExpr*>(x)->base.get(); continue;
+            case Expr::Kind::OptChain: x = static_cast<const OptChainExpr*>(x)->base.get(); continue;
+            case Expr::Kind::OptValue: x = static_cast<const OptValueExpr*>(x)->chain->base.get(); continue;
+            case Expr::Kind::MethodCall: {
+                auto& call = *static_cast<const MethodCallExpr*>(x);
+                if (call.lowered && call.name == "at") return true;
+                if (!call.receiver || !call.receiver->type) return false;
+                const Type* t = call.receiver->type;
+                if (((t->isVector() || t->isArray() || t->is(K::String)) && (call.name == "back" || call.name == "front")) || (isHashmap(t) && (call.name == "get" || call.name == "at"))) return true;
+                x = call.receiver.get();
+                continue;
+            }
+            default: return false;
+        }
+    }
+}
+
+static const char* const kStoreFirst = "store it in a variable first, change that, and store it back where it came from";
 
 // How to change what is in an optional, as what was written has it: `if (auto v = o) { v.x = 1; o = v; }`. `change` is what is done to it,
 // `opening` starts the sentence, and `how` says what the code does. When the shape is not one this can be sure of, it gives no code.
@@ -354,7 +389,7 @@ std::string Sema::changeForm(const Expr& base, const std::string& change, const 
     auto store = [&](const std::string& place) {
         const std::string inner = freshName(place + " " + change);
         return canCopy ? "`if (auto " + inner + " = " + place + ") { " + inner + change + "; " + place + " = " + inner + "; }`"
-                       : "`auto " + inner + " = move(" + place + ").value(); " + inner + change + "; " + place + " = move(" + inner + ");`";
+                       : "`if (" + place + ") { auto " + inner + " = move(" + place + ").value(); " + inner + change + "; " + place + " = move(" + inner + "); }`";
     };
     const std::string what = canCopy ? how : "move it out and back";
     if (!name.empty() && (!from.place.empty() || namesOnePlace(base)))
@@ -363,6 +398,7 @@ std::string Sema::changeForm(const Expr& base, const std::string& change, const 
         const std::string opt = freshName(name + " " + change, {"opt", "copy", "temp", "held"});
         return opening + "store it in a variable first, as this only exists as a copy: `auto " + opt + " = " + name + ";`. Then " + what + ": " + store(opt);
     }
+    if (!throughContainerMethod(base)) return opening + kStoreFirst;
     return opening + "reach it with `[ ]`, and not with `back()`, `at()` or `get()`, which give copies, then unwrap it, change the copy and store it back there";
 }
 
@@ -409,6 +445,7 @@ std::string Sema::storeItBack(const Expr& recv, const std::string& method, bool 
     if (name.empty() || (from.place.empty() && !namesOnePlace(*root))) {
         if (isTemporaryResult(*root) && !name.empty())
             return "store it in a variable first, as this only exists as a copy: `auto " + freshName(name, {"opt", "copy", "temp", "held"}) + " = " + name + ";`. Then " + inTurn;
+        if (!throughContainerMethod(*root)) return kStoreFirst;
         return "reach it with `[ ]`, and not with `back()`, `at()` or `get()`, which give copies. Then " + inTurn;
     }
     std::string used = name + " " + method;
@@ -432,7 +469,7 @@ static const MethodCallExpr* reachedThroughCopy(const Expr& e) {
     const Expr* x = &e;
     while (x->kind == Expr::Kind::Member || x->kind == Expr::Kind::Index) {
         x = x->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(x)->base.get() : static_cast<const IndexExpr*>(x)->base.get();
-        if (x->type && x->type->isClass()) return nullptr;
+        if (x->type && (x->type->isClass() || x->type->isPointer())) return nullptr;  // it lives on its own, wherever the way to it came from
     }
     if (x->kind != Expr::Kind::MethodCall) return nullptr;
     auto* call = static_cast<const MethodCallExpr*>(x);
@@ -2463,6 +2500,8 @@ std::string Sema::copyHelp(const Expr& target, const std::string& change) {
         const std::string v = asBase(spelled(*call.receiver, ""));
         if (!v.empty()) {
             const std::string inner = freshName(v + " " + path);
+            if (!isCopyable(call.receiver->type))
+                return "`value()` gives a copy, which this cannot be. Move it out and back: `auto " + inner + " = move(" + v + ").value(); " + inner + path + "; " + v + " = move(" + inner + ");`";
             return "`value()` gives a copy. Unwrap it, change that and store it back: `if (auto " + inner + " = " + v + ") { " + inner + path + "; " + v + " = " + inner + "; }`";
         }
     }
@@ -4737,10 +4776,10 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         diags_.error(call.loc, q(m->name) + " may change the struct, but '?.' works on a copy of it",
                      storeItBack(recv, m->name, !call.args.empty()) + (comesWithTheLanguage(*m->owner) ? "" : ", or mark " + q(m->name) + " `const` if it does not change any field"),
                      spec::Optionals);
-    } else if (const MethodCallExpr* copied = !m->isConst && t->isStruct() ? reachedThroughCopy(recv) : nullptr) {
+    } else if (const MethodCallExpr* copied = !m->isConst && t->isStruct() && isCopyable(t) ? reachedThroughCopy(recv) : nullptr) {  // what cannot be copied has been reported
         // In C++ this changes the element. Here what the method gave is a copy, so it would quietly do nothing.
         diags_.error(call.loc, q(m->name) + " may change the struct, but '" + copied->name + "()' gives a copy of it",
-                     copyHelp(recv, "." + m->name + (call.args.empty() ? "()" : "(...)")), spec::Structs);
+                     copyHelp(recv, "." + m->name + (call.args.empty() ? "()" : "(...)")) + (comesWithTheLanguage(*m->owner) ? "" : ", or mark " + q(m->name) + " `const` if it does not change any field"), spec::Structs);
     } else if (!m->isConst) {
         // A method that may change fields changes the struct value it is called on,
         // wherever that value is stored.
@@ -5673,10 +5712,10 @@ const Type* Sema::checkWeakMethod(MethodCallExpr& call, Flow& flow, const Type* 
 
 const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Type* opt) {
     const Type* inner = opt->elem;
-    std::string n = spelled(*call.receiver, "(...)");
+    std::string n = asBase(spelled(*call.receiver, "(...)"));
     if (!isCopyable(inner) && (call.name == "value" || call.name == "value_or") && isPlaceKind(*call.receiver))
         diags_.error(call.loc, call.name + "() gives a copy, but a " + q(inner) + " cannot be copied",
-                     "read through it with `" + n + "?.field`, or take it with `move(" + n + ")." + call.name + "(...)`", spec::Unique);
+                     "read through it with `" + n + "?.field`, or take it: `auto " + freshName(n) + " = move(" + n + ")." + call.name + (call.args.empty() ? "()" : "(...)") + ";`, and, to keep it, `" + n + " = move(" + freshName(n) + ");` when done", spec::Unique);
     size_t want = 0;
     if (call.name == "has_value") call.optMethod = OptMethod::HasValue;
     else if (call.name == "value") call.optMethod = OptMethod::Value;

@@ -49,7 +49,7 @@ void wholeTypes() {
     auto e = make_shared<vector<int>>();
     // error: write `vector<int>(...)`. It is a value, which is copied, so to share one hold it in a class
     auto f = make_shared<St<int>>();
-    // error: write `St<int>(...)`. A class variable is already a counted reference
+    // error: write `St<int>(...)`. It is a value, which is copied, so to share one hold it in a class
     Foo<int, X> g;
     // error: define it first: `template<typename T, int N2> class Foo { ... };`
     Bar<X> h;

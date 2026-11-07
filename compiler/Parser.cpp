@@ -1609,6 +1609,9 @@ std::string Parser::writtenBetweenAngles(size_t at, size_t& end) const {
     return "";
 }
 
+// A generic that comes with the language, such as `hashmap`, which is a value.
+static bool comesWithLanguageTemplate(const TemplateDecl& tmpl) { return tmpl.nameLoc.line == 0; }
+
 // `make_unique<T>()` or `make_shared<T>()`, at the `<`. What takes its place depends on what T is.
 void Parser::failMakePointer(const Token& t) {
     const bool wantsUnique = t.text == "make_unique";
@@ -1624,17 +1627,19 @@ void Parser::failMakePointer(const Token& t) {
     if (first.kind != Tok::Ident)
         fail(t.loc, message, "write the value itself, as in `int(3)`: a value needs no pointer", anchor);
     const bool isGeneric = peek(at + 1).kind == Tok::Less;
-    StructDecl* named = !isGeneric && isTypeName(first) ? prog_->findStruct(first.text) : nullptr;
+    const std::string keep = wantsUnique ? "have one owner" : "share one";
+    // A value of the language, such as `vector<int>`, or a struct, which is copied
     const TemplateDecl* tmpl = isGeneric ? classTemplate(first.text) : nullptr;
-    const bool isLibraryValue = isGeneric && !tmpl;  // `vector<int>`, `hashmap<string, int>`
-    const std::string asValue = "write `" + whole + "(...)`. It is a value, which is copied, so to share one hold it in a class";
-    if (isLibraryValue) fail(t.loc, message, asValue, anchor);
+    StructDecl* named = !isGeneric && isTypeName(first) ? prog_->findStruct(first.text) : nullptr;
+    const bool knownClass = (named && named->isClass) || (tmpl && !comesWithLanguageTemplate(*tmpl) && tmpl->start < toks_.size() && toks_[tmpl->start].kind != Tok::KwStruct);
+    if (isGeneric && !knownClass)
+        fail(t.loc, message, "write `" + whole + "(...)`. It is a value, which is copied, so to " + keep + " hold it in a class", anchor);
     if (named && !named->isClass)
-        fail(t.loc, message, "write `" + whole + "(...)`. A struct is a value, which is copied, so to " + (wantsUnique ? "have one owner" : "share one") + " make it a class", anchor);
+        fail(t.loc, message, "write `" + whole + "(...)`. A struct is a value, which is copied, so to " + keep + " make it a class", anchor);
     if (wantsUnique) fail(t.loc, message, "write `unique<" + whole + ">(...)`, which builds a new " + whole, anchor);
     fail(t.loc, message,
-         named ? "write `" + whole + "(...)`: a class variable is already a counted reference"
-               : "write `" + whole + "(...)`. A class variable is already a counted reference. A struct is a value, which is copied, so to share one make it a class",
+         knownClass ? "write `" + whole + "(...)`: a class variable is already a counted reference"
+                    : "write `" + whole + "(...)`. A class variable is already a counted reference. A struct is a value, which is copied, so to share one make it a class",
          anchor);
 }
 
@@ -2062,15 +2067,17 @@ void Parser::failCStyleArray(const Type* elem, const std::string& name, ArrayPla
     }
     const std::string note = anyMissing ? ", with N the number of rows" : "";
     std::string help;
+    std::string zeros;
+    for (size_t i = 0; i < sizes.size(); ++i) zeros += "[0]";
     bool anyVariable = false;
     for (size_t at = 0; at < past; ++at)
         anyVariable = anyVariable || (peek(at).kind == Tok::Ident && !constHooks().constant(peek(at).text));
     if (sizes.size() > 1 && elem->is(Type::Kind::Char) && peek(past).kind == Tok::Assign && peek(past + 1).kind == Tok::LBrace && peek(past + 2).kind == Tok::StringLit)
         help = "write `array<string, " + sizes[0] + "> " + name + " = {...};`" + note;
     else if (place == ArrayPlace::Parameter && sizes.size() > 1 && anyVariable)
-        help = "write `" + nestedVectors + " " + name + "`, which is a copy. To change the caller's, write `" + nestedVectors + "* " + name + "`, called with `&x`, and use `(*" + name + ")[0][0]`";
+        help = "write `" + nestedVectors + " " + name + "`, which is a copy. To change the caller's, write `" + nestedVectors + "* " + name + "`, called with `&x`, and use `(*" + name + ")" + zeros + "`";
     else if (place == ArrayPlace::Parameter && sizes.size() > 1)
-        help = "write `" + nested + " " + name + "`, or `" + nestedVectors + " " + name + "`, which are copies. To change the caller's, write `" + nested + "* " + name + "`, called with `&x`, and use `(*" + name + ")[0][0]`" + note;
+        help = "write `" + nested + " " + name + "`, or `" + nestedVectors + " " + name + "`, which are copies. To change the caller's, write `" + nested + "* " + name + "`, called with `&x`, and use `(*" + name + ")" + zeros + "`" + note;
     else if (place != ArrayPlace::Field && sizes.size() > 1 && anyName)
         help = "write `" + nested + " " + name + "` if those are constants, or `auto " + name + " = " + builtVectors + ";` if they are only known while the program runs" + note;
     else if (sizes.size() > 1)

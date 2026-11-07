@@ -66,9 +66,9 @@ void whatCannotBeCopied() {
     // error: write `o?.go()`, which does nothing when o is null
     vector<unique<N>>? vs;
     vs.clear();
-    // error: To change it, move it out and back: `auto v = move(vs).value(); v.clear(); vs = move(v);`
+    // error: To change it, move it out and back: `if (vs) { auto v = move(vs).value(); v.clear(); vs = move(v); }`
     vs[0].go();
-    // error: To reach an element, move it out and back: `auto v = move(vs).value(); v[i] = ...; vs = move(v);`
+    // error: To reach an element, move it out and back: `if (vs) { auto v = move(vs).value(); v[i] = ...; vs = move(v); }`
 }
 void constMaps() {
     const hashmap<string, vector<int>> m = {};
@@ -159,7 +159,7 @@ struct WithMethod {
 vector<unique<N>>? makeUniques() { return null; }
 void temporariesThatCannotBeCopied() {
     makeUniques().clear();
-    // error: To change it, store it in a variable first, as this only exists as a copy: `auto opt = makeUniques();`. Then move it out and back: `auto v = move(opt).value(); v.clear(); opt = move(v);`
+    // error: To change it, store it in a variable first, as this only exists as a copy: `auto opt = makeUniques();`. Then move it out and back: `if (opt) { auto v = move(opt).value(); v.clear(); opt = move(v); }`
 }
 
 int main() { return 0; }

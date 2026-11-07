@@ -1,0 +1,103 @@
+// What the errors about copies say in the places a grid of shapes does not reach by itself.
+import json;
+struct S {
+    int x = 0;
+    void set() { x = 1; }
+    int area() { return x * x; }
+};
+struct H { S? os; vector<int>? ov; };
+class C {
+public:
+    int n = 0;
+    void go() { n = 1; }
+};
+struct WithUnique {
+    unique<C> c = unique<C>();
+    void bump() { }
+};
+class K {
+public:
+    S? o;
+    vector<S> vs;
+    vector<int>? ov;
+    void readOnly() const {
+        this.o?.set();
+        // error: const method 'readOnly' cannot change fields. Remove `const` from it, or change a copy: `auto x = ...;`, and change that
+        this.vs.back().set();
+        // error: const method 'readOnly' cannot change fields
+        this.ov.push_back(1);
+        // error: const method 'readOnly' cannot change fields
+    }
+};
+vector<int>? makeOptional() { return null; }
+H makeH() { return H{}; }
+
+void itMayOnlyRead() {
+    S? o = S{};
+    int a = o.value().area();
+    // error: `value()` gives a copy. Unwrap it, change that and store it back: `if (auto v = o) { v.area(); o = v; }`, or mark 'area' `const` if it does not change any field
+    const vector<S> w = {S{}};
+    w.back().area();
+    // error: 'w' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change that, or mark 'area' `const` if it does not change any field
+}
+void pointerToPointer(H** p) {
+    (*p)->os?.set();
+    // error: `if (auto v = (*p)->os) { v.set(); (*p)->os = v; }`
+}
+void pointerToOptional(vector<int>?* p, C?* q) {
+    long n = p->size();
+    // error: read with `(*p)?.size()`
+    q->go();
+    // error: write `(*q)?.go()`, which does nothing when (*q) is null, or unwrap it: `if (auto v = (*q)) v.go();`
+}
+void pointersToConst(const H* p, const vector<S>* w, const hashmap<string, S>* m) {
+    p->os?.set();
+    // error: 'p' is a 'const H*', so what it points to cannot change. Use a pointer that is not const, or change a copy: `auto x = ...;`, and change that
+    w->back().set();
+    // error: 'w' is a 'const vector<S>*', so what it points to cannot change
+    m->at("a").set();
+    // error: 'm' is a 'const hashmap<string, S>*', so what it points to cannot change
+}
+void cannotBeCopied() {
+    WithUnique? o;
+    o.value().bump();
+    // error: read through it with `o?.field`, or take it: `auto v = move(o).value();`, and, to keep it, `o = move(v);` when done
+    // not-error: 'bump' may change the struct, but 'value()' gives a copy of it
+    vector<unique<C>>? u;
+    u?.clear();
+    // error: move it out and back: `if (u) { auto v = move(u).value(); v.clear(); u = move(v); }`
+}
+void nothingToIndex() {
+    json::Value d = json::parse<json::Value>("{}");
+    d.get("a")?.push(json::of(1));
+    // error: store it in a variable first, change that, and store it back where it came from
+    makeH().ov.push_back(1);
+    // error: To change it, store it in a variable first, change that, and store it back where it came from
+    S? o = S{};
+    H h = {};
+    h.os.value().set();
+    // error: `value()` gives a copy. Unwrap it, change that and store it back: `if (auto v = h.os) { v.set(); h.os = v; }`
+}
+void generics() {
+    auto a = make_unique<hashmap<string, int>>();
+    // error: write `hashmap<string, int>(...)`. It is a value, which is copied, so to have one owner hold it in a class
+    auto b = make_unique<StructGeneric<int>>();
+    // error: write `StructGeneric<int>(...)`. It is a value, which is copied, so to have one owner hold it in a class
+    auto c = make_unique<ClassGeneric<int>>();
+    // error: write `unique<ClassGeneric<int>>(...)`, which builds a new ClassGeneric<int>
+    auto d = make_shared<ClassGeneric<int>>();
+    // error: write `ClassGeneric<int>(...)`: a class variable is already a counted reference
+}
+template <typename T>
+struct StructGeneric { T x; };
+template <typename T>
+class ClassGeneric {
+public:
+    T x;
+};
+void threeSizes(int n, int a[n][n][n]) { }
+// error: called with `&x`, and use `(*a)[0][0][0]`
+void threeConstantSizes(int a[2][3][4]) { }
+// error: called with `&x`, and use `(*a)[0][0][0]`
+
+int main() { return 0; }

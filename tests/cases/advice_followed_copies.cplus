@@ -15,6 +15,11 @@ public:
     int n = 1;
 };
 vector<int>? gives() { return vector<int>{1}; }
+struct Wrapped {
+    unique<N> held = unique<N>();
+    int n = 1;
+    void bump() { n = 2; }
+};
 const int X = 2;
 const int R = 2;
 const int C = 3;
@@ -83,6 +88,17 @@ int main() {
     w.a[1][2] = 3;
     println("{}", w.a[1][2]);
     // expect: 3
+    // What cannot be copied, moved out and back, which does nothing when there is nothing
+    vector<unique<N>>? none = null;
+    if (none) { auto taken = move(none).value(); taken.clear(); none = move(taken); }
+    println("{}", none.has_value());
+    // expect: false
+    Wrapped? wrapped = Wrapped{};
+    auto out = move(wrapped).value();
+    out.bump();
+    wrapped = move(out);
+    println("{}", wrapped?.n);
+    // expect: 2
     // What takes the place of make_shared
     auto node = Node();
     println("{}", node.value);

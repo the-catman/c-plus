@@ -120,6 +120,53 @@ NOT_SIMPLE = [
     ("O? o = O{.h = H{}};", "o.value().h.value().items.clear();"),
 ]
 
+# Outside main: the line that is wrong goes where the @ is, and main shows what it did.
+ELSEWHERE = [  # (definitions, wrong, main, expected)
+    ("void f(H* p) { @ }", "p->os?.set();", 'H h = {};\nh.os = S{};\nf(&h);\nprintln("{}", h.os?.x);', "7"),
+    ("void f(H* p) { @ }", "p->os.set();", 'H h = {};\nh.os = S{};\nf(&h);\nprintln("{}", h.os?.x);', "7"),
+    ("void f(H* p) { @ }", "(*p).os?.set();", 'H h = {};\nh.os = S{};\nf(&h);\nprintln("{}", h.os?.x);', "7"),
+    ("void f(H* p) { @ }", "p->ov.push_back(N);", 'H h = {};\nh.ov = vector<int>{1};\nf(&h);\nprintln("{}", h.ov);', "[1, 5]"),
+    ("void f(H* p) { @ }", "p->ov[0] = N;", 'H h = {};\nh.ov = vector<int>{1};\nf(&h);\nprintln("{}", h.ov);', "[5]"),
+    ("void f(H* p) { @ }", "p[0].os?.set();", 'H h = {};\nh.os = S{};\nf(&h);\nprintln("{}", h.os?.x);', "7"),
+    ("void f(H** p) { @ }", "(*p)->os?.set();", 'H h = {};\nh.os = S{};\nH* q = &h;\nf(&q);\nprintln("{}", h.os?.x);', "7"),
+    ("void f(vector<S>* p) { @ }", "p->back().set();", 'vector<S> w = {S{}};\nf(&w);\nprintln("{}", w[0].x);', "7"),
+    ("void f(vector<S>* p) { @ }", "(*p).back().x = N;", 'vector<S> w = {S{}};\nf(&w);\nprintln("{}", w[0].x);', "5"),
+    ('void f(hashmap<string, S>* p) { @ }', 'p->at("a").set();', 'hashmap<string, S> m = {{"a", S{}}};\nf(&m);\nprintln("{}", m["a"].x);', "7"),
+    ('void f(hashmap<string, S>* p) { @ }', 'p->get("a")?.set();', 'hashmap<string, S> m = {{"a", S{}}};\nf(&m);\nprintln("{}", m["a"].x);', "7"),
+    ("void f(vector<int>?* p) { @ }", "p->push_back(N);", 'vector<int>? o = vector<int>{1};\nf(&o);\nprintln("{}", o);', "[1, 5]"),
+    ("void f(S?* p) { @ }", "p->set();", 'S? o = S{};\nf(&o);\nprintln("{}", o?.x);', "7"),
+    ("struct M { S? o; vector<int>? ov; vector<S> ws; hashmap<string, S> ms; void f() { @ } };", "o?.set();", 'M m = {};\nm.o = S{};\nm.f();\nprintln("{}", m.o?.x);', "7"),
+    ("struct M { S? o; vector<int>? ov; vector<S> ws; hashmap<string, S> ms; void f() { @ } };", "o.set();", 'M m = {};\nm.o = S{};\nm.f();\nprintln("{}", m.o?.x);', "7"),
+    ("struct M { S? o; vector<int>? ov; vector<S> ws; hashmap<string, S> ms; void f() { @ } };", "ov.push_back(N);", 'M m = {};\nm.ov = vector<int>{1};\nm.f();\nprintln("{}", m.ov);', "[1, 5]"),
+    ("struct M { S? o; vector<int>? ov; vector<S> ws; hashmap<string, S> ms; void f() { @ } };", "ws.back().set();", 'M m = {};\nm.ws.push_back(S{});\nm.f();\nprintln("{}", m.ws[0].x);', "7"),
+    ("struct M { S? o; vector<int>? ov; vector<S> ws; hashmap<string, S> ms; void f() { @ } };", 'ms.at("a").set();', 'M m = {};\nm.ms["a"] = S{};\nm.f();\nprintln("{}", m.ms["a"].x);', "7"),
+    ("struct M { S? o; vector<int>? ov; vector<S> ws; hashmap<string, S> ms; void f() { @ } };", 'ms.get("a")?.set();', 'M m = {};\nm.ms["a"] = S{};\nm.f();\nprintln("{}", m.ms["a"].x);', "7"),
+    ("class K { public: S? o; vector<S> ws; void f() { @ } };", "this.o?.set();", 'K k = K();\nk.o = S{};\nk.f();\nprintln("{}", k.o?.x);', "7"),
+    ("class K { public: S? o; vector<S> ws; void f() { @ } };", "o?.set();", 'K k = K();\nk.o = S{};\nk.f();\nprintln("{}", k.o?.x);', "7"),
+    ("class K { public: S? o; vector<S> ws; void f() { @ } };", "this.ws.back().set();", 'K k = K();\nk.ws.push_back(S{});\nk.f();\nprintln("{}", k.ws[0].x);', "7"),
+    # Names the program has in a field, a parameter, or a loop
+    ("struct M { vector<int>? ov; int v = 5; void f() { @ } };", "ov.push_back(v);", 'M m = {};\nm.ov = vector<int>{1};\nm.f();\nprintln("{}", m.ov);', "[1, 5]"),
+    ("void f(vector<int>?* p, int v) { @ }", "p->push_back(v);", 'vector<int>? o = vector<int>{1};\nf(&o, 5);\nprintln("{}", o);', "[1, 5]"),
+    ("void f(vector<int>?* p) { vector<int> list = {5}; for (auto v : list) { @ } }", "p->push_back(v);", 'vector<int>? o = vector<int>{1};\nf(&o);\nprintln("{}", o);', "[1, 5]"),
+    ("void f(vector<int>?* p) { if (true) { int inner = 5; int v = 5; @ } }", "p->push_back(inner);", 'vector<int>? o = vector<int>{1};\nf(&o);\nprintln("{}", o);', "[1, 5]"),
+    # When there is nothing there, what `?.` did was nothing
+    ("void f(vector<unique<C>>?* p) { @ }", "(*p)?.clear();", 'vector<unique<C>>? u = null;\nf(&u);\nprintln("{}", u.has_value());', "false"),
+    ("void f(vector<int>?* p) { @ }", "(*p)?.clear();", 'vector<int>? o = null;\nf(&o);\nprintln("{}", o.has_value());', "false"),
+]
+
+# What is not wrong, and must stay that way: through a pointer, or a class, a method that gave a copy reaches the real thing.
+VALID = [  # (definitions, main, expected)
+    ("", "S a = {};\nvector<S*> ps = {&a};\nps.back()[0].set();\nprintln(\"{}\", a.x);", "7"),
+    ("", "S a = {};\nvector<S*> ps = {&a};\nps.back()->set();\nprintln(\"{}\", a.x);", "7"),
+    ("struct WithPointer { S* p; };", "S a = {};\nvector<WithPointer> v = {WithPointer{.p = &a}};\nv.back().p[0].set();\nprintln(\"{}\", a.x);", "7"),
+    ("", "S a = {};\nhashmap<string, S*> m = {{\"k\", &a}};\nm.at(\"k\")[0].set();\nprintln(\"{}\", a.x);", "7"),
+    ("class Box { public: S s; void set() { s.x = 7; } };", "vector<Box> v = {Box()};\nv.back().set();\nprintln(\"{}\", v[0].s.x);", "7"),
+    ("class Box { public: S s; };", "vector<Box> v = {Box()};\nv.back().s.set();\nprintln(\"{}\", v[0].s.x);", "7"),
+    ("class Box { public: S s; };\nstruct InABox { Box b; };", "vector<InABox> v = {InABox{.b = Box()}};\nv.back().b.s.set();\nprintln(\"{}\", v[0].b.s.x);", "7"),
+    ("struct Reader { int x = 3; int area() const { return x * x; } };", "vector<Reader> v = {Reader{}};\nprintln(\"{}\", v.back().area());", "9"),
+    ("", "S a = {};\nH h = {};\nh.os = S{};\nH* const p = &h;\nif (auto v = p[0].os) { v.set(); p[0].os = v; }\nprintln(\"{}\", p[0].os?.x);", "7"),
+]
+
 CONST = [
     ('const hashmap<string, vector<int>> m = {};', 'm.at("a").push_back(N);'),
     ('const hashmap<string, vector<int>> m = {};', 'm.get("a").push_back(N);'),
@@ -130,6 +177,9 @@ CONST = [
     ("const vector<S> w = {S{}};", "w.back().x = N;"),
     ("const vector<S> w = {S{}};", "w.back().set();"),
     ("const O? a = O{.h = H{}};", "a?.h?.items.clear();"),
+    ("H h = {};\nconst H* p = &h;", "p->os?.set();"),
+    ("vector<S> w = {S{}};\nconst vector<S>* p = &w;", "p->back().set();"),
+    ("H h = {};\nconst H* p = &h;", "p->ov.push_back(N);"),
 ]
 
 # Names of the program's own that what is suggested must not hide.
@@ -138,8 +188,8 @@ COLLISIONS = ["", "int v = 5;", "int inner = 5;", "int opt = 5;", "int v = 5;\ni
 CODE = re.compile(r"`([^`]*)`")
 
 
-def program(body):
-    return PRELUDE + "\nint main() {\n" + body + "\n    return 0;\n}\n"
+def program(body, definitions=""):
+    return PRELUDE + definitions + "\nint main() {\n" + body + "\n    return 0;\n}\n"
 
 
 def is_statement(code):
@@ -152,7 +202,7 @@ def compile_errors(cplus, path):
 
 def followed(code, wrong, value):
     """The suggested code, with what it left out filled in from the line that was wrong."""
-    args = re.search(r"\.(\w+)\(([^()]*)\);$", wrong)
+    args = re.search(r"(?:\.|->)(\w+)\(([^()]*)\);$", wrong)
     code = code.replace("(...)", "(" + (args.group(2) if args else "") + ")")
     code = code.replace("[i]", "[0]").replace(" = ...", " = " + value)
     return code
@@ -217,6 +267,49 @@ def run_case(cplus, workdir, index, declared, wrong, kind, printed=None, expecte
     return None
 
 
+def run_elsewhere(cplus, workdir, index, definitions, wrong, body, expected):
+    """A case outside main: the line goes in the definitions, and main shows what it did."""
+    wrong = wrong.replace("N", "5")
+    shown = f"{definitions!r} / {wrong!r}"
+    source = workdir / f"else{index}.cplus"
+    source.write_text(program(body, "\n" + definitions.replace("@", wrong) + "\n"))
+    result = compile_errors(cplus, source)
+    if result.returncode != 1:
+        return f"{shown}: the compiler gave {result.returncode}: {result.stderr[:300]}"
+    helps = re.findall(r"= help: (.*)", result.stderr)
+    if len(helps) != 1:
+        return f"{shown}: expected one error: {result.stderr[:500]}"
+    text = helps[0]
+    if "only exists as a copy" in text:
+        return f"{shown}: says this only exists as a copy: {text}"
+    codes = [c for c in CODE.findall(text) if is_statement(c) or " = ..." in c or re.search(r"\.\w+\((\.\.\.)?\)$", c)]
+    if not codes:
+        return f"{shown}: no code to follow in: {text}"
+    value = re.search(r"\(([^()]*)\);$", wrong)
+    code = followed(codes[-1], wrong, value.group(1) if value and value.group(1) else "5")
+    if "..." in code:
+        return f"{shown}: left something unsaid: {code}"
+    code += ";" if not code.rstrip().endswith((";", "}")) else ""
+    target = workdir / f"else{index}_fixed.cplus"
+    target.write_text(program(body, "\n" + definitions.replace("@", code) + "\n"))
+    run = subprocess.run([cplus, "run", str(target)], capture_output=True, text=True, timeout=120)
+    if run.returncode != 0:
+        return f"{shown}: following `{code}` does not work:\n{run.stderr.split(chr(10) + chr(10))[0][:500]}\n(help: {text})"
+    if run.stdout.strip() != expected:
+        return f"{shown}: following `{code}` printed {run.stdout.strip()!r}, and it should be {expected!r}"
+    return None
+
+
+def run_valid(cplus, workdir, index, definitions, body, expected):
+    """A program that is not wrong, which must compile and do what it says."""
+    target = workdir / f"valid{index}.cplus"
+    target.write_text(program(body, "\n" + definitions + "\n"))
+    run = subprocess.run([cplus, "run", str(target)], capture_output=True, text=True, timeout=120)
+    if run.returncode != 0 or run.stdout.strip() != expected:
+        return f"valid program {body!r} gave {run.returncode}, {run.stdout.strip()!r}: {run.stderr[:400]}"
+    return None
+
+
 def problems(cplus, workdir):
     cases = []
     seen = set()
@@ -243,7 +336,10 @@ def problems(cplus, workdir):
         return run_case(cplus, workdir, index, declared, wrong, kind, printed, expected, extra, value)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        return len(cases), [p for p in pool.map(one, enumerate(cases)) if p]
+        found = [p for p in pool.map(one, enumerate(cases)) if p]
+        found += [p for p in pool.map(lambda c: run_elsewhere(cplus, workdir, c[0], *c[1]), enumerate(ELSEWHERE)) if p]
+        found += [p for p in pool.map(lambda c: run_valid(cplus, workdir, c[0], *c[1]), enumerate(VALID)) if p]
+    return len(cases) + len(ELSEWHERE) + len(VALID), found
 
 
 def main():
