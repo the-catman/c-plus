@@ -139,7 +139,7 @@ Token Lexer::next() {
     Loc loc = locHere();
     std::string shown = (unsigned char)c >= 0x80 ? "a non-ASCII character" : std::string("'") + c + "'";
     diags_.error(loc, "unexpected character " + shown + " in source",
-                 "identifiers and operators use ASCII; non-ASCII text belongs inside a string", spec::SourceFiles);
+                 "write names and operators in ASCII, and put other text inside a string", spec::SourceFiles);
     advance();
     while (pos_ < src_.size() && ((unsigned char)peek() & 0xC0) == 0x80) advance();  // rest of a UTF-8 sequence
     return next();
@@ -259,7 +259,7 @@ Token Lexer::lexFloat() {
     if (std::isinf(value))
         diags_.error(loc, "the number " + text + " is too large for a " + (isFloat ? "float" : "double"),
                      isFloat ? "the largest float is about 3.4e38; leave out the f to make it a double"
-                             : "the largest double is about 1.8e308",
+                             : "write a smaller number: the largest double is about 1.8e308",
                      spec::FloatingPointTypes);
     Token t{Tok::FloatLit, loc, text, 0};
     t.floatValue = value;
@@ -310,7 +310,7 @@ Token Lexer::lexNumber() {
         while (std::isdigit((unsigned char)peek())) advance();
         const char* baseName = base == 2 ? "a binary" : base == 8 ? "an octal" : "a decimal";
         diags_.error(digitLoc, std::string("'") + bad + "' is not a valid digit in " + baseName + " number",
-                     base == 2 ? "binary numbers use only 0 and 1" : "octal numbers use only the digits 0 to 7",
+                     base == 2 ? "write only 0 and 1 in a binary number" : "write only the digits 0 to 7 in an octal number",
                      spec::IntegerLiterals);
     }
     std::string text = src_.substr(start, pos_ - start);
@@ -328,7 +328,7 @@ Token Lexer::lexNumber() {
                      spec::IntegerLiterals);
     } else if (overflow) {
         diags_.error(loc, "the number " + text + " is too large for any integer type",
-                     "the largest integer type is long, which holds up to 9223372036854775807",
+                     "write a smaller number: the largest integer type is long, which holds up to 9223372036854775807",
                      spec::IntegerLiterals);
     }
 
@@ -474,7 +474,7 @@ bool Lexer::lexEscape(std::string& value, const char* anchor) {
         }
         default:
             diags_.error(escLoc, std::string("unknown escape sequence '\\") + e + "'",
-                         "valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\' and \\xHH", anchor);
+                         "write one of the valid escapes: \\n \\t \\r \\0 \\\\ \\\" \\' and \\xHH", anchor);
             return false;
     }
 }

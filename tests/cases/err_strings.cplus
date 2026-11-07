@@ -58,9 +58,9 @@ int main() {
 // error: '+=' on a string adds a string or a char, but this is 'int'
 // error: turn the number into a string first: `s += to_string(n)`
 // error: '-=' cannot be used with 'string'
-// error: the only compound assignment on strings is +=, which appends
+// error: use +=, which appends, and is the only compound assignment on strings
 // error: '-' cannot be used with 'string'
-// error: strings work with + to join them, and with == != < <= > >= to compare them
+// error: use + to join strings, and == != < <= > >= to compare them
 // error: '<' compares two strings, but this is 'int'
 // error: an index into a string must be an int or long, but this is 'bool'
 // error: the elements of 'string' are 'char', which cannot be stored in 'string' 'ch'
@@ -68,7 +68,7 @@ int main() {
 // error: this compiler does not support append() on strings yet
 // error: write `s += text`
 // error: expected 'char' for push_back(), but this is 'string'
-// error: 'x' in single quotes is a char; "x" is a string
+// error: write 'x', in single quotes, for a char. "x" is a string
 // error: this compiler does not support insert() on strings yet
 // error: 'string' has no method named 'lenght'
 // error: did you mean 'length'?

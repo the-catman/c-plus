@@ -77,7 +77,7 @@ int main() {
 // error: Copy the array into a variable and call data() on that
 // error: the if condition must be a bool, a number, a pointer or an optional, but this is 'array<int, 3>'
 // error: an array always has its elements. To test one of them, write e.g. `a[0] != 0`
-// error: 'array<int, 3>' values can only be compared with == and !=
+// error: use == or !=, which are all that 'array<int, 3>' values have
 // error: both sides of '==' must have the same type, but they are 'array<int, 3>' and 'array<int, 2>'
 // error: the elements of 'array<int, 3>' are 'int', which cannot be stored in 'string' 's'
 // error: a cast cannot turn a value into a string

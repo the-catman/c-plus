@@ -74,7 +74,7 @@ int main() {
 // error: did you mean 'size'?
 // error: 'size' is a method; call it with `size()`
 // error: to check whether it has elements, write `!v.empty()`
-// error: 'vector<int>' values can only be compared with == and !=
+// error: use == or !=, which are all that 'vector<int>' values have
 // error: both sides of '==' must have the same type, but they are 'vector<int>' and 'vector<string>'
 // error: 'c' is const and cannot be changed
 // error: 'c' is const, so its elements cannot be assigned to

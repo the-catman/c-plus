@@ -3,4 +3,4 @@ int main() {
     return 0;
 }
 // error: unknown type 'Nothing'
-// error: the types are int, long, double, float, bool, char, string
+// error: write one of the types: int, long, double, float, bool, char, string

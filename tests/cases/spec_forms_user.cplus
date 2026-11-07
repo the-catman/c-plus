@@ -1,0 +1,47 @@
+// What the spec's text shows of a class named User, written as it writes it. See spec_forms.
+class User {
+public:
+    string name;
+    int age = 0;
+    int doubled() const { return this.age * 2; }
+};
+class Person {
+public:
+    string name;
+    int born;
+};
+
+void f() {}
+
+int main() {
+    f();
+    User u0 = User{"Alice", 30};
+    println("{}", u0.doubled());
+    // expect: 60
+    {
+        const User u = User("Grace");
+        println("{}", u.name);
+    }
+    // expect: Grace
+    User one = User("Ada");
+    User* p = &one;
+    *p = User("Grace");
+    println("{}", p->name);
+    // expect: Grace
+    {
+        User? found = one;
+        if (User? u = found) println("{}", u?.name);
+    }
+    // expect: Grace
+    show();
+    return 0;
+}
+
+// The spec's names for these, in a type of their own, as a class has one name.
+void show() {
+    Person ada = Person{"Ada", 1815};
+    println("{}", ada);
+    // expect: Person {name: "Ada", born: 1815}
+    println("{}", ada.born);
+    // expect: 1815
+}

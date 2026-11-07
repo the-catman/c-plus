@@ -1,0 +1,29 @@
+// What the spec's text shows of threads, written as it writes it. See spec_forms.
+class Worker {
+public:
+    int method(int x) { return x + 1; }
+};
+
+int g() throws { return 2; }
+int f(int x) { return x; }
+void save(vector<int> data) {}
+
+void plain() {}
+void plainThrows() throws {}
+
+int main() throws {
+    Worker object = Worker();
+    int x = 1;
+    Task<int> t = spawn object.method(x);
+    println("{}", t.wait());
+    // expect: 2
+    Task<int> given = spawn f(try g());
+    println("{}", given.wait());
+    // expect: 2
+    vector<int> data = {1};
+    spawn save(data);
+    int? none = null;
+    println("{}", none.value_or(1));
+    // expect: 1
+    return 0;
+}

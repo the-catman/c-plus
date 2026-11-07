@@ -3,4 +3,4 @@ int main() {
     return 0;
 }
 // error: a cast converts between numbers, char and bool, but this converts to 'int?'
-// error: no cast is needed
+// error: remove the cast

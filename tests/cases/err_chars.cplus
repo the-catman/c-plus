@@ -36,7 +36,7 @@ int main() {
 // error: expected 'char' to initialize 'c', but this is 'int'
 // error: Write a character such as 'A', or `char(n)`, which stops the program unless n is from 0 to 255
 // error: expected 'char' to initialize 'd', but this is 'string'
-// error: 'a' in single quotes is a char; "a" is a string
+// error: write 'a', in single quotes, for a char. "a" is a string
 // error: a string does not convert to a char; `s[i]` is the char at position i
 // error: write `string(1, c)` for a string holding the char
 // error: a char is not a bool; compare it, e.g. `c != '\0'`

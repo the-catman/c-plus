@@ -203,8 +203,15 @@ def check_spec_code(cplus, workdir):
     return ok
 
 
+HELP_VERBS = ("write|use|remove|add|declare|give|make|call|put|move|rename|pass|mark|leave|drop|replace|store|split|set|define|install|check|convert|turn|unwrap|read|reach"
+              "|compare|assign|name|say|delete|keep|take|return|pick|build|derive|list|cast|choose|free|start|end|go|loop|copy|create|hold|print|override|run|stop|handle"
+              "|change|type|allocate|look|subtract|ask|let|do|first")
+HELP_SAYS_WHAT_TO_DO = re.compile(r"(?:^|[.;:?!]\s+|\bor\s+|\band\s+|,\s+)(?:" + HELP_VERBS + r")\b", re.I)
+
+
 def errors_without_help(stderr):
-    """Every error says how to fix it, and where the rule is."""
+    """Every error says how to fix it, and where the rule is. Whether advice is good takes reading, but this much a machine can tell:
+    it gives code to write, a name it may have meant, or a verb that says what to do, rather than only saying how things are."""
     problems = []
     blocks = re.split(r"^(?=(?:error|warning|note): )", stderr, flags=re.M)
     for block in blocks:
@@ -215,6 +222,9 @@ def errors_without_help(stderr):
             problems.append("no help: " + first)
         if "= spec:" not in block:
             problems.append("no spec: " + first)
+        for advice in re.findall(r"= help: (.*)", block):
+            if "`" not in advice and "did you mean" not in advice and not HELP_SAYS_WHAT_TO_DO.search(advice):
+                problems.append(f"help that gives nothing to do: {first}: {advice}")
     return problems
 
 
@@ -637,7 +647,41 @@ SHEET_VARIANTS = [
 SHEET_NOT_CODE = {"<cmath>", "<cctype>", "std::", "std::weak_ptr", "std::string", "0x...", "--debug", "-Wno-new-delete", "-lname", "import x;", "long double", "/0",
                   "http::fetch", "cplus check", "cplus run app.cplus --race", "cplus run app.cplus -- arg1 arg2", "cplus run app.cplus --debug"}
 # Habits that the left side of the table only names a part of, which is fine on its own. The rest of its row says what is wrong.
-SHEET_HABITS_THAT_COMPILE = {"int count = 0;", "x", "*p", "u", "if (flag)", "Node? next", "u1 == u2", "v[i]", "m[k]", "n", "s[s.size()]", "'\\0'", "s.substr(pos)"}
+SHEET_HABITS_THAT_COMPILE = {"int count = 0;", "x", "*p", "u", "if (flag)", "Node? next", "u1 == u2", "v[i]", "m[k]", "n", "s[s.size()]", "'\\0'", "s.substr(pos)",
+                             "int x;", "int* p = new int;", "User u;", "array<int, 10000000> a;"}
+
+
+def span_sources(span):
+    """A piece of code from a document, in the places where it could mean something."""
+    filled = span.replace("{ ... }", "{ }").replace("{...}", "{ }")
+    end = "" if filled.rstrip().endswith((";", "}")) else ";"
+    statement = (SHEET_PRELUDE + "long throwsLong() throws { return 1; }\nint zero() { return 0; }\nint f() throws { return 0; }\n"
+                 "int main() throws {\n" + SHEET_BODY + "\n" + filled + end + "\nreturn 0;\n}\n")
+    for variant in SHEET_VARIANTS:
+        yield statement.replace("%s", variant)
+    yield SHEET_PRELUDE + filled + end + "\nint main() { return 0; }\n"
+    yield SHEET_PRELUDE + 'class Wrap : public Animal { public: int w = 1; int h = 2; Wrap(string n) {} ' + filled + end + " };\nint main() { return 0; }\n"
+    yield SHEET_PRELUDE + "class Wrap2 { public: int w = 1; int h = 2; void m() { " + filled + end + " } };\nint main() { return 0; }\n"
+    if filled.startswith("template<") and "(" not in filled and "{" not in filled:
+        yield SHEET_PRELUDE + filled + " T pass__(T a) { return a; }\nint main() { return 0; }\n"
+    if "catch" in filled and "try" not in filled:
+        yield SHEET_PRELUDE + "int f() throws { return 0; }\nvoid w() throws { try { try f(); } " + filled.replace(";", "") + " { } }\nint main() { return 0; }\n"
+    yield SHEET_PRELUDE + "template<typename T> void w() { T a = T(); " + filled + end + " }\nint main() { w<int>(); return 0; }\n"
+    yield SHEET_PRELUDE + "template<typename T, typename Base> void w() { if constexpr (" + filled + ") { } }\nint main() { w<int, Animal>(); return 0; }\n"
+    yield SHEET_PRELUDE + "int main() {\n" + filled + " dummy__;\nreturn 0;\n}\n"
+
+
+def span_compiles(cplus, workdir, span, index, candidates):
+    path = workdir / f"span{index}.cplus"
+    for source in candidates:
+        path.write_text(source)
+        run = subprocess.run([cplus, "check", str(path)], capture_output=True, text=True, timeout=60)
+        if run.returncode == 0:
+            return True
+        if run.returncode != 1:
+            print(f"FAIL a document's `{span}` stops the compiler: exit code {run.returncode}")
+            return True
+    return False
 
 
 def check_cheat_sheet(cplus, workdir):
@@ -657,34 +701,6 @@ def check_cheat_sheet(cplus, workdir):
             if piece and not re.search(pattern, forms, re.S):
                 return False
         return True
-    def sources(span):
-        filled = span.replace("{ ... }", "{ }").replace("{...}", "{ }")
-        end = "" if filled.rstrip().endswith((";", "}")) else ";"
-        statement = (SHEET_PRELUDE + "long throwsLong() throws { return 1; }\nint zero() { return 0; }\nint f() throws { return 0; }\n"
-                     "int main() throws {\n" + SHEET_BODY + "\n" + filled + end + "\nreturn 0;\n}\n")
-        for variant in SHEET_VARIANTS:
-            yield statement.replace("%s", variant)
-        yield SHEET_PRELUDE + filled + end + "\nint main() { return 0; }\n"
-        yield SHEET_PRELUDE + 'class Wrap : public Animal { public: int w = 1; int h = 2; Wrap(string n) {} ' + filled + end + " };\nint main() { return 0; }\n"
-        yield SHEET_PRELUDE + "class Wrap2 { public: int w = 1; int h = 2; void m() { " + filled + end + " } };\nint main() { return 0; }\n"
-        if filled.startswith("template<") and "(" not in filled and "{" not in filled:
-            yield SHEET_PRELUDE + filled + " T pass__(T a) { return a; }\nint main() { return 0; }\n"
-        if "catch" in filled and "try" not in filled:
-            yield SHEET_PRELUDE + "int f() throws { return 0; }\nvoid w() throws { try { try f(); } " + filled.replace(";", "") + " { } }\nint main() { return 0; }\n"
-        yield SHEET_PRELUDE + "template<typename T> void w() { T a = T(); " + filled + end + " }\nint main() { w<int>(); return 0; }\n"
-        yield SHEET_PRELUDE + "template<typename T, typename Base> void w() { if constexpr (" + filled + ") { } }\nint main() { w<int, Animal>(); return 0; }\n"
-        yield SHEET_PRELUDE + "int main() {\n" + filled + " dummy__;\nreturn 0;\n}\n"
-    def compiles(span, index, candidates):
-        path = workdir / f"sheet{index}.cplus"
-        for source in candidates:
-            path.write_text(source)
-            run = subprocess.run([cplus, "check", str(path)], capture_output=True, text=True, timeout=60)
-            if run.returncode == 0:
-                return True
-            if run.returncode != 1:
-                print(f"FAIL the cheat sheet's `{span}` stops the compiler: exit code {run.returncode}")
-                return True
-        return False
     write = []
     for _, column in rows(works) + rows(different):
         for span in re.findall(r"`([^`]+)`", column):
@@ -697,14 +713,30 @@ def check_cheat_sheet(cplus, workdir):
             span = span.replace("\\|", "|")
             if span not in habits and span not in SHEET_HABITS_THAT_COMPILE and not span.startswith(("-g", "-f", "#", "std::setprecision", "curl -k", "verify=")):
                 habits.append(span)
-    def habit_sources(span):
+    def habit(pair):
+        """What the compiler makes of it: whether it compiled, and whether it was ever rejected for itself."""
+        index, span = pair
         end = "" if span.rstrip().endswith((";", "}")) else ";"
-        yield (SHEET_PRELUDE + "long throwsLong() throws { return 1; }\nint zero() { return 0; }\nint f() throws { return 0; }\n"
-               "int main() throws {\n" + SHEET_BODY + "\n" + span + end + "\nreturn 0;\n}\n").replace("%s", SHEET_VARIANTS[0])
+        helpers = "long throwsLong() throws { return 1; }\nint zero() { return 0; }\nint f() throws { return 0; }\n"
+        candidates = [(SHEET_PRELUDE + helpers + "int main() throws {\n" + SHEET_BODY + "\n" + span + end + "\nreturn 0;\n}\n").replace("%s", SHEET_VARIANTS[0]),
+                      SHEET_PRELUDE + "int main() throws {\n" + span + end + "\nreturn 0;\n}\n",
+                      span + end + "\nint main() { return 0; }\n",
+                      "int main() {\n" + span + end + "\nreturn 0;\n}\n"]
+        path = workdir / f"habit{index}.cplus"
+        for at, source in enumerate(candidates):
+            path.write_text(source)
+            run = subprocess.run([cplus, "check", str(path)], capture_output=True, text=True, timeout=60)
+            if run.returncode == 0:
+                return at <= 1  # with nothing else around it, it may mean something else
+            errors = [line for line in run.stderr.splitlines() if line.startswith("error:") and "could not compile" not in line]
+            names = r"is not declared|already declared|there is no function named" + ("|unknown type" if at >= 2 else "")  # alone, the types of the others are unknown too
+            if errors and not re.search(names, errors[0]):
+                return False
+        return None  # only ever rejected for what it names
     ok = True
     with concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 4) as pool:
-        wrote = list(pool.map(lambda pair: compiles(pair[1], pair[0], sources(pair[1])), enumerate(write)))
-        rejected = list(pool.map(lambda pair: compiles(pair[1], "h%d" % pair[0], habit_sources(pair[1])), enumerate(habits)))
+        wrote = list(pool.map(lambda pair: span_compiles(cplus, workdir, pair[1], pair[0], span_sources(pair[1])), enumerate(write)))
+        rejected = list(pool.map(habit, enumerate(habits)))
     for span, good in zip(write, wrote):
         if not good:
             print(f"FAIL the cheat sheet writes `{span}`, which does not compile")
@@ -712,6 +744,130 @@ def check_cheat_sheet(cplus, workdir):
     for span, compiled in zip(habits, rejected):
         if compiled:
             print(f"FAIL the cheat sheet warns of `{span}`, which compiles")
+            ok = False
+        elif compiled is None:
+            print(f"FAIL the cheat sheet warns of `{span}`, which is only rejected for a name it uses, so this cannot tell")
+            ok = False
+    return ok
+
+
+# What the spec's text writes that is not code: tools and what is typed at a shell, the names of other languages' things, and how
+# rules are written.
+SPEC_NOT_CODE = {
+    "compiler/SpecRefs.h", "cplus explain <topic>", ".cplus", "\\n \\t \\r \\0 \\\\ \\\" \\'", "\\xHH", "\\012", "<cctype>", "<cmath>", "std::format", "std::string", "std::",
+    "std::optional<T>", "std::optional", "std::vector", "std::array", "std::unordered_map", "std::numbers::pi", "std::println", "std::weak_ptr", "std::make_shared",
+    "std::unique_ptr", "std::async", "int + long", "long + float", "float + double", "Transfer-Encoding", "wss://", "libcurl4-openssl-dev", "CPLUS_CHECK_LEAKS=1",
+    "CPLUS_CHECK_LEAKS=0", "-Wno-new-delete", "cplus check", "cplus run", "cplus run greet.cplus -- Ada", "cplus build app.cplus -lsqlite3", "-L <directory>", ".hplus",
+    "break cplus_trap", "uncaught error:", "--race", "--debug", "cplus build", "cplus.", "-fsanitize=address", "llvm-symbolizer", "libclang-rt-18-dev", "exit()",
+    "cplus run app.cplus --race", "-l<name>", "-L<dir>", "--emit-llvm", "cplus explain", "spec:", "cplus explain cheatsheet", "{ x }", "[ x ]", "value_or()", "new[]",
+}
+# What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
+SPEC_REJECTED = {
+    "#include": "^#include <vector>", "#define": "^#define X 1", "#ifdef": "^#ifdef X", "0'10": "int a = 0'10;", "'ab'": "char a = 'ab';", "'é'": "char a = 'é';",
+    "L'a'": "auto a = L'a';", "u'a'": "auto a = u'a';", "U'a'": "auto a = U'a';", 'u8"text"': 'auto a = u8"text";', "long long": "long long a = 1;",
+    "long double": "long double a = 1;", "0x1.8p3": "double a = 0x1.8p3;", "int n = true;": "int n = true;", "unsigned char": "unsigned char a = 1;",
+    "signed char": "signed char a = 1;", "c *= 2": "char c = 'a'; c *= 2;", "s.at(i)": 'string s = "a"; int i = 0; s.at(i);', "int??": "int?? a;",
+    "auto x = null;": "auto x = null;", "found?.age = 3": 'User? found = null; found?.age = 3;',
+    "found.name": 'User? found = null; println("{}", found.name);', "list[i]": 'vector<int>? list = null; int i = 0; println("{}", list[i]);',
+    "for (auto x : list)": "vector<int>? list = null; for (auto x : list) {}", "auto p = {1, 2};": "auto p = {1, 2};",
+    "bool operator==(const Point&) const = default;": "^struct Q { bool operator==(const Q&) const = default; };", "new User(...)": 'auto u = new User("a");',
+    "u->age": 'User u = User("a"); println("{}", u->age);', "class Dog : Animal": "^class Dog2 : Animal {};", "dynamic_cast<Dog*>": "Animal a = Dog(); auto d = dynamic_cast<Dog*>(a);",
+    "dynamic_cast<Dog&>": "Animal a = Dog(); auto d = dynamic_cast<Dog&>(a);", "static_cast<Dog>(a)": "Animal a = Dog(); Dog d = static_cast<Dog>(a);", "(Dog)a": "Animal a = Dog(); Dog d = (Dog)a;",
+    "b.Base::id": 'Twice b = Twice(); println("{}", b.Base::id);', "int Rect::area() { ... }": "^struct Rect { int w = 0; };\nint Rect::area() { return 1; }",
+    "this->w": "^struct R2 { int w = 0; int f() { return this->w; } };", "&this": "^struct R3 { int w = 0; R3* f() { return &this; } };",
+    "vector<User>(n)": "int n = 1; auto v = vector<User>(n);", "int n = v.size();": "vector<int> v; int n = v.size();", "v[-1]": 'vector<int> v = {1}; println("{}", v[-1]);',
+    "makeList().push_back(1)": "makeList().push_back(1);", "makeThree().fill(1)": "makeThree().fill(1);", "begin()": "vector<int> v; auto b = v.begin();", "end()": "vector<int> v; auto b = v.end();",
+    "const vector<int>&": "^void f2(const vector<int>& v) {}", "int* p = a;": "array<int, 3> a; int* p = a;", "m.find(k)": "hashmap<int, int> m; int k = 1; auto x = m.find(k);",
+    "http::fetch": 'auto r = http::fetch("x");', "int*?": "int*? a = null;", "auto*": "int x = 1; auto* p = &x;", "&v[0]": "vector<int> v = {1}; int* p = &v[0];",
+    "(int*)0x1000": "int* p = (int*)0x1000;", "int* p = 0;": "int* p = 0;", "T&": "^template<typename T> void f2(T& x) {}", "int* a, b;": "int* a, b;",
+    "new int[3]{1, 2, 3}": "auto p = new int[3]{1, 2, 3};", "new (buffer) T": "int buffer = 0; auto p = new (buffer) int;", "new auto(x)": "int x = 1; auto p = new auto(x);",
+    "[[nodiscard]]": "^[[nodiscard]] int f2() { return 1; }", "int x{5}": "int x{5};", "int x(5)": "int x(5);", "int f(int x);": "^int f2(int x);", "int values[]": '^extern "C" void f2(int values[]);',
+    "char name[64];": '^extern "C" { struct S2 { char name[64]; }; }', "typedef struct { ... } name;": "^typedef struct { int a; } name;", "struct FILE*": "struct FILE* f = null;",
+    "f[i]": "FILE* f = null; int i = 0; auto x = f[i];", "f + 1": "FILE* f = null; auto x = f + 1;", "sizeof(FILE)": "long x = sizeof(FILE);", "typedef struct x x;": "^typedef struct x x;",
+    "class X;": "^class X;", "json::Mine": "^struct json::Mine {};", "for (auto& x : v)": "vector<int> v; for (auto& x : v) {}", "for (const auto& x : v)": "vector<int> v; for (const auto& x : v) {}",
+    "Point operator+(Point other) const": "^struct P2 { int x = 0; P2 operator+(P2 other) const { return other; } };", "1 << 40": "long x = 1 << 40;", "sizeof(void)": "long x = sizeof(void);",
+    "{:x}": 'println("{:x}", 1);', 'throw "text"': '^void f2() throws { throw "text"; }', "const Error& e": "try { } catch (const Error& e) { }", "try f() + g()": "int x = try f() + g();",
+    "Node n = a;": 'local<Node> a = local<Node>("x"); Node n = a;', "local<Node> a = n;": 'Node n = Node("x"); local<Node> a = n;', "weak<Node>?": "weak<Node>? w = null;",
+    "w == null": 'weak<Node> w; println("{}", w == null);', "largest(1, 2.5)": "auto x = largest(1, 2.5);", "Stack(1)": "auto s = Stack(1);", "spawn f(x).wait()": "int x = 1; spawn given(x).wait();",
+    "for (auto [k, v] : m)": "hashmap<string, int> m; for (auto [k, v] : m) {}", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
+}
+SPEC_REJECT_PRELUDE = """class Base { public: int id = 0; };
+class LeftOf : public Base {};
+class RightOf : public Base {};
+class Twice : public LeftOf, public RightOf {};
+vector<int> makeList() { return {}; }
+array<int, 3> makeThree() { return {}; }
+int f() throws { return 0; }
+int g() throws { return 0; }
+int given(int x) { return x; }
+"""
+
+
+def check_spec_spans(cplus, workdir):
+    """Each piece of code in the spec's text compiles, alone or in a test that runs, or is rejected if the text says it is an error."""
+    text = re.sub(r"^```.*?^```", "", (ROOT / "docs" / "SPEC.md").read_text(), flags=re.S | re.M)
+    spans = []
+    for span in re.findall(r"(?<!`)`([^`]+)`(?!`)", text):
+        span = " ".join(span.split()) if "\n" in span else span
+        if span not in spans:
+            spans.append(span)
+    def code_of(line):  # what the compiler reads of a line, and what a test says it prints
+        if re.match(r"\s*//[ \t]*expect:", line):
+            return line
+        out, quote, at = "", None, 0
+        while at < len(line):
+            c = line[at]
+            if quote:
+                out += c
+                if c == "\\":
+                    out += line[at + 1:at + 2]
+                    at += 1
+                elif c == quote:
+                    quote = None
+            elif c in "\"'":
+                quote = c
+                out += c
+            elif line.startswith("//", at):
+                break
+            else:
+                out += c
+            at += 1
+        return out
+    running = []
+    for path in list((ROOT / "tests" / "cases").glob("*.cplus")) + list((ROOT / "examples").rglob("*.cplus")):
+        source = path.read_text()
+        if not re.search(r"//[ \t]*error:", source):
+            running.append("\n".join(code_of(line) for line in source.splitlines()))
+    running = "\n".join(running)
+    def in_tests(span):
+        pattern = re.escape(span).replace(r"\{\ \.\.\.\ \}", r"\{.*?\}").replace(r"\{\.\.\.\}", r"\{.*?\}").replace(r"\.\.\.", ".*?")
+        return re.search(pattern, running, re.S) is not None
+    ok = True
+    for listed in list(SPEC_NOT_CODE) + list(SPEC_REJECTED):
+        if listed not in spans:
+            print(f"FAIL the spec no longer has `{listed}`, which tests/run_tests.py still has a list entry for")
+            ok = False
+    def rejected(pair):
+        index, (span, code) = pair
+        top = code.startswith("^")
+        body = code[1:] if top else code
+        source = SHEET_PRELUDE + SPEC_REJECT_PRELUDE + (body + "\nint main() { return 0; }\n" if top else "int main() throws {\n" + body + "\nreturn 0;\n}\n")
+        path = workdir / f"rejected{index}.cplus"
+        path.write_text(source)
+        run = subprocess.run([cplus, "check", str(path)], capture_output=True, text=True, timeout=60)
+        errors = [line for line in run.stderr.splitlines() if line.startswith("error:") and "could not compile" not in line]
+        missing_name = errors and re.search(r"is not declared|already declared|there is no function named", errors[0])
+        return span, run.returncode, errors[:1], missing_name
+    left = [span for span in spans if span not in SPEC_NOT_CODE and span not in SPEC_REJECTED and not re.fullmatch(r"[\W_]+|\w+", span) and not in_tests(span)]
+    with concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 4) as pool:
+        for span, code, errors, missing_name in pool.map(rejected, enumerate(SPEC_REJECTED.items())):
+            if code != 1 or missing_name:
+                print(f"FAIL the spec says `{span}` is an error, but: exit code {code}, {errors}")
+                ok = False
+        compiled = list(pool.map(lambda pair: span_compiles(cplus, workdir, pair[1], "s%d" % pair[0], span_sources(pair[1])), enumerate(left)))
+    for span, good in zip(left, compiled):
+        if not good:
+            print(f"FAIL the spec writes `{span}`, which neither compiles nor is in a test that runs")
             ok = False
     return ok
 
@@ -780,6 +936,7 @@ def check_command_line(cplus, workdir):
         (["build", g, "--race"], "CPLUS_NO_SANITIZERS_FOR_TESTS", "1", "--race needs ThreadSanitizer"),
         (["build", g, "--debug"], "CPLUS_NO_SANITIZERS_FOR_TESTS", "1", "--debug needs AddressSanitizer"),
         (["build", g, "-o", str(workdir / "out")], "CPLUS_LINKER_FOR_TESTS", str(workdir / "no-such-compiler"), "could not run"),
+        (["run", g], "CPLUS_LINKER_FOR_TESTS", "true", "could not run"),  # it says all went well, and leaves no program to run
         (["build", g, "-o", str(workdir / "out")], "CPLUS_TARGET_FOR_TESTS", "no-such-machine", "this is about the machine"),
     ]
     for args, name, value, message in pretending:
@@ -794,34 +951,45 @@ def check_command_line(cplus, workdir):
     return ok
 
 
-def check_what_is_linked(cplus, workdir):
-    """What a program uses of the runtime decides what it links and builds, and nothing else does."""
+def check_threads_linked(cplus, workdir):
+    """A program written on threads names their library, as older systems need, and one with no threads does not.
+    What is in the way here is not a library, so naming it stops the linker, whatever the system's own libpthread has in it."""
+    folder = workdir / "not_a_library"
+    folder.mkdir(exist_ok=True)
+    (folder / "libpthread.a").write_text("this is not a library\n")
     source = workdir / "linked.cplus"
-    exe = workdir / "linked"
-    ok = True
-    def link_line(text):
+    def links(text):
         source.write_text(text)
-        run = subprocess.run([cplus, "build", str(source), "-o", str(exe)], capture_output=True, text=True,
-                             env=dict(os.environ, CPLUS_SHOW_LINK="1"))
-        return run.stderr
+        return subprocess.run([cplus, "build", str(source), "-o", str(workdir / "linked"), "-L", str(folder)], capture_output=True, text=True).returncode == 0
+    ok = True
     threads = {"a Mutex": "int main() { Mutex m = Mutex(); m.lock(); m.unlock(); return 0; }\n",
                "a LockGuard": "int main() { Mutex m = Mutex(); LockGuard g = LockGuard(m); return 0; }\n",
                "spawn": "void f() {}\nint main() { spawn f(); return 0; }\n"}
     for what, text in threads.items():
-        if "-lpthread" not in link_line(text):
+        if links(text):
             print(f"FAIL a program with {what} is written on threads, but does not link them")
             ok = False
-    if "-lpthread" in link_line("int main() { return 0; }\n"):
+    if not links("int main() { return 0; }\n"):
         print("FAIL a program with no threads links them")
         ok = False
-    # Reflection only looks at types, so what makes values for JSON is not there for it.
+    return ok
+
+
+def check_reflect_alone(cplus, workdir):
+    """Reflection only looks at types, so what makes values for JSON is not there for it."""
+    source = workdir / "reflect_alone.cplus"
     source.write_text("import reflect;\nclass N { public: int x = 0; };\nstruct S { hashmap<string, N> m; };\nint main() { println(\"{}\", reflect::type<S>().name()); return 0; }\n")
     run = subprocess.run([cplus, "build", str(source), "--emit-llvm"], capture_output=True, text=True)
     made = [name for name in ("#make", "#put") if name in run.stdout]
     if run.returncode != 0 or made:
         print(f"FAIL a program that only imports reflect has what JSON needs: {made}\n  " + run.stderr[:300])
-        ok = False
-    # json::of makes its value directly, as text between the two would cost twice as much.
+        return False
+    return True
+
+
+def check_json_of_direct(cplus, workdir):
+    """json::of makes its value directly, as text between the two would cost twice as much."""
+    source = workdir / "json_of.cplus"
     source.write_text("import json;\nint main() { println(\"{}\", json::of(1).whole()); return 0; }\n")
     run = subprocess.run([cplus, "build", str(source), "--emit-llvm"], capture_output=True, text=True)
     body = re.search(r'define [^\n]*"cplus\.json::of<int>"[^\n]*\n(.*?)^}', run.stdout, re.S | re.M)
@@ -829,8 +997,8 @@ def check_what_is_linked(cplus, workdir):
     through_text = [name for name in calls if "json_write" in name or "json_read" in name or "stringify" in name or "parse" in name]
     if run.returncode != 0 or through_text or "cplus_json_build" not in calls:
         print(f"FAIL json::of goes through text: it calls {calls}\n  " + run.stderr[:300])
-        ok = False
-    return ok
+        return False
+    return True
 
 
 def check_source_rules(root=ROOT):
@@ -1046,8 +1214,11 @@ def main():
             ok = check_leak_report(cplus, pathlib.Path(tmp)) and ok
             ok = check_planned_features(cplus, pathlib.Path(tmp)) and ok
             ok = check_cheat_sheet(cplus, pathlib.Path(tmp)) and ok
+            ok = check_spec_spans(cplus, pathlib.Path(tmp)) and ok
             ok = check_print_lines(cplus, pathlib.Path(tmp)) and ok
-            ok = check_what_is_linked(cplus, pathlib.Path(tmp)) and ok
+            ok = check_threads_linked(cplus, pathlib.Path(tmp)) and ok
+            ok = check_reflect_alone(cplus, pathlib.Path(tmp)) and ok
+            ok = check_json_of_direct(cplus, pathlib.Path(tmp)) and ok
             ok = check_source_rules() and ok
             ok = check_command_line(cplus, pathlib.Path(tmp)) and ok
             ok = check_spec_code(cplus, pathlib.Path(tmp)) and ok

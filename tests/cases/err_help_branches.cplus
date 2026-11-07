@@ -15,7 +15,7 @@ void pointers() {
     println("{}", p == q);
     // error: pointers to different types cannot be compared; convert one first
     println("{}", p == 1);
-    // error: a pointer is compared with another pointer to the same type, or with null
+    // error: compare it with another pointer to the same type, or with null
     println("{}", true & false);
     // error: use '&&' for logic
     Speaker().speek();

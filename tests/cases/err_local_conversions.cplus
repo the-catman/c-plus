@@ -20,4 +20,4 @@ int main() {
 // error: expected 'Node' for parameter 'n' of 'takesPlain', but this is 'local<Node>'
 // error: write `b.get()`, which lends the object, and takes care that no other thread gets it
 // error: a local reference is never empty. For one that can be, write `local<Node>?`
-// error: the object is not a 'Other'
+// error: use one that holds a 'Other', as this object is not one

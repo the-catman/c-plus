@@ -75,7 +75,7 @@ int main() {
 // error: write `a.get()`, which lends the object
 // error: a 'Node' may be shared, so it has no one owner. Write `unique<Node>(...)` to build a new object
 // error: a unique reference is never empty. For one that can be, write `unique<Node>?`
-// error: the object is not a 'Other'
+// error: use one that holds a 'Other', as this object is not one
 // error: expected 'unique<Derived>' to initialize 'e', but this is 'unique<Node>'
 // error: a unique reference owns a class object, but 'int' is not a class
 // error: a unique reference owns a class object, but 'Value' is not a class

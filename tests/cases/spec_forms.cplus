@@ -1,0 +1,431 @@
+// What the spec's text shows in passing, written as it writes it, and what it says happens.
+// check_spec_spans in tests/run_tests.py looks for each one in the tests that run, and these are for what no other test has.
+import json;
+
+extern "C" {
+    int abs(int);
+    int rand(void);
+    double frexp(double x, int* e);
+    void* malloc(long n);
+    void free(void* p);
+}
+
+struct Point {
+    int x = 0;
+    void move(int by) { x += by; }
+    int m() const { return x; }
+};
+struct Rect {
+    int w = 1;
+    int h = 2;
+    void scale(int by) { this.w = this.w * by; }
+    int area() const { return w * h; }
+    int doubled() const { return this.area() * 2; }
+};
+Rect makeRect() { return {}; }
+class Named {
+public:
+    string name = "n";
+    int age = 0;
+    Named next() const { return this; }
+    void birthday() { this.age = this.age + 1; }
+};
+class WithBoss {
+public:
+    Named manager = Named();
+    string name = "with a boss";
+};
+class WithMaybeBoss {
+public:
+    Named? manager;
+    string name = "with a maybe";
+};
+class Pair {
+public:
+    string name;
+    int age;
+};
+class Counter {
+public:
+    int count = 0;
+};
+class Grace {
+public:
+    string name;
+    Grace(string n) : name(n) {}
+};
+class Animal {
+public:
+    string name;
+    Animal(string n) : name(n) {}
+    virtual string sound() const { return "generic"; }
+};
+class Dog : public Animal {
+public:
+    string breed;
+    Dog(string n) : Animal(n), breed("lab") {}
+    ~Dog() {}
+    string sound() const override { return "woof"; }
+    string both() const { return Animal::sound() + " " + sound(); }
+};
+class Cat : public Animal {
+public:
+    Cat(string n) : Animal(n) {}
+};
+struct Plain0 { int id = 0; };
+class Plain {
+public:
+    int id;
+    string label;
+};
+class Fancy : public Plain {
+public:
+    Fancy() : Plain(1, "a") {}
+};
+class Name {
+public:
+    ~Name() { }
+};
+class Empty {
+public:
+    ~Empty() = default;
+};
+class Base0 { public: int value = 1; };
+class Left : public Base0 {};
+class Right : public Base0 {};
+class Both : public Left, public Right {
+public:
+    int fromLeft() const { return Left::value; }
+};
+struct Inner { int c = 3; };
+struct Middle { Inner b; };
+class NoBody {};
+class Item {
+public:
+    int x = 1;
+    void go() {}
+};
+
+int? next() { return null; }
+
+void numbers() {
+    float f = 1.5f;
+    println("{} {}", f * 0.5, f * 0.5f);
+    // expect: 0.75 0.75
+    {
+        float x = 0.1;
+        println("{}", x);
+    }
+    // expect: 0.1
+    int count = 1;
+    if (count) println("counted");
+    // expect: counted
+    long MIN = -9223372036854775807L - 1;
+    println("{}", MIN % -1);
+    // expect: 0
+    if (count == 0) println("{}", MIN / -1);
+    int x = 1;
+    println("{}", ~x);
+    // expect: -2
+    println("{}", abs(-1));
+    // expect: 1
+    int exponent = 0;
+    println("{}", frexp(x, &exponent));
+    // expect: 0.5
+    {
+        int n = 2;
+        int* numbers = (int*)malloc(n * sizeof(int));
+        free(numbers);
+    }
+}
+
+void strings() {
+    string s = "hello";
+    long pos = 1;
+    long count = 2;
+    string text = "ell";
+    char c = 'x';
+    println("{}", s.size() == 0);
+    // expect: false
+    println("{} {}", s.substr(pos, count), s.substr(pos));
+    // expect: el ello
+    println("{} {} {} {}", s.find(text, pos), s.contains(text), s.starts_with(text), s.ends_with(text));
+    // expect: 1 true false false
+    s.push_back(c);
+    println("{} {}", s, string(count, c));
+    // expect: hellox xx
+}
+
+void optionals() {
+    {
+        int? n;
+        println("{}", n == null);
+    }
+    // expect: true
+    {
+        int? n = 0;
+        int fallback = 9;
+        println("{} {} {} {}", n ?? 0 + 1, n ?? (0 + 1), (n ?? 0) + 1, n.value_or(fallback));
+    }
+    // expect: 0 0 1 0
+    {
+        int? a = null;
+        int? b = null;
+        int c = 7;
+        println("{}", a ?? b ?? c);
+    }
+    // expect: 7
+    {
+        Named? found = Named();
+        println("{} {}", found?.name, found?.name ?? "nobody");
+        // expect: n n
+        if (auto u = found) u.age = 3;
+        found?.birthday();
+        if (auto u = found) println("{}", u.age);
+        // expect: 4
+    }
+    {
+        WithBoss? found = WithBoss();
+        println("{}", found?.manager.name);
+    }
+    // expect: n
+    {
+        WithMaybeBoss? found = WithMaybeBoss();
+        println("{}", found?.manager?.name == null);
+    }
+    // expect: true
+    {
+        int? cur = null;
+        Named? found = null;
+        while (cur) cur = null;
+        if (!found) println("not found");
+    }
+    // expect: not found
+    {
+        int? found = null;
+        if (auto u = found) println("{}", u);
+        while (auto x = next()) println("{}", x);
+        int? maybeInt = 2;
+        if (long n = maybeInt) println("{}", n);
+    }
+    // expect: 2
+}
+
+void classes() {
+    Pair pair = Pair{"Alice", 30};
+    println("{}", pair.name);
+    // expect: Alice
+    println("{}", Counter{.count = 1}.count);
+    // expect: 1
+    const Named u = Named{};
+    println("{}", u.next().age);
+    // expect: 0
+    bool c = true;
+    Dog dog = Dog("rex");
+    Animal animal = Dog("max");
+    Cat cat = Cat("tom");
+    println("{}", (c ? dog : animal).sound());
+    // expect: woof
+    println("{}", (c ? static_cast<Animal>(dog) : cat).sound());
+    // expect: woof
+    Dog d = dog;
+    println("{} {} {}", d.Animal::sound(), d.Animal::name, d.both());
+    // expect: generic rex generic woof
+    println("{} {}", static_cast<Animal>(dog).name, ((Animal)dog).name);
+    // expect: rex rex
+    println("{}", Fancy().label);
+    // expect: a
+    Both both = Both();
+    Both x = both;
+    println("{} {}", x.Left::value, both.fromLeft());
+    // expect: 1 1
+    Left left = static_cast<Left>(both);
+    println("{}", dynamic_cast<Right?>(left) == null);
+    // expect: false
+    Named user = Named();
+    Named? either = c ? user : null;
+    println("{}", either?.name);
+    // expect: n
+    Middle a;
+    Middle holder = a;
+    {
+        Middle a = holder;
+        println("{}", a.b.c);
+    }
+    // expect: 3
+}
+
+void structMethods() {
+    Rect r = Rect{};
+    r.scale(2);
+    makeRect().scale(2);
+    println("{} {}", r.w, r.doubled());
+    // expect: 2 8
+}
+
+void vectors() {
+    long i = 0;
+    int x = 5;
+    vector<int> v = {1};
+    v[i] = x;
+    println("{}", v);
+    // expect: [5]
+    v[v.size() - 1] = x;
+    vector<Point> points = {Point{}};
+    points[i].x = 1;
+    points[i].move(1);
+    println("{}", points[i].x);
+    // expect: 2
+    {
+        vector<Point> v = {Point{}};
+        v[0].move(1);
+        int j = 0;
+        v[j].move(x);
+        println("{}", v[0].x);
+    }
+    // expect: 6
+    vector<vector<int>> grid = {{1}};
+    grid[i].push_back(x);
+    long j = 0;
+    grid[i][j] += 1;
+    println("{}", grid);
+    // expect: [[2, 5]]
+    println("{}", vector<string>{"Ada", "Linus"});
+    // expect: ["Ada", "Linus"]
+    vector<long> ints = {1, 2};
+    for (long x : ints) print("{} ", x);
+    println();
+    // expect: 1 2 
+    println("{}", array<int, 3>{});
+    // expect: [0, 0, 0]
+}
+
+void arrays() {
+    array<int, 3> a = {1, 2, 3};
+    array<int, 3>* p = &a;
+    (*p)[0] = 1;
+    println("{}", p->size());
+    // expect: 3
+    array<char, 3> text = {'a', 'b', '\0'};
+    {
+        array<char, 3> a = text;
+        println("{}", string(a.data()));
+    }
+    // expect: ab
+    {
+        const int N = 3; array<int, N> a;
+        println("{}", a.size());
+    }
+    // expect: 3
+    {
+        const int a = 1;
+        const int b = 2;
+        array<int, (a > b ? 1 : 2)> chosen;
+        println("{}", chosen.size());
+    }
+    // expect: 2
+}
+
+void maps() {
+    string key = "k";
+    int value = 2;
+    {
+        hashmap<string, int> m;
+        m[key] = 1;
+        m[key]++;
+        println("{} {}", m.at(key), m.count(key));
+        // expect: 2 1
+        m[key] = value;
+        m.insert({key, value});
+        println("{}", m);
+        // expect: {"k": 2}
+    }
+    {
+        hashmap<string, Point> m;
+        m[key].x = 1;
+        println("{}", m[key].x);
+        // expect: 1
+    }
+    {
+        hashmap<string, vector<int>> m;
+        m[key].push_back(1);
+        println("{}", m);
+        // expect: {"k": [1]}
+    }
+    {
+        hashmap<string, unique<Item>> m;
+        unique<Item> u = unique<Item>();
+        m[key] = move(u);
+        unique<Item> taken = move(m[key]);
+        println("{}", taken.x);
+        // expect: 1
+    }
+    {
+        hashmap<string, Item> m;
+        m[key] = Item();
+        println("{}", m[key].x);
+        m[key].go();
+        // expect: 1
+    }
+}
+
+void valuesOfJson() throws {
+    json::Value doc = json::array();
+    json::Value value = json::of(1);
+    long index = 0;
+    string key = "k";
+    doc.push(value);
+    println("{}", doc.at(index)?.whole() ?? 0);
+    // expect: 1
+    json::Value other = json::object();
+    other.set(key, value);
+    println("{}", json::stringify(other));
+    // expect: {"k":1}
+}
+
+void pointers() {
+    Point point;
+    Point* p = &point;
+    p->move(1);
+    println("{} {}", p->x, p->m());
+    // expect: 1 1
+    {
+        int number = 1;
+        void* v = &number;
+        void* memory = &number;
+        println("{} {} {} {}", *static_cast<int*>(v), *(int*)v, *static_cast<int*>(memory), *(int*)memory);
+    }
+    // expect: 1 1 1 1
+    Grace grace = Grace("Ada");
+    Grace* other = &grace;
+    {
+        Grace* p = other;
+        println("{}", p->name);
+        // expect: Ada
+    }
+    Named user = Named();
+    Named* place = &user;
+    println("{}", place->name);
+    // expect: n
+    grace = Grace("Hopper");
+    {
+        Grace* p = &grace;
+        *p = Grace("Grace");
+    }
+    println("{}", grace.name);
+    // expect: Grace
+}
+
+int main() throws {
+    numbers();
+    strings();
+    optionals();
+    classes();
+    structMethods();
+    vectors();
+    arrays();
+    maps();
+    try valuesOfJson();
+    pointers();
+    return 0;
+}

@@ -103,7 +103,7 @@ int main() {
 // error: 'array<int, 3>' has no method named 'length'
 // error: this compiler does not support begin() on arrays yet
 // error: did you mean 'fill'?
-// error: the array methods are size, empty, front, back, fill and data
+// error: use one of the array methods: size, empty, front, back, fill and data
 // error: size() takes no arguments but 1 was given
 // error: fill() takes one argument but 0 were given
 // error: expected 'int' for fill() on 'array<int, 3>', but this is 'string'
@@ -116,10 +116,10 @@ int main() {
 // error: 'fixed' is const and cannot be assigned to
 // error: only a variable or one of its fields can be assigned to
 // error: index 3 is past the end of 'array<int, 3>'
-// error: its elements are numbered from 0 to 2
+// error: use an index from 0 to 2
 // error: an index into an array cannot be negative
 // error: an index into an array must be an int or long, but this is 'double'
 // error: an index into an array must be an int or long, but this is 'char'
 // error: index 0 is past the end of 'array<int, 0>'
-// error: this array has no elements
+// error: make the array larger: this one has no elements
 // error: spec: docs/SPEC.md#arrays

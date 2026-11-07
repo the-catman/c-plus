@@ -10,8 +10,7 @@ Lines are not enough for this, since `if (bad) fail(...);` runs its line whether
   llvm-cov export build-cov/cplus -instr-profile=build-cov/cov.profdata -format=text compiler/*.cpp > build-cov/cov.json
   python3 tests/errors_reached.py build-cov/cov.json
 
-Run it from the root of the repository. "could not run" in main.cpp always shows up here, since it is in a child process that
-ends without writing what it counted. The test runner checks that one by what it prints.
+Run it from the root of the repository.
 """
 import bisect
 import json

@@ -1,0 +1,23 @@
+// What the spec's text shows of HTTP, written as it writes it. See spec_forms.
+import http;
+
+extern "C" string? getenv(string name);
+
+int main() throws {
+    string url = (getenv("CPLUS_TEST_HTTP") ?? "missing") + "/echo";
+    string body = "a body";
+    string contentType = "text/plain";
+    http::Response r = try http::post(url, body, contentType);
+    println("{}", r.status);
+    // expect: 200
+    string name = "content-type";
+    println("{}", r.header(name) != null);
+    // expect: true
+    string q = "a b";
+    println("{}", (url + "?q=" + http::encode(q)).ends_with("a%20b"));
+    // expect: true
+    vector<http::Header> headers = r.headers;
+    println("{}", headers.empty());
+    // expect: false
+    return 0;
+}

@@ -30,7 +30,7 @@ int main() {
 // error: this { } list needs a type here
 // error: a { } list builds a struct, a class object, a vector or an array, but 'int' is expected here
 // error: 'int' has no fields, so '.x' cannot be used
-// error: 'Point' values can only be compared with == and !=
+// error: use == or !=, which are all that 'Point' values have
 // error: both sides of '==' must have the same type, but they are 'Point' and 'int'
 // error: expected 'int' for field 'x' of 'Point', but this is 'string'
 // error: 'Point' has 2 fields but 3 values were given

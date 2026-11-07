@@ -1,0 +1,114 @@
+// What the spec's text shows of errors and references, written as it writes it. See spec_forms.
+class E : public Error {
+public:
+    E() : Error("an E") {}
+};
+class NotFound : public Error {
+public:
+    NotFound() : Error("not found") {}
+};
+class Noisy {
+public:
+    string name;
+    Noisy(string n) : name(n) {}
+    ~Noisy() { println("{} went", name); }
+};
+class Chain {
+public:
+    int b() throws { return 1; }
+    int f() const throws { return 2; }
+};
+class Node {
+public:
+    int x = 0;
+    Node? next;
+    Node get() { return this; }
+};
+class Animal {
+public:
+    int legs = 0;
+};
+class Dog : public Animal {};
+class Holder {
+public:
+    unique<Node>? child;
+};
+class Base {
+public:
+    int method() const { return 1; }
+};
+class FromBase : public Base {
+public:
+    int twice() const { return Base::method() * 2; }
+};
+struct F {
+    int kept = 0;
+    int f(int x) const { return kept + x; }
+};
+
+Chain a() throws { return Chain(); }
+int f() throws { return 1; }
+int g() throws { return 2; }
+int fail() throws { throw NotFound(); }
+void take(Noisy n, int x) {}
+Node makeUser() { return Node(); }
+
+void references() {
+    Node n = makeUser();
+    Node a = Node();
+    Node b = Node();
+    a.next = b; b.next = a;
+    a.next = null;
+    b.next = null;
+    weak<Node> w = weak<Node>(n);
+    println("{}", w.expired());
+    // expect: false
+    local<Dog> dog = local<Dog>();
+    local<Animal> animal = dog;
+    println("{}", animal.legs);
+    // expect: 0
+    unique<Node> u = unique<Node>();
+    println("{}", u.get().get().x);
+    // expect: 0
+    Holder o = Holder();
+    o.child = unique<Node>();
+    unique<Node>? taken = move(o.child);
+    println("{}", taken == null);
+    // expect: false
+    vector<F> v = {F{}};
+    long i = 0;
+    int x = 3;
+    println("{}", v[i].f(x));
+    // expect: 3
+    println("{}", FromBase().twice());
+    // expect: 2
+}
+
+void catches() throws {
+    try { } catch (E e) { }
+    try {
+        try fail();
+    } catch (NotFound) {
+        println("not found, and no need for the error");
+    }
+    // expect: not found, and no need for the error
+    println("{}", try a().b());
+    // expect: 1
+    println("{}", try f() + try g());
+    // expect: 3
+    println("{}", try f());
+    // expect: 1
+    try take(Noisy("a"), try fail());
+}
+
+int main() throws {
+    references();
+    try {
+        try catches();
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // expect: a went
+    // expect: not found
+    return 0;
+}

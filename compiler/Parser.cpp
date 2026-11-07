@@ -1273,7 +1273,7 @@ const Type* Parser::parseCType(Loc& loc, bool isReturn) {
         if (!use.empty()) {
             if (n == "unsigned" && peek(isConst ? 2 : 1).kind == Tok::KwLong)
                 use = "long", why = "it passes the same 64 bits; C+ has no unsigned types yet";
-            fail(t.loc, "'" + n + "' is a C type; write `" + use + "` here", why, spec::CFunctions);
+            fail(t.loc, "'" + n + "' is a C type; write `" + use + "` here", "write `" + use + "`: " + why, spec::CFunctions);
         }
     }
     if (base.kind == Tok::KwStruct) {
@@ -1495,7 +1495,7 @@ void Parser::checkUnknownType() {
     else if (t.text == "unsigned")
         notYet(t.loc, "unsigned integer types", "use int (32-bit) or long (64-bit); both are signed and the same size on every platform");
     else
-        help = "the types are int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, and the "
+        help = "write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the "
                "structs and classes of the program";
     fail(t.loc, "unknown type '" + t.text + "'", help, spec::IntegerTypes);
 }
@@ -1594,7 +1594,7 @@ const Type* Parser::parseBaseType(Loc& loc) {
                      target->isOptional() && target->elem->isClass()
                          ? "it is already empty when the object is gone: write `weak<" + std::string(target->elem->name) + ">`"
                      : target->isStruct() ? "a struct is a value, so nothing refers to it. Make it a class, or use a pointer"
-                                          : "only objects of a class are counted, so only they can be gone",
+                                          : "make it a class: only objects of a class are counted, so only they can be gone",
                      spec::Weak);
             }
             loc.len = prev().loc.col + prev().loc.len - t.loc.col;
@@ -1636,7 +1636,7 @@ const Type* Parser::parseBaseType(Loc& loc) {
                     fail(inner, "a unique reference owns a class object, but '" + name + "' is not a class",
                          target->isOptional() && target->elem->isClass()
                              ? "for one that can be empty, write `unique<" + std::string(target->elem->name) + ">?`"
-                             : "a struct or a number is a value, which already has one owner: the variable that holds it",
+                             : "use the value itself: a struct or a number already has one owner, the variable that holds it",
                          spec::Unique);
                 }
                 loc.len = prev().loc.col + prev().loc.len - t.loc.col;
@@ -1652,7 +1652,7 @@ const Type* Parser::parseBaseType(Loc& loc) {
                     fail(inner, "a local reference refers to a class object, but '" + name + "' is not a class",
                          target->isOptional() && target->elem->isClass()
                              ? "for one that can be empty, write `local<" + std::string(target->elem->name) + ">?`"
-                             : "a struct or a number is a value, which has no count to save work on",
+                             : "use the value itself: a struct or a number has no count to save work on",
                          spec::Local);
                 }
                 loc.len = prev().loc.col + prev().loc.len - t.loc.col;
@@ -1745,8 +1745,8 @@ const Type* Parser::parseBaseType(Loc& loc) {
                     notYet(t.loc, "sets", "use a `hashmap<int, bool>`, whose keys are the set, with `m.contains(x)`");
                 notYet(t.loc, "'" + t.text + "'", t.text == "pair" || t.text == "tuple" ? "write a struct with a name for each part" : "use a `vector<T>`, with `push_back`, `pop_back` and `back`");
             }
-            fail(t.loc, "unknown type '" + t.text + "'", "the types are int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, and the structs and classes of the program", spec::IntegerTypes);
-        default: fail(t.loc, "expected a type, found " + describeToken(t), "the types are int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, and the structs and classes of the program", spec::IntegerTypes);
+            fail(t.loc, "unknown type '" + t.text + "'", "write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program", spec::IntegerTypes);
+        default: fail(t.loc, "expected a type, found " + describeToken(t), "write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program", spec::IntegerTypes);
     }
 }
 
@@ -1906,7 +1906,7 @@ void Parser::parseRecord(StructDecl* into) {
             if (!isPublic)
                 fail(base.loc, std::string("write `public` before the base class: `") + kw + " " + name.text + " : public " +
                                    base.text + "`",
-                     "in C++ a class without it derives privately, which is not what it looks like, so C+ asks for it",
+                     "write `public`: in C++ a class without it derives privately, which is not what it looks like",
                      spec::Inheritance);
             std::string baseName = base.text;
             if (classTemplate(base.text) || boundType(base)) {  // `public Source<T>`, or `public T`
@@ -2272,7 +2272,7 @@ StmtPtr Parser::parseTry() {
         st->catches.push_back(std::move(clause));
     }
     if (check(Tok::Ident) && peek().text == "finally")
-        fail(peek().loc, "C+ has no finally", "what must always happen belongs in a destructor, which runs on every way out",
+        fail(peek().loc, "C+ has no finally", "put what must always happen in a destructor, which runs on every way out",
              spec::Errors);
     return st;
 }
@@ -2663,7 +2663,7 @@ ExprPtr Parser::parseUnary() {
                 loc.len = lit.loc.col + lit.loc.len - t.loc.col;
                 if (lit.intValue > (uint64_t)INT64_MAX + 1)
                     fail(loc, "the number -" + lit.text + " is too small for any integer type",
-                         "the smallest long is -9223372036854775808", spec::IntegerLiterals);
+                         "write a larger number: the smallest long is -9223372036854775808", spec::IntegerLiterals);
                 int64_t v = lit.intValue == (uint64_t)INT64_MAX + 1 ? INT64_MIN : -(int64_t)lit.intValue;
                 return parsePostfix(std::make_unique<IntLitExpr>(loc, v, lit.longSuffix));
             }
@@ -2908,7 +2908,7 @@ ExprPtr Parser::parsePrimary() {
         case Tok::IntLit:
             if (t.intValue > (uint64_t)INT64_MAX)
                 fail(t.loc, "the number " + t.text + " is too large for any integer type",
-                     "the largest long is 9223372036854775807", spec::IntegerLiterals);
+                     "write a smaller number: the largest long is 9223372036854775807", spec::IntegerLiterals);
             return std::make_unique<IntLitExpr>(t.loc, (int64_t)t.intValue, t.longSuffix);
         case Tok::StringLit: {
             Loc loc = t.loc;

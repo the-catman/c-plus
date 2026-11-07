@@ -7,5 +7,13 @@ int hashmap(int n) { return n * 3; }
 int main() {
     println("{} {} {} {}", Mutex(1), LockGuard(), Task(2), hashmap(2));
     // expect: 2 a function 4 6
+    {
+        // A local variable can have one of these names too.
+        int Mutex = 1;
+        string Task = "t";
+        int LockGuard = 2;
+        println("{} {} {}", Mutex, Task, LockGuard);
+    }
+    // expect: 1 t 2
     return 0;
 }

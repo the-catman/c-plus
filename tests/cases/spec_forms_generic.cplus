@@ -1,0 +1,150 @@
+// What the spec's text shows of generics, written as it writes it. See spec_forms.
+[[allow(new_delete)]];
+import reflect;
+
+const int MAX = 4;
+
+template<typename T, int N> struct Buffer {
+    array<T, N> items;
+};
+class Plain {
+public:
+    int kept = 0;
+    Plain(int x) : kept(x) {}
+    int f() const { return kept + 1; }
+    int method() const { return kept + 2; }
+};
+class FromPlain : public Plain {
+public:
+    FromPlain(int x) : Plain(x) {}
+};
+template<typename T> class Base {
+public:
+    T kept;
+    Base(T x) : kept(x) {}
+    T f() const { return kept; }
+    string shown() const { return format("{}", kept); }
+};
+template<typename T> class Derived : public Base<T> {
+public:
+    Derived(T x) : Base<T>(x) {}
+    T both() const { return Base<T>::f(); }
+    string text() const { return format("{}", Base::f()); }
+};
+class Short : public Base<int> {
+public:
+    Short(int x) : Base(x) {}
+};
+class WithMethod {
+public:
+    int method() const { return 1; }
+};
+class UsesMethod : public Plain {
+public:
+    UsesMethod(int x) : Plain(x) {}
+    int total() const { return Plain::method() + Plain::f(); }
+};
+template<typename T> concept Addable = requires(T a, T b) { a + b; };
+
+template<typename T> T identity(T x) {
+    const T* readOnly = &x;
+    T* place = &x;
+    T** toPlace = &place;
+    T* const fixed = &x;
+    T v = x;
+    println("{} {} {} {}", *readOnly, **toPlace, *fixed, v);
+    return x;
+}
+
+template<typename T> long total(vector<T> v) {
+    long sum = 0;
+    for (T x : v) sum += long(static_cast<T>(x));
+    return sum;
+}
+
+template<typename T> T onTheHeap(T x, long n) {
+    T* many = new T[n];
+    T* one = new T(x);
+    T* plain = new T();
+    T seen = *one;
+    delete[] many;
+    delete one;
+    delete plain;
+    return seen;
+}
+
+template<typename T> T f(T x) { return x; }
+
+template<typename T> T callsF(T x) { return f<T>(x); }
+
+template<typename T> T recurse(T x, int depth) {
+    return depth == 0 ? x : recurse<T>(x, depth - 1);
+}
+
+template<typename T> string describes(T x) {
+    if constexpr (Addable<T>) return "can be added";
+    else return "cannot";
+}
+
+template<typename T, typename U> bool sameTypes() {
+    if constexpr (same_as<T, U>) return true;
+    else return false;
+}
+
+template<typename T, typename Base> bool derives() {
+    if constexpr (derived_from<T, Base>) return true;
+    else return false;
+}
+
+template<typename T, int N> long sizes() {
+    array<T, 0> none;
+    array<char, N> chars;
+    return none.size() + chars.size();
+}
+
+template<typename T> string typeName() {
+    auto t = reflect::type<T>();
+    return t.name();
+}
+
+template<typename T> long counted(local<T> kept) {
+    local<T> other = kept;
+    return other.get() == kept.get() ? 1 : 0;
+}
+
+int main() {
+    println("{}", identity(1));
+    // expect: 1 1 1 1
+    // expect: 1
+    println("{}", total<int>({1, 2}));
+    // expect: 3
+    println("{}", onTheHeap(3, 2));
+    // expect: 3
+    println("{} {} {}", recurse(4, 2), callsF(1), Short(2).f());
+    // expect: 4 1 2
+    println("{}", describes(1));
+    // expect: can be added
+    println("{} {}", sameTypes<int, int>(), derives<FromPlain, Plain>());
+    // expect: true true
+    println("{}", sizes<int, 2>());
+    // expect: 2
+    println("{}", typeName<int>());
+    // expect: int
+    println("{}", counted<Plain>(local<Plain>(1)));
+    // expect: 1
+    Derived<int> d = Derived<int>(5);
+    println("{} {}", d.both(), d.text());
+    // expect: 5 5
+    println("{}", UsesMethod(1).total());
+    // expect: 5
+    Buffer<string, 16> small;
+    Buffer<string, MAX * 2> doubled;
+    println("{} {}", small.items.size(), doubled.items.size());
+    // expect: 16 8
+    reflect::Type? none = reflect::type<vector<int>>().elem();
+    println("{}", none == null);
+    // expect: false
+    for (reflect::Field f : reflect::type<Buffer<int, 1>>().fields()) println("{}", f.name);
+    // expect: items
+    return 0;
+}

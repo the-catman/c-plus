@@ -1,5 +1,6 @@
 // The `cplus` command: check, build, or run a C+ program.
 #include <pthread.h>
+#include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -17,6 +18,8 @@
 #include "Lexer.h"
 #include "Parser.h"
 #include "Sema.h"
+
+extern char** environ;
 
 namespace fs = std::filesystem;
 using namespace cplus;
@@ -62,21 +65,17 @@ static int usageError(const std::string& message) {
     return 2;
 }
 
-// Runs a program and waits for it. Returns its exit code, or 128 + signal number.
-static int runProcess(const std::vector<std::string>& argv) {
+// Runs a program and waits for it. Returns its exit code, or 128 + signal number. If it cannot be started, this says so, with
+// `help` as what to do about it, and returns -1.
+static int runProcess(const std::vector<std::string>& argv, const std::string& help) {
     std::vector<char*> args;
     for (auto& a : argv) args.push_back(const_cast<char*>(a.c_str()));
     args.push_back(nullptr);
     std::fflush(nullptr);
-    pid_t pid = fork();
-    if (pid < 0) {
-        std::perror("fork");
-        return 127;
-    }
-    if (pid == 0) {
-        execvp(args[0], args.data());
-        toolError(std::string("could not run ") + args[0] + ": " + std::strerror(errno), "this is the C compiler that links programs, named when cplus was built. Install it, or run cmake and build cplus again");
-        _exit(127);
+    pid_t pid;
+    if (int error = posix_spawnp(&pid, args[0], nullptr, nullptr, args.data(), environ)) {
+        toolError(std::string("could not run ") + args[0] + ": " + std::strerror(error), help);
+        return -1;
     }
     int status = 0;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
@@ -171,13 +170,10 @@ static int build(const Options& opts, const std::string& exePath) {
     link.push_back("-lm");  // the math functions, part of the C standard library
     if (program.linksThreads) link.push_back("-lpthread");
     link.insert(link.end(), {"-o", exePath});
-    if (std::getenv("CPLUS_SHOW_LINK")) {  // for the tests, and for finding out why a program does not link
-        for (auto& part : link) std::fprintf(stderr, "%s ", part.c_str());
-        std::fprintf(stderr, "\n");
-    }
-    int rc = runProcess(link);
+    int rc = runProcess(link, "this is the C compiler that links programs, named when cplus was built. Install it, or run cmake and build cplus again");
     std::error_code ec;
     fs::remove(objPath, ec);
+    if (rc < 0) return 1;
     if (rc != 0) {
         bool callsC = false;
         for (auto& f : program.funcs) callsC = callsC || f->isExtern;
@@ -253,7 +249,7 @@ static int compilerMain(int argc, char** argv) {
         return usageError("--debug and --race cannot be used together, as each watches the program's memory in its own way; build once with each");
     if (opts.input.empty()) return usageError("no source file given");
     if (fs::path(opts.input).extension() != ".cplus") {
-        toolError(opts.input + " is not a C+ source file", "C+ source files end in .cplus");
+        toolError(opts.input + " is not a C+ source file", "give it a name that ends in .cplus, as C+ source files do");
         return 2;
     }
 
@@ -278,7 +274,8 @@ static int compilerMain(int argc, char** argv) {
     if (rc == 0) {
         std::vector<std::string> argvRun{exe.string()};
         argvRun.insert(argvRun.end(), opts.programArgs.begin(), opts.programArgs.end());
-        rc = runProcess(argvRun);
+        rc = runProcess(argvRun, "it is built in the folder for temporary files, which may not allow programs to run. Set the environment variable TMPDIR to a folder that does");
+        if (rc < 0) rc = 1;
     }
     std::error_code ec;
     fs::remove_all(tmpl, ec);

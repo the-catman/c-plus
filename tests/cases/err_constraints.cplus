@@ -64,6 +64,6 @@ int main() {
 // error: 'Cat' does not derive from 'Speaker'. Write `public Speaker` in its definition
 // error: 'int' is not a class, so it cannot derive from 'Speaker'
 // error: 'Point' cannot be used for 'T' of 'sum', which must be 'Addable'
-// error: what 'Addable' requires does not work for 'Point'
+// error: use a type that has what 'Addable' requires, which 'Point' does not
 // error: 'Addable' requires this, which does not work for 'Point'
 // error: 'Point' cannot be used for 'K' of 'Sorted', which must be 'Comparable'

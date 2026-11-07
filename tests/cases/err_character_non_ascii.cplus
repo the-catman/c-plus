@@ -3,4 +3,4 @@ int main() {
     return 0;
 }
 // error: unexpected character a non-ASCII character in source
-// error: non-ASCII text belongs inside a string
+// error: put other text inside a string

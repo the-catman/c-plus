@@ -1,0 +1,18 @@
+// What the spec's text shows of C, written as it writes it. See spec_forms.
+extern "C" {
+    struct Named {
+        array<char, 64> name;
+    };
+    struct tm { int tm_sec; };
+}
+
+int main() {
+    Named s = {};
+    println("[{}]", string(s.name));
+    // expect: []
+    tm t;
+    t.tm_sec = 1;
+    println("{}", t.tm_sec);
+    // expect: 1
+    return 0;
+}

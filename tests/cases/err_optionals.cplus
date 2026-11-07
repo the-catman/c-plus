@@ -103,7 +103,7 @@ int main() {
 // error: '??' gives a fallback for an optional, but the left side is 'int', which is never null
 // error: the fallback after '??' must be 'int', but this is 'string'
 // error: '==' compares 'int?' with 'int' or null, but this is 'string'
-// error: null can only be compared with == and !=
+// error: write `x == null` or `x != null`, which are all that null can be used with
 // error: it may be null: `opt ?? "none"` is its value, or "none" when it is null
 // error: write `null`; only an optional, such as `User?`, can be null
 // error: spec: docs/SPEC.md#optionals

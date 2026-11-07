@@ -276,7 +276,7 @@ static std::vector<const FieldDecl*> allFields(const StructDecl& sd) {
 static std::string listFields(const StructDecl& sd) {
     std::vector<const FieldDecl*> fields = allFields(sd);
     if (fields.empty()) return q(sd.name) + " has no fields yet. Add this one to it: `int x = 0;`";
-    std::string out = "its fields are ";
+    std::string out = "use one of its fields: ";
     for (size_t i = 0; i < fields.size(); ++i)
         out += (i ? ", " : "") + std::string(fields[i]->type->name) + " " + fields[i]->name;
     return out;
@@ -810,7 +810,7 @@ void Sema::checkMembers(StructDecl& sd) {
         if (m->role != FuncDecl::Role::Method) continue;
         if (int f = sd.fieldIndex(m->name); f >= 0) {
             diags_.error(m->nameLoc, q(sd.name) + " already has a field named " + q(m->name),
-                         "a method and a field cannot share a name", spec::Methods);
+                         "rename one of them: a method and a field cannot share a name", spec::Methods);
             continue;
         }
         auto [it, inserted] = seen.emplace(m->name, m.get());
@@ -1212,11 +1212,9 @@ void Sema::checkExternFunction(FuncDecl& fn) {
             message = "this compiler does not support passing vectors to or from C functions yet",
             help = "C takes an array as a pointer to its first element. Pass the elements one at a time, or memory from "
                    "C's malloc that holds them";
-        else if (t->isOptional())
+        else  // only an optional is left, of something that is not text
             help = "in C, only text and pointers can be null. " + std::string(isReturn ? "Declare the result as" : "Pass") +
-                   " a plain " + q(t->elem) + " instead";
-        else
-            help = "use one of those, or pass what C needs of it as separate arguments";
+                   " a plain " + q(t->elem ? t->elem : t) + " instead";
         diags_.error(loc, message, help, spec::CFunctions);
     };
     check(fn.retType, fn.retTypeLoc, true);
@@ -1769,7 +1767,7 @@ void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
     const Type* t = checkExpr(e, flow);
     if (usableAsCondition(t)) return;
     std::string help;
-    if (t->is(K::Void)) help = "this expression produces no value";
+    if (t->is(K::Void)) help = "use a value here: this call gives nothing back";
     else if (t->isWeak()) help = "write `!" + spelled(e, "w") + ".expired()`, or `if (auto x = " + spelled(e, "w") + ".lock())`, which also keeps the object alive";
     else if (t->isUnique()) help = "a unique reference is never empty. For one that can be, write `" + std::string(t->name) + "?`";
     else if (t->isLocal()) help = "a local reference is never empty. For one that can be, write `" + std::string(t->name) + "?`";
@@ -2091,11 +2089,11 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
     std::string help;
     if (from->isObjectRef() && to->isUnique()) {
         help = from->isClass() ? "a '" + std::string(from->name) + "' may be shared, so it has no one owner. Write `" + std::string(to->name) + "(...)` to build a new object"
-                               : "the object is not a '" + std::string(to->elem->name) + "'";
+                               : "use one that holds a '" + std::string(to->elem->name) + "', as this object is not one";
     } else if (from->isNull() && to->isUnique()) {
         help = "a unique reference is never empty. For one that can be, write `" + std::string(to->name) + "?`";
     } else if (from->isObjectRef() && to->isLocal()) {
-        help = from->isLocal() ? "the object is not a '" + std::string(to->elem->name) + "'"
+        help = from->isLocal() ? "use one that holds a '" + std::string(to->elem->name) + "', as this object is not one"
                                : "a '" + std::string(from->name) + "' may be used by other threads, whose count a local reference would upset. Write `" +
                                      std::string(to->name) + "(...)` to build a new object";
     } else if (from->isNull() && to->isLocal()) {
@@ -2118,7 +2116,7 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
                                               "stops the program if the value does not fit";
     } else if (target->is(K::Char) && (from->isInteger() || from->is(K::String) || from->isFloating())) {
         if (e.kind == Expr::Kind::StringLit && static_cast<const StringLitExpr&>(e).value.size() == 1)
-            help = "'" + static_cast<const StringLitExpr&>(e).value + "' in single quotes is a char; \"" +
+            help = "write '" + static_cast<const StringLitExpr&>(e).value + "', in single quotes, for a char. \"" +
                    static_cast<const StringLitExpr&>(e).value + "\" is a string";
         else if (from->is(K::String))
             help = "a string does not convert to a char; `s[i]` is the char at position i";
@@ -2435,7 +2433,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         bool arr = baseType->isArray();
         if (!str && !arr && !baseType->isVector()) {
             diags_.error(e.loc, "'[ ]' picks an element of a vector or an array, or a char of a string, but this is " + q(baseType),
-                         baseType->hasFields() ? "read a field with '.', e.g. `p.x`" : "only vectors, arrays, strings, hashmaps and pointers can be indexed", spec::Vectors);
+                         baseType->hasFields() ? "read a field with '.', e.g. `p.x`" : "use `[ ]` on a vector, an array, a string, a hashmap or a pointer, which are what can be indexed", spec::Vectors);
             return e.type;
         }
         const char* what = str ? "a string" : arr ? "an array" : "a vector";
@@ -2456,8 +2454,8 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         else if (arr && ix.index->kind == Expr::Kind::IntLit && static_cast<IntLitExpr&>(*ix.index).value >= baseType->length)
             diags_.error(ix.index->loc, "index " + std::to_string(static_cast<IntLitExpr&>(*ix.index).value) +
                                             " is past the end of " + q(baseType),
-                         baseType->length == 0 ? "this array has no elements"
-                                               : "its elements are numbered from 0 to " + std::to_string(baseType->length - 1),
+                         baseType->length == 0 ? "make the array larger: this one has no elements"
+                                               : "use an index from 0 to " + std::to_string(baseType->length - 1),
                          anchor);
         return e.type = str ? Type::charTy() : baseType->elem;
     }
@@ -2530,7 +2528,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
                    : baseType->isArray()  ? "arrays have methods like size(), fill(x) and data(), and elements are read with `a[i]`"
                                           : "vectors have methods like size(), push_back(x) and back(), and elements are read with `v[i]`";
         else
-            help = "only structs and classes have fields, and " + q(baseType) + " is neither";
+            help = "use a struct or a class here: only they have fields, and " + q(baseType) + " is neither";
         diags_.error(e.loc, q(baseType) + " has no fields, so '." + m.field + "' cannot be used", help,
                      str                     ? spec::Strings
                      : baseType->isVector()  ? spec::Vectors
@@ -2788,7 +2786,7 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
             help = std::string(t->isClass() ? "a class reference is used directly, so " : t->isUnique() ? "a unique reference is used directly, so " : t->isLocal() ? "a local reference is used directly, so " : "") +
                    "fields and methods are reached with '.': write `" + n + "." + u.arrowMember + "`";
         else
-            help = "only a pointer can be followed with '->'";
+            help = "use a pointer here, as only a pointer can be followed with '->'. `&x` gives the address of a variable";
         diags_.error(u.loc, "'->' follows a pointer, but " + q(n) + " is " + q(t), help, spec::Pointers);
         return;
     }
@@ -2918,7 +2916,7 @@ const Type* Sema::checkAddressOf(UnaryExpr& u, Flow& flow) {
         if (t->isError()) return t;
         diags_.error(u.loc, "'&' takes the address of a variable, a field, or what a pointer points to, but this is a "
                             "temporary value",
-                     target.kind == Expr::Kind::OptChain ? "'?.' gives a copy of the value"
+                     target.kind == Expr::Kind::OptChain ? "store it in a variable first, and take the address of that: '?.' gives a copy of the value"
                                                          : "store it in a variable first, and take the address of that",
                      spec::Pointers);
         return Type::error();
@@ -2979,7 +2977,7 @@ const Type* Sema::checkPointerBinary(BinaryExpr& b, const Type* l, const Type* r
             help = "pointers to different types cannot be compared; convert one first, e.g. `(void*)" +
                    spelled(otherSide, "q") + "`";
         else
-            help = "a pointer is compared with another pointer to the same type, or with null";
+            help = "compare it with another pointer to the same type, or with null";
         diags_.error(otherSide.loc, "'" + sym + "' compares " + q(ptr) + " with a pointer or null, but this is " + q(other),
                      help, spec::Pointers);
         return Type::boolTy();
@@ -3150,7 +3148,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                     diags_.error(u.operand->loc,
                                  std::string("'") + sym + "' needs " + (u.op == UnOp::BitNot ? "an int or a long" : "a number") +
                                      ", but this is " + q(t),
-                                 t->isFloating() ? "'~' flips the bits of an integer" : "use it on a number", spec::Operators);
+                                 t->isFloating() ? "use it on an integer, as it flips bits. Convert first, with `long(x)`" : "use it on a number", spec::Operators);
                     break;
                 }
                 result = t;
@@ -3270,10 +3268,10 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 std::string help;
                 if ((l->isWeak() || r->isWeak()) && (equality || comparison)) help = "to check whether the object is gone, write `w.expired()`. To compare it with an object, write `w.lock() == x`";
                 else if (bad->isOptional()) help = unwrapHelp(spelled(*side));
-                else if (bad->isNull()) help = "null can only be compared with == and !=";
-                else if (bad->is(K::String)) help = "strings work with + to join them, and with == != < <= > >= to compare them";
-                else if (equality) help = "both sides of '" + std::string(sym) + "' must have the same type, but they are " + q(l) + " and " + q(r);
-                else if (comparison && (bad->hasFields() || bad->isVector() || bad->isArray())) help = q(bad) + " values can only be compared with == and !=";
+                else if (bad->isNull()) help = "write `x == null` or `x != null`, which are all that null can be used with";
+                else if (bad->is(K::String)) help = "use + to join strings, and == != < <= > >= to compare them";
+                else if (equality) help = "both sides of '" + std::string(sym) + "' must have the same type, but they are " + q(l) + " and " + q(r) + ". Convert one of them, or compare a field of each";
+                else if (comparison && (bad->hasFields() || bad->isVector() || bad->isArray())) help = "use == or !=, which are all that " + q(bad) + " values have, or compare a field or an element of each";
                 else if (!bad->isArithmetic() && !bad->is(K::Bool)) help = std::string("'") + sym + "' works on numbers. Use a field or a method of this value that gives one";
                 else if (bad->is(K::Bool) && (b.op == BinOp::BitAnd || b.op == BinOp::BitOr)) help = std::string("use '") + (b.op == BinOp::BitAnd ? "&&" : "||") + "' for logic";
                 else help = "a bool is not a number. Write `int(b)` for 1 or 0";
@@ -3335,7 +3333,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                         diags_.error(a.value->loc, opName + " on a pointer needs an int or a long, but this is " + q(vt), "a pointer moves by a whole number of elements, such as `p += 2`", spec::Pointers);
                 } else if (t->is(K::String))
                     diags_.error(a.target->loc, opName + " cannot be used with 'string'",
-                                 "the only compound assignment on strings is +=, which appends", spec::Strings);
+                                 "use +=, which appends, and is the only compound assignment on strings", spec::Strings);
                 else if (!t->isError() && !t->isNumber())
                     diags_.error(a.target->loc, opName + " needs a number, but this is " + q(t), "use it on a number. Another type is changed with `=`", spec::Operators);
                 else if (!a.value->type->isError() && !a.value->type->isArithmetic())
@@ -3423,7 +3421,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (t->isError() || (!t->isOpaque() && !checkStorable(t, e.loc))) break;
             if (t->is(K::Void) || t->isNull() || t->isOpaque() || t->is(K::Auto))
                 diags_.error(e.loc, "sizeof needs a type with a size, but this is " + q(t),
-                             t->isOpaque() ? q(t) + " is a C type known only by name, so only C knows its size" : "give it a type that has a size, such as `sizeof(int)`",
+                             t->isOpaque() ? "let its C library make one, and hold a pointer to it, `" + std::string(t->name) + "*`. Only C knows the size of a type known only by name" : "give it a type that has a size, such as `sizeof(int)`",
                              t->isOpaque() ? spec::CTypes : spec::Sizeof);
             break;
         }
@@ -3926,7 +3924,7 @@ static std::string jsonProblem(const Program& program, const Type* t, bool readi
     if (isHashmap(t)) {
         const Type* key = t->decl->templateArgs[0].type;
         if (!key->is(K::String) && !key->is(K::Int) && !key->is(K::Long))
-            return where + " has keys of type " + q(key) + ", while a JSON object has strings. A key can be a string, an int or a long, which is written as a string";
+            return where + " has keys of type " + q(key) + ", while a JSON object has strings. Use a string, an int or a long for the key, which is written as a string";
         return jsonProblem(program, t->decl->templateArgs[1].type, reading, path.empty() ? "[key]" : path + "[key]", seen);
     }
     if (!t->hasFields()) return where + " is a pointer, which only means something to this program. Make it a private field, which is left out of JSON";
@@ -3974,7 +3972,7 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
     if (auto s = structs_.find(constraint); s != structs_.end()) {  // an interface or a class
         if (t->isClass() && t->decl->partsOf(s->second) == 1) return "";
         return t->isClass() ? q(t) + " does not derive from " + q(constraint) + ". Write `public " + constraint + "` in its definition"
-                            : q(t) + " is not a class, so it cannot derive from " + q(constraint);
+                            : q(t) + " is not a class, so it cannot derive from " + q(constraint) + ". Use a class that does";
     }
     if (TemplateDecl* c = program_->findTemplate(constraint); c && c->kind == TemplateDecl::Kind::Concept) {
         auto key = std::pair{constraint, t};
@@ -4003,7 +4001,7 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
                 int before = diags_.mutedErrors();
                 checkExpr(*requirement, flow);
                 if (diags_.mutedErrors() == before) continue;
-                problem = "what " + q(constraint) + " requires does not work for " + q(t);
+                problem = "use a type that has what " + q(constraint) + " requires, which " + q(t) + " does not";
                 where = requirement->loc;
                 break;
             }
@@ -4017,16 +4015,16 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
         return t->isArithmetic() || t->is(K::String) || t->isPointer()
                    ? ""
                    : q(t) + " has no `<`. Only numbers, chars, strings and pointers do, until operators can be overloaded";
-    if (constraint == "Number") return t->isNumber() ? "" : q(t) + " is not int, long, float or double";
-    if (constraint == "Integer") return t->isInteger() ? "" : q(t) + " is not int or long";
-    if (constraint == "Floating") return t->isFloating() ? "" : q(t) + " is not float or double";
+    if (constraint == "Number") return t->isNumber() ? "" : q(t) + " is not int, long, float or double. Use one of those";
+    if (constraint == "Integer") return t->isInteger() ? "" : q(t) + " is not int or long. Use one of those, or convert it with `long(x)`";
+    if (constraint == "Floating") return t->isFloating() ? "" : q(t) + " is not float or double. Use one of those, or convert it with `double(x)`";
     if (constraint == "__JsonWritable" || constraint == "__JsonReadable") {
         std::vector<const StructDecl*> seen;
         return jsonProblem(*program_, t, constraint == "__JsonReadable", "", seen);
     }
     if (constraint == "Hashable" || constraint == "__Hashable")
         return isHashable(t) ? ""
-                             : q(t) + " cannot be a key. Numbers, chars, bools, strings, pointers and class references can, and so can "
+                             : "use another type for the key, as " + q(t) + " cannot be one. Numbers, chars, bools, strings, pointers and class references can, and so can "
                                       "optionals, vectors, arrays and structs of those. A unique or weak reference or a hashmap cannot";
     return "";  // unknown, which was reported at the generic
 }
@@ -4228,7 +4226,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
                 help = sd.nameLoc.line ? q(sd.name) + " has no methods. Write the method inside the type: `void " + call.name + "() { ... }`"
                                        : q(sd.name) + " has no methods. " + listFields(sd);
             } else {
-                help = "its methods are ";
+                help = "use one of its methods: ";
                 for (size_t i = 0; i < names.size(); ++i) help += (i ? ", " : "") + names[i];
             }
         }
@@ -4334,14 +4332,14 @@ const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type
         else if (call.name == "insert" || call.name == "erase" || call.name == "resize" || call.name == "reserve" ||
                  call.name == "begin" || call.name == "end") {
             diags_.error(call.loc, "this compiler does not support " + call.name + "() on vectors yet",
-                         "the vector methods today are size, empty, push_back, pop_back, front, back and clear",
+                         "use one of the vector methods today: size, empty, push_back, pop_back, front, back and clear",
                          spec::Status);
             return Type::error();
         } else {
             std::vector<std::string> names;
             for (auto& m : kVectorMethods) names.push_back(m.name);
             std::string guess = closest(call.name, names);
-            help = guess.empty() ? "the vector methods are size, empty, push_back, pop_back, front, back and clear"
+            help = guess.empty() ? "use one of the vector methods: size, empty, push_back, pop_back, front, back and clear"
                                  : "did you mean " + q(guess) + "?";
         }
         diags_.error(call.loc, q(vecType) + " has no method named " + q(call.name), help, spec::Vectors);
@@ -4395,13 +4393,13 @@ const Type* Sema::checkArrayMethod(MethodCallExpr& call, Flow& flow, const Type*
         else if (call.name == "length" || call.name == "count") help = "did you mean 'size'?";
         else if (call.name == "begin" || call.name == "end" || call.name == "swap") {
             diags_.error(call.loc, "this compiler does not support " + call.name + "() on arrays yet",
-                         "the array methods today are size, empty, front, back, fill and data", spec::Status);
+                         "use one of the array methods today: size, empty, front, back, fill and data", spec::Status);
             return Type::error();
         } else {
             std::vector<std::string> names;
             for (auto& m : kArrayMethods) names.push_back(m.name);
             std::string guess = closest(call.name, names);
-            help = guess.empty() ? "the array methods are size, empty, front, back, fill and data"
+            help = guess.empty() ? "use one of the array methods: size, empty, front, back, fill and data"
                                  : "did you mean " + q(guess) + "?";
         }
         diags_.error(call.loc, q(arrayType) + " has no method named " + q(call.name), help, spec::Arrays);
@@ -4560,7 +4558,7 @@ const Type* Sema::checkDelete(DeleteExpr& d, Flow& flow) {
                      "free it with the C function made for it, such as fclose for a FILE*", spec::CTypes);
     else
         diags_.error(loc, "'" + op + "' frees memory from new through a pointer, but this is " + q(t),
-                     t->isVector() || t->is(K::String) ? "a " + std::string(t->isVector() ? "vector" : "string") +
+                     t->isVector() || t->is(K::String) ? "remove it: a " + std::string(t->isVector() ? "vector" : "string") +
                                                              " frees its memory by itself"
                                                        : "remove it: `delete` is only for what `new` gave",
                      spec::NewDelete);
@@ -4624,7 +4622,7 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
                                  "write {{ for a literal '{'", spec::Printing);
                 else
                     diags_.error(fmtExpr.loc, "this compiler does not support the format option " + shown + " yet",
-                                 "a placeholder can give the precision of a floating-point value and f, e or g, such "
+                                 "write {}, or give the precision of a floating-point value and f, e or g, such "
                                  "as {:.2f}, {:e} or {:.3g}. Width and alignment are planned",
                                  spec::Printing);
                 return result;
@@ -4686,7 +4684,7 @@ const Type* Sema::checkToString(CallExpr& call, Flow& flow) {
     const Type* t = checkExpr(*call.args[0], flow);
     if (!t->isError() && !t->isNumber())
         diags_.error(call.args[0]->loc, "to_string() takes a number, but this is " + q(t),
-                     t->is(K::String) ? "it is already a string"
+                     t->is(K::String) ? "remove `to_string`: it is already a string"
                      : t->is(K::Char) ? "in C++, to_string(c) gives the code of the char, such as \"97\". Write "
                                         "`string(1, c)` for the char itself, or `to_string(int(c))` for its code"
                                       : textHelp(t),
@@ -4823,7 +4821,7 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     }
     if (!castable) {
         diags_.error(c.loc, "a cast converts between numbers, char and bool, but this converts to " + q(to),
-                     to->isOptional() && canConvert(from, to) ? "no cast is needed: a value converts to an optional "
+                     to->isOptional() && canConvert(from, to) ? "remove the cast: a value converts to an optional "
                                                                 "by itself"
                                                               : "a cast can only convert to int, long, float, double, "
                                                                 "char or bool",
@@ -4908,7 +4906,7 @@ const StringMethodInfo kStringMethods[] = {
     {"back", StrMethod::Back, "back()", 0, 0, false, false},
 };
 const char* kStringMethodList =
-    "the string methods today are size, length, empty, substr, find, contains, starts_with, ends_with, clear, "
+    "use one of the string methods today: size, length, empty, substr, find, contains, starts_with, ends_with, clear, "
     "push_back, pop_back, front and back";
 
 std::string argumentCount(size_t min, size_t max) {
@@ -5025,8 +5023,8 @@ void Sema::checkCondDecl(CondDecl& d, Flow& flow, const char* stmt) {
                      v.type->isOptional() ? boolOptionalHelp(v.name)
                      : v.type->isWeak()     ? "write `" + std::string(stmt) + " (auto " + v.name + " = " + spelled(*v.init, "w") +
                                                   ".lock())`, which runs the branch when the object is still there"
-                                          : "an optional runs the branch when it holds a value, and a bool or a "
-                                            "number when it is true or not zero",
+                                          : "declare it from an optional, which runs the branch when it holds a value, or from a bool or a "
+                                            "number, which do when true or not zero",
                      spec::Optionals);
 }
 

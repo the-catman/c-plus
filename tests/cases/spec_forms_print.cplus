@@ -1,0 +1,21 @@
+// What the spec's text says a value prints as. See spec_forms.
+struct Born {
+    string name;
+    int born;
+};
+class User {
+public:
+    string name;
+    int born;
+};
+
+void f() throws {}
+
+int main() throws {
+    try f();
+    println("{}", Born{"Ada", 1815});
+    // expect: {name: "Ada", born: 1815}
+    println("{}", User{"Ada", 1815});
+    // expect: User {name: "Ada", born: 1815}
+    return 0;
+}
