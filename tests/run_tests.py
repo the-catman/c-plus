@@ -930,7 +930,7 @@ def check_command_line(cplus, workdir):
     ]
     ok = True
     for args, code, message in cases:
-        run = subprocess.run([cplus, *args], capture_output=True, text=True)
+        run = subprocess.run([cplus, *args], capture_output=True, text=True, cwd=workdir)
         lacking = errors_without_help(run.stderr)
         if run.returncode != code or message not in run.stderr or lacking:
             print(f"FAIL cplus {' '.join(args)}: exit code {run.returncode}, expected {code}, and '{message}'. {lacking}\n  " + run.stderr[:300])
@@ -940,7 +940,7 @@ def check_command_line(cplus, workdir):
         resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
         signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
     for args, advice in ((["build", g, "-o", str(workdir / "out")], "choose another with -o"), (["run", g], "set the environment variable TMPDIR")):
-        run = subprocess.run([cplus, *args], capture_output=True, text=True, preexec_fn=no_room)
+        run = subprocess.run([cplus, *args], capture_output=True, text=True, cwd=workdir, preexec_fn=no_room)
         if run.returncode != 1 or "cannot write" not in run.stderr or advice not in run.stderr or errors_without_help(run.stderr):
             print(f"FAIL cplus {' '.join(args)} with no room for the object file: exit code {run.returncode}\n  " + run.stderr[:400])
             ok = False
@@ -956,7 +956,7 @@ def check_command_line(cplus, workdir):
         (["build", g, "-o", str(workdir / "out")], "CPLUS_TARGET_FOR_TESTS", "no-such-machine", "this is about the machine"),
     ]
     for args, name, value, message in pretending:
-        run = subprocess.run([cplus, *args], capture_output=True, text=True, env=dict(os.environ, **{name: value}))
+        run = subprocess.run([cplus, *args], capture_output=True, text=True, cwd=workdir, env=dict(os.environ, **{name: value}))
         if run.returncode == 0 or message not in run.stderr or errors_without_help(run.stderr):
             print(f"FAIL cplus {' '.join(args)} with {name}: exit code {run.returncode}, and not '{message}'\n  " + run.stderr[:300])
             ok = False
@@ -1032,6 +1032,19 @@ def check_advice_grid(cplus, workdir):
     for p in found:
         print(f"FAIL advice grid: {p}")
     return not found
+
+
+def tracked_binaries(root=ROOT):
+    """Files in the repo that are not text. A built program holds the paths it was built from, so it must never be committed."""
+    listed = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True)
+    if listed.returncode != 0:
+        return []  # not a checkout, as in an unpacked archive
+    found = []
+    for name in listed.stdout.decode().split("\0"):
+        path = pathlib.Path(root) / name
+        if name and path.is_file() and b"\0" in path.read_bytes():
+            found.append(name)
+    return found
 
 
 def check_source_rules(root=ROOT):
@@ -1254,6 +1267,9 @@ def main():
             ok = check_json_of_direct(cplus, pathlib.Path(tmp)) and ok
             ok = check_advice_grid(cplus, pathlib.Path(tmp)) and ok
             ok = check_source_rules() and ok
+            for name in tracked_binaries():
+                print(f"FAIL {name} is in the repo, and it is not text: a built program holds the paths it was built from")
+                ok = False
             ok = check_command_line(cplus, pathlib.Path(tmp)) and ok
             ok = check_spec_code(cplus, pathlib.Path(tmp)) and ok
 
