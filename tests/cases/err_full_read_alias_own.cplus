@@ -1,0 +1,30 @@
+// Aliases of the program's own types are kept as they are; tasks keep `throws`; numbers of other sizes, `const` elements,
+// class pointers and wrong numbers of arguments are checked.
+class Node { };
+struct Pt { int x = 0; };
+template <typename K, typename V>
+class map { public: K k; V v; };
+struct mutex { int x; };
+template <typename T>
+struct Stack { T x; };
+using A1 = Task<long, throws>;
+// error: write the type itself, `Task<long, throws>`, wherever `A1` is used
+using A3 = vector<Task<int, throws>>;
+// error: write the type itself, `vector<Task<int, throws>>`, wherever `A3` is used
+using B1 = uint8_t;
+// error: write the type itself, `char`, wherever `B1` is used
+using B3 = int16_t;
+// error: write the type itself wherever `B3` is used, as C+ writes it
+using C1 = map<int, int>;
+// error: write the type itself, `map<int, int>`, wherever `C1` is used
+using C2 = mutex;
+// error: write the type itself, `mutex`, wherever `C2` is used
+using D1 = std::array<const int, 3>;
+// error: write the type itself wherever `D1` is used, as C+ writes it
+using E1 = Node*;
+// error: write the type itself, `Node?`, wherever `E1` is used
+using F3 = Stack<int, int>;
+// error: write the type itself wherever `F3` is used, as C+ writes it
+using F5 = std::vector<int>&;
+// error: write the type itself wherever `F5` is used, as C+ writes it
+int main() { return 0; }

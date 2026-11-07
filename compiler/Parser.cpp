@@ -992,30 +992,37 @@ void Parser::rejectOtherLanguages() {
         // The type as C+ writes it, or nothing when C+ has none
         std::vector<std::string> words;
         std::vector<bool> fromStd;  // written `std::name`, which only names what C+ has under another name, if anything
-        for (size_t at = 3; at < 60 && peek(at).kind != Tok::Semi && peek(at).kind != Tok::Eof; ++at) {
+        bool cutShort = false;
+        for (size_t at = 3; peek(at).kind != Tok::Semi && peek(at).kind != Tok::Eof; ++at) {
+            if (at >= 400) {  // too long to say anything about
+                cutShort = true;
+                break;
+            }
             bool isStd = false;
             if (peek(at).kind == Tok::ColonColon) continue;  // `::std::string`
             if (peek(at).kind == Tok::Ident && peek(at).text == "std" && peek(at + 1).kind == Tok::ColonColon) {
                 at += 2;
                 isStd = true;
-                if (at >= 60 || peek(at).kind == Tok::Semi || peek(at).kind == Tok::Eof) break;
+                if (peek(at).kind == Tok::Semi || peek(at).kind == Tok::Eof) break;
             }
             words.push_back(peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text);
             fromStd.push_back(isStd);
         }
         size_t pos = 0;
-        bool known = true;
+        bool known = !cutShort;
         auto isClassName = [&](const std::string& name) {
             const StructDecl* sd = typeNames_.count(name) ? prog_->findStruct(name) : nullptr;
             return sd && sd->isClass;
         };
         // What a word can stand for: a type of C+, a C++ name C+ has another form of, or a type of the program's own
-        auto cName = [](const std::string& w) -> std::string {  // C's names for numbers, as C+ writes them
-            if (w == "int8_t" || w == "uint8_t" || w == "int16_t" || w == "uint16_t" || w == "int32_t" || w == "uint32_t") return "int";
+        auto cName = [](const std::string& w) -> std::string {  // C's names for numbers, as C+ writes them: the same size
+            if (w == "uint8_t") return "char";  // a char is one byte, 0 to 255
+            if (w == "int32_t" || w == "uint32_t") return "int";
             if (w == "int64_t" || w == "uint64_t" || w == "size_t" || w == "ssize_t" || w == "ptrdiff_t" || w == "intptr_t" || w == "uintptr_t") return "long";
             return "";
         };
-        static const char* const ownWords[] = {"int", "long", "bool", "char", "double", "float", "void", "string", "vector", "array", "hashmap", "unique", "weak", "local", "Mutex", "Task"};
+        static const char* const ownWords[] = {"int", "long", "bool", "char", "double", "float", "void", "string", "vector", "array", "hashmap", "unique", "weak", "local", "Mutex", "Task",
+                                               "__TaskThrows"};
         static const char* const stdWords[] = {"string", "vector", "array", "optional", "unique_ptr", "weak_ptr", "shared_ptr", "unordered_map", "map", "mutex"};
         auto among = [](const auto& list, const std::string& w) { return std::find_if(std::begin(list), std::end(list), [&](const char* n) { return w == n; }) != std::end(list); };
         auto isKey = [](const std::string& k) { return k == "int" || k == "long" || k == "char" || k == "bool" || k == "string"; };  // what a hashmap can hash
@@ -1034,8 +1041,12 @@ void Parser::rejectOtherLanguages() {
             }
             if (w == "long" && pos < words.size() && words[pos] == "long") ++pos;
             if (w == "long" && pos < words.size() && words[pos] == "int") ++pos;
-            if (!cName(w).empty()) w = cName(w);
-            else if (isStd ? !among(stdWords, w) : !among(ownWords, w) && !typeNames_.count(w) && !classTemplate(w)) known = false;
+            const bool isOwn = !isStd && (typeNames_.count(w) || classTemplate(w)) && !among(ownWords, w);  // the program's own, kept as it is
+            if (isStd || !isOwn) {
+                if (!cName(w).empty() && !typeNames_.count(w)) w = cName(w);
+                else if (isStd ? !among(stdWords, w) : !among(ownWords, w)) known = false;
+            }
+            if (w == "int8_t" || w == "int16_t" || w == "uint16_t") known = false;  // no C+ type of that size
             std::vector<std::string> args;
             if (pos < words.size() && words[pos] == "<") {
                 ++pos;
@@ -1043,10 +1054,11 @@ void Parser::rejectOtherLanguages() {
                 while (known && pos < words.size()) {
                     if (w == "array" && args.size() == 1) {  // its size, a number
                         const std::string& n = words[pos];
-                        if (n.empty() || !std::all_of(n.begin(), n.end(), [](char c) { return std::isdigit((unsigned char)c) || c == '\''; })) { known = false; break; }
+                        if (n.empty() || !std::isdigit((unsigned char)n[0]) || !std::all_of(n.begin(), n.end(), [](char c) { return std::isdigit((unsigned char)c) || c == '\''; })) { known = false; break; }
                         args.push_back(words[pos++]);
                     } else {
                         args.push_back(typeAt());
+                        if (args.back().rfind("const ", 0) == 0 && args.back().back() != '*') { known = false; break; }  // a const element; a pointer to const is fine
                     }
                     if (pos < words.size() && words[pos] == ",") { ++pos; continue; }
                     if (pos < words.size() && words[pos] == ">") { ++pos; closed = true; break; }
@@ -1064,7 +1076,27 @@ void Parser::rejectOtherLanguages() {
             const std::string first = args.empty() ? "" : args[0];
             auto inner = [&](const std::string& t) { return t.size() > 5 && (t.rfind("weak<", 0) == 0); };
             std::string out;
-            if (w == "string" || w == "int" || w == "long" || w == "bool" || w == "char" || w == "double" || w == "float" || w == "void" || w == "Mutex" || w == "mutex") {
+            for (const std::string& a : args)
+                if (a.empty() || (a == "void" && w != "Task" && w != "__TaskThrows")) known = false;  // nothing but a task holds a void
+            if (isOwn) {  // the program's own type, with as many arguments as it takes
+                const TemplateDecl* own = classTemplate(w);
+                if (own ? own->params.size() != args.size() : !args.empty()) known = false;
+                out = w + (args.empty() ? "" : "<" + joined() + ">");
+                size_t stars = 0;
+                while (pos < words.size() && words[pos] == "*") ++stars, ++pos;
+                if (stars == 1 && isClassName(w)) out += "?";  // a pointer to an object is what a class variable already is, and may be null
+                else if (stars > 0 && isClassName(w)) known = false;
+                else out += std::string(stars, '*');
+                if (pos < words.size() && (words[pos] == "[" || words[pos] == "&")) known = false;
+                return prefix + out;
+            }
+            if (w == "__TaskThrows") {  // what `Task<T, throws>` is read as, with `, throws` taken out
+                takes(1);
+                out = "Task<" + first + ", throws>";
+            } else if (w == "Task") {
+                takes(1);
+                out = "Task<" + first + ">";
+            } else if (w == "string" || w == "int" || w == "long" || w == "bool" || w == "char" || w == "double" || w == "float" || w == "void" || w == "Mutex" || w == "mutex") {
                 takes(0);
                 out = w == "mutex" ? "Mutex" : w;
             } else if (w == "shared_ptr") {  // a class variable is already a counted reference; nothing else is shared that way
@@ -1091,7 +1123,7 @@ void Parser::rejectOtherLanguages() {
                 out = "array<" + joined() + ">";
             } else out = w + (args.empty() ? "" : "<" + joined() + ">");
             while (pos < words.size() && words[pos] == "*") out += "*", ++pos;
-            if (pos < words.size() && words[pos] == "[") known = false;  // a C array, which C+ writes `array<T, N>`
+            if (pos < words.size() && (words[pos] == "[" || words[pos] == "&")) known = false;  // a C array, which C+ writes `array<T, N>`, or a reference
             return prefix + out;
         };
         std::string type = typeAt();
