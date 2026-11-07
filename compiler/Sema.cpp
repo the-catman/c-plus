@@ -638,14 +638,14 @@ static void thrownAway(const Expr& e, std::vector<const Expr*>& out) {
             thrownAway(*static_cast<const TernaryExpr&>(e).thenExpr, out);
             thrownAway(*static_cast<const TernaryExpr&>(e).elseExpr, out);
             return;
-        case Expr::Kind::Coalesce:
-            thrownAway(*static_cast<const CoalesceExpr&>(e).lhs, out);
-            thrownAway(*static_cast<const CoalesceExpr&>(e).rhs, out);
+        // The left of `??`, `&&` and `||` decides whether the right runs, so it is used even when the whole is not
+        case Expr::Kind::Coalesce: thrownAway(*static_cast<const CoalesceExpr&>(e).rhs, out); return;
+        case Expr::Kind::Binary: {
+            auto& b = static_cast<const BinaryExpr&>(e);
+            if (b.op != BinOp::LogAnd && b.op != BinOp::LogOr) thrownAway(*b.lhs, out);
+            thrownAway(*b.rhs, out);
             return;
-        case Expr::Kind::Binary:
-            thrownAway(*static_cast<const BinaryExpr&>(e).lhs, out);
-            thrownAway(*static_cast<const BinaryExpr&>(e).rhs, out);
-            return;
+        }
         case Expr::Kind::Unary:
             if (!isDeref(e)) thrownAway(*static_cast<const UnaryExpr&>(e).operand, out);
             return;
@@ -685,6 +685,13 @@ static bool isReferenceInCpp(const Expr& e) {
     }
 }
 
+// Whether `e` is, or may be, something the program has: a place, or a `?:` with one in either branch, however deep.
+static bool holdsAPlace(const Expr& e) {
+    if (e.kind != Expr::Kind::Ternary) return reachesAPlace(e);
+    auto& t = static_cast<const TernaryExpr&>(e);
+    return holdsAPlace(*t.thenExpr) || holdsAPlace(*t.elseExpr);
+}
+
 // What gave a copy of something the program has, on the way to `e`, as it is written: `back()` in `v.back().p`, `?:` in
 // `(f ? a : b).set()`. Empty when nothing did, and when a class object or what a pointer points to is on the way, as they live on their own.
 // `?:` counts when both of what it chooses from are places, as then C++ would change the one it chose.
@@ -699,7 +706,7 @@ static std::string copyOnTheWay(const Expr& e, bool resultUsed) {
         // too, and only a change that nothing receives is a mistake.
         case Expr::Kind::Ternary: {
             auto& t = *static_cast<const TernaryExpr*>(x);
-            return isReferenceInCpp(*x) || (!resultUsed && (reachesAPlace(*t.thenExpr) || reachesAPlace(*t.elseExpr))) ? "?:" : "";
+            return isReferenceInCpp(*x) || (!resultUsed && (holdsAPlace(*t.thenExpr) || holdsAPlace(*t.elseExpr))) ? "?:" : "";
         }
         case Expr::Kind::Assign: return reachesAPlace(*x) ? "=" : "";
         case Expr::Kind::Coalesce: return !resultUsed && reachesAPlace(*x) ? "??" : "";
@@ -2771,11 +2778,6 @@ std::string Sema::copyHelp(const Expr& target, const std::string& change, bool g
         if (!c.empty() && !a.empty() && !b.empty())
             return givesValue ? "`?:` gives a copy of what it chose. Call it on each in place: `(" + c + " ? " + before + a + path + " : " + before + b + path + ")`"
                               : "`?:` gives a copy of what it chose. Change each in place: `if (" + c + ") " + before + a + path + "; else " + before + b + path + ";`";
-        auto holdsAPlace = [](const Expr& branch) {  // `g ? b : make()` holds `b`
-            if (branch.kind != Expr::Kind::Ternary) return reachesAPlace(branch);
-            auto& inner = static_cast<const TernaryExpr&>(branch);
-            return reachesAPlace(*inner.thenExpr) || reachesAPlace(*inner.elseExpr);
-        };
         const bool otherIsMadeHere = a.empty() ? !holdsAPlace(*t.thenExpr) : b.empty() ? !holdsAPlace(*t.elseExpr) : false;
         if (!c.empty() && !givesValue && (!a.empty() || !b.empty()) && otherIsMadeHere)  // the other is a value made here, which nothing keeps
             return "`?:` gives a copy of what it chose, so this changes nothing. Change " + q(!a.empty() ? a : b) + " itself when it is chosen: `if (" +

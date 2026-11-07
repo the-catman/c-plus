@@ -18,7 +18,9 @@ struct S {
     int read() const { return x; }
     S with(int n) { x = n; return this; }
     int bump() { x = x + 1; return x; }
+    bool ok() { x = x + 1; return x > 0; }
 };
+bool logged() { println("logged"); return true; }
 struct H {
     vector<int> items;
     S s;
@@ -241,6 +243,12 @@ VALID = [  # (definitions, main, expected)
     ("", "hashmap<string, S> m = {{\"a\", S{}}};\nS u = m.values()[0].with(4);\nprintln(\"{} {}\", u.x, m[\"a\"].x);", "4 1"),
     ("", "S a = {};\nS d = {};\nS? o = S{};\nbool f = true;\nS u = (f ? a : o.value_or(d)).with(9);\nprintln(\"{} {}\", u.x, a.x);", "9 1"),
     ("", "S? o = S{};\nS? p = S{};\nS? u = (o ?? p)?.with(7);\nprintln(\"{} {}\", u?.x, o?.x);", "7 1"),
+    # The left of `&&`, `||` and `??` decides what runs, so its result is used even in a statement of its own
+    ("", "S? o = null;\nS d = {};\n(o ?? d).ok() && logged();", "logged"),
+    ("", "S? o = null;\nS d = {};\n(o ?? d).ok() || logged();\nprintln(\"none\");", "none"),
+    ("", "S? o = null;\nS d = {};\no.value_or(d).ok() && logged();", "logged"),
+    ("", "maybeS(true)?.ok() == true && logged();", "logged"),
+    ("", "S? o = null;\nbool f = true;\nf ? (o ?? S{}).ok() && logged() : false;", "logged"),
     ("", "S u = listS().back().with(5);\nprintln(\"{}\", u.x);", "5"),
     ("", "S u = tableS().at(\"a\").with(5);\nprintln(\"{}\", u.x);", "5"),
     ("", "S a = {};\nbool f = true;\nS u = (f ? a : makeS(2)).with(9);\nprintln(\"{} {}\", u.x, a.x);", "9 1"),

@@ -41,4 +41,21 @@ void keptThroughSeveral() {
     // error: unwrap each optional, change the copy, keep what it gives, and store each one back: `int? result = null; if (auto b = a) { if (auto c = b.h) { if (auto d = c.os) { result = d.bump(); c.os = d; } b.h = c; } a = b; }`
 }
 
+bool logged() { return true; }
+struct Ok {
+    int x = 0;
+    bool ok() { x = x + 1; return x > 0; }
+};
+void nestedPlaces(S a) {
+    bool f = true;
+    bool g = true;
+    (f ? (g ? a : maybeS(true).value()) : maybeS(true).value()).set();
+    // error: 'set' may change the struct, but '?:' gives a copy of it
+}
+void decidesWhatRuns() {
+    Ok? o = Ok{};
+    o?.ok() == true && logged();
+    // error: to keep what it gives, unwrap it and call it on the copy: `bool? result = null; if (auto v = o) { result = v.ok(); o = v; }`
+}
+
 int main() { return 0; }
