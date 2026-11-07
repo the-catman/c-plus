@@ -15,6 +15,7 @@ struct Point {
     void move(int by) { x += by; }
     int m() const { return x; }
 };
+struct Aged { int age = 0; };
 struct Rect {
     int w = 1;
     int h = 2;
@@ -184,6 +185,18 @@ void optionals() {
         if (auto u = found) println("{}", u.age);
         // expect: 4
     }
+    {
+        Point? found = Point{};
+        if (auto u = found) { u.x = 3; found = u; }
+        println("{}", found?.x);
+    }
+    // expect: 3
+    {
+        Aged? found = Aged{};
+        if (auto u = found) { u.age = 3; found = u; }
+        println("{}", found?.age);
+    }
+    // expect: 3
     {
         WithBoss? found = WithBoss();
         println("{}", found?.manager.name);

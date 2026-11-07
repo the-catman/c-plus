@@ -1,0 +1,12 @@
+// What cannot be copied, where there is no short way to say where it is.
+class N { public: int x = 0; };
+long position() { return 0; }
+void copies() {
+    vector<unique<N>> v;
+    unique<N> taken = v[position()];
+    // error: this cannot be copied, since a 'unique<N>' has one owner
+    // error: write `move(...)` around it to hand it over, after which it has no value, or `.get()` on it to lend the object
+}
+constexpr float TOO_LARGE_FOR_FLOAT = 1e300;
+// error: this number is too large for a float
+int main() { return 0; }

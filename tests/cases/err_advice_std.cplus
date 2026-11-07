@@ -1,0 +1,45 @@
+// What each name of std:: is in C+, in the places a type or a call can be.
+extern "C" void wideUnsigned(unsigned short a);
+// error: this compiler does not support 8-bit and 16-bit integer types such as 'unsigned short' yet
+extern "C" void noName(struct { int a; } x);
+// error: give it a name, at the top level: `struct Point { int x; };`
+void sizeT() {
+    std::size_t n = 1;
+    // error: write `long`, which has the same size
+}
+void aPair() {
+    std::pair<int, int> p;
+    // error: write a struct with a name for each part
+}
+void aSet() {
+    std::set<int> s;
+    // error: use a `vector<T>` or a `hashmap<K, V>` for now: `cplus explain hashmap` says what they do
+}
+void aCondition() {
+    std::condition_variable c;
+    // error: this compiler does not support condition variables yet. To wait for a thread, write `t.wait()`
+}
+void aSwap() {
+    int a = 1;
+    int b = 2;
+    std::swap(a, b);
+    // error: write it with a third variable: `auto t = a; a = b; b = t;`
+}
+void aLine() {
+    std::getline(1);
+    // error: declare C's: `extern "C" int getchar();`, as there are no input functions yet
+}
+void moduleInAList() {
+    vector<json::Value> v;
+    // error: 'json::Value' is in the module 'json', which this program does not import
+}
+void commaInCondition() {
+    int a = 1;
+    for (; a < 1, a > 0; a++) {}
+    // error: join the conditions with `&&`, or test the second in the body of the loop
+}
+void mapInParentheses() {
+    hashmap<string, int> m(1);
+    // error: write `hashmap<string, int> m = {...};`
+}
+int main() { return 0; }

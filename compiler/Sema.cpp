@@ -1370,12 +1370,8 @@ void Sema::foldConstexpr(VarDecl& v) {
     ConstEval eval(constHooks());
     try {
         value = eval.convert(value, v.type, v.init->loc);
-    } catch (ConstError& error) {
-        // That it does not convert has been reported, and this only says so again.
-        if (!v.init->type || canConvert(v.init->type, v.type))
-            diags_.error(v.init->loc, "the value of " + q(v.name) + " must be known at compile time, but " + error.message,
-                         "write a value that fits in " + q(v.type) + ", or use a larger type", spec::Constexpr);
-        return;
+    } catch (ConstError&) {
+        return;  // that it does not convert has been reported, when the types were checked
     }
     putLiteral(v, value);
 }

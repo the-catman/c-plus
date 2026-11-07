@@ -48,7 +48,7 @@ int main() {
 // error: C+ has no C-style arrays
 // error: write `array<char, 64> name`
 // error: C+ has no typedef
-// error: write a C struct as `struct div_t { int quot; int rem; };`
+// error: for a number, write the number type. Write a C struct as `struct div_t { int quot; int rem; };`
 // error: unknown type 'time_t'
 // error: write `long`, which has the same size as 'time_t'
 // error: C+ writes the type of a struct or class without the word 'struct'
