@@ -34,4 +34,8 @@ using C7 = std::shared_ptr<std::shared_ptr<Box<int>>>;
 // error: write the type itself wherever `C7` is used, as C+ writes it
 using C8 = std::vector<std::shared_ptr<Box<int>>>;
 // error: write the type itself, `vector<Box<int>>`, wherever `C8` is used
+using C9 = std::unique_ptr<Box<std::shared_ptr<Node>>>;
+// error: write the type itself, `unique<Box<Node>>`, wherever `C9` is used
+using D1 = std::weak_ptr<Box<Box<std::shared_ptr<Node>>>>;
+// error: write the type itself, `weak<Box<Box<Node>>>`, wherever `D1` is used
 int main() { return 0; }

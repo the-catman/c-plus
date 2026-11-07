@@ -1096,6 +1096,7 @@ void Parser::rejectOtherLanguages() {
                 else if (stars == 1 && isClassName(w)) out += "?";  // a pointer to an object is what a class variable already is, and may be null
                 else out += std::string(stars, '*');
                 if (pos < words.size() && (words[pos] == "[" || words[pos] == "&")) known = false;
+                madeOfSmart = false;  // the program's own type, whatever it holds
                 return prefix + out;
             }
             if (w == "__TaskThrows") {  // what `Task<T, throws>` is read as, with `, throws` taken out
