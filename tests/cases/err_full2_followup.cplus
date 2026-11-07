@@ -1,0 +1,37 @@
+// The re-read of the second full reading's fixes: flat hashmap lists of literals only, overflow by type, JSON's null,
+// casts between kinds of reference, a method that takes arguments, and generics with a parameter of another shape.
+import json;
+class Dog { public: int a = 0; };
+class Cat { public: int b = 0; };
+template <typename T> struct Box { T x; };
+template <typename T> T three(T a, T b, Box<T> c) { return a; }
+class W {
+public:
+    int twice(int x) { return x * 2; }
+    int use() { return twice + 1; }
+    // error: call it with `twice(...)`
+};
+constexpr int A = 2147483647 + 1;
+// error: declare it as a `long` and write the numbers as `long`, as in `constexpr long n = 2147483647L + 1;`
+constexpr long C = 9223372036854775807L + 1;
+// error: the result does not fit in a long either: use smaller numbers, or a `double` if a close value will do
+void f(json::Value doc, vector<int> v, local<Dog> l, unique<Dog> ud) {
+    hashmap<string, int> big = {"a", 1, "b", 2, "c", 3, "d", 4};
+    // error: write each entry as `{key, value}`: `{{"a", 1}, {"b", 2}, {"c", 3}, {"d", 4}}`
+    hashmap<int, int> neg = {-1, 2};
+    string key = "a";
+    hashmap<string, int> named = {key, 1};
+    // error: write each entry as `{key, value}`, in braces of its own, as in `{{"a", 1}, {"b", 2}}`
+    // error: write each entry as `{key, value}`: `{{-1, 2}}`
+    bool j = doc == null;
+    // error: write `doc.isNull()`, which tests for JSON's null
+    bool vv = v == null;
+    // error: declare it `vector<int>?` if it may hold nothing
+    auto u1 = static_cast<unique<Dog>?>(l);
+    // error: this cannot become a 'unique<Dog>?': build a new object, as in `unique<Dog>(...)`
+    auto u3 = static_cast<Cat?>(l);
+    // error: this cannot become a 'Cat?': build a new object, as in `Cat(...)`
+    long t = three(1L, 2L, Box<int>{});
+    // error: 'T' cannot be both 'long' and 'int'. Convert an argument, so that both have the same type
+}
+int main() { return 0; }

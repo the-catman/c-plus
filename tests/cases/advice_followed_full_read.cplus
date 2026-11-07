@@ -83,6 +83,13 @@ int main() {
     for (long i = word.size() - look.size(); i >= 0; i--) if (word.substr(i, look.size()) == look) { lastAb = i; break; }
     println("{} {} {} {}", lastSlash, firstText, lastText, lastAb);
     // expect: 3 2 3 3
+    // An entry of a map is an entry of a { } list as it is
+    hashmap<string, int> source = {{"a", 1}};
+    for (auto e : source) {
+        hashmap<string, int> copied = {e, {"c", 3}};
+        println("{}", copied.size());
+    }
+    // expect: 2
     reflect::Type r = reflect::type<int>();
     long size = s.size();
     println("{}", size);

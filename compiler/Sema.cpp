@@ -1187,7 +1187,9 @@ void Sema::reportUnknownName(const NameExpr& n) {
             d = d->bases.empty() ? nullptr : d->bases[0];
         }
         if (isMethod) {
-            diags_.error(n.loc, q(n.name) + " is a method, not a value", "call it with `" + n.name + "()`", spec::Methods);
+            const FuncDecl* method = nullptr;
+            for (const StructDecl* d = o; d && !method; d = d->bases.empty() ? nullptr : d->bases[0]) method = d->findMethod(n.name);
+            diags_.error(n.loc, q(n.name) + " is a method, not a value", "call it with `" + n.name + (method && !method->params.empty() ? "(...)" : "()") + "`", spec::Methods);
             return;
         }
     }
@@ -1989,7 +1991,8 @@ bool Sema::evaluate(const Expr& e, ConstValue& out, const std::string& what) {
         const std::string& m = error.message;
         auto has = [&](const char* piece) { return m.find(piece) != std::string::npos; };
         const std::string help =
-            has("integer overflow") ? "make the value fit: write the numbers as `long`, as in `2147483647L + 1`, or use smaller ones"
+            has("integer overflow") && has("'long'") ? "the result does not fit in a long either: use smaller numbers, or a `double` if a close value will do"
+            : has("integer overflow") ? "make the value fit: declare it as a `long` and write the numbers as `long`, as in `constexpr long n = 2147483647L + 1;`, or use smaller ones"
             : has("division by zero") ? "change what it divides by to a number that is not 0"
             : has("does not fit in 'char'") ? "use a value from 0 to 255, which is what a char holds"
             : has("does not fit in") ? "use a value that fits, or a wider type such as `long` or `double`"
@@ -3023,6 +3026,8 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
     } else if (from->isNull()) {
         help = "only an optional or a pointer can be null; make the type `" + std::string(to->name) + "?`";
     }
+    if (help.empty() && to->isStruct() && to->decl && to->decl->templateOf && to->decl->templateOf->name == "hashmap_entry")
+        help = "write each entry as `{key, value}`, in braces of its own, as in `{{\"a\", 1}, {\"b\", 2}}`";
     if (help.empty() && isJsonValue(to) && !from->isError())
         help = "make one with `json::of`: `json::of(" + (spelled(e, "").empty() || spelled(e, "").find("...") != std::string::npos ? std::string("x") : spelled(e, "")) + ")`";
     if (help.empty() && to->is(K::String) && from->isNumber()) help = "turn it into a string: `to_string(x)`";
@@ -3065,17 +3070,24 @@ void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
     list.type = type;
     if (isHashmap(type) && !list.elements.empty()) {  // its entries, as `{key, value}`
         const Type* entry = type->decl->fields[hashmapEntriesField(*type->decl)].type->elem;
-        bool flat = false;  // `{1, 2}`, where each entry would be `{1, 2}` of its own
-        for (auto& el : list.elements) flat = flat || (el.designator.empty() && el.value->kind != Expr::Kind::InitList);
+        // `{1, 2}` or `{"a", 1}`: keys and values written flat, where each entry would be in braces of its own. Only literals are
+        // taken for that, as a variable can already be an entry: `{e, {"c", 3}}` in a loop over a map.
+        auto isLiteral = [](const Expr& x) {
+            const Expr* y = &x;
+            if (y->kind == Expr::Kind::Unary && static_cast<const UnaryExpr*>(y)->op == UnOp::Neg) y = static_cast<const UnaryExpr*>(y)->operand.get();
+            return y->kind == Expr::Kind::IntLit || y->kind == Expr::Kind::FloatLit || y->kind == Expr::Kind::StringLit || y->kind == Expr::Kind::CharLit || y->kind == Expr::Kind::BoolLit;
+        };
+        bool flat = !list.elements.empty() && list.elements.size() % 2 == 0;
+        for (auto& el : list.elements) flat = flat && el.designator.empty() && isLiteral(*el.value);
         if (flat) {
             std::string example;
-            for (size_t i = 0; i + 1 < list.elements.size() && i < 6; i += 2) {
-                const std::string k = plainKey(*list.elements[i].value), v = plainKey(*list.elements[i + 1].value);
+            for (size_t i = 0; i + 1 < list.elements.size(); i += 2) {
+                const std::string k = spelled(*list.elements[i].value, ""), v = spelled(*list.elements[i + 1].value, "");
                 if (k.empty() || v.empty()) { example.clear(); break; }
                 example += (example.empty() ? "" : ", ") + std::string("{") + k + ", " + v + "}";
             }
             diags_.error(list.loc, "each entry of a hashmap's { } list is in braces of its own",
-                         "write each entry as `{key, value}`: `{" + (example.empty() ? std::string("{\"a\", 1}, {\"b\", 2}") : example) + "}`", spec::HashMaps);
+                         "write each entry as `{key, value}`: `{" + (example.empty() ? std::string("{key, value}, {key, value}") : example) + "}`", spec::HashMaps);
             for (auto& el : list.elements) checkLooseValue(*el.value, flow);
             list.type = Type::error();
             return;
@@ -4216,9 +4228,10 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 const Type* notNull = l->isNull() ? r : r->isNull() ? l : nullptr;  // `n == null`, of what can never be null
                 const Expr* notNullSide = l->isNull() ? b.rhs.get() : b.lhs.get();
                 if ((l->isWeak() || r->isWeak()) && (equality || comparison)) help = "to check whether the object is gone, write `w.expired()`. To compare it with an object, write `w.lock() == x`";
+                else if (equality && notNull && isJsonValue(notNull))
+                    help = "write `" + asBase(spelled(*notNullSide, "doc")) + ".isNull()`, which tests for JSON's null";
                 else if (equality && notNull && !notNull->isOptional() && !notNull->isPointer() && !notNull->isError() && !notNull->is(K::Void))
-                    help = q(spelled(*notNullSide, "it")) + " is a " + q(notNull) + ", which is never null: remove the test, or declare it `" +
-                           (notNull->isUnique() || notNull->isLocal() || notNull->isClass() || notNull->isStruct() || notNull->isNumber() || notNull->is(K::String) ? std::string(notNull->name) + "?" : std::string("T?")) + "` if it may hold nothing";
+                    help = q(spelled(*notNullSide, "it")) + " is a " + q(notNull) + ", which is never null: remove the test, or declare it `" + std::string(notNull->name) + "?` if it may hold nothing";
                 else if (bad->is(K::Void)) help = "this call gives nothing to compare or use. Call it on a line of its own";
                 else if (bad->isOptional()) help = unwrapHelp(spelled(*side));
                 else if (bad->isNull()) help = "write `x == null` or `x != null`, which are all that null can be used with";
@@ -4805,8 +4818,22 @@ static std::string writtenArguments(const TemplateDecl& t, const Deduction& d, s
     auto isNumberLike = [](const Type* x) { return x->isNumber() || x->is(K::Char); };
     const Type* one = d.args[d.conflictAt].type;
     size_t direct = 0;  // parameters written as the type parameter itself, `T a`, to which a narrower number converts
+    bool onlyDirect = true;  // and none has it inside another type, as `Box<T> c`, which a wider number does not fit
+    std::function<bool(const Type*)> mentions = [&](const Type* x) {
+        if (!x) return false;
+        if (x->is(K::TypeParam)) return x->length == d.conflictAt;
+        if (x->pattern)
+            for (const TemplateArg& a : x->pattern->args)
+                if (mentions(a.type)) return true;
+        return mentions(x->elem);
+    };
     if (t.pattern)
-        for (const auto& p : t.pattern->params) direct += p->declType && p->declType->is(K::TypeParam) && p->declType->length == d.conflictAt;  // `T a`, as written
+        for (const auto& p : t.pattern->params) {
+            const bool isDirect = p->declType && p->declType->is(K::TypeParam) && p->declType->length == d.conflictAt;  // `T a`, as written
+            direct += isDirect;
+            if (!isDirect && mentions(p->declType)) onlyDirect = false;
+        }
+    if (!onlyDirect) direct = 0;
     if (one && (!(isNumberLike(one) && isNumberLike(d.conflictOther)) || direct < 2))  // no type holds both a Box<int> and a Box<long>
         return q(t.params[d.conflictAt].name) + " cannot be both " + q(one) + " and " + q(d.conflictOther) + ". Convert an argument, so that both have the same type";
     return "write the type you mean and those before it: `" + t.name + "<" + argumentsUpTo(t, d, d.conflictAt + 1) + ">(...)`, or convert an argument";
@@ -5831,9 +5858,11 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     }
     if (from->isLocal() || to->isLocal()) {
         diags_.error(c.loc, "a cast cannot change a reference that only this thread counts, as this one from " + q(from) + " to " + q(to) + " would",
-                     from->isLocal() && to->isOptional() && to->elem->isObjectRef()
+                     from->isLocal() && to->isOptional() && to->elem->isObjectRef() && (to->elem->isLocal() || (to->elem->isClass() && (to->elem->decl == from->elem->decl || from->elem->decl->derivesFrom(to->elem->decl))))
                          ? (to->elem->isLocal() ? "no cast is needed: `" + std::string(to->name) + " x = " + asBase(spelled(*c.operand, "l")) + ";`"
                                                 : "`" + std::string(to->name) + " x = " + asBase(spelled(*c.operand, "l")) + ".get();` lends the object")
+                     : from->isLocal() && to->isOptional() && to->elem->isObjectRef()
+                         ? "this cannot become a " + q(to) + ": build a new object, as in `" + std::string(to->elem->name) + "(...)`"
                      : from->isLocal() && !to->isObjectRef()
                          ? std::string("this holds an object, not a number. `x.get()` lends the object, and `x.field` reads a field")
                          : !from->isLocal() ? (from->isClass() ? "a '" + std::string(from->name) + "' may be used by other threads. " : std::string()) + "Write `" + std::string(to->name) + "(...)` to build a new object"
@@ -5843,7 +5872,10 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     }
     if (from->isUnique() || to->isUnique()) {
         diags_.error(c.loc, "a cast cannot change who owns an object, as this one from " + q(from) + " to " + q(to) + " would",
-                     from->isUnique() && to->isOptional() && to->elem->isObjectRef()
+                     from->isUnique() && to->isOptional() && to->elem->isObjectRef() &&
+                             !(to->elem->isUnique() || (to->elem->isClass() && (to->elem->decl == from->elem->decl || from->elem->decl->derivesFrom(to->elem->decl))))
+                         ? "this cannot become a " + q(to) + ": build a new object, as in `" + std::string(to->elem->name) + "(...)`"
+                     : from->isUnique() && to->isOptional() && to->elem->isObjectRef()
                          ? (to->elem->isUnique() ? "no cast is needed: `" + std::string(to->name) + " x = " +
                                                        (spelled(*c.operand, "u").rfind("move(", 0) == 0 ? spelled(*c.operand, "u") : "move(" + spelled(*c.operand, "u") + ")") + ";`"
                                                  : "`" + std::string(to->name) + " x = " + asBase(spelled(*c.operand, "u")) + ".get();` lends the object")

@@ -382,7 +382,29 @@ void Parser::scanTemplate(Program& prog, size_t& i) {
     auto passOver = [&](Loc loc, const std::string& message, const std::string& help, const char* anchor) {  // reported, and the declaration left out
         diags_.error(loc, message, help, anchor);
         size_t last = pos_;
-        while (last + 1 < toks_.size() && toks_[last].kind != Tok::LBrace && toks_[last].kind != Tok::Semi) ++last;
+        while (last + 1 < toks_.size() && toks_[last].kind != Tok::LParen && toks_[last].kind != Tok::LBrace && toks_[last].kind != Tok::Semi) ++last;
+        auto pastBalanced = [&](size_t at) {  // past the `(...)` or `{...}` that starts at `at`
+            const Tok open = toks_[at].kind, close = open == Tok::LParen ? Tok::RParen : Tok::RBrace;
+            int depth = 0;
+            for (; at < toks_.size(); ++at) {
+                if (toks_[at].kind == open) ++depth;
+                else if (toks_[at].kind == close && --depth == 0) return at + 1;
+            }
+            return at;
+        };
+        if (toks_[last].kind == Tok::LParen) {  // the parameters, then what initializes the members: `: v{x}, w(y)`
+            last = pastBalanced(last);
+            if (last < toks_.size() && toks_[last].kind == Tok::Colon) {
+                ++last;
+                while (last < toks_.size() && toks_[last].kind != Tok::Eof) {
+                    while (last < toks_.size() && (toks_[last].kind == Tok::Ident || toks_[last].kind == Tok::ColonColon)) ++last;
+                    if (last < toks_.size() && (toks_[last].kind == Tok::LParen || toks_[last].kind == Tok::LBrace)) last = pastBalanced(last);
+                    if (last < toks_.size() && toks_[last].kind == Tok::Comma) { ++last; continue; }
+                    break;
+                }
+            }
+            while (last + 1 < toks_.size() && toks_[last].kind != Tok::LBrace && toks_[last].kind != Tok::Semi) ++last;
+        }
         last = toks_[last].kind == Tok::LBrace ? afterBraces(last) : (last + 1 < toks_.size() ? last + 1 : last);
         skipTemplate_[first] = last;
         i = last;
@@ -1217,8 +1239,10 @@ void Parser::parseTopLevel(Program& prog) {
         case Tok::KwClass:
             if (peek(1).kind == Tok::Ident &&
                 (peek(2).kind == Tok::Star || peek(2).kind == Tok::Amp ||
-                 (peek(2).kind == Tok::Ident && peek(2).text != "final" && (peek(3).kind == Tok::LParen || peek(3).kind == Tok::Semi || peek(3).kind == Tok::Assign))))
+                 (peek(2).kind == Tok::Ident && peek(2).text != "final" && (peek(3).kind == Tok::LParen || peek(3).kind == Tok::Semi || peek(3).kind == Tok::Assign)))) {
+                if (peek(2).kind == Tok::Ident && peek(3).kind == Tok::LParen) prog.unreadFunctions.insert(peek(2).text);  // its calls say nothing more
                 rejectStructKeyword();  // `struct Point make()`, as C writes a struct's type
+            }
             parseRecord();
             return;
         case Tok::KwInterface: parseRecord(); return;

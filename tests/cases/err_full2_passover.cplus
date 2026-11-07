@@ -1,0 +1,12 @@
+// A constructor of a generic class defined outside it, with members initialized in braces, is passed over whole, and a
+// function declared with `class` before its type is not reported again at each call.
+template <typename T>
+class Box { public: T v; };
+template <typename T> Box<T>::Box(T x) : v{x} {}
+// error: move this definition into the body of 'Box'
+// not-error: expected a function
+class Node { };
+class Node make() { return Node(); }
+// error: write just `Node`, as in C++
+// not-error: there is no function named 'make'
+int main() { make(); return 0; }
