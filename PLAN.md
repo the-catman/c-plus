@@ -367,6 +367,8 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
 - `size()` returns `long`, since there are no unsigned types.
 - An index out of range, and `pop_back`, `front` or `back` on an empty vector, stop the
   program with the file and line.
+- `front()` and `back()` give copies, as there are no references yet. Changing what they give, `v.back().x = 1` or a method that
+  changes a struct, is an error, since in C++ it would change the element, and here it would quietly do nothing. Decided 2026-11-07.
 - A range-based `for` loops over the vector as it was when the loop started, so changing
   the vector in the body is safe. `for (auto& x : v)` waits for references.
 
@@ -513,6 +515,7 @@ Decided 2026-11-05.
 - No iterators yet. `m.contains(k)` and `m.get(k)`, which gives a `V?`, take the place of `m.find(k)`.
 - Any type with `==` can be a key, if that `==` looks at what can be hashed, with no hash to write. A hash function of
   your own waits for function overloading.
+- `m.at(k)` and `m.get(k)` give copies too, so changing what they give is an error for the same reason, and `m[k]` is the place.
 - Strings hash with SipHash-1-3 and a seed chosen at each start, as HTTP brings input from anyone. Since the order does not
   come from the hash, the seed cannot change what a program does.
 - It is written in C+, on top of `vector`, in `compiler/Builtins.h`, and only added to programs that use it. Copies,
@@ -546,7 +549,7 @@ Decided 2026-11-05.
 What §5 asks for, as built in Phase 4. Decided 2026-11-07.
 - `cplus explain` has the spec, the cheat sheet and the examples built into the compiler at build time, so it works wherever the compiler is, with no repository and no network. A topic is the name of a section, as an error's `spec:` line shows it, or a word someone already knows, such as `hashmap` or `spawn`.
 - The examples corpus is `examples/features/`, one small program for each section of the spec, named after its anchor. They carry the directives of the tests, so the test suite runs them all, in every build. An example cannot go out of date without a test failing, which is what "the test suite doubles as few-shot material" asks for. The tests themselves stay as they are, since they are written to find mistakes and not to teach.
-- Errors are held to the standard by tools as well as by reading: the arguments are required by the compiler's own types, the test runner fails on any error it sees without a `help` and a `spec`, and a measurement with coverage, `tests/errors_reached.py`, shows which errors and which pieces of advice no test reaches. Whether a help is good advice only reading can tell, and following it. On 2026-11-07 three readers who had not written them did that for all of them, compiling what each told them to write, and what they found was fixed. Reading comes with each new one after that, and a program in `tests/cases/advice_followed*` shows that what the help says compiles and does what it says.
+- Errors are held to the standard by tools as well as by reading: the arguments are required by the compiler's own types, the test runner fails on any error it sees without a `help` and a `spec`, and a measurement with coverage, `tests/errors_reached.py`, shows which errors and which pieces of advice no test reaches. Whether a help is good advice only reading can tell, and following it. On 2026-11-07 readers who had not written them did that for all of them, compiling what each told them to write and running it, and then again for what had been rewritten, until what was left to find was small. What they found was fixed. Reading comes with each new one after that, and a program in `tests/cases/advice_followed*` shows that what the help says compiles and does what it says.
 - The documents are held to the compiler by the test runner: everything called planned must be rejected with "does not support ... yet" (`check_planned_features`), every form the cheat sheet tells a reader to write must compile, alone or in a `cheatsheet_forms` test, and every C++ habit it warns of must be rejected (`check_cheat_sheet`).
 
 ## 3. Compiler architecture
