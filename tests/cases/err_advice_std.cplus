@@ -42,4 +42,27 @@ void mapInParentheses() {
     hashmap<string, int> m(1);
     // error: write `hashmap<string, int> m = {...};`
 }
+void stdFunction() {
+    std::function<int(int)> f;
+    // error: write a function, and call it by name: C+ has no function values yet
+}
+void stdMakePair() {
+    auto p = std::make_pair(1, 2);
+    // error: write a struct with a name for each part, and build it with `{a, b}`
+}
+void stdByte() {
+    std::uint8_t b = 1;
+    // error: write `char`, one byte from 0 to 255
+}
+void stdSixteen() {
+    std::int16_t b = 1;
+    // error: write `int`, as this compiler has no 16-bit integers yet
+}
+void noSize() {
+    int a[];
+    // error: a fixed-size array is written with its size in the type: `array<int, 5> a`. For a size known only while the program runs, write `auto a = vector<int>(n);`
+}
+class Point { public: int x = 0; };
+Point& operator=(Point a) { return a; }
+// error: this compiler does not support operator overloading yet
 int main() { return 0; }
