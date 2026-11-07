@@ -26,4 +26,12 @@ using C3 = std::shared_ptr<Box<int>*>;
 // error: write the type itself wherever `C3` is used, as C+ writes it
 using C4 = std::unique_ptr<Box<int>>;
 // error: write the type itself, `unique<Box<int>>`, wherever `C4` is used
+using C5 = std::unique_ptr<std::shared_ptr<Box<int>>>;
+// error: write the type itself wherever `C5` is used, as C+ writes it
+using C6 = std::weak_ptr<std::shared_ptr<Box<int>>>;
+// error: write the type itself wherever `C6` is used, as C+ writes it
+using C7 = std::shared_ptr<std::shared_ptr<Box<int>>>;
+// error: write the type itself wherever `C7` is used, as C+ writes it
+using C8 = std::vector<std::shared_ptr<Box<int>>>;
+// error: write the type itself, `vector<Box<int>>`, wherever `C8` is used
 int main() { return 0; }

@@ -1029,7 +1029,9 @@ void Parser::rejectOtherLanguages() {
         static const char* const stdWords[] = {"string", "vector", "array", "optional", "unique_ptr", "weak_ptr", "shared_ptr", "unordered_map", "map", "mutex"};
         auto among = [](const auto& list, const std::string& w) { return std::find_if(std::begin(list), std::end(list), [&](const char* n) { return w == n; }) != std::end(list); };
         auto isKey = [](const std::string& k) { return k == "int" || k == "long" || k == "char" || k == "bool" || k == "string"; };  // what a hashmap can hash
+        bool madeOfSmart = false;  // what `typeAt` gave last came from a smart pointer, whose ownership a C+ type of it would lose
         std::function<std::string()> typeAt = [&]() -> std::string {
+            madeOfSmart = false;
             if (pos >= words.size()) return known = false, "";
             std::string prefix;
             if (words[pos] == "const") {  // `const int*` stays as it is
@@ -1052,6 +1054,7 @@ void Parser::rejectOtherLanguages() {
             }
             if (w == "int8_t" || w == "int16_t" || w == "uint16_t") known = false;  // no C+ type of that size
             std::vector<std::string> args;
+            bool smartInside = false;
             if (pos < words.size() && words[pos] == "<") {
                 ++pos;
                 bool closed = false;
@@ -1062,6 +1065,7 @@ void Parser::rejectOtherLanguages() {
                         args.push_back(words[pos++]);
                     } else {
                         args.push_back(typeAt());
+                        smartInside = smartInside || madeOfSmart;
                         if (args.back().rfind("const ", 0) == 0 && args.back().back() != '*') { known = false; break; }  // a const element; a pointer to const is fine
                     }
                     if (pos < words.size() && words[pos] == ",") { ++pos; continue; }
@@ -1106,7 +1110,7 @@ void Parser::rejectOtherLanguages() {
             } else if (w == "shared_ptr") {  // a class variable is already a counted reference; nothing else is shared that way
                 takes(1);
                 out = first;
-                if (!isClassName(first)) known = false;
+                if (!isClassName(first) || smartInside) known = false;
             } else if (w == "optional") {
                 takes(1);
                 out = first;
@@ -1114,7 +1118,7 @@ void Parser::rejectOtherLanguages() {
             } else if (w == "unique_ptr" || w == "weak_ptr" || w == "unique" || w == "weak" || w == "local") {
                 takes(1);
                 out = (w == "unique_ptr" ? std::string("unique") : w == "weak_ptr" ? std::string("weak") : w) + "<" + first + ">";
-                if (!isClassName(first)) known = false;  // they hold an object of a class
+                if (!isClassName(first) || smartInside) known = false;  // they hold an object of a class, and not another smart pointer
             } else if (w == "unordered_map" || w == "map" || w == "hashmap") {
                 takes(2);
                 out = "hashmap<" + joined() + ">";
@@ -1128,6 +1132,7 @@ void Parser::rejectOtherLanguages() {
             } else out = w + (args.empty() ? "" : "<" + joined() + ">");
             while (pos < words.size() && words[pos] == "*") out += "*", ++pos;
             if (pos < words.size() && (words[pos] == "[" || words[pos] == "&")) known = false;  // a C array, which C+ writes `array<T, N>`, or a reference
+            madeOfSmart = w == "shared_ptr" || w == "unique_ptr" || w == "weak_ptr";
             return prefix + out;
         };
         std::string type = typeAt();
