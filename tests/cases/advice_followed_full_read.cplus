@@ -66,6 +66,23 @@ int main() {
     s += string(2, ' ');
     println("[{}]", s);
     // expect: [hE  ]
+    // Each search, as its recipe goes
+    string path = "a/b/c";
+    string slash = "/";
+    long lastSlash = -1;
+    for (long i = path.size() - 1; i >= 0; i--) if (slash.contains(string(1, path[i]))) { lastSlash = i; break; }
+    string padded = "  hi ";
+    string space = " ";
+    long firstText = -1;
+    for (long i = 0; i < padded.size(); i++) if (!space.contains(string(1, padded[i]))) { firstText = i; break; }
+    long lastText = -1;
+    for (long i = padded.size() - 1; i >= 0; i--) if (!space.contains(string(1, padded[i]))) { lastText = i; break; }
+    string word = "abcab";
+    string look = "ab";
+    long lastAb = -1;
+    for (long i = word.size() - look.size(); i >= 0; i--) if (word.substr(i, look.size()) == look) { lastAb = i; break; }
+    println("{} {} {} {}", lastSlash, firstText, lastText, lastAb);
+    // expect: 3 2 3 3
     reflect::Type r = reflect::type<int>();
     long size = s.size();
     println("{}", size);

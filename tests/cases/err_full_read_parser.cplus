@@ -4,7 +4,7 @@ class Box {
 public:
     T x;
     Box(T v) throws { x = v; }
-    // error: `template <...> Box<T> make(int x) throws { ...; return Box<T>(x); }`
+    // error: `template <typename T> Box<T> make(int x) throws { ...; return Box<T>(x); }`
 };
 struct F { int* a, * const b; };
 // error: declare it on its own line, without `const`: `int* b;`. A field cannot be const yet

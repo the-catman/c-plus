@@ -22,9 +22,9 @@ void pointers(int* p, double* dp, vector<int> v, string s) {
     double* d = p + 1;
     // error: cast it: `(double*)(p + 1)`
     int* q = v[0];
-    // error: Copy it into a variable, `auto x = v[0];`, and use `&x`
+    // error: Copy it into a variable, `auto copy = v[0];`, and use `&copy`
     int w = dp;
-    // error: For the address it holds, write `reinterpret_cast<long>(dp)`
+    // error: For the address it holds, write `reinterpret_cast<long>(dp)`, and make what holds it a `long`, as an address does not fit in an int
 }
 void chars() {
     char a = "\n";
@@ -50,7 +50,7 @@ void generics() {
     auto a = Pair;
     // error: write it with its arguments: `Pair<int, int>(...)`
     auto b = Buf;
-    // error: write it with its arguments: `Buf<int, 3>(...)`
+    // error: write it with its arguments: `Buf<int, 4>(...)`
     auto c = hashmap;
     // error: write `hashmap<string, int>`
 }
@@ -83,7 +83,7 @@ void comparing(string name, string? maybe, bool flag, int count) {
 }
 void uniques(vector<unique<Node>> vu) {
     auto b = vu.back();
-    // error: read the element in place, as in `vu[vu.size() - 1].name`, or take it with `move(vu[vu.size() - 1])`
+    // error: read the element in place, through `vu[vu.size() - 1]`, or take it with `move(vu[vu.size() - 1])`
 }
 void formats(double? od, int x, int? o) {
     string q = format("{:.1f} and {}", od, x);
@@ -97,7 +97,7 @@ void strings(string s) {
     s.replace(0, 1, "x");
     // error: build it: `s = s.substr(0, pos) + t + s.substr(pos + n);`
     long i = s.rfind("x");
-    // error: go back from the end: `for (long i = s.size() - 1; i >= 0; i--) if (s[i] == 'x') { ...; break; }`
+    // error: go back from the end: `for (long i = s.size() - t.size(); i >= 0; i--) if (s.substr(i, t.size()) == t) { ...; break; }`, with `t` what is looked for
     s.resize(3);
     // error: build it: `s = s.substr(0, n);` to shorten it, or `s += string(k, ' ');` to add k spaces
     long j = s.find_first_of("ab");

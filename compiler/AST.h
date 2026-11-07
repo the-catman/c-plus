@@ -1013,4 +1013,29 @@ inline const char* binOpSpelling(BinOp op) {
     return "?";
 }
 
+// Whether a parameter with this constraint can be given `int`.
+inline bool constraintTakesInt(const std::string& c) {
+    return c.empty() || c == "Comparable" || c == "Number" || c == "Integer" || c == "Hashable" || c == "__Hashable";
+}
+
+// A generic written with arguments that fit its parameters, for a help: `Pair<int, int>`, `Buf<int, 4>`, `Flag<true>`.
+inline std::string exampleArguments(const TemplateDecl& t) {
+    if (t.name == "hashmap" && t.nameLoc.line == 0) return "hashmap<string, int>";
+    std::string written = t.name + "<";
+    for (size_t i = 0; i < t.params.size(); ++i) {
+        const TemplateParam& p = t.params[i];
+        const std::string value = !p.valueType ? "" : p.valueType->is(Type::Kind::Bool) ? "true" : p.valueType->is(Type::Kind::Char) ? "'a'" : "4";
+        written += std::string(i ? ", " : "") + (p.valueType ? value : constraintTakesInt(p.constraint) ? "int" : p.constraint == "Floating" ? "double" : "...");
+    }
+    return written + ">";
+}
+
+// What `...` in those stands for: a type only the program knows of.
+inline std::string constraintNote(const TemplateDecl& t) {
+    for (const TemplateParam& p : t.params)
+        if (!p.valueType && !constraintTakesInt(p.constraint) && p.constraint != "Floating")
+            return ", with a type that has what '" + p.constraint + "' requires";
+    return "";
+}
+
 }  // namespace cplus

@@ -1,0 +1,43 @@
+// The second reading of the full-reading fixes: each search its own recipe, names that cannot be spelled, and the rest.
+import reflect;
+class Node { public: int n = 0; };
+interface Speaker { string speak() const; };
+template <Floating T>
+struct Fl { T x; };
+template <Speaker T>
+struct Holder { T x; };
+template <bool B>
+struct Flag { int x; };
+
+void searches(string name) {
+    long a = name.find_last_of("/");
+    // error: go back from the end and test each char: `for (long i = s.size() - 1; i >= 0; i--) if (chars.contains(string(1, s[i]))) { ...; break; }`
+    long b = name.find_first_not_of(" ");
+    // error: go over it and test each char: `for (long i = 0; i < s.size(); i++) if (!chars.contains(string(1, s[i]))) { ...; break; }`
+    long c = name.find_last_not_of(" ");
+    // error: go back from the end and test each char: `for (long i = s.size() - 1; i >= 0; i--) if (!chars.contains(string(1, s[i]))) { ...; break; }`
+}
+void unspelled(string? o, int count, string name) {
+    string e = "Hi " + (o ?? "none") + count;
+    // error: turn the number into a string first: `to_string(count)` in place of `count`
+    string g = -count + name;
+    // error: turn the number into a string first: put it in `to_string(...)`
+}
+void others(vector<int> v, double* dp, hashmap<string, int> m, vector<int> vi) {
+    reflect::Type r = 5;
+    // error: give it a value such as `reflect::Type x = reflect::type<int>();`
+    int x = 1;
+    int* p = v[0];
+    // error: Copy it into a variable, `auto copy = v[0];`, and use `&copy`
+    auto k = Fl;
+    // error: write it with its arguments: `Fl<double>(...)`
+    auto l = Holder;
+    // error: write it with its arguments: `Holder<...>(...)`, with a type that has what 'Speaker' requires
+    auto q = Flag;
+    // error: write it with its arguments: `Flag<true>(...)`
+    auto ks = m->keys();
+    // error: only a pointer is followed with '->': write `m.keys()`
+    int z = vi->x;
+    // error: remove `->x`: 'vi' holds 'int', which has no fields
+}
+int main() { return 0; }

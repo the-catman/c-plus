@@ -129,28 +129,6 @@ static bool isOtherContainer(const std::string& name) {
 
 static const char* article(const char* word) { return word[0] == 'i' ? "an " : "a "; }
 
-static bool constraintTakesInt(const std::string& c) {
-    return c.empty() || c == "Comparable" || c == "Number" || c == "Integer" || c == "Hashable" || c == "__Hashable";
-}
-
-static std::string exampleArguments(const TemplateDecl& t) {
-    if (t.name == "hashmap" && t.nameLoc.line == 0) return "hashmap<string, int>";
-    std::string written = t.name + "<";
-    for (size_t i = 0; i < t.params.size(); ++i) {
-        const TemplateParam& p = t.params[i];
-        written += std::string(i ? ", " : "") + (p.valueType ? "4" : constraintTakesInt(p.constraint) ? "int" : p.constraint == "Floating" ? "double" : "...");
-    }
-    return written + ">";
-}
-
-// What `...` in those stands for: a type only the program knows of.
-static std::string constraintNote(const TemplateDecl& t) {
-    for (const TemplateParam& p : t.params)
-        if (!p.valueType && !constraintTakesInt(p.constraint) && p.constraint != "Floating")
-            return ", with a type that has what '" + p.constraint + "' requires";
-    return "";
-}
-
 // Code written in C+ that comes with the language. Its tokens have no place in the file.
 void Parser::addBuiltinSource(const SourceFile& source) {
     Lexer lexer(source, diags_);
@@ -1013,13 +991,23 @@ void Parser::rejectOtherLanguages() {
     if (w == "using" && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Assign) {  // `using Id = long;`
         std::string type;
         for (size_t at = 3; at < 40 && peek(at).kind != Tok::Semi && peek(at).kind != Tok::Eof; ++at) {
-            const std::string piece = peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text;
+            if (peek(at).kind == Tok::Ident && peek(at).text == "std" && peek(at + 1).kind == Tok::ColonColon) {  // C+ writes them without
+                ++at;
+                continue;
+            }
+            std::string piece = peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text;
+            if (piece == "unsigned" || piece == "signed") continue;  // the C+ type of the same size follows
+            if (piece == "long" && peek(at + 1).kind == Tok::KwLong) continue;  // `long long` is `long`
+            if (piece == "int8_t" || piece == "uint8_t" || piece == "int16_t" || piece == "uint16_t" || piece == "int32_t" || piece == "uint32_t") piece = "int";
+            if (piece == "int64_t" || piece == "uint64_t" || piece == "size_t" || piece == "ssize_t" || piece == "ptrdiff_t") piece = "long";
+            if (piece == "int" && !type.empty() && type.size() >= 4 && type.compare(type.size() - 4, 4, "long") == 0) continue;  // `long int`
             const bool word = !piece.empty() && (std::isalnum((unsigned char)piece[0]) || piece[0] == '_');
             if (word && !type.empty() && (std::isalnum((unsigned char)type.back()) || type.back() == '_')) type += " ";
             type += piece;
             if (peek(at).kind == Tok::Comma) type += " ";
         }
-        fail(t.loc, "C+ has no type aliases", "write the type itself, `" + (type.empty() ? std::string("long") : type) + "`, wherever `" + peek(1).text + "` is used", spec::Variables);
+        if (type.empty()) type = "int";  // `unsigned` alone
+        fail(t.loc, "C+ has no type aliases", "write the type itself, `" + type + "`, wherever `" + peek(1).text + "` is used", spec::Variables);
     }
     if (w == "using") fail(t.loc, "C+ has no 'using' declarations", "built-ins like println, string and vector need no std:: prefix, so `using` has nothing to do", spec::Modules);
     if (w == "inline") fail(t.loc, "C+ has no 'inline'", "remove it: with -O, the compiler decides what to inline", spec::Functions);
@@ -1122,10 +1110,11 @@ void Parser::parseTopLevel(Program& prog) {
             size_t at = 1;
             while (peek(at).kind == Tok::KwConst || peek(at).kind == Tok::KwConstexpr) ++at;
             const bool isConstant = at > 1;
-            size_t name = at;
-            while (name < at + 12 && peek(name).kind != Tok::Ident && peek(name).kind != Tok::Eof) ++name;
-            while (peek(name + 1).kind == Tok::Ident || peek(name + 1).kind == Tok::Star || peek(name + 1).kind == Tok::Less || peek(name + 1).kind == Tok::Greater) ++name;
-            const bool isFunction = peek(name + 1).kind == Tok::LParen;
+            size_t end = at;  // what comes first after the type and the name: `(` for a function, `=` or `;` for a variable
+            while (end < at + 64 && peek(end).kind != Tok::LParen && peek(end).kind != Tok::Assign && peek(end).kind != Tok::Semi &&
+                   peek(end).kind != Tok::LBrace && peek(end).kind != Tok::Eof)
+                ++end;
+            const bool isFunction = peek(end).kind == Tok::LParen;
             fail(t.loc, "C+ has no 'static' outside a type",
                  isConstant || isFunction ? std::string("remove it, which leaves a constant or a function as it was")
                                           : "remove it, and make it a constant if it never changes: `const ... = ...;`. A variable that changes is not supported outside functions yet, so pass it to the functions that use it",
@@ -1375,7 +1364,8 @@ const Type* Parser::parseCType(Loc& loc, bool isReturn) {
                 use = "long", why = "it passes the same 64 bits; C+ has no unsigned types yet";
             const Token& after = peek(isConst ? 2 : 1);
             const bool twoWords = (n == "unsigned" || n == "signed") && (after.kind == Tok::KwInt || after.kind == Tok::KwLong || after.kind == Tok::KwChar);
-            const std::string whole = twoWords ? n + " " + tokSpelling(after.kind) : n;
+            const bool threeWords = twoWords && after.kind == Tok::KwLong && peek(isConst ? 3 : 2).kind == Tok::KwLong;
+            const std::string whole = threeWords ? n + " long long" : twoWords ? n + " " + tokSpelling(after.kind) : n;
             fail(t.loc, "'" + whole + "' is a C type; write `" + use + "` here", "write `" + use + "` in place of `" + whole + "`: " + why, spec::CFunctions);
         }
     }
@@ -2474,13 +2464,17 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         if (check(Tok::KwThrows))
             notYet(peek().loc, "constructors that can fail",
                    [&] {
-                       std::string type = ownName;  // a generic's own name, with its parameters
+                       std::string type = ownName, params;  // a generic's own name, with its parameters
                        if (currentTemplate_ && !currentTemplate_->params.empty()) {
                            type += "<";
-                           for (size_t i = 0; i < currentTemplate_->params.size(); ++i) type += (i ? ", " : "") + currentTemplate_->params[i].name;
+                           for (size_t i = 0; i < currentTemplate_->params.size(); ++i) {
+                               const TemplateParam& p = currentTemplate_->params[i];
+                               type += (i ? ", " : "") + p.name;
+                               params += std::string(i ? ", " : "") + (p.valueType ? std::string(p.valueType->name) : p.constraint.empty() ? "typename" : p.constraint) + " " + p.name;
+                           }
                            type += ">";
                        }
-                       return "write a function that can fail and makes the object: `" + std::string(currentTemplate_ ? "template <...> " : "") + type + " make(int x) throws { ...; return " + type + "(x); }`";
+                       return "write a function that can fail and makes the object: `" + (params.empty() ? std::string() : "template <" + params + "> ") + type + " make(int x) throws { ...; return " + type + "(x); }`";
                    }());
         if (match(Tok::Colon)) parseMemberInits(*ctor);
         if (check(Tok::Semi))

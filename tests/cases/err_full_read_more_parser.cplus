@@ -1,0 +1,16 @@
+// `static` before functions whose types have `<...>` or `?`, aliases of C++ types, and a C type of three words.
+class Node { };
+static vector<string> split(string s) { return {}; }
+// error: remove it, which leaves a constant or a function as it was
+static Node? root() { return null; }
+static array<int, 3> fa() { return {}; }
+using F = std::vector<std::string>;
+// error: write the type itself, `vector<string>`, wherever `F` is used
+using N = long long;
+// error: write the type itself, `long`, wherever `N` is used
+using U = uint32_t;
+// error: write the type itself, `int`, wherever `U` is used
+extern "C" unsigned long long strtoull(string s, char** e, int b);
+// error: write `long` in place of `unsigned long long`
+// not-error: make it a constant if it never changes
+int main() { return 0; }
