@@ -1010,7 +1010,8 @@ void Parser::rejectOtherLanguages() {
         }
         size_t pos = 0;
         bool known = !cutShort;
-        auto isClassName = [&](const std::string& name) {  // a class of the program's own, generic or not
+        auto isClassName = [&](const std::string& name) {  // a class of the program's own, generic or not: `Box<int>`, and not `Box<int>?`
+            if (name.empty() || name.back() == '?' || name.back() == '*') return false;
             const std::string base = name.substr(0, name.find('<'));
             if (const TemplateDecl* tmpl = classTemplate(base)) return tmpl->start < toks_.size() && toks_[tmpl->start].kind == Tok::KwClass;
             const StructDecl* sd = typeNames_.count(base) ? prog_->findStruct(base) : nullptr;

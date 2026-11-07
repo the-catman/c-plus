@@ -18,4 +18,12 @@ using A7 = unsigned char;
 using B1 = LaterClass*;
 // error: write the type itself, `LaterClass?`, wherever `B1` is used
 class LaterClass { };
+using C1 = std::unique_ptr<Box<int>*>;
+// error: write the type itself wherever `C1` is used, as C+ writes it
+using C2 = std::weak_ptr<Box<int>*>;
+// error: write the type itself wherever `C2` is used, as C+ writes it
+using C3 = std::shared_ptr<Box<int>*>;
+// error: write the type itself wherever `C3` is used, as C+ writes it
+using C4 = std::unique_ptr<Box<int>>;
+// error: write the type itself, `unique<Box<int>>`, wherever `C4` is used
 int main() { return 0; }
