@@ -1,0 +1,13 @@
+// The types the alias help names, which must compile where they are written.
+class Node { };
+struct Pt { int x = 0; };
+void uses(weak<Node> w, array<int, 3> a, Node? n, hashmap<string, vector<Pt>> m, const int* p, Mutex mu) { }
+int main() {
+    long size = 3;
+    int? maybe = null;
+    vector<vector<int>> grid = {};
+    unique<Node> owned = unique<Node>();
+    println("{} {} {}", size, maybe.has_value(), grid.size());
+    // expect: 3 false 0
+    return 0;
+}

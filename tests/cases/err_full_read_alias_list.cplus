@@ -1,0 +1,26 @@
+// An alias names a C+ type only for what C+ has, checked against its rules; anything else gets the help with no type in it.
+class Node { };
+struct Pt { int x = 0; };
+using X1 = const std::set<int>;
+// error: write the type itself wherever `X1` is used, as C+ writes it
+using X2 = set<int>;
+// error: write the type itself wherever `X2` is used, as C+ writes it
+using X4 = std::optional<std::weak_ptr<Node>>;
+// error: write the type itself, `weak<Node>`, wherever `X4` is used
+using X5 = std::map<std::unique_ptr<Node>, int>;
+// error: write the type itself wherever `X5` is used, as C+ writes it
+using X6 = std::array<int>;
+// error: write the type itself wherever `X6` is used, as C+ writes it
+using X8 = std::size_t;
+// error: write the type itself, `long`, wherever `X8` is used
+using Y1 = std::array<int, 3>;
+// error: write the type itself, `array<int, 3>`, wherever `Y1` is used
+using Y2 = std::optional<Node>;
+// error: write the type itself, `Node?`, wherever `Y2` is used
+using Y3 = std::map<std::string, std::vector<Pt>>;
+// error: write the type itself, `hashmap<string, vector<Pt>>`, wherever `Y3` is used
+void f(Pt* p) {
+    int a = (*p)->x;
+    // error: fields and methods are reached with '.': write `(*p).x`
+}
+int main() { return 0; }

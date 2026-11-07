@@ -3620,7 +3620,7 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
     std::string help;
     if (u.isArrow()) {
         if (t->isOptional())
-            help = "write `" + n + "?." + u.arrowMember + "`, which is null when " + n + " is, or unwrap it first: `if (auto v = " +
+            help = "write `" + asBase(n) + "?." + u.arrowMember + "`, which is null when " + n + " is, or unwrap it first: `if (auto v = " +
                    n + ") ... v." + u.arrowMember + "`";
         else if (t->isVector() || t->isArray() || t->is(K::String) || isHashmap(t)) {
             // A method of the container, or a field of what it holds
@@ -3648,7 +3648,7 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
                  : "only a pointer is followed with '->'. For a field of what it holds, write `" + asBase(n) + (isHashmap(t) ? "[key]." : "[i].") + u.arrowMember + "`";
         } else if (t->hasFields() || t->isUnique() || t->isLocal())
             help = std::string(t->isClass() ? "a class reference is used directly, so " : t->isUnique() ? "a unique reference is used directly, so " : t->isLocal() ? "a local reference is used directly, so " : "") +
-                   "fields and methods are reached with '.': write `" + n + "." + u.arrowMember + "`";
+                   "fields and methods are reached with '.': write `" + asBase(n) + "." + u.arrowMember + "`";
         else
             help = "remove `->" + u.arrowMember + "`: " + q(n) + " is a " + q(t) + ", which has no fields, and only a pointer is followed with '->'";
         diags_.error(u.loc, "'->' follows a pointer, but " + q(n) + " is " + q(t), help, spec::Pointers);

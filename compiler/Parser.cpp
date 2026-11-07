@@ -1009,31 +1009,45 @@ void Parser::rejectOtherLanguages() {
             const StructDecl* sd = typeNames_.count(name) ? prog_->findStruct(name) : nullptr;
             return sd && sd->isClass;
         };
+        // What a word can stand for: a type of C+, a C++ name C+ has another form of, or a type of the program's own
+        auto cName = [](const std::string& w) -> std::string {  // C's names for numbers, as C+ writes them
+            if (w == "int8_t" || w == "uint8_t" || w == "int16_t" || w == "uint16_t" || w == "int32_t" || w == "uint32_t") return "int";
+            if (w == "int64_t" || w == "uint64_t" || w == "size_t" || w == "ssize_t" || w == "ptrdiff_t" || w == "intptr_t" || w == "uintptr_t") return "long";
+            return "";
+        };
+        static const char* const ownWords[] = {"int", "long", "bool", "char", "double", "float", "void", "string", "vector", "array", "hashmap", "unique", "weak", "local", "Mutex", "Task"};
+        static const char* const stdWords[] = {"string", "vector", "array", "optional", "unique_ptr", "weak_ptr", "shared_ptr", "unordered_map", "map", "mutex"};
+        auto among = [](const auto& list, const std::string& w) { return std::find_if(std::begin(list), std::end(list), [&](const char* n) { return w == n; }) != std::end(list); };
+        auto isKey = [](const std::string& k) { return k == "int" || k == "long" || k == "char" || k == "bool" || k == "string"; };  // what a hashmap can hash
         std::function<std::string()> typeAt = [&]() -> std::string {
             if (pos >= words.size()) return known = false, "";
+            std::string prefix;
+            if (words[pos] == "const") {  // `const int*` stays as it is
+                prefix = "const ";
+                if (++pos >= words.size()) return known = false, "";
+            }
             const bool isStd = fromStd[pos];
             std::string w = words[pos++];
-            std::string prefix;
-            if (w == "const") {  // `const int*` stays as it is
-                prefix = "const ";
-                if (pos >= words.size()) return known = false, "";
-                w = words[pos++];
+            if (w == "unsigned" || w == "signed") {  // the C+ type of the same size
+                w = pos < words.size() && (words[pos] == "long" || words[pos] == "char") ? words[pos] : "int";
+                if (pos < words.size() && (words[pos] == "int" || words[pos] == "long" || words[pos] == "char")) ++pos;
             }
-            while ((w == "unsigned" || w == "signed") && pos < words.size() && (words[pos] == "int" || words[pos] == "long" || words[pos] == "char")) w = words[pos++];  // the C+ type of the same size
-            if (w == "unsigned" || w == "signed") w = "int";
             if (w == "long" && pos < words.size() && words[pos] == "long") ++pos;
             if (w == "long" && pos < words.size() && words[pos] == "int") ++pos;
-            if (w == "int8_t" || w == "uint8_t" || w == "int16_t" || w == "uint16_t" || w == "int32_t" || w == "uint32_t") w = "int";
-            if (w == "int64_t" || w == "uint64_t" || w == "size_t" || w == "ssize_t" || w == "ptrdiff_t" || w == "intptr_t" || w == "uintptr_t") w = "long";
-            if (w == "short" || w == "wchar_t" || w == "char16_t" || w == "char32_t" || w == "char8_t") known = false;
-            static const char* const stdKnown[] = {"string", "vector", "array", "optional", "unique_ptr", "weak_ptr", "shared_ptr", "unordered_map", "map", "mutex"};
-            if (isStd && std::find_if(std::begin(stdKnown), std::end(stdKnown), [&](const char* n) { return w == n; }) == std::end(stdKnown)) known = false;
+            if (!cName(w).empty()) w = cName(w);
+            else if (isStd ? !among(stdWords, w) : !among(ownWords, w) && !typeNames_.count(w) && !classTemplate(w)) known = false;
             std::vector<std::string> args;
             if (pos < words.size() && words[pos] == "<") {
                 ++pos;
                 bool closed = false;
                 while (known && pos < words.size()) {
-                    args.push_back(typeAt());
+                    if (w == "array" && args.size() == 1) {  // its size, a number
+                        const std::string& n = words[pos];
+                        if (n.empty() || !std::all_of(n.begin(), n.end(), [](char c) { return std::isdigit((unsigned char)c) || c == '\''; })) { known = false; break; }
+                        args.push_back(words[pos++]);
+                    } else {
+                        args.push_back(typeAt());
+                    }
                     if (pos < words.size() && words[pos] == ",") { ++pos; continue; }
                     if (pos < words.size() && words[pos] == ">") { ++pos; closed = true; break; }
                     if (pos < words.size() && words[pos] == ">>") { words[pos] = ">"; closed = true; break; }
@@ -1046,22 +1060,36 @@ void Parser::rejectOtherLanguages() {
                 for (size_t i = 0; i < args.size(); ++i) all += (i ? ", " : "") + args[i];
                 return all;
             };
-            auto one = [&](size_t n) { if (args.size() != n) known = false; return n == 0 || args.size() < n ? std::string() : args[0]; };
+            auto takes = [&](size_t n) { if (args.size() != n) known = false; };
+            const std::string first = args.empty() ? "" : args[0];
+            auto inner = [&](const std::string& t) { return t.size() > 5 && (t.rfind("weak<", 0) == 0); };
             std::string out;
-            if (w == "shared_ptr") {  // a class variable is already a counted reference; nothing else is shared that way
-                out = one(1);
-                if (!isClassName(out)) known = false;
+            if (w == "string" || w == "int" || w == "long" || w == "bool" || w == "char" || w == "double" || w == "float" || w == "void" || w == "Mutex" || w == "mutex") {
+                takes(0);
+                out = w == "mutex" ? "Mutex" : w;
+            } else if (w == "shared_ptr") {  // a class variable is already a counted reference; nothing else is shared that way
+                takes(1);
+                out = first;
+                if (!isClassName(first)) known = false;
             } else if (w == "optional") {
-                out = one(1);
-                if (!out.empty() && (out.back() == '?' || out.back() == '*')) {}  // already can be null
-                else out += "?";
-            } else if (w == "unique_ptr" || w == "weak_ptr") {
-                out = (w == "unique_ptr" ? "unique<" : "weak<") + one(1) + ">";
-                if (!isClassName(args.empty() ? "" : args[0])) known = false;  // they hold an object of a class
-            } else if (w == "unordered_map" || w == "map") out = "hashmap<" + (one(2), joined()) + ">";
-            else if (w == "vector") out = "vector<" + one(1) + ">";
-            else if (w == "mutex") out = "Mutex";
-            else out = w + (args.empty() ? "" : "<" + joined() + ">");
+                takes(1);
+                out = first;
+                if (!out.empty() && out.back() != '?' && out.back() != '*' && !inner(out)) out += "?";  // a pointer or a weak reference can already be null
+            } else if (w == "unique_ptr" || w == "weak_ptr" || w == "unique" || w == "weak" || w == "local") {
+                takes(1);
+                out = (w == "unique_ptr" ? std::string("unique") : w == "weak_ptr" ? std::string("weak") : w) + "<" + first + ">";
+                if (!isClassName(first)) known = false;  // they hold an object of a class
+            } else if (w == "unordered_map" || w == "map" || w == "hashmap") {
+                takes(2);
+                out = "hashmap<" + joined() + ">";
+                if (!isKey(first)) known = false;
+            } else if (w == "vector") {
+                takes(1);
+                out = "vector<" + first + ">";
+            } else if (w == "array") {
+                takes(2);
+                out = "array<" + joined() + ">";
+            } else out = w + (args.empty() ? "" : "<" + joined() + ">");
             while (pos < words.size() && words[pos] == "*") out += "*", ++pos;
             if (pos < words.size() && words[pos] == "[") known = false;  // a C array, which C+ writes `array<T, N>`
             return prefix + out;
