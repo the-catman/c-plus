@@ -1,0 +1,28 @@
+// Advice about using an object before it is whole, and about fields that are not there.
+struct P { int x = 0; };
+class Inner { public: int v = 0; };
+class InConstructor {
+public:
+    Inner a;
+    InConstructor() { println("{}", this); a = Inner(); }
+    // error: the object cannot be used until all of its fields have values: 'a' has none yet
+    // error: assign 'a' first, or give it a default
+};
+class NoFields {
+public:
+    NoFields() : y(1) {}
+    // error: 'NoFields' has no fields yet. Add it: `int y = 0;`
+};
+Inner make(InConstructor c) { return Inner(); }
+class NeedsTheObject {
+public:
+    Inner a;
+    NeedsTheObject() : a(use(this)) {}
+    // error: do this in the constructor's body, where every field has its value. If building a class-typed field needs the object, make the field optional: `A? a;`
+    Inner use(NeedsTheObject o) { return Inner(); }
+};
+void numberToStruct() {
+    P built = 5;
+    // error: build one from it: `P{x}`
+}
+int main() { return 0; }

@@ -1,0 +1,12 @@
+// Advice about what JSON cannot show.
+import json;
+void pointers() {
+    int n = 1;
+    int* p = &n;
+    println("{}", json::stringify(p));
+    // error: Write `*p` for what it points to
+    Mutex m = Mutex();
+    println("{}", json::stringify(m));
+    // error: Pass the values it protects or holds instead
+}
+int main() { return 0; }

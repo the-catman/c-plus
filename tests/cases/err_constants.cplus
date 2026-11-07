@@ -28,7 +28,7 @@ int main() {
 // error: this compiler does not support global variables yet
 // error: for a value that never changes, write a constant: `const int variable = 0;`
 // error: the value of a constant is worked out from literals, other constants and operators
-// error: a variable or a call cannot be used here
+// error: only calls to `constexpr` functions work here
 // error: to initialize 'WRONG_TYPE'
 // error: the value of 'A' depends on itself
 // error: the value of 'SELF' depends on itself

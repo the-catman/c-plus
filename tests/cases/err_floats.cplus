@@ -69,13 +69,13 @@ int main() {
 // error: a cast cannot turn a value into a string
 // error: write `to_string(x)`, or `format("{}", x)`
 // error: this compiler does not support reading a number from a string yet
-// error: until then, C's `atoi` or `strtol` can be declared with extern "C" and called
-// error: until then, C's `atof` or `strtod` can be declared with extern "C" and called
+// error: declare `extern "C" int atoi(string text);`, then call `atoi(s)`
+// error: declare `extern "C" double atof(string text);`, then call `atof(s)`
 // error: 'int(x)' converts a number, a char or a bool, but this is 'int?'
 // error: 'long(x)' converts a number, a char or a bool, but this is 'vector<int>'
-// error: convert one of its fields or elements instead, e.g. `long(v[0])`
+// error: convert one of its elements instead, e.g. `long(v[0])`
 // error: sqrt() takes a number, but this is 'string'
-// error: C's `atof` can be declared with extern "C" and called
+// error: Declare C's: `extern "C" double atof(string text);`, and call `atof(s)`
 // error: pow() takes two arguments but 1 was given
 // error: write `pow(base, exponent)`
 // error: min() takes two arguments but 3 were given

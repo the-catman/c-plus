@@ -1,0 +1,92 @@
+// What the errors about calls and casts tell a reader to write, which must compile and do what they say.
+extern "C" long strlen(string s);
+extern "C" int atoi(string text);
+extern "C" long strtol(string s, char** end, int base);
+extern "C" double strtod(string s, char** end);
+class A { public: int x = 3; };
+struct P {
+    vector<int> items;
+    int x = 0;
+    void set(int v) { x = v; }
+};
+template<typename U, typename T> T pick(U u, T a, T b) { return a; }
+template<typename T, typename U> U conv(T a) { return U(); }
+template<typename T, int N> int sized(T a) { return N; }
+
+int main() {
+    // "unwrap it, change the copy and store it back"
+    vector<int>? o = vector<int>{1};
+    if (auto v = o) { v.push_back(2); o = v; }
+    println("{}", o);
+    // expect: [1, 2]
+    println("{}", o?.size());
+    // expect: 2
+    P? held = P{};
+    if (auto v = held) { v.items.push_back(1); held = v; }
+    println("{}", held?.items);
+    // expect: [1]
+    // "write the type you mean and those before it"
+    println("{}", pick<string, long>("u", 1, 2L));
+    // expect: 1
+    println("{} {}", conv<int, int>(1), sized<int, 16>(1));
+    // expect: 0 16
+    // Strings with what is not one
+    string s = "a";
+    println("{} {}", s == format("{}", true), s.empty());
+    // expect: false false
+    string? t = "a";
+    println("{}", s < (t ?? ""));
+    // expect: false
+    int? n = 3;
+    println("{} {}", to_string(n ?? 0), format("{}", n));
+    // expect: 3 3
+    // C's way of reading numbers
+    println("{} {} {}", atoi("7"), strtol("8", null, 10), strtod("0.5", null));
+    // expect: 7 8 0.5
+    println("{}", strlen(s));
+    // expect: 1
+    // What takes the place of methods that are not there
+    string e = "hello";
+    long pos = 1;
+    long count = 2;
+    println("{}", e.substr(0, pos) + e.substr(pos + count));
+    // expect: hlo
+    println("{}", e.substr(0, pos) + "x" + e.substr(pos));
+    // expect: hxello
+    for (char c : "ab") print("{} ", c);
+    println();
+    // expect: a b 
+    // "`double(c.x)`"
+    A c = A();
+    println("{}", double(c.x));
+    // expect: 3
+    // "(const void*)p"
+    const char* p = null;
+    println("{}", (const void*)p == null);
+    // expect: true
+    // "d ?? 0.0"
+    double? d = 1;
+    println("{:.2f}", d ?? 0.0);
+    // expect: 1.00
+    // "b = b || c", and "x = int(fmod(x, y))"
+    bool b = false;
+    b = b || true;
+    int x = 7;
+    x = int(fmod(x, 4.5));
+    println("{} {}", b, x);
+    // expect: true 2
+    // "start empty and add them"
+    vector<unique<A>> owners;
+    owners.push_back(unique<A>());
+    println("{}", owners.size());
+    // expect: 1
+    // "set each one"
+    array<unique<A>, 2> filled = {unique<A>(), unique<A>()};
+    filled[0] = unique<A>();
+    println("{}", filled[0].x);
+    // expect: 3
+    // The characters of <cctype>
+    println("{} {} {} {}", isprint('a'), isgraph(' '), iscntrl('\n'), isblank('\t'));
+    // expect: true false true true
+    return 0;
+}

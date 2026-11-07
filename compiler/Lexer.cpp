@@ -338,7 +338,7 @@ Token Lexer::lexNumber() {
                      spec::IntegerLiterals);
     }
 
-    if (peek() == '.' && std::isxdigit((unsigned char)peek(1))) {  // `0x1.8p3`, a C++ hexadecimal float
+    if (base != 10 && peek() == '.' && std::isxdigit((unsigned char)peek(1))) {  // `0x1.8p3`, a C++ hexadecimal float
         while (std::isalnum((unsigned char)peek()) || peek() == '.' ||
                ((peek() == '+' || peek() == '-') && (src_[pos_ - 1] == 'p' || src_[pos_ - 1] == 'P')))
             advance();

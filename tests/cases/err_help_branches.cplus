@@ -8,14 +8,14 @@ public:
 void pointers() {
     int n = 1;
     println("{}", n->x);
-    // error: only a pointer can be followed with '->'
+    // error: 'n' is not a pointer: remove the `->`
     int* p = &n;
     long big = 1;
     long* q = &big;
     println("{}", p == q);
     // error: pointers to different types cannot be compared; convert one first
     println("{}", p == 1);
-    // error: compare it with another pointer to the same type, or with null
+    // error: write `*p == ...` to compare the value it points to
     println("{}", true & false);
     // error: use '&&' for logic
     Speaker().speek();

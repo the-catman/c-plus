@@ -3,4 +3,4 @@ int main() {
     return 0;
 }
 // error: there is no function named 'malloc'
-// error: declared before it is called: `extern "C" void* malloc(long n);`
+// error: declared: `extern "C" void* malloc(long n);`

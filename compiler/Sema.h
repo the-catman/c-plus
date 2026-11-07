@@ -126,7 +126,8 @@ private:
     void checkThrow(ThrowStmt& st, Flow& flow);
     const StructDecl* errorClass();  // `Error`, what every thrown object derives from
     // A call to a function that can fail, or a `throw`, must have somewhere for the error to go.
-    void checkCanFail(const FuncDecl& callee, Loc loc);
+    void checkCanFail(const FuncDecl& callee, Loc loc, const Expr* receiver = nullptr);
+    std::string whereAnErrorCanGo() const;
     const Type* checkSpawn(SpawnExpr& s, Flow& flow);
     const Expr* spawned_ = nullptr;  // the call `spawn` is on, whose error goes in the task
     const Type* checkExpr(Expr& e, Flow& flow);

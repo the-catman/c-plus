@@ -157,7 +157,7 @@ long square(long n) { return n * n; }
 | `*opt`, `opt->name` | `opt.value()`, `opt?.name`, or unwrap with `if (auto u = opt)` |
 | `int x = opt;`, `opt + 1` | error: unwrap first, e.g. `(opt ?? 0) + 1` |
 | `if (flag)` on a `bool?` | error: write `flag == true` or `flag != null` |
-| `opt?.age = 3` | error: `?.` only reads. Write `if (auto u = opt) u.age = 3;` |
+| `opt?.age = 3` | error: `?.` only reads. Write `if (auto u = opt) u.age = 3;` for an object. For a struct, `u` is a copy, so store it back: `if (auto u = opt) { u.age = 3; opt = u; }` |
 | `struct Node { Node next; }`, `Node? next` in a struct | a struct cannot hold itself, not even as an optional. Use `class Node { Node? next; };`, or a pointer, `Node* next = null;` |
 | `const User u` freezes the object | `const` only stops `u` from referring to another object |
 | `u1 == u2` compares two objects' fields | it is true only for the same object, like `===` in JS. Compare fields instead |

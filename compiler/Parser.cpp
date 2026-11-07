@@ -331,11 +331,18 @@ void Parser::parseProgram(Program& prog) {
     pos_ = 0;
     while (!check(Tok::Eof)) {
         fileAttr_ = false;
+        const size_t declaration = pos_;
         try {
             parseTopLevel(prog);
         } catch (TooDeep&) {
             return;
         } catch (ParseError&) {
+            // A function whose header or body could not be read is still there, as far as what calls it can tell.
+            for (size_t i = declaration; i < pos_ && i + 1 < toks_.size(); ++i)
+                if (toks_[i].kind == Tok::Ident && toks_[i + 1].kind == Tok::LParen) {
+                    prog.unreadFunctions.insert(toks_[i].text);
+                    break;
+                }
             syncTopLevel();
         }
         if (!fileAttr_) declSeen_ = true;
@@ -1205,7 +1212,7 @@ void Parser::parseOpaqueStruct() {
     const Token& kw = advance();
     if (kw.kind == Tok::Ident)
         fail(kw.loc, "C+ has no typedef",
-             "write a C struct as `struct div_t { int quot; int rem; };`, or, for one used only through pointers, "
+             "for a number, write the number type. Write a C struct as `struct div_t { int quot; int rem; };`, or, for one used only through pointers, "
              "`struct sqlite3;`. C+ code then uses the name without 'struct'",
              spec::CTypes);
     if (kw.kind == Tok::KwClass)

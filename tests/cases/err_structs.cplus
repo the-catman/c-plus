@@ -34,6 +34,6 @@ int main() {
 // error: both sides of '==' must have the same type, but they are 'Point' and 'int'
 // error: expected 'int' for field 'x' of 'Point', but this is 'string'
 // error: 'Point' has 2 fields but 3 values were given
-// error: 'Point' is a struct type. To build one, write `Point{...}` or `Point(...)`
+// error: to build one, write `Point{...}` or `Point(...)`
 // error: struct 'Node' contains itself through field 'next', so it would be infinitely large
 // error: struct 'Twice' already has a field named 'a'

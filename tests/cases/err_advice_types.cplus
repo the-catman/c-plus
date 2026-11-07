@@ -1,0 +1,212 @@
+// Advice from the type checker that is about what was actually written, and works if followed. advice_followed has the forms.
+struct P { int x = 0; };
+void fails() throws {}
+class FromConstructor {
+public:
+    int x = 0;
+    FromConstructor() { try fails(); }
+    // error: handle it here with `try { ... } catch (Error e) { ... }`, or write a function that can fail and makes the object: `FromConstructor make(...) throws { ...; return FromConstructor(...); }`
+    ~FromConstructor() { try fails(); }
+    // error: handle it here with `try { ... } catch (Error e) { ... }`: a destructor cannot fail
+};
+class ReturnsFromConstructor {
+public:
+    int x = 0;
+    ReturnsFromConstructor() { return 1; }
+    // error: a constructor cannot return a value
+    // error: write just `return;`: it gives back nothing
+};
+void nothing() {}
+void returnsAVoidCall() {
+    return nothing();
+    // error: call it on a line of its own, then write `return;`
+}
+interface Speaker { string speak() const; };
+void unassignedInterface() {
+    Speaker s;
+    println("{}", s.speak());
+    // error: `Speaker s = SomeClass(...);`, with a class that derives from it
+}
+int worker() { return 1; }
+void unassignedTask() {
+    Task<int> t;
+    println("{}", t.wait());
+    // error: `Task<int> t = spawn f();`
+}
+struct NeedsArgument {
+    int x;
+    NeedsArgument(int v) : x(v) {}
+};
+void unassignedStruct() {
+    NeedsArgument s;
+    println("{}", s);
+    // error: `NeedsArgument s = NeedsArgument(...);`
+}
+void backOfVector() {
+    vector<P> v = {P{}};
+    v.back().x = 1;
+    // error: `back()` gives a copy. Change the element in place: `v[v.size() - 1].x = ...`
+    v.front().x = 1;
+    // error: `front()` gives a copy. Change the element in place: `v[0].x = ...`
+    hashmap<string, int> m;
+    m.at("a") = 3;
+    // error: `at()` gives a copy. Change the value in place: `m[key] = ...`
+}
+void throughPointers() {
+    P p;
+    P* q = &p;
+    P** pp = &q;
+    println("{}", (*pp).x);
+    // error: write `(*pp)->x`
+}
+const int MAX = 1;
+void changesAConstant() {
+    MAX = 2;
+    // error: a constant never changes. Copy it into a local variable and change that, or keep the value in a class object
+}
+void throwsText() throws {
+    throw "bad";
+    // error: write `throw Error("bad");`
+}
+class Node { public: int v = 0; };
+void copiesFromAMap() {
+    hashmap<string, unique<Node>> m;
+    unique<Node> f = m["a"];
+    // error: write `move(m["a"])` to hand it over
+}
+class TakesTwo {
+public:
+    string s;
+    int a;
+    TakesTwo(string x, int y) : s(x), a(y) {}
+};
+void namedForConstructor() {
+    TakesTwo u = {.s = "a", .a = 1};
+    // error: pass the values in the order of its constructor, `TakesTwo(string x, int y)`, as in `TakesTwo(...)`
+}
+class FromInterface : public Speaker {
+public:
+    int y = 0;
+    string speak() const override { return "x"; }
+};
+void valuesWithAnInterface() {
+    FromInterface d = {1};
+    // error: write one: `FromInterface(...) { ... }`
+}
+void condition() {
+    bool? b = true;
+    println("{}", !b);
+    // error: it could mean false, or that it holds nothing: write `b != true`, or `b == null` to check that it holds nothing
+    weak<Node> w;
+    println("{}", !w);
+    // error: write `w.expired()`
+    string s = "a";
+    println("{}", !s);
+    // error: write `s.empty()`
+    if (s && true) {}
+    // error: to check whether it has any text, write `!s.empty()`
+    if (nothing()) {}
+    // error: this call gives nothing back. Have the function return a bool, or call it on a line of its own and test something else
+}
+void constexprOfAVector() {
+    constexpr vector<int> W = {1};
+    // error: For a local variable of any other type, write `const`
+}
+constexpr char TOO_LARGE = 300;
+// not-error: must be known at compile time, but the value 300 does not fit in 'char'
+class Base { public: int id = 0; };
+class L : public Base {};
+class R : public Base {};
+class Other2 {};
+class Diamond : public Other2, public L, public R {};
+void conversions() {
+    Base b = Diamond();
+    // error: e.g. `static_cast<L>(x)`
+    unique<Node> a = local<Node>();
+    // error: write `unique<Node>(...)` to build a new object. A 'local<Node>' cannot change who owns it
+    string s = 5;
+    // error: turn it into a string: `to_string(x)`
+    string t = true;
+    // error: turn it into a string: `format("{}", b)`
+    int n = "5";
+    // error: Declare C's: `extern "C" int atoi(string text);`, and call `atoi(s)`
+    double d = "5";
+    // error: Declare C's: `extern "C" double atof(string text);`, and call `atof(s)`
+    int* p = 5;
+    // error: a number is not a pointer. To make one from a number, write `reinterpret_cast<int*>(n)`
+    Node o = 5;
+    // error: build one: `Node(...)`
+}
+void insidesOfBuiltins() {
+    Mutex m = Mutex();
+    println("{}", m.mutex_);
+    // error: it is part of how 'Mutex' works inside. use one of its methods: lock
+    hashmap<string, int> map;
+    println("{}", map.entries);
+    // error: use one of its methods: size
+}
+void names() {
+    auto a = Speaker;
+    // error: 'Speaker' is a type, not a value
+    // error: build an object of a class that derives from it: `SomeClass(...)`
+    auto f = nothing;
+    // error: 'nothing' is a function, not a value
+    long size = sizeof(vector);
+    // error: write `vector<int>`
+}
+void movedField() {
+    Node x = Node();
+    unique<Node> u = unique<Node>();
+    unique<Node> v = move(u);
+    println("{}", u.v);
+    // error: 'u' has no value here, since it may have been moved away
+}
+class NF : public Error { public: NF() : Error("x") {} };
+void twoCatches() {
+    try {
+        try fails();
+    } catch (NF e) {
+    } catch (NF e2) {
+        // error: remove one of them
+    } catch (Error e3) {
+    }
+}
+void pointerArithmetic() {
+    int n = 1;
+    int* p = &n;
+    int k = 1 - p;
+    // error: a number cannot have a pointer subtracted from it
+    println("{}", p == 5);
+    // error: write `*p == ...` to compare the value it points to
+}
+class Fails { public: void go() throws {} };
+void methodThatFails() {
+    Fails u = Fails();
+    u.go();
+    // error: write `try u.go(...)`
+}
+void unwrapping() {
+    int? o = 1;
+    println("{}", o[0]);
+    // error: remove the `[ ]`: unwrap it, as `o ?? value`, for the 'int' inside
+    for (auto x : o) {}
+    // error: write the vector, array or string to loop over after the ':'
+}
+void arrowOnAVector() {
+    vector<int> v;
+    println("{}", v->size());
+    // error: write `v.size`: only a pointer is followed with '->'
+    int a = 1;
+    println("{}", a->x);
+    // error: 'a' is not a pointer: remove the `->`
+    P s;
+    println("{}", *s);
+    // error: this is already the value
+    println("{}", ~1.5);
+    // error: use it on an integer, as it flips bits. Convert first: `~long(x)`
+    println("{}", -true);
+    // error: convert it first: `-int(b)`
+    println("{}", -"a");
+    // error: '-' only works on numbers. Use it on a number
+}
+int main() { return 0; }

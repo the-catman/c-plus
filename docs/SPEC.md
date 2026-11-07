@@ -170,8 +170,8 @@ string word = string(1, c);       // "a"
 - `to_string(c)` is an error: C++ gives the code, `"97"`. Write `string(1, c)` for the
   character, or `to_string(int(c))` for the code.
 - The character functions of C++'s `<cctype>` are built in and take a `char`:
-  `isalpha`, `isdigit`, `isalnum`, `isspace`, `isupper`, `islower`, `ispunct` and
-  `isxdigit` return a `bool`, and `toupper` and `tolower` return a `char`; in C++ all of
+  `isalpha`, `isdigit`, `isalnum`, `isspace`, `isupper`, `islower`, `ispunct`, `isxdigit`, `isprint`, `isgraph`,
+  `iscntrl` and `isblank` return a `bool`, and `toupper` and `tolower` return a `char`; in C++ all of
   them take and return an `int`. They know only ASCII, as C's do in the default locale,
   so `isalpha` is false for each byte of `"é"`. A function of the program with the same
   name takes their place.
@@ -352,7 +352,8 @@ string name = found?.name ?? "nobody";
   result is optional unless it already is, or the method returns `void`. The left side is
   evaluated once.
 - `?.` only reads. `found?.age = 3` is an error; unwrap it to make a change:
-  `if (auto u = found) u.age = 3;`. On a class, `found?.birthday()` changes the object it
+  `if (auto u = found) u.age = 3;`, for a class object. For a struct, `u` is a copy, so store it back:
+  `if (auto u = found) { u.age = 3; found = u; }`. On a class, `found?.birthday()` changes the object it
   refers to. On a struct, string or vector, `?.` works on a copy, so a method that changes
   the copy is an error.
 - **`??`** gives a fallback: `found?.name ?? "nobody"` is a `string`. The fallback is

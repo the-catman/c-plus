@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -368,16 +369,25 @@ enum class MathFn {
 bool isMathFunction(const std::string& name);  // `sqrt`, `pow`, ...: defined in Sema.cpp
 
 // The character tests and conversions of C++'s <cctype>, for one char.
-enum class CharFn { IsAlpha, IsDigit, IsAlnum, IsSpace, IsUpper, IsLower, IsPunct, IsXDigit, ToUpper, ToLower };
+enum class CharFn { IsAlpha, IsDigit, IsAlnum, IsSpace, IsUpper, IsLower, IsPunct, IsXDigit, IsPrint, IsGraph, IsCntrl, IsBlank, ToUpper, ToLower };
 bool isCharFunction(const std::string& name);  // `isdigit`, `toupper`, ...: defined in Sema.cpp
 
 // The C function that reads a number from text the way C++'s `std::stoi`, `std::stod`
 // and so on do, as a declaration to suggest: `int atoi(string text)`. Empty for other names.
 inline std::string cNumberReader(const std::string& name) {
     if (name == "stoi" || name == "atoi") return "int atoi(string text)";
-    if (name == "stol" || name == "stoll" || name == "atol" || name == "strtol") return "long atol(string text)";
-    if (name == "stod" || name == "stof" || name == "atof" || name == "strtod") return "double atof(string text)";
+    if (name == "stol" || name == "stoll" || name == "stoul" || name == "stoull" || name == "atol") return "long atol(string text)";
+    if (name == "stod" || name == "stof" || name == "atof") return "double atof(string text)";
+    if (name == "strtol") return "long strtol(string s, char** end, int base)";
+    if (name == "strtod") return "double strtod(string s, char** end)";
     return "";
+}
+
+// The name in that declaration.
+inline std::string cReaderName(const std::string& name) {
+    const std::string declared = cNumberReader(name);
+    size_t start = declared.find(' ') + 1;
+    return declared.substr(start, declared.find('(') - start);
 }
 
 // The options of one placeholder, `{:.2f}`: a precision, and f, e or g. Both are for
@@ -942,6 +952,7 @@ struct Program {
     std::vector<std::unique_ptr<VarDecl>> constants;
     std::vector<std::unique_ptr<TemplateDecl>> templates;
     bool allowNewDelete = false;  // `[[allow(new_delete)]];` at the top of the file
+    std::set<std::string> unreadFunctions;  // what could not be read because of an error that has been reported
     bool usesThreads = false;     // it has a `spawn`: printing then has to keep lines together, and main to wait
     bool linksThreads = false;    // it uses the part of the runtime that is written on the system's threads
 

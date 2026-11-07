@@ -19,7 +19,7 @@ int main() {
 // error: until it does, `acos(-1)` is pi and `exp(1)` is e
 // error: this compiler does not support reading a number from a string yet
 // error: this compiler cannot read a number from a string yet
-// error: a C function must be declared before it is called: `extern "C" int atoi(string text);`
+// error: a C function must be declared: `extern "C" int atoi(string text);`
 // error: write `fabs`, which returns a float when given floats, as in C++
 // error: C+ has no long double; write `sqrt`
 // error: define it in this file, in any order, or declare a C function with `extern "C"`

@@ -87,7 +87,7 @@ int main() {
 // error: a vector's { } list holds its elements, not named fields
 // error: name the type, e.g. `Point{1, 2}` or `vector<int>{1, 2}`
 // error: expected 'int' to initialize 'size', but this is 'long'
-// error: front() and back() return a copy of the element
+// error: gives a copy. Change the element in place
 // error: push_back() takes one argument but 0 were given
 // error: write `push_back(value)`
 // error: this compiler does not support insert() on vectors yet

@@ -1,0 +1,18 @@
+// Advice about how types are declared, which is checked before any function body.
+class FromMap : public hashmap<string, int> {};
+// error: hold it in a field
+class Self : public Self {};
+// error: remove `: public Self`
+class WrongOrder {
+public:
+    virtual int f() const throws { return 1; }
+};
+class Overrides : public WrongOrder {
+public:
+    int f() const throws { return 2; }
+    // error: write `override` last, after the parameters and any `const` and `throws`
+};
+class NotAFunction {};
+void NotAFunction() {}
+// error: 'NotAFunction' is already the name of a class
+int main() { return 0; }

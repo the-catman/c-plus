@@ -1,0 +1,94 @@
+// More advice about calls and casts, kept apart for the limit on errors. advice_followed_calls has the forms it gives.
+class A { public: int x = 0; };
+class B : public A {};
+class Other { public: int x = 0; };
+struct P { int x = 0; };
+void casts() {
+    unique<A> u = unique<A>();
+    println("{}", int(u));
+    // error: this holds an object, not a number. `u.get()` lends the object, and `u.field` reads a field
+    A a = A();
+    auto made = static_cast<unique<A>>(a);
+    // error: a 'A' may be shared, so it has no one owner. Write `unique<A>(...)` to build a new object
+    local<A> l = local<A>();
+    println("{}", int(l));
+    // error: this holds an object, not a number. `x.get()` lends the object, and `x.field` reads a field
+    auto named = static_cast<local<A>>(a);
+    // error: a 'A' may be used by other threads. Write `local<A>(...)` to build a new object
+    println("{}", reinterpret_cast<float>(1));
+    // error: to convert a number, write `float(x)`
+    B b = reinterpret_cast<B>(a);
+    // error: write `dynamic_cast<B?>(x)`, which gives null when it is not one
+    string s = "a";
+    println("{}", reinterpret_cast<int>(s));
+    // error: write a number or a pointer here: nothing else can be reinterpreted
+    auto built = static_cast<P>(1);
+    // error: build one instead: `P(...)`, or `P{...}`
+    println("{}", double(a));
+    // error: convert one of its fields instead, e.g. `double(c.x)`
+}
+void printing() {
+    const char* p = null;
+    println("{}", p);
+    // error: or `(const void*)p` to print the address
+    double? d = 1;
+    println("{:.2f}", d);
+    // error: give it a fallback: `println("{:.2f}", d ?? 0.0)`
+    int x = 1;
+    println("{ x: {} }", x);
+    // error: a placeholder is `{}`, with the value after the format string: `println("{}", name)`. A literal brace is written {{
+    println("{name}", x);
+    // error: a placeholder is `{}`, with the value after the format string
+    println("{:d}", x);
+    // error: write {} to print it as it is, or give the precision
+}
+void assigning() {
+    int x = 1;
+    bool b = true;
+    string s = "5";
+    int? o = 1;
+    x += b;
+    // error: convert it first: `int(b)`
+    x += s;
+    // error: this compiler cannot read a number from a string yet. Declare C's: `extern "C" int atoi(string text);`, and call `atoi(s)`
+    x += o;
+    // error: 'o' may be null
+    x %= 1.5;
+    // error: for floating-point numbers, write `x = int(fmod(x, y))`
+    b |= true;
+    // error: write `b = b || c`, or `b = b && c`
+    vector<int> v;
+    v += 1;
+    // error: write `v.push_back(x)` to add to it
+}
+void containers() {
+    auto u = vector<unique<A>>(3);
+    // error: start empty and add them with `push_back`: `vector<unique<A>> v;`
+    auto t = vector<string>("a", "b", "c");
+    // error: to list the elements, use braces: `vector<string>{a, b, c}`
+    array<unique<A>, 2> filled = {unique<A>(), unique<A>()};
+    filled.fill(unique<A>());
+    // error: set each one: `a[i] = unique<A>(...)`
+    string s = "a";
+    println("{}", s.c_str());
+    // error: pass `s` itself: a `string` parameter of a C function converts at each call
+    s.erase(0, 1);
+    // error: build it from what stays: `s = s.substr(0, pos) + s.substr(pos + n);`
+    s.insert(0, "x");
+    // error: build it: `s.substr(0, pos) + t + s.substr(pos)`
+    println("{}", s.compare("x"));
+    // error: compare with `a < b` and `a == b`
+    println("{}", s.begin());
+    // error: go over it with `for (char c : s)`
+    vector<int> v;
+    v.reserve(1);
+    // error: remove the call: a vector grows by itself
+    v.insert(1, 2);
+    // error: build a new vector with a loop and `push_back`
+    println("{}", v.begin());
+    // error: go over it with `for (auto x : v)`
+    hashmap<string, int> m;
+    m.set("a", 1);
+    // error: write `m[key] = value`
+}
+int main() { return 0; }

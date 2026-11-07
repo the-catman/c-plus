@@ -2627,6 +2627,10 @@ struct Codegen::Impl {
             case CharFn::IsLower: return lower();
             case CharFn::IsPunct: return b.CreateAnd(in('!', '~'), b.CreateNot(alnum()));
             case CharFn::IsXDigit: return b.CreateOr(digit(), b.CreateOr(in('a', 'f'), in('A', 'F')));
+            case CharFn::IsPrint: return in(' ', '~');
+            case CharFn::IsGraph: return in('!', '~');
+            case CharFn::IsCntrl: return b.CreateOr(in('\0', '\x1f'), b.CreateICmpEQ(c, b.getInt8(127)));
+            case CharFn::IsBlank: return b.CreateOr(b.CreateICmpEQ(c, b.getInt8(' ')), b.CreateICmpEQ(c, b.getInt8('\t')));
             case CharFn::ToUpper: return b.CreateSelect(lower(), b.CreateSub(c, b.getInt8(32)), c);
             case CharFn::ToLower: return b.CreateSelect(upper(), b.CreateAdd(c, b.getInt8(32)), c);
         }

@@ -25,7 +25,7 @@ public:
 struct Point {
     int x = 0;
     Point* self() { return &this; }
-    // error: write `this`, which already refers to the object a method works on
+    // error: a method cannot get a pointer to its own object. Use `this` as a value
 };
 void nothing() {}
 vector<int> makeVector() { return {1}; }
@@ -47,7 +47,7 @@ void outside(Other other) {
     println("{}", maybe ?? "text");
     // error: write a fallback of type 'int', which is what the optional holds
     println("{}", other.x == 0 ? 1 : "text");
-    // error: Between numbers, a cast does it: `long(x)`
+    // error: For text, `to_string(x)` or `format("{}", x)` turns the other into a string
     println("{}", dynamic_cast<Base?>(other) == null);
     // error: check which class you meant, or derive a class from both
     int n = nothing();

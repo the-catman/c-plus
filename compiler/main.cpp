@@ -150,7 +150,8 @@ static int build(const Options& opts, const std::string& exePath) {
     }
     std::string objPath = exePath + ".o";
     if (!codegen.writeObjectFile(objPath, error)) {
-        toolError(error, "check that the folder of the output exists and can be written to, or choose another with -o");
+        toolError(error, opts.command == "run" ? "set the environment variable TMPDIR to a folder that can be written to"
+                                               : "check that the folder of the output exists and can be written to, or choose another with -o");
         return 1;
     }
     const char* linkerForTests = std::getenv("CPLUS_LINKER_FOR_TESTS");
@@ -238,10 +239,12 @@ static int compilerMain(int argc, char** argv) {
             if (opts.command != "build") return usageError("--emit-llvm is only used with `cplus build`");
             opts.emitLLVM = true;
         } else if (!a.empty() && a[0] == '-') {
+            if (a.rfind("-O", 0) == 0) return usageError("'" + a + "' is not an option of cplus; write -O, which is the one level of optimization");
             return usageError("unknown option '" + a + "'");
         } else if (opts.input.empty()) {
             opts.input = a;
         } else {
+            if (opts.command == "run") return usageError("to pass arguments to the program, put them after `--`: `cplus run " + opts.input + " -- " + a + "`");
             return usageError("only one source file can be given; multi-file programs are not supported yet");
         }
     }
@@ -266,7 +269,7 @@ static int compilerMain(int argc, char** argv) {
     }
     std::string tmpl = (tempDir / "cplus-run-XXXXXX").string();
     if (!mkdtemp(tmpl.data())) {
-        std::perror("mkdtemp");
+        toolError("cannot make a folder for temporary files in " + tempDir.string() + ": " + std::strerror(errno), "set the environment variable TMPDIR to a folder that can be written to");
         return 1;
     }
     fs::path exe = fs::path(tmpl) / fs::path(opts.input).stem();

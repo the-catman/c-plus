@@ -87,17 +87,17 @@ int main() {
 // error: write `n.value_or(fallback)`
 // error: a value reached through '?.' cannot be assigned to
 // error: a value reached through '?.' cannot be incremented
-// error: '?.' only reads. To change the value, unwrap the optional first: `if (auto u = opt) u.field = ...;`
+// error: '?.' only reads. Unwrap it, change the value and store it back: `if (auto u = opt) { u.field = ...; opt = u; }`
 // error: 'move' may change the struct, but '?.' works on a copy of it
-// error: unwrap the optional, change the copy and store it back: `if (auto v = opt) { v.move(...); opt = v; }`
+// error: unwrap the optional, change the copy and store it back: `if (auto v = p) { v.move(...); p = v; }`
 // error: push_back() changes the vector, but '?.' works on a copy of it
 // error: clear() changes the string, but '?.' works on a copy of it
 // error: it may be null; unwrap it first: `if (auto v = list) for (auto x : v) ...`
 // error: the if condition must be a bool, a number, a pointer or an optional, but this is 'bool?'
 // error: it could mean true, or that it has a value: write `flag == true`, or `flag != null` to check that it holds a bool
 // error: null never holds a value, so this if would never run
-// error: the variable declared in the if condition must be an optional, a bool or a number, but 'k' is 'bool?'
-// error: the variable declared in the if condition must be an optional, a bool or a number, but 'k' is 'string'
+// error: the variable declared in the if condition must be an optional, a bool, a number or a pointer, but 'k' is 'bool?'
+// error: the variable declared in the if condition must be an optional, a bool, a number or a pointer, but 'k' is 'string'
 // error: '?.' reads from an optional, but this is 'string', which is never null
 // error: write '.' instead of '?.'
 // error: '??' gives a fallback for an optional, but the left side is 'int', which is never null
@@ -105,5 +105,5 @@ int main() {
 // error: '==' compares 'int?' with 'int' or null, but this is 'string'
 // error: write `x == null` or `x != null`, which are all that null can be used with
 // error: it may be null: `opt ?? "none"` is its value, or "none" when it is null
-// error: write `null`; only an optional, such as `User?`, can be null
+// error: write `null`; only an optional, such as `User?`, or a pointer can be null
 // error: spec: docs/SPEC.md#optionals

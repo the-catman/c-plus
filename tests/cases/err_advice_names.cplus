@@ -1,0 +1,40 @@
+// What is said about names that are something else, or that could not be read.
+import json;
+int valueNotFunction() {
+    int g = 1;
+    return g();
+    // error: 'g' is a variable, and C+ has no function values yet. Write a function, and call it by name
+}
+void moduleHasNoSuch() {
+    json::foo(1);
+    // error: `cplus explain json` says what the module 'json' has
+}
+void vectorData() {
+    vector<int> v;
+    println("{}", v.data());
+    // error: copy it into an `array<int, N>` and use `a.data()`
+}
+void numberCall() {
+    println("{}", 1.abs());
+    // not-error: a number with a fraction is written in decimal
+    // error: 'int' has no methods, so '.abs()' cannot be used
+}
+void constPointer() {
+    const int x = 1;
+    const int* q = &x;
+    *q = 2;
+    // error: If what it points to is itself `const`, remove that `const` as well
+}
+extern "C" { typedef int myint; }
+// error: for a number, write the number type
+int hasADefault(int a = 1) { return a; }
+// error: remove `= ...`, and write the value at each call
+void callsIt() {
+    println("{}", hasADefault(1));
+    // not-error: there is no function named 'hasADefault'
+}
+int main() {
+    println("{}", 1;
+    // not-error: this program has no main function
+    return 0;
+}

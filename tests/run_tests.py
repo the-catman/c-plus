@@ -916,6 +916,7 @@ def check_command_line(cplus, workdir):
         (["check", g, "-o", "x"], 2, "-o is only used with `cplus build`"), (["build", g, "-o"], 2, "-o needs an output path"),
         (["run", g, "--emit-llvm"], 2, "--emit-llvm is only used with `cplus build`"), (["build", g, "--", "a"], 2, "'--' is only used with `cplus run`"),
         (["build", g, "-l"], 2, "-l needs a library name"), (["build", g, "-L"], 2, "-L needs a directory"),
+        (["run", g, "one", "two"], 2, "to pass arguments to the program, put them after `--`"), (["build", g, "-O2"], 2, "write -O"),
         (["build", g, "-g"], 2, "'-g' is not an option of cplus"), (["build", g, "-fsanitize=thread"], 2, "is not an option of cplus"),
         (["build", g, "--debug", "--race"], 2, "--debug and --race cannot be used together"), (["explain", "a", "b"], 2, "explain takes one topic"),
         (["check", str(text)], 2, "is not a C+ source file"), (["check", str(workdir / "gone.cplus")], 1, "cannot read"),
@@ -943,6 +944,11 @@ def check_command_line(cplus, workdir):
         run = subprocess.run([cplus, *args], capture_output=True, text=True, env=dict(os.environ, **{name: value}))
         if run.returncode == 0 or message not in run.stderr or errors_without_help(run.stderr):
             print(f"FAIL cplus {' '.join(args)} with {name}: exit code {run.returncode}, and not '{message}'\n  " + run.stderr[:300])
+            ok = False
+    if sys.platform.startswith("linux"):  # a folder that is there, and where nothing can be made
+        run = subprocess.run([cplus, "run", g], capture_output=True, text=True, env=dict(os.environ, TMPDIR="/proc"))
+        if run.returncode != 1 or "cannot make a folder for temporary files" not in run.stderr or errors_without_help(run.stderr):
+            print(f"FAIL cplus run where no folder can be made: exit code {run.returncode}\n  " + run.stderr[:300])
             ok = False
     run = subprocess.run([cplus, "run", g], capture_output=True, text=True, env=dict(os.environ, TMPDIR=str(missing_dir)))
     if run.returncode != 1 or "cannot find a folder for temporary files" not in run.stderr or errors_without_help(run.stderr):

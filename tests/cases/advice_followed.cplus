@@ -4,7 +4,13 @@ public:
     string name = "n";
     Node? next;
 };
-struct Pair { int a = 1; int b = 2; };
+struct Pair {
+    int a = 1;
+    int b = 2;
+    Pair self() { return this; }
+};
+extern "C" int atoi(string text);
+extern "C" double atof(string text);
 Pair both() { return {1, 2}; }
 extern "C" long strlen(string s);
 
@@ -55,6 +61,60 @@ int main() {
     // "a constant"
     const auto x = 1;
     println("{}", x);
+    // expect: 1
+    // "Unwrap it, change the value and store it back"
+    Pair? opt = Pair{};
+    if (auto u = opt) { u.a = 5; opt = u; }
+    println("{}", opt);
+    // expect: {a: 5, b: 2}
+    // The same, with what the spec names it
+    {
+        Pair? found = Pair{};
+        if (auto u = found) { u.a = 9; found = u; }
+        println("{}", found?.a);
+    }
+    // expect: 9
+    // "If the optional holds a class object, `u` is that object"
+    Node? held = Node();
+    if (auto u = held) u.name = "changed";
+    println("{}", held?.name);
+    // expect: changed
+    // "Change the element in place"
+    vector<Pair> v = {Pair{}, Pair{}};
+    v[v.size() - 1].a = 7;
+    v[0].a = 8;
+    println("{} {}", v[0].a, v[1].a);
+    // expect: 8 7
+    hashmap<string, int> m;
+    string key = "k";
+    m[key] = 3;
+    println("{}", m);
+    // expect: {"k": 3}
+    // "`(*pp)->x`"
+    Pair pair;
+    Pair* q = &pair;
+    Pair** pp = &q;
+    println("{}", (*pp)->a);
+    // expect: 1
+    // "turn it into a string", and what reads a number
+    string text = to_string(5) + format("{}", true);
+    println("{} {}", text, atoi("7") + atof("0.5"));
+    // expect: 5true 7.5
+    println("{}", ~long(1.0));
+    // expect: -2
+    println("{}", -int(true));
+    // expect: -1
+    Pair built = Pair{5};
+    println("{}", built.a);
+    // expect: 5
+    // "`move(m["a"])`"
+    hashmap<string, unique<Node>> owners;
+    owners["a"] = unique<Node>();
+    unique<Node> taken = move(owners["a"]);
+    println("{}", taken.name);
+    // expect: n
+    // "a method can return it"
+    println("{}", Pair{}.self().a);
     // expect: 1
     return 0;
 }

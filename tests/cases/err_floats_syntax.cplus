@@ -33,7 +33,7 @@ int main() {
 // error: write `double`, which has 64 bits
 // error: 'd' is not a suffix for a floating-point number
 // error: reinterpret_cast converts between a pointer and an integer, or between pointers, but this goes from 'double' to 'int'
-// error: to convert a number, write `int(x)` or `static_cast<int>(x)`
+// error: to convert a number, write `int(x)`
 // error: C+ has no const_cast
 // error: dynamic_cast finds out whether an object is of a class, but this asks for 'int'
 // error: write `int(x)` to convert x. For a zero, write `0`

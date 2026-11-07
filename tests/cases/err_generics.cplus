@@ -73,7 +73,7 @@ int main() {
 // error: the size of an array cannot be negative, but 'N' is -1
 // error: in 'Sized<int, -1>', which is used here
 // error: cannot work out 'T' of 'nothing' from the arguments
-// error: write it: `nothing<int>(...)`
+// error: write all up to it: `nothing<int>(...)`
 // error: the arguments of 'two' do not agree: 'T' cannot be both 'int' and 'double'
 // error: 'same' takes 1 argument but 0 were given
 // error: 'same' takes 1 argument but 2 were given
@@ -81,6 +81,6 @@ int main() {
 // error: 'same' takes 1 template argument, but more were given
 // error: expected 'array<int, 2>' for parameter 'a' of 'lengthOf<int, 2>', but this is 'array<int, 3>'
 // error: this argument has no value
-// error: 'same' is not declared
+// error: 'same' is a function, not a value
 // error: functions can only be called for now
 // error: 'T' is a template parameter here, so it cannot also be a variable

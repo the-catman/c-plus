@@ -1,0 +1,88 @@
+// Advice about calls and casts, which is about what was actually written. advice_followed_calls has the forms it gives.
+class A {
+public:
+    virtual string s() const = 0;
+};
+class D : public A {
+public:
+    string s() const override { return A::s(); }
+    // error: 'A' only declares it, so there is nothing to call. Inside an override, write what the method does here
+};
+struct P {
+    vector<int> items;
+    int x = 0;
+    void set(int v) { x = v; }
+    int get() const { set(1); return x; }
+    // error: remove `const` from 'get', or mark 'set' `const` if it does not change any field
+    int other() const { this.set(1); return x; }
+    // error: remove `const` from 'other', or mark 'set' `const` if it does not change any field
+};
+class C { public: int x = 1; };
+void casts() {
+    string s = "abc";
+    char* a = (char*)s;
+    // error: there are no pointers into a string yet. A C function with a `string` parameter takes `s` itself
+    vector<int> v = {1};
+    int* b = (int*)v;
+    // error: there are no pointers into a vector yet. Copy it into an `array<int, N>` and use `a.data()`
+    C c = C();
+    void* e = (void*)c;
+    // error: pass the object itself: `&x` would be the address of the variable, not of the object
+    int n = 1;
+    void* f = (void*)n;
+}
+void optionalValues() {
+    vector<int>? o = vector<int>{1};
+    o.push_back(2);
+    // error: read with `o?.push_back(...)`. To change it, unwrap it, change the copy and store it back: `if (auto v = o) { v.push_back(...); o = v; }`
+    P? held = P{};
+    held?.items.push_back(1);
+    // error: unwrap the optional, change the copy and store it back: `if (auto v = held) { v.items.push_back(...); held = v; }`
+    held?.items.clear();
+    // error: `if (auto v = held) { v.items.clear(); held = v; }`
+}
+template<typename U, typename T> T pick(U u, T a, T b) { return a; }
+template<typename T> T same(T a, T b) { return a; }
+template<int N> int two(array<int, N> a, array<int, N> b) { return N; }
+template<typename T, typename U> U conv(T a) { return U(); }
+template<typename T, int N> int sized(T a) { return N; }
+void generics() {
+    println("{}", pick("u", 1, 2L));
+    // error: write the type you mean and those before it: `pick<string, long>(...)`, or convert an argument
+    println("{}", same(1, 2.5));
+    // error: `same<double>(...)`
+    array<int, 2> x;
+    array<int, 3> y;
+    println("{}", two(x, y));
+    // error: 'N' must be the same for both. Give them arrays of one size
+    println("{}", conv(1));
+    // error: arguments are written in order, so write all up to it: `conv<int, int>(...)`
+    println("{}", sized(1));
+    // error: arguments are written in order, so write all up to it: `sized<int, 16>(...)`
+}
+void strings() {
+    string s = "a";
+    bool b = true;
+    int? o = 1;
+    println("{}", s == b);
+    // error: turn it into a string: `s == format("{}", x)`
+    println("{}", s == null);
+    // error: a string is never null. Write `s.empty()` for no text, or make it `string?`
+    string? t = "x";
+    println("{}", s < t);
+    // error: give it a fallback: `s < (t ?? "")`
+    println("{}", s + o);
+    // error: it may be null: `to_string(opt ?? 0)` for a number, or `format("{}", opt)`, which gives its value or "null"
+    println("{}", stoi(s));
+    // error: until it does, declare `extern "C" int atoi(string text);`, and call `atoi(s)` instead of `stoi`
+    println("{}", strtol(s, null, 10));
+    // error: a C function must be declared: `extern "C" long strtol(string s, char** end, int base);`
+    println("{}", pthread_create(1));
+    // error: write `auto t = spawn f(x);`, then `t.wait()`, which gives what `f` returned
+}
+void constHolder() {
+    const P p = P{};
+    p.set(1);
+    // error: declare 'p' without `const`, or mark 'set' `const` if it does not change any field
+}
+int main() { return 0; }

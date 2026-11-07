@@ -134,7 +134,7 @@ int main() {
 // error: 'throwsHere' is not marked `throws`, so an error has nowhere to go
 // error: `throw;` passes on the error being handled, so it can only be inside a catch
 // error: only an object of `Error`, or of a class deriving from it, can be thrown, but this is 'int'
-// error: write `throw Error(s);`
+// error: wrap the string in `Error(...)`: `throw Error(s);`
 // error: it may be null. Write `throw e.value();`
 // error: an error none of these catches takes has nowhere to go, since 'incomplete' is not marked `throws`
 // error: only `Error` and classes deriving from it are thrown, so a catch cannot take 'int'
