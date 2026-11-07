@@ -1181,7 +1181,22 @@ void Sema::reportUnknownName(const NameExpr& n) {
         return;
     }
     if (const TemplateDecl* tmpl = program_->findTemplate(n.name); tmpl && tmpl->kind != TemplateDecl::Kind::Function) {
-        diags_.error(n.loc, q(n.name) + " is a generic type, not a value", "to build one, write it with its arguments: `" + exampleArguments(*tmpl) + "(...)`" + constraintNote(*tmpl), spec::Generics);
+        std::string example = exampleArguments(*tmpl), note = constraintNote(*tmpl);
+        if (!note.empty()) {  // a constraint of the program's own: `int` or `double` may have what it requires
+            std::string args;
+            bool allFit = true;
+            for (const TemplateParam& p : tmpl->params) {
+                std::string one = p.valueType ? (p.valueType->is(K::Bool) ? "true" : p.valueType->is(K::Char) ? "'a'" : "4") : "";
+                Loc where{};
+                if (!p.valueType)
+                    for (const Type* candidate : {Type::intTy(), Type::doubleTy()})
+                        if (one.empty() && (p.constraint.empty() || constraintProblem(p.constraint, candidate, where).empty())) one = candidate->name;
+                allFit = allFit && !one.empty();
+                args += (args.empty() ? "" : ", ") + (one.empty() ? std::string("...") : one);
+            }
+            if (allFit) example = tmpl->name + "<" + args + ">", note.clear();
+        }
+        diags_.error(n.loc, q(n.name) + " is a generic type, not a value", "to build one, write it with its arguments: `" + example + "(...)`" + note, spec::Generics);
         return;
     }
     if (false) {}
@@ -3619,8 +3634,17 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
             const Type* held = isHashmap(t) ? t->decl->templateArgs[1].type : t->elem;
             help = isMethod ? "only a pointer is followed with '->': write `" + n + "." + u.arrowMember + (takesNothing ? "()" : "(...)") + "`"
                  : t->is(K::String) ? q(n) + " is a string, which has no fields: only a pointer is followed with '->'"
-                 : held && !held->hasFields() && !held->isClass() && !held->isUnique() && !held->isLocal()
+                 : held && (held->isNumber() || held->is(K::Char) || held->is(K::Bool) || held->is(K::String))
                      ? "remove `->" + u.arrowMember + "`: " + q(n) + " holds " + q(held) + ", which has no fields, and only a pointer is followed with '->'"
+                 : held && (held->isPointer() || held->isOptional() || held->isWeak())
+                     ? [&] {
+                           const std::string at = n + (isHashmap(t) ? "[key]" : "[i]");
+                           const bool weakMethod = u.arrowMember == "lock" || u.arrowMember == "expired" || u.arrowMember == "reset";
+                           const std::string to = held->isPointer() ? at + "->" + u.arrowMember
+                                                : held->isOptional() ? at + "?." + u.arrowMember
+                                                : weakMethod ? at + "." + u.arrowMember + "()" : at + ".lock()?." + u.arrowMember;
+                           return "only a pointer is followed with '->', and " + q(n) + " holds " + q(held) + ": write `" + to + "`";
+                       }()
                  : "only a pointer is followed with '->'. For a field of what it holds, write `" + n + (isHashmap(t) ? "[key]." : "[i].") + u.arrowMember + "`";
         } else if (t->hasFields() || t->isUnique() || t->isLocal())
             help = std::string(t->isClass() ? "a class reference is used directly, so " : t->isUnique() ? "a unique reference is used directly, so " : t->isLocal() ? "a local reference is used directly, so " : "") +
@@ -4074,8 +4098,9 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 }
                 const Expr* other = lStr ? b.rhs.get() : b.lhs.get();
                 const Type* ot = lStr ? r : l;
-                const std::string str = spelled(lStr ? *b.lhs : *b.rhs, "");
-                const std::string otherName = spelled(*other, "");
+                auto whole = [](const std::string& written) { return written.find("...") == std::string::npos ? written : std::string(); };  // nothing left out
+                const std::string str = whole(spelled(lStr ? *b.lhs : *b.rhs, ""));
+                const std::string otherName = whole(spelled(*other, ""));
                 auto inOrder = [&](const std::string& fixed) {  // the string where it was, and the other side as it should be
                     if (str.empty()) return fixed + "` in place of `" + otherName;
                     return lStr ? str + " " + sym + " " + fixed : fixed + " " + sym + " " + str;
@@ -5908,6 +5933,8 @@ const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
                          : n == "insert" ? "build it: `s = s.substr(0, pos) + t + s.substr(pos);`"
                          : n == "replace" ? "build it: `s = s.substr(0, pos) + t + s.substr(pos + n);`"
                          : n == "resize" ? "build it: `s = s.substr(0, n);` to shorten it, or `s += string(k, ' ');` to add k spaces"
+                         : n == "rfind" && !call.args.empty() && call.args[0]->kind == Expr::Kind::CharLit
+                             ? "go back from the end: `for (long i = s.size() - 1; i >= 0; i--) if (s[i] == " + plainKey(*call.args[0]) + ") { ...; break; }`"
                          : n == "rfind" ? "go back from the end: `for (long i = s.size() - t.size(); i >= 0; i--) if (s.substr(i, t.size()) == t) { ...; break; }`, with `t` what is looked for"
                          : n == "find_first_of" ? "go over it and test each char: `for (long i = 0; i < s.size(); i++) if (chars.contains(string(1, s[i]))) { ...; break; }`"
                          : n == "find_last_of" ? "go back from the end and test each char: `for (long i = s.size() - 1; i >= 0; i--) if (chars.contains(string(1, s[i]))) { ...; break; }`"

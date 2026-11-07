@@ -989,25 +989,60 @@ void Parser::rejectOtherLanguages() {
     const std::string& w = t.text;
     if (w == "typedef") fail(t.loc, "C+ has no typedef", "write the type itself. A struct or a class already goes by its name", spec::Variables);
     if (w == "using" && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Assign) {  // `using Id = long;`
-        std::string type;
-        for (size_t at = 3; at < 40 && peek(at).kind != Tok::Semi && peek(at).kind != Tok::Eof; ++at) {
-            if (peek(at).kind == Tok::Ident && peek(at).text == "std" && peek(at + 1).kind == Tok::ColonColon) {  // C+ writes them without
-                ++at;
-                continue;
-            }
-            std::string piece = peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text;
-            if (piece == "unsigned" || piece == "signed") continue;  // the C+ type of the same size follows
-            if (piece == "long" && peek(at + 1).kind == Tok::KwLong) continue;  // `long long` is `long`
-            if (piece == "int8_t" || piece == "uint8_t" || piece == "int16_t" || piece == "uint16_t" || piece == "int32_t" || piece == "uint32_t") piece = "int";
-            if (piece == "int64_t" || piece == "uint64_t" || piece == "size_t" || piece == "ssize_t" || piece == "ptrdiff_t") piece = "long";
-            if (piece == "int" && !type.empty() && type.size() >= 4 && type.compare(type.size() - 4, 4, "long") == 0) continue;  // `long int`
-            const bool word = !piece.empty() && (std::isalnum((unsigned char)piece[0]) || piece[0] == '_');
-            if (word && !type.empty() && (std::isalnum((unsigned char)type.back()) || type.back() == '_')) type += " ";
-            type += piece;
-            if (peek(at).kind == Tok::Comma) type += " ";
+        // The type as C+ writes it, or nothing when C+ has none
+        std::vector<std::string> words;
+        for (size_t at = 3; at < 60 && peek(at).kind != Tok::Semi && peek(at).kind != Tok::Eof; ++at) {
+            if (peek(at).kind == Tok::ColonColon) continue;  // `::std::string`, `std::string`
+            if (peek(at).kind == Tok::Ident && peek(at).text == "std" && peek(at + 1).kind == Tok::ColonColon) continue;
+            words.push_back(peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text);
         }
-        if (type.empty()) type = "int";  // `unsigned` alone
-        fail(t.loc, "C+ has no type aliases", "write the type itself, `" + type + "`, wherever `" + peek(1).text + "` is used", spec::Variables);
+        size_t pos = 0;
+        bool known = true;
+        std::function<std::string()> typeAt = [&]() -> std::string {
+            if (pos >= words.size()) return known = false, "";
+            std::string w = words[pos++];
+            while ((w == "unsigned" || w == "signed" || w == "const") && pos < words.size()) w = words[pos++];  // the C+ type of the same size follows
+            if (w == "unsigned" || w == "signed") w = "int";
+            if (w == "long" && pos < words.size() && words[pos] == "long") ++pos;
+            if (w == "long" && pos < words.size() && words[pos] == "int") ++pos;
+            if (w == "int8_t" || w == "uint8_t" || w == "int16_t" || w == "uint16_t" || w == "int32_t" || w == "uint32_t") w = "int";
+            if (w == "int64_t" || w == "uint64_t" || w == "size_t" || w == "ssize_t" || w == "ptrdiff_t") w = "long";
+            static const char* const none[] = {"short", "pair", "tuple", "set", "unordered_set", "list", "deque", "string_view", "function", "variant", "any", "map_view"};
+            for (const char* n : none)
+                if (w == n) known = false;
+            std::vector<std::string> args;
+            if (pos < words.size() && words[pos] == "<") {
+                ++pos;
+                while (known && pos < words.size()) {
+                    args.push_back(typeAt());
+                    if (pos < words.size() && words[pos] == ",") { ++pos; continue; }
+                    if (pos < words.size() && words[pos] == ">") { ++pos; break; }
+                    if (pos < words.size() && words[pos] == ">>") { words[pos] = ">"; break; }
+                    known = false;
+                }
+            }
+            std::string out;
+            auto joined = [&] {
+                std::string all;
+                for (size_t i = 0; i < args.size(); ++i) all += (i ? ", " : "") + args[i];
+                return all;
+            };
+            if ((w == "shared_ptr") && args.size() == 1) out = args[0];  // a class variable is already a counted reference
+            else if (w == "optional" && args.size() == 1) out = args[0] + "?";
+            else if (w == "unique_ptr" && args.size() == 1) out = "unique<" + args[0] + ">";
+            else if (w == "weak_ptr" && args.size() == 1) out = "weak<" + args[0] + ">";
+            else if ((w == "unordered_map" || w == "map") && args.size() == 2) out = "hashmap<" + joined() + ">";
+            else out = w + (args.empty() ? "" : "<" + joined() + ">");
+            while (pos < words.size() && words[pos] == "*") out += "*", ++pos;
+            if (pos < words.size() && words[pos] == "[") known = false;  // a C array, which C+ writes `array<T, N>`
+            return out;
+        };
+        std::string type = typeAt();
+        if (pos != words.size()) known = false;
+        fail(t.loc, "C+ has no type aliases",
+             known && !type.empty() ? "write the type itself, `" + type + "`, wherever `" + peek(1).text + "` is used"
+                                    : "write the type itself wherever `" + peek(1).text + "` is used, as C+ writes it: `cplus explain cheatsheet` shows what takes the place of each C++ type",
+             spec::Variables);
     }
     if (w == "using") fail(t.loc, "C+ has no 'using' declarations", "built-ins like println, string and vector need no std:: prefix, so `using` has nothing to do", spec::Modules);
     if (w == "inline") fail(t.loc, "C+ has no 'inline'", "remove it: with -O, the compiler decides what to inline", spec::Functions);
