@@ -1,0 +1,3 @@
+// An alias cut off at the end of the file names no type.
+using X = std::vector<
+// error: write the type itself wherever `X` is used, as C+ writes it

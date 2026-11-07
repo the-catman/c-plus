@@ -991,51 +991,80 @@ void Parser::rejectOtherLanguages() {
     if (w == "using" && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Assign) {  // `using Id = long;`
         // The type as C+ writes it, or nothing when C+ has none
         std::vector<std::string> words;
+        std::vector<bool> fromStd;  // written `std::name`, which only names what C+ has under another name, if anything
         for (size_t at = 3; at < 60 && peek(at).kind != Tok::Semi && peek(at).kind != Tok::Eof; ++at) {
-            if (peek(at).kind == Tok::ColonColon) continue;  // `::std::string`, `std::string`
-            if (peek(at).kind == Tok::Ident && peek(at).text == "std" && peek(at + 1).kind == Tok::ColonColon) continue;
+            bool isStd = false;
+            if (peek(at).kind == Tok::ColonColon) continue;  // `::std::string`
+            if (peek(at).kind == Tok::Ident && peek(at).text == "std" && peek(at + 1).kind == Tok::ColonColon) {
+                at += 2;
+                isStd = true;
+                if (at >= 60 || peek(at).kind == Tok::Semi || peek(at).kind == Tok::Eof) break;
+            }
             words.push_back(peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text);
+            fromStd.push_back(isStd);
         }
         size_t pos = 0;
         bool known = true;
+        auto isClassName = [&](const std::string& name) {
+            const StructDecl* sd = typeNames_.count(name) ? prog_->findStruct(name) : nullptr;
+            return sd && sd->isClass;
+        };
         std::function<std::string()> typeAt = [&]() -> std::string {
             if (pos >= words.size()) return known = false, "";
+            const bool isStd = fromStd[pos];
             std::string w = words[pos++];
-            while ((w == "unsigned" || w == "signed" || w == "const") && pos < words.size()) w = words[pos++];  // the C+ type of the same size follows
+            std::string prefix;
+            if (w == "const") {  // `const int*` stays as it is
+                prefix = "const ";
+                if (pos >= words.size()) return known = false, "";
+                w = words[pos++];
+            }
+            while ((w == "unsigned" || w == "signed") && pos < words.size() && (words[pos] == "int" || words[pos] == "long" || words[pos] == "char")) w = words[pos++];  // the C+ type of the same size
             if (w == "unsigned" || w == "signed") w = "int";
             if (w == "long" && pos < words.size() && words[pos] == "long") ++pos;
             if (w == "long" && pos < words.size() && words[pos] == "int") ++pos;
             if (w == "int8_t" || w == "uint8_t" || w == "int16_t" || w == "uint16_t" || w == "int32_t" || w == "uint32_t") w = "int";
-            if (w == "int64_t" || w == "uint64_t" || w == "size_t" || w == "ssize_t" || w == "ptrdiff_t") w = "long";
-            static const char* const none[] = {"short", "pair", "tuple", "set", "unordered_set", "list", "deque", "string_view", "function", "variant", "any", "map_view"};
-            for (const char* n : none)
-                if (w == n) known = false;
+            if (w == "int64_t" || w == "uint64_t" || w == "size_t" || w == "ssize_t" || w == "ptrdiff_t" || w == "intptr_t" || w == "uintptr_t") w = "long";
+            if (w == "short" || w == "wchar_t" || w == "char16_t" || w == "char32_t" || w == "char8_t") known = false;
+            static const char* const stdKnown[] = {"string", "vector", "array", "optional", "unique_ptr", "weak_ptr", "shared_ptr", "unordered_map", "map", "mutex"};
+            if (isStd && std::find_if(std::begin(stdKnown), std::end(stdKnown), [&](const char* n) { return w == n; }) == std::end(stdKnown)) known = false;
             std::vector<std::string> args;
             if (pos < words.size() && words[pos] == "<") {
                 ++pos;
+                bool closed = false;
                 while (known && pos < words.size()) {
                     args.push_back(typeAt());
                     if (pos < words.size() && words[pos] == ",") { ++pos; continue; }
-                    if (pos < words.size() && words[pos] == ">") { ++pos; break; }
-                    if (pos < words.size() && words[pos] == ">>") { words[pos] = ">"; break; }
-                    known = false;
+                    if (pos < words.size() && words[pos] == ">") { ++pos; closed = true; break; }
+                    if (pos < words.size() && words[pos] == ">>") { words[pos] = ">"; closed = true; break; }
+                    break;
                 }
+                if (!closed) known = false;  // cut off, or something that is not a list of types
             }
-            std::string out;
             auto joined = [&] {
                 std::string all;
                 for (size_t i = 0; i < args.size(); ++i) all += (i ? ", " : "") + args[i];
                 return all;
             };
-            if ((w == "shared_ptr") && args.size() == 1) out = args[0];  // a class variable is already a counted reference
-            else if (w == "optional" && args.size() == 1) out = args[0] + "?";
-            else if (w == "unique_ptr" && args.size() == 1) out = "unique<" + args[0] + ">";
-            else if (w == "weak_ptr" && args.size() == 1) out = "weak<" + args[0] + ">";
-            else if ((w == "unordered_map" || w == "map") && args.size() == 2) out = "hashmap<" + joined() + ">";
+            auto one = [&](size_t n) { if (args.size() != n) known = false; return n == 0 || args.size() < n ? std::string() : args[0]; };
+            std::string out;
+            if (w == "shared_ptr") {  // a class variable is already a counted reference; nothing else is shared that way
+                out = one(1);
+                if (!isClassName(out)) known = false;
+            } else if (w == "optional") {
+                out = one(1);
+                if (!out.empty() && (out.back() == '?' || out.back() == '*')) {}  // already can be null
+                else out += "?";
+            } else if (w == "unique_ptr" || w == "weak_ptr") {
+                out = (w == "unique_ptr" ? "unique<" : "weak<") + one(1) + ">";
+                if (!isClassName(args.empty() ? "" : args[0])) known = false;  // they hold an object of a class
+            } else if (w == "unordered_map" || w == "map") out = "hashmap<" + (one(2), joined()) + ">";
+            else if (w == "vector") out = "vector<" + one(1) + ">";
+            else if (w == "mutex") out = "Mutex";
             else out = w + (args.empty() ? "" : "<" + joined() + ">");
             while (pos < words.size() && words[pos] == "*") out += "*", ++pos;
             if (pos < words.size() && words[pos] == "[") known = false;  // a C array, which C+ writes `array<T, N>`
-            return out;
+            return prefix + out;
         };
         std::string type = typeAt();
         if (pos != words.size()) known = false;

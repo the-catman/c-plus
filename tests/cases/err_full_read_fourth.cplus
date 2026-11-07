@@ -1,0 +1,29 @@
+// The fourth reading: aliases of C++ types C+ has no form for, or a form with rules of its own, `const` kept,
+// `rfind` of an escaped char, and `->` through a pointer to a container.
+class Node { };
+struct Pt { int x = 0; };
+using A1 = std::optional<int*>;
+// error: write the type itself, `int*`, wherever `A1` is used
+using A2 = std::optional<std::optional<int>>;
+// error: write the type itself, `int?`, wherever `A2` is used
+using A3 = std::unique_ptr<int>;
+// error: write the type itself wherever `A3` is used, as C+ writes it
+using A5 = std::shared_ptr<int>;
+// error: write the type itself wherever `A5` is used, as C+ writes it
+using A6 = std::queue<int>;
+// error: write the type itself wherever `A6` is used, as C+ writes it
+using A7 = std::mutex;
+// error: write the type itself, `Mutex`, wherever `A7` is used
+using A8 = intptr_t;
+// error: write the type itself, `long`, wherever `A8` is used
+using B2 = const int*;
+// error: write the type itself, `const int*`, wherever `B2` is used
+using B3 = std::vector<const int*>;
+// error: write the type itself, `vector<const int*>`, wherever `B3` is used
+void f(vector<Pt*>* pp, string path) {
+    int c = (*pp)->x;
+    // error: only a pointer is followed with '->', and '*pp' holds 'Pt*': write `(*pp)[i]->x`
+    long a = path.rfind('\n');
+    // error: go back from the end: `for (long i = s.size() - 1; i >= 0; i--) if (s[i] == '\n') { ...; break; }`
+}
+int main() { return 0; }

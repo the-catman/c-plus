@@ -3638,14 +3638,14 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
                      ? "remove `->" + u.arrowMember + "`: " + q(n) + " holds " + q(held) + ", which has no fields, and only a pointer is followed with '->'"
                  : held && (held->isPointer() || held->isOptional() || held->isWeak())
                      ? [&] {
-                           const std::string at = n + (isHashmap(t) ? "[key]" : "[i]");
+                           const std::string at = asBase(n) + (isHashmap(t) ? "[key]" : "[i]");
                            const bool weakMethod = u.arrowMember == "lock" || u.arrowMember == "expired" || u.arrowMember == "reset";
                            const std::string to = held->isPointer() ? at + "->" + u.arrowMember
                                                 : held->isOptional() ? at + "?." + u.arrowMember
                                                 : weakMethod ? at + "." + u.arrowMember + "()" : at + ".lock()?." + u.arrowMember;
                            return "only a pointer is followed with '->', and " + q(n) + " holds " + q(held) + ": write `" + to + "`";
                        }()
-                 : "only a pointer is followed with '->'. For a field of what it holds, write `" + n + (isHashmap(t) ? "[key]." : "[i].") + u.arrowMember + "`";
+                 : "only a pointer is followed with '->'. For a field of what it holds, write `" + asBase(n) + (isHashmap(t) ? "[key]." : "[i].") + u.arrowMember + "`";
         } else if (t->hasFields() || t->isUnique() || t->isLocal())
             help = std::string(t->isClass() ? "a class reference is used directly, so " : t->isUnique() ? "a unique reference is used directly, so " : t->isLocal() ? "a local reference is used directly, so " : "") +
                    "fields and methods are reached with '.': write `" + n + "." + u.arrowMember + "`";
@@ -5934,7 +5934,7 @@ const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
                          : n == "replace" ? "build it: `s = s.substr(0, pos) + t + s.substr(pos + n);`"
                          : n == "resize" ? "build it: `s = s.substr(0, n);` to shorten it, or `s += string(k, ' ');` to add k spaces"
                          : n == "rfind" && !call.args.empty() && call.args[0]->kind == Expr::Kind::CharLit
-                             ? "go back from the end: `for (long i = s.size() - 1; i >= 0; i--) if (s[i] == " + plainKey(*call.args[0]) + ") { ...; break; }`"
+                             ? "go back from the end: `for (long i = s.size() - 1; i >= 0; i--) if (s[i] == " + charLiteral(static_cast<const CharLitExpr&>(*call.args[0]).value) + ") { ...; break; }`"
                          : n == "rfind" ? "go back from the end: `for (long i = s.size() - t.size(); i >= 0; i--) if (s.substr(i, t.size()) == t) { ...; break; }`, with `t` what is looked for"
                          : n == "find_first_of" ? "go over it and test each char: `for (long i = 0; i < s.size(); i++) if (chars.contains(string(1, s[i]))) { ...; break; }`"
                          : n == "find_last_of" ? "go back from the end and test each char: `for (long i = s.size() - 1; i >= 0; i--) if (chars.contains(string(1, s[i]))) { ...; break; }`"
