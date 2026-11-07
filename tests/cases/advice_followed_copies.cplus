@@ -23,6 +23,28 @@ struct Counted {
     int n = 0;
     int bump() { n = n + 1; return n; }
 };
+struct Withs {
+    int x = 0;
+    Withs with(int n) { x = n; return this; }
+};
+struct Incs {
+    int x = 0;
+    void inc() throws { x = x + 1; }
+};
+int failing() {
+    try {
+        Incs a = {};
+        Incs b = {};
+        bool f = true;
+        if (f) try a.inc(); else try b.inc();
+        a = b;
+        try a.inc();
+        try a.inc();
+        return a.x;
+    } catch (Error e) {
+        return -1;
+    }
+}
 struct Wrapped {
     unique<N> held = unique<N>();
     int n = 1;
@@ -146,6 +168,14 @@ int main() {
     int got = (takeFirst ? first.bump() : second.bump());
     println("{} {}", got, first.n);
     // expect: 1 1
+    // Keeping what a method of the copy gives
+    Withs? held = Withs{};
+    Withs? result = null;
+    if (auto v = held) { result = v.with(5); held = v; }
+    println("{} {}", result?.x, held?.x);
+    // expect: 5 5
+    println("{}", failing());
+    // expect: 2
     // What takes the place of make_shared
     auto node = Node();
     println("{}", node.value);

@@ -1,0 +1,71 @@
+// What is kept or lost when a copy is changed: results that are used, `try`, `const`, operators, and what a call is given.
+struct S {
+    int x = 0;
+    void set() { x = 1; }
+    void add(int n) { x = x + n; }
+    S with(int n) { x = n; return this; }
+    int bump() { x = x + 1; return x; }
+    void inc() throws { x = x + 1; }
+};
+bool pick(int n) { return n > 0; }
+
+void keepWhatItGives() {
+    S? o = S{};
+    S? u = o?.with(5);
+    // error: to keep what it gives, unwrap it and call it on the copy: `S? result = null; if (auto v = o) { result = v.with(...); o = v; }`, and leave out `o = v;` to keep 'o' as it is
+    S a = {};
+    S b = {};
+    S w = (a = b).with(7);
+    // error: `=` gives a copy of what was assigned. Assign first, on a line of its own, `a = ...;`, and then use `a.with(...)`
+    vector<S> list = {S{}};
+    list.back().with(3);
+    // error: `back()` gives a copy. Change it in place: `list[list.size() - 1].with(...)`
+    hashmap<string, S> m;
+    m.values()[0].set();
+    // error: 'set' may change the struct, but 'values()' gives a copy of it
+    S? none;
+    (none ?? a).set();
+    // error: 'set' may change the struct, but '??' gives a copy of it
+}
+void canFail() throws {
+    S a = {};
+    S b = {};
+    bool f = true;
+    try (f ? a : b).inc();
+    // error: `if (f) try a.inc(); else try b.inc();`
+    try (a = b).inc();
+    // error: `a = ...; try a.inc();`
+    S? o = S{};
+    try o.value().inc();
+    // error: `if (auto v = o) { try v.inc(); o = v; }`
+}
+struct Pair {
+    S a;
+    S b;
+    int f(bool g) const { return (g ? a : b).bump(); }
+    // error: const method 'f' cannot change fields. Remove `const` from it, or change a copy: `auto x = ...;`, and change that
+};
+void constLocals() {
+    const S a = {};
+    const S b = {};
+    bool f = true;
+    (f ? a : b).set();
+    // error: 'a' is const, so what is in it cannot change
+}
+void operators() {
+    S a = {};
+    S b = {};
+    bool f = true;
+    (f ? a : b).x += 3;
+    // error: `if (f) a.x += ...; else b.x += ...;`
+    (f ? a : b).x++;
+    // error: `if (f) a.x++; else b.x++;`
+    (pick(1) ? a : b).add(4);
+    // error: `if (pick(1)) a.add(...); else b.add(...);`
+}
+void pointersIntoGrowingThings(vector<int>? o, string? s) {
+    o.data();
+    // error: this compiler does not support pointers into vectors and strings yet, as their elements move when they grow. Copy the values into an `array<T, N>` variable, and call `data()` on that
+}
+
+int main() { return 0; }

@@ -17,6 +17,7 @@ struct S {
     void merge(S other) { x = x + other.x; }
     int read() const { return x; }
     S with(int n) { x = n; return this; }
+    int bump() { x = x + 1; return x; }
 };
 struct H {
     vector<int> items;
@@ -109,6 +110,9 @@ SAME = [  # (declared, wrong, printed, expected)
     ("S a = {};\nS b = {};\nbool f = false;", "(f ? a : b).x = N;", "b.x", "5"),
     ("Plain a = {};\nPlain b = {};\nbool f = true;", "(f ? a : b).p.set();", "a.p.x", "7"),
     ("vector<S> ws = {S{}, S{}};\nbool f = true;", "(f ? ws.back() : ws.front()).set();", "ws[1].x", "7"),
+    ("S a = {};\nS b = {};\nbool f = true;", "(f ? a : b).x += N;", "a.x", "6"),
+    ("S a = {};\nS b = {};\nbool f = true;", "(f ? a : b).x++;", "a.x", "2"),
+    ("vector<S> ws = {S{}};", "ws.back().x -= N;", "ws[0].x", "-4"),
     ("vector<S> ws = {S{}, S{}};\nbool f = false;", "(f ? ws.back() : ws.front()).x = N;", "ws[0].x", "5"),
     ('hashmap<string, S> m = {{"a", S{}}, {"b", S{}}};\nbool f = true;', '(f ? m["a"] : m["b"]).set();', 'm["a"].x', "7"),
     ("vector<unique<C>?> w;\nw.push_back(unique<C>());", "w[w.size() - 1].go();", "w[0]?.n", "2"),
@@ -224,6 +228,11 @@ VALID = [  # (definitions, main, expected)
     ("", "bool f = false;\nS u = maybeS(f).value_or(S{}).with(7);\nprintln(\"{}\", u.x);", "7"),
     ("", "bool f = true;\nS u = (f ? makeS(1) : makeS(2));\nprintln(\"{}\", (f ? u : makeS(4)).read());", "1"),
     ("", "S u = maybeS(true).value().with(5);\nprintln(\"{}\", u.x);", "5"),
+    ("", "vector<S> v = {S{}};\nauto t = spawn v.back().bump();\nprintln(\"{} {}\", t.wait(), v[0].x);", "2 1"),
+    ("", "S? u = maybeS(true)?.with(5);\nprintln(\"{}\", u?.x);", "5"),
+    ("", "S d = {};\nS u = maybeS(false).value_or(d).with(7);\nprintln(\"{} {}\", u.x, d.x);", "7 1"),
+    ("", "S d = {};\nS u = (maybeS(false) ?? d).with(7);\nprintln(\"{} {}\", u.x, d.x);", "7 1"),
+    ("", "hashmap<string, S> m = {{\"a\", S{}}};\nS u = m.values()[0].with(4);\nprintln(\"{} {}\", u.x, m[\"a\"].x);", "4 1"),
     ("", "S u = listS().back().with(5);\nprintln(\"{}\", u.x);", "5"),
     ("", "S u = tableS().at(\"a\").with(5);\nprintln(\"{}\", u.x);", "5"),
     ("", "S a = {};\nbool f = true;\nS u = (f ? a : makeS(2)).with(9);\nprintln(\"{} {}\", u.x, a.x);", "9 1"),
@@ -273,7 +282,7 @@ def followed(code, wrong, value):
     """The suggested code, with what it left out filled in from the line that was wrong."""
     args = re.search(r"(?:\.|->)(\w+)\(([^()]*)\);$", wrong)
     code = code.replace("(...)", "(" + (args.group(2) if args else "") + ")")
-    code = code.replace("[i]", "[0]").replace(" = ...", " = " + value)
+    code = re.sub(r"= \.\.\.", "= " + value, code.replace("[i]", "[0]"))
     return code
 
 
@@ -319,7 +328,7 @@ def run_case(cplus, workdir, index, declared, wrong, kind, printed=None, expecte
     if kind == "temporary" and not claims_temporary:
         return f"{shown}: does not say this only exists as a copy: {text}"
     # The last piece of code that is a statement, or an assignment with a place to change
-    codes = [c for c in CODE.findall(text) if is_statement(c) or " = ..." in c or re.search(r"\.\w+\((\.\.\.)?\)$", c)]
+    codes = [c for c in CODE.findall(text) if is_statement(c) or "= ..." in c or re.search(r"\.\w+\((\.\.\.)?\)$", c)]
     if not codes:
         if kind == "simple":
             return f"{shown}: no code to follow in: {text}"
@@ -361,7 +370,7 @@ def run_elsewhere(cplus, workdir, index, definitions, wrong, body, expected):
     text = helps[0]
     if "only exists as a copy" in text:
         return f"{shown}: says this only exists as a copy: {text}"
-    codes = [c for c in CODE.findall(text) if is_statement(c) or " = ..." in c or re.search(r"\.\w+\((\.\.\.)?\)$", c)]
+    codes = [c for c in CODE.findall(text) if is_statement(c) or "= ..." in c or re.search(r"\.\w+\((\.\.\.)?\)$", c)]
     if not codes:
         return f"{shown}: no code to follow in: {text}"
     value = re.search(r"\(([^()]*)\);$", wrong)

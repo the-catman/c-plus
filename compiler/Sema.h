@@ -128,7 +128,7 @@ private:
     // A call to a function that can fail, or a `throw`, must have somewhere for the error to go.
     void checkCanFail(const FuncDecl& callee, Loc loc, const Expr* receiver = nullptr);
     std::string whereAnErrorCanGo() const;
-    std::string copyHelp(const Expr& target, const std::string& change, bool givesValue = false);
+    std::string copyHelp(const Expr& target, const std::string& change, bool givesValue = false, const std::string& before = "");
     std::string freshName(const std::string& avoid, std::initializer_list<const char*> names = {"v", "inner", "item", "held", "unwrapped"});
     std::string constHolderHelp(const Expr& e, bool canCopy = true);
     std::string loopCopyNote(const Expr& e);
@@ -136,6 +136,7 @@ private:
     std::string storeItBack(const Expr& recv, const std::string& method, bool hasArguments, const std::string& before = "");
     const Type* checkSpawn(SpawnExpr& s, Flow& flow);
     const Expr* spawned_ = nullptr;  // the call `spawn` is on, whose error goes in the task
+    const Expr* discarded_ = nullptr;  // the expression of the statement being checked, whose value goes nowhere
     const Type* checkExpr(Expr& e, Flow& flow);
     // Checks `e` where a value of type `expected` is needed. A `{ }` list takes that type.
     void checkValue(Expr& e, Flow& flow, const Type* expected, const std::string& context);
@@ -197,7 +198,7 @@ private:
     // Resolves a variable or field access. When the expression is rooted at a variable,
     // `var` and `path` name the place; otherwise var is null (e.g. `makePoint().x`).
     const Type* resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::string& path);
-    bool checkAssignable(Expr& target, Flow& flow, const char* action, const VarDecl*& var, std::string& path);
+    bool checkAssignable(Expr& target, Flow& flow, const char* action, const VarDecl*& var, std::string& path, const std::string& change = " = ...");
     // Reports an error when the resolved place `target` cannot be changed: it is const,
     // a field of `this` in a const method, or part of a temporary value.
     bool checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path, const std::string& change = " = ...");
