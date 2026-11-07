@@ -1,0 +1,17 @@
+// A generic can name itself with its arguments in its own body, as its name alone, as anywhere else.
+template<typename T> class G {
+public:
+    T v;
+    G(T x) : v(x) {}
+    G<T> dup() { return G<T>(v); }
+    G<T> braces() { return G<T>{v}; }
+    G<int> ofInt() { return G<int>(1); }
+    G alone() { return G(v); }
+};
+
+int main() {
+    G<string> g = G<string>("a");
+    println("{} {} {} {}", g.dup().v, g.braces().v, g.ofInt().v, g.alone().v);
+    // expect: a a 1 a
+    return 0;
+}

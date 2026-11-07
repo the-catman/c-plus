@@ -39,7 +39,7 @@ void outside(Other other) {
     Base::go();
     // error: call it on an object: `x.method(...)`
     makePoint().x = 1;
-    // error: Store it in a variable first, and change that
+    // error: Store it in a variable first, change that, and store it back where it came from
     makeVector().push_back(1);
     int? maybe = 1;
     println("{}", maybe == "text");

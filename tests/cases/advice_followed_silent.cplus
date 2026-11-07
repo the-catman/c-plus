@@ -1,0 +1,119 @@
+// The forms that take the place of what would quietly do the wrong thing, which must do what the errors say.
+struct P {
+    int x = 0;
+    void set() { x = 1; }
+};
+struct Holder {
+    P inner;
+    vector<int> items;
+};
+struct Outer { Holder? h; };
+class U {
+public:
+    string name = "n";
+    bool same(U other) const { return name == other.name; }
+};
+extern "C" int write(int fd, string s, long n);
+extern "C" long atol(string text);
+extern "C" double atof(string text);
+
+P? findIt() { return P{}; }
+void fill(int* a) { a[0] = 9; }
+
+int main() {
+    // The name in the store-back form is not the optional's own
+    vector<int>? v = vector<int>{1};
+    if (auto inner = v) { inner.push_back(2); v = inner; }
+    println("{}", v);
+    // expect: [1, 2]
+    // Through each `?.`
+    Outer? o = Outer{.h = Holder{}};
+    if (auto a = o) { if (auto b = a.h) { b.items.push_back(1); a.h = b; } o = a; }
+    println("{}", o?.h?.items);
+    // expect: [1]
+    // What is not in a variable, first put in one
+    auto opt = findIt();
+    if (auto inner = opt) { inner.set(); opt = inner; }
+    println("{}", opt);
+    // expect: {x: 1}
+    // `back()`, `value()`, `get()` and `at()` give copies, and these change what is there
+    string s = "a";
+    s[s.size() - 1] = 'b';
+    println("{}", s);
+    // expect: b
+    P? p = P{};
+    if (auto u = p) { u.x = 5; p = u; }
+    println("{}", p);
+    // expect: {x: 5}
+    hashmap<string, int> m;
+    m["a"] = 1;
+    println("{}", m);
+    // expect: {"a": 1}
+    hashmap<string, vector<int>> lists;
+    lists["a"].push_back(1);
+    println("{}", lists);
+    // expect: {"a": [1]}
+    vector<P> ps = {P{}};
+    ps[ps.size() - 1].set();
+    println("{}", ps);
+    // expect: [{x: 1}]
+    // Changing an element of what is in an optional
+    vector<int>? w = vector<int>{1};
+    if (auto u = w) { u[0] = 4; w = u; }
+    println("{}", w);
+    // expect: [4]
+    // A method for a class, whose == is the same object
+    U one = U();
+    U two = U();
+    println("{} {}", one == two, one.same(two));
+    // expect: false true
+    // What changes the caller's array
+    array<int, 3> a = {};
+    fill(a.data());
+    println("{}", a);
+    // expect: [9, 0, 0]
+    // Changing the values of a map, and growing a vector
+    hashmap<string, int> counts = {{"x", 1}};
+    for (auto e : counts) counts[e.first] = e.second + 1;
+    println("{}", counts);
+    // expect: {"x": 2}
+    vector<int> grows = {1, 2, 3};
+    long n = 5;
+    while (grows.size() < n) grows.push_back(0);
+    println("{}", grows);
+    // expect: [1, 2, 3, 0, 0]
+    // Inserting, which is an assignment
+    string text = "hello";
+    long pos = 1;
+    string t = "x";
+    text = text.substr(0, pos) + t + text.substr(pos);
+    println("{}", text);
+    // expect: hxello
+    // Reading numbers for the type that is wanted
+    println("{} {}", atol("9999999999"), atof("1.5") * 2);
+    // expect: 9999999999 3
+    // Other compound assignments
+    bool b = true;
+    bool c = true;
+    b = b != c;
+    println("{}", b);
+    // expect: false
+    long big = 7;
+    big = long(fmod(big, 2.5));
+    println("{}", big);
+    // expect: 2
+    // A new object for each element
+    vector<U> us;
+    for (int i = 0; i < 2; i++) us.push_back(U());
+    us[0].name = "changed";
+    println("{}", us[1].name);
+    // expect: n
+    // Standard error
+    string err = "to standard error\n";
+    write(2, err, err.size());
+    // stderr: to standard error
+    return 0;
+}
+
+const int TOP = 100;
+const auto TEXT = "x";

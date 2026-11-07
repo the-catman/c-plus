@@ -14,7 +14,7 @@ int main() {
     // error: write the character itself, as in `"é"`: strings are UTF-8
     string f = "one \
 two";
-    // error: a string cannot continue on the next line
+    // error: a string or a char cannot continue on the next line
     int g = 1 $ 2;
     // error: unexpected character '$' in source
     // error: remove it: names use letters, digits and `_`. Text goes in double quotes

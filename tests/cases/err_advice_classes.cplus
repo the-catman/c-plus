@@ -18,11 +18,11 @@ class NeedsTheObject {
 public:
     Inner a;
     NeedsTheObject() : a(use(this)) {}
-    // error: do this in the constructor's body, where every field has its value. If building a class-typed field needs the object, make the field optional: `A? a;`
+    // error: do this in the constructor's body, where every field has its value. If building a class-typed field needs the object, make the field optional: `Inner? a;`
     Inner use(NeedsTheObject o) { return Inner(); }
 };
 void numberToStruct() {
     P built = 5;
-    // error: build one from it: `P{x}`
+    // error: build one from it: `P{5}`
 }
 int main() { return 0; }

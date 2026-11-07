@@ -30,9 +30,7 @@ int main() {
 // error: built-ins need no prefix: write `array` instead of `std::array`
 // error: list the elements after '=': `array<int, 3> b5 = {...};`
 // error: list the elements after '=': `array<int, 3> b6 = {...};`
-// error: write `array<int, 3> values`
-// error: a fixed-size array is written with its size in the type: `array<int, 5> values`
-// error: For a size known only while the program runs, write `auto values = vector<int>(n);`
+// error: write `vector<int> values`, or, to change the caller's array, `int* values`, called with `x.data()`
 // error: write `array<int, 4> cells`
 // error: array needs an element type and a size
 // error: write e.g. `array<int, 5>`

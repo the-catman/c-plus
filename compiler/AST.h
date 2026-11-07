@@ -374,6 +374,17 @@ bool isCharFunction(const std::string& name);  // `isdigit`, `toupper`, ...: def
 
 // The C function that reads a number from text the way C++'s `std::stoi`, `std::stod`
 // and so on do, as a declaration to suggest: `int atoi(string text)`. Empty for other names.
+// The declaration to suggest for a C function people call without a thought, or nothing.
+inline std::string cDeclarationOf(const std::string& name) {
+    static const std::map<std::string, std::string> known = {
+        {"malloc", "void* malloc(long n)"}, {"calloc", "void* calloc(long n, long size)"}, {"realloc", "void* realloc(void* p, long n)"}, {"free", "void free(void* p)"},
+        {"exit", "void exit(int code)"}, {"abort", "void abort()"}, {"strlen", "long strlen(string s)"}, {"strcmp", "int strcmp(string a, string b)"},
+        {"rand", "int rand()"}, {"srand", "void srand(int seed)"}, {"time", "long time(long* out)"}, {"sleep", "int sleep(int seconds)"},
+        {"usleep", "int usleep(int microseconds)"}, {"getenv", "string? getenv(string name)"}, {"system", "int system(string command)"}, {"getchar", "int getchar()"}};
+    auto it = known.find(name);
+    return it == known.end() ? "" : it->second;
+}
+
 inline std::string cNumberReader(const std::string& name) {
     if (name == "stoi" || name == "atoi") return "int atoi(string text)";
     if (name == "stol" || name == "stoll" || name == "stoul" || name == "stoull" || name == "atol") return "long atol(string text)";

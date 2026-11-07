@@ -7,7 +7,7 @@ void commaInFor() {
 }
 int commaInReturn() {
     return 1, 2;
-    // error: a function returns one value. To return several, return a struct: `return {1, 2};`
+    // error: a function returns one value. To return several, define a struct with a field for each, make it the return type, and write `return {1, 2};`
 }
 void cStyle() {
     int a[2][3];
@@ -25,6 +25,10 @@ void cSized() {
     int n = 3;
     int a[n];
     // error: write `array<int, n> a` if n is a constant, or `auto a = vector<int>(n);` if it is only known while the program runs
+}
+void brackets() {
+    int[] a = {1, 2};
+    // error: write `vector<int> a = {...};`, or `array<int, N> a = {...};`, with N the number of elements
 }
 void declared() {
     int** a = null, * b = null;
@@ -71,11 +75,11 @@ void unknownGenericOfTwo() {
 }
 void optionalOfStd() {
     optional<int> x;
-    // error: write `int?`, which is an int or `null`
+    // error: write `int?`, which holds a value of that type, or `null`
 }
 void stdOptional() {
     std::optional<int> x;
-    // error: write `int?`, which is an int or `null`
+    // error: write `T?`, such as `int?`, which is an int or `null`
 }
 void stdRuntimeError() {
     throw std::runtime_error("x");
@@ -87,7 +91,7 @@ void stdSort() {
 }
 void stdUnknown() {
     std::something(1);
-    // error: write what C+ has instead of `std::something`: `cplus explain` lists it
+    // error: leave out `std::`, and see what C+ has instead in the table of `cplus explain cheatsheet`
 }
 void withAwait() {
     await withAwait();
@@ -124,7 +128,7 @@ void objectInParentheses() {
 }
 void structInParentheses() {
     Point p(1, 2);
-    // error: write `Point p = {1, 2};`
+    // error: write `Point p = {...};`, with the same values
 }
 void listOfText() {
     auto v = vector<string>;

@@ -27,14 +27,14 @@ void casts() {
     // error: there are no pointers into a vector yet. Copy it into an `array<int, N>` and use `a.data()`
     C c = C();
     void* e = (void*)c;
-    // error: pass the object itself: `&x` would be the address of the variable, not of the object
+    // error: C cannot hold a C+ object: pass the fields it needs as separate arguments. `&x` would be the address of the variable, not of the object
     int n = 1;
     void* f = (void*)n;
 }
 void optionalValues() {
     vector<int>? o = vector<int>{1};
     o.push_back(2);
-    // error: read with `o?.push_back(...)`. To change it, unwrap it, change the copy and store it back: `if (auto v = o) { v.push_back(...); o = v; }`
+    // error: To change it, unwrap it, change the copy and store it back: `if (auto v = o) { v.push_back(...); o = v; }`
     P? held = P{};
     held?.items.push_back(1);
     // error: unwrap the optional, change the copy and store it back: `if (auto v = held) { v.items.push_back(...); held = v; }`
@@ -72,7 +72,7 @@ void strings() {
     println("{}", s < t);
     // error: give it a fallback: `s < (t ?? "")`
     println("{}", s + o);
-    // error: it may be null: `to_string(opt ?? 0)` for a number, or `format("{}", opt)`, which gives its value or "null"
+    // error: it may be null: `to_string(o ?? 0)` for a number, or `format("{}", o)`, which gives its value or "null"
     println("{}", stoi(s));
     // error: until it does, declare `extern "C" int atoi(string text);`, and call `atoi(s)` instead of `stoi`
     println("{}", strtol(s, null, 10));

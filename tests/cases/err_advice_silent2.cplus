@@ -1,0 +1,82 @@
+// More advice that would compile and quietly do the wrong thing.
+struct P { int x = 0; void set() { x = 1; } };
+class U { public: int x = 0; };
+void optionalNamedV() {
+    vector<int>? v = vector<int>{1};
+    v?.push_back(2);
+    // error: `if (auto inner = v) { inner.push_back(...); v = inner; }`
+}
+void nestedOptional() {
+    P? o = P{};
+    o?.set();
+    // error: `if (auto v = o) { v.set(...); o = v; }`
+}
+P? findIt() { return null; }
+void notAVariable() {
+    findIt()?.set();
+    // error: store it in a variable first: `auto opt = ...;`. Then unwrap the optional
+}
+void copies() {
+    string s = "a";
+    s.back() = 'b';
+    // error: `back()` gives a copy. Change it in place: `s[s.size() - 1] = ...`
+    P? o = P{};
+    o.value().x = 1;
+    // error: `value()` gives a copy. Unwrap it, change that and store it back: `if (auto v = o) { v.x = ...; o = v; }`
+    hashmap<string, int> m;
+    m.get("a") = 1;
+    // error: `get()` gives a copy. Change the value in place: `m["a"] = ...`
+    hashmap<string, vector<int>> lists;
+    lists.at("a").push_back(1);
+    // error: `at()` gives a copy. Change the value in place: `lists["a"].push_back(...)`
+    vector<P> v = {P{}};
+    v.back().set();
+    // error: 'set' may change the struct, but 'back()' gives a copy of it
+    // error: `back()` gives a copy. Change it in place: `v[v.size() - 1].set(...)`
+    vector<int>? w = vector<int>{1};
+    w[0] = 1;
+    // error: To change an element, store it back: `if (auto v = w) { v[i] = ...; w = v; }`
+}
+void strings() {
+    string s = "hello";
+    s.insert(1, "x");
+    // error: build it: `s = s.substr(0, pos) + t + s.substr(pos);`
+    vector<int> v = {1};
+    v.resize(5);
+    // error: grow it with `while (v.size() < n) v.push_back(value);`, and shrink it with `pop_back`
+}
+void readers() {
+    long n = "5";
+    // error: declare `extern "C" long atol(string text);`, then call `atol(s)`
+    double d = 1;
+    string s = "1.5";
+    d *= s;
+    // error: declare `extern "C" double atof(string text);`, then call `atof(s)`
+    bool b = true;
+    b ^= true;
+    // error: write `b = b != c`
+    vector<int> w;
+    w -= 1;
+    // not-error: write `v.push_back(x)` to add to it
+    // error: use it on a number. Another type is changed with `=`
+    long x = 1;
+    x %= 2.5;
+    // error: write `x = long(fmod(x, y))`
+}
+void classes() {
+    auto v = vector<U>(3);
+    // error: start empty, and `push_back` a new object in a loop: every element of `vector<U>(n, value)` would be one object
+    array<unique<U>, 2> a = {unique<U>(), unique<U>()};
+    unique<U> b = a.back();
+    // error: reach the element in place, as in `a[a.size() - 1].field`, or take it with `move(a[a.size() - 1])`
+}
+void thrown() throws {
+    throw "a \"q\"";
+    // error: wrap the string in `Error(...)`
+}
+template<typename T> void inAGeneric(T x) {
+    try thrown();
+    // error: mark it: `... inAGeneric(...) throws { ... }`
+}
+void generic() { inAGeneric(1); }
+int main() { return 0; }

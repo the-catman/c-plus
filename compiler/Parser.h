@@ -47,6 +47,7 @@ private:
     static constexpr int kMaxChain = 10000;  // `a + b + c`, `a.b.c`: no nesting, but as deep to work through
     int nesting_ = 0;
     bool gaveUp_ = false;
+    bool inExternStruct_ = false;  // reading the fields of a struct inside extern "C"
     [[noreturn]] void failTooDeep();
 
     // Token helpers
@@ -58,6 +59,7 @@ private:
     const Token& expect(Tok k, const std::string& context);
     const Token& expectNewName(const std::string& context);
     std::string operatorHelp(size_t ahead = 0) const;
+    [[noreturn]] void failUnknownGeneric(size_t at);
     Loc afterPrev() const;
     [[noreturn]] void fail(Loc loc, const std::string& message, const std::string& help, const std::string& spec);
     [[noreturn]] void notYet(Loc loc, const std::string& feature, const std::string& help);
@@ -146,7 +148,8 @@ private:
     // repeat the first one's.
     void parseLaterStars(const Type* ty, const std::string& firstName, const char* what);
     void expectCloseAngle(const std::string& context);
-    [[noreturn]] void failCStyleArray(const Type* elem, const std::string& name);
+    enum class ArrayPlace { Variable, Parameter, Field };
+    [[noreturn]] void failCStyleArray(const Type* elem, const std::string& name, ArrayPlace place = ArrayPlace::Variable);
     size_t afterAngles(size_t ahead) const;
     std::unique_ptr<FuncDecl> parseFunction(const Type* retType, Loc retLoc);
     std::unique_ptr<BlockStmt> parseBlock(const FuncDecl* function = nullptr);  // with the parameters of the function it is the body of

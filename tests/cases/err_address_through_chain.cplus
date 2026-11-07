@@ -5,4 +5,4 @@ int main() {
     return 0;
 }
 // error: '&' takes the address of a variable, a field, or what a pointer points to, but this is a temporary value
-// error: '?.' gives a copy of the value
+// error: For a struct, `u` is a copy, so store it back after writing: `opt = u;`

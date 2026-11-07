@@ -493,7 +493,7 @@ bool Lexer::lexEscape(std::string& value, const char* anchor) {
                          "write the character itself, as in `\"é\"`: strings are UTF-8", anchor);
             return false;
         case '\0':  // what a backslash at the end of a line gives
-            diags_.error(escLoc, "a string cannot continue on the next line",
+            diags_.error(escLoc, "a string or a char cannot continue on the next line",
                          "write `\"one \" \"two\"`, or a raw string, `R\"(...)\"`", anchor);
             return false;
         default:

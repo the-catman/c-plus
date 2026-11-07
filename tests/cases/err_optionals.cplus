@@ -104,6 +104,6 @@ int main() {
 // error: the fallback after '??' must be 'int', but this is 'string'
 // error: '==' compares 'int?' with 'int' or null, but this is 'string'
 // error: write `x == null` or `x != null`, which are all that null can be used with
-// error: it may be null: `opt ?? "none"` is its value, or "none" when it is null
+// error: it may be null: `text ?? "none"` is its value, or "none" when it is null
 // error: write `null`; only an optional, such as `User?`, or a pointer can be null
 // error: spec: docs/SPEC.md#optionals

@@ -37,9 +37,9 @@ int main() {
     return 0;
 }
 // error: this compiler does not support 16-bit integer types such as 'short' yet
-// error: write `int`. A C struct with such a field can still be used through pointers, by declaring it by name: `extern "C" struct name;`
+// error: `int` would change its layout. Declare the struct by name, `extern "C" struct name;`, and use it through pointers
 // error: this compiler does not support 16-bit integer types such as 'uint16_t' yet
-// error: this compiler does not support 16-bit integer types such as 'unsigned' yet
+// error: this compiler does not support 16-bit integer types such as 'unsigned short' yet
 // error: this compiler does not support 8-bit integer types such as 'uint8_t' yet
 // error: write `int` for a number, or `char` for a byte, as in `char c = char(n);`
 // error: C+ has no 'unsigned int' type

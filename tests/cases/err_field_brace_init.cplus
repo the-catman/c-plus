@@ -1,4 +1,4 @@
 struct S { int x{5}; };
 int main() { return 0; }
 // error: this compiler does not support brace initializers for fields yet
-// error: write `int x = 5;`
+// error: move what is in the braces after `=`: `int x = ...;`

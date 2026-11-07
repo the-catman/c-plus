@@ -22,7 +22,7 @@ int main() {
 // error: this compiler does not support references in range-based for loops yet
 // error: drop the '&': `for (auto x : items)` copies each element, which is cheap
 // error: drop the '&': `for (const auto x : items)`
-// error: To change the elements, loop over the indexes: `for (long i = 0; i < items.size(); i++) items[i] = ...;`
+// error: To change the elements of a vector, loop over the indexes: `for (long i = 0; i < items.size(); i++) items[i] = ...;`
 // error: this compiler does not support brace and constructor initializers yet
 // error: write `vector<int> sized = {1, 2, 3};` or `auto sized = vector<int>(count, value);`
 // error: C+ has no C-style arrays

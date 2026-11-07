@@ -1,0 +1,44 @@
+// Advice that would compile and quietly do the wrong thing, if it were not about what was written. advice_followed_silent shows the right forms.
+struct P { int x = 0; void set() { x = 1; } };
+class User {
+public:
+    string name = "n";
+    bool operator==(User o) const { return name == o.name; }
+    // error: For a class, `==` means the same object, so write a method: `bool same(User other) const { ... }`
+};
+void fill(int a[3]) { a[0] = 9; }
+// error: write `vector<int> a`, or, to change the caller's array, `int* a`, called with `x.data()`
+class WithArrayField {
+public:
+    int a[];
+    // error: write `vector<int> a;`, or `array<int, N> a;`, with N a constant
+};
+class FieldBraces {
+public:
+    int x{7};
+    // error: move what is in the braces after `=`: `int x = ...;`
+};
+void refInLoop() {
+    hashmap<long, int> m;
+    for (auto& e : m) {}
+    // error: Of a hashmap: `for (auto e : m) m[e.first] = ...;`
+}
+struct Holder { vector<int> items; };
+void refInPath() {
+    Holder g;
+    for (auto& e : g.items) {}
+    // error: `for (auto e : g.items)`
+}
+void parenthesized() {
+    P p(1, 2, 3);
+    // error: write `P p = {...};`, with the same values
+}
+void lists() {
+    array<int, 3> a = [1, 2, 3];
+    // error: write the list in braces: `{1, 2, 3}`. `auto` needs the type written: `vector<int>{1, 2, 3}`
+}
+int main() { return 0; }
+int topLevel = 100;
+// error: `const int topLevel = ...;`
+auto text = "x";
+// error: `const auto text = ...;`

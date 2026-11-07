@@ -726,7 +726,8 @@ Building a vector:
   and line. C++ leaves all of these undefined. A negative literal index such as `v[-1]` is
   a compile error.
 - `front()` and `back()` return a copy. To change the last element, write
-  `v[v.size() - 1] = x`.
+  `v[v.size() - 1] = x`. Changing what they give, `v.back().x = 1` or a method that changes a struct, `v.back().set()`, is an
+  error, as in C++ it would change the element, and here it would do nothing.
 - `==` and `!=` compare the sizes and then each pair of elements, in order. Ordering with
   `<` is planned.
 - A vector prints as `[1, 2, 3]`, with strings in quotes: `["Ada", "Linus"]`.

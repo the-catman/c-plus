@@ -45,12 +45,12 @@ void unassignedStruct() {
 void backOfVector() {
     vector<P> v = {P{}};
     v.back().x = 1;
-    // error: `back()` gives a copy. Change the element in place: `v[v.size() - 1].x = ...`
+    // error: `back()` gives a copy. Change it in place: `v[v.size() - 1].x = ...`
     v.front().x = 1;
-    // error: `front()` gives a copy. Change the element in place: `v[0].x = ...`
+    // error: `front()` gives a copy. Change it in place: `v[0].x = ...`
     hashmap<string, int> m;
     m.at("a") = 3;
-    // error: `at()` gives a copy. Change the value in place: `m[key] = ...`
+    // error: `at()` gives a copy. Change the value in place: `m["a"] = ...`
 }
 void throughPointers() {
     P p;
@@ -129,13 +129,13 @@ void conversions() {
     string t = true;
     // error: turn it into a string: `format("{}", b)`
     int n = "5";
-    // error: Declare C's: `extern "C" int atoi(string text);`, and call `atoi(s)`
+    // error: declare `extern "C" int atoi(string text);`, then call `atoi(s)`
     double d = "5";
-    // error: Declare C's: `extern "C" double atof(string text);`, and call `atof(s)`
+    // error: declare `extern "C" double atof(string text);`, then call `atof(s)`
     int* p = 5;
     // error: a number is not a pointer. To make one from a number, write `reinterpret_cast<int*>(n)`
     Node o = 5;
-    // error: build one: `Node(...)`
+    // error: give it a value such as `Node x = Node(...);`
 }
 void insidesOfBuiltins() {
     Mutex m = Mutex();
@@ -195,7 +195,7 @@ void unwrapping() {
 void arrowOnAVector() {
     vector<int> v;
     println("{}", v->size());
-    // error: write `v.size`: only a pointer is followed with '->'
+    // error: write `v.size()`, or a field of what it holds: only a pointer is followed with '->'
     int a = 1;
     println("{}", a->x);
     // error: 'a' is not a pointer: remove the `->`

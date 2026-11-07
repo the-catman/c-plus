@@ -86,6 +86,19 @@ void structForms() {
     U v = u;
     println("{} {}", u, v.name);
     // expect: U {hidden: 0, shared: 0, name: "a"} a
+    {
+        vector<Point> v = {Point{}};
+        v[v.size() - 1].x = 1;
+        println("{}", v);
+    }
+    // expect: [{x: 1, y: 0}]
+    {
+        hashmap<string, int> m;
+        string k = "k";
+        m[k] = 1;
+        println("{}", m);
+    }
+    // expect: {"k": 1}
     println("{}", vector<int>{1, 2});
     // expect: [1, 2]
     println("{}", array<int, 3>{1, 2, 3});

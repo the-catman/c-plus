@@ -26,7 +26,7 @@ int main() {
 }
 // error: the constant 'NO_VALUE' needs a value
 // error: this compiler does not support global variables yet
-// error: for a value that never changes, write a constant: `const int variable = 0;`
+// error: for a value that never changes, write a constant: `const int variable = ...;`
 // error: the value of a constant is worked out from literals, other constants and operators
 // error: only calls to `constexpr` functions work here
 // error: to initialize 'WRONG_TYPE'

@@ -1,0 +1,78 @@
+// What else is said about what was written, that is about what was written.
+template<typename T> T grows(T x, int n) { return n == 0 ? x : grows(vector<T>{x}, n - 1)[0]; }
+int use() { return grows(1, 2); }
+// error: have it call itself with the same types, or end the chain with `if constexpr (...) { ... } else { ... }` on a value parameter
+import json;
+void reading() throws {
+    int* p = try json::parse<int*>("1");
+    // error: Read what it points to: `json::parse<int>`
+}
+void unknownThings() {
+    auto x = Foo<int>();
+    // error: unknown type 'Foo'
+}
+void containersInExpressions() {
+    auto q = queue<int>();
+    // error: this compiler does not support 'queue' yet
+}
+void functionType() {
+    function<int(int)> f;
+    // error: write a function, and call it by name: C+ has no function values yet
+}
+void cFor() {
+    for (let i = 0; i < 1; i++) {}
+    // error: C+ declares a variable with its type, or `auto`
+}
+void cForType() {
+    for (size_t i = 0; i < 1; i++) {}
+    // error: write `long`, which has the same size as 'size_t'
+}
+void arrowFunction() {
+    int a = 1;
+    auto f = (a) => a + 1;
+    // error: this compiler does not support lambdas yet
+}
+void stdThings() {
+    std::cerr << 1;
+    // error: For standard error, declare C's `write`
+}
+void stdText() {
+    std::stringstream s;
+    // error: build the text with `format("{}: {}", a, b)`
+}
+void stdPrecision() {
+    std::setprecision(2);
+    // error: choose the digits in the format: `println("{:.2f}", x)`
+}
+void stdNullopt() {
+    int? a = std::nullopt;
+    // error: write `null`
+}
+void stdCatch() {
+    try { } catch (std::exception e) { }
+    // error: In a `catch`, write `catch (Error e)`
+}
+void stdCFunction() {
+    println("{}", std::strlen("a"));
+    // error: a C function must be declared: `extern "C" long strlen(string s);`
+}
+void stdAsync() {
+    auto t = std::async(1);
+    // error: write `auto t = spawn f(x);`, then `t.wait()`, which gives what `f` returned
+}
+class S { public: void f() {}; };
+// error: remove this ';': the `}` of a method needs none
+class Point { public: int x = 0; };
+Point operator+(Point a, Point b) { return a; }
+// error: this compiler does not support operator overloading yet
+extern "C" { struct WithShort { unsigned short d; }; }
+// error: `int` would change its layout. Declare the struct by name, `extern "C" struct name;`, and use it through pointers
+void pointersOfSmallTypes() {
+    uint8_t* p = null;
+    // error: write `char* p`, as a char is one byte
+}
+void pointersOfWideTypes() {
+    short* p = null;
+    // error: write `void* p`, as this compiler has no 16-bit integers yet
+}
+int main() { return 0; }

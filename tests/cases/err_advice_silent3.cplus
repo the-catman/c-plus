@@ -1,0 +1,51 @@
+// What takes the place of what cannot be built or converted.
+interface Speaker { string speak() const; };
+class Dog : public Speaker { public: string speak() const override { return "w"; } };
+class Animal { public: int x = 0; };
+class Cat : public Animal {};
+int worker() { return 1; }
+class C { public: int x = 1; };
+void conversions() {
+    Speaker s = 5;
+    // error: `Speaker x = SomeClass(...);`, with a class that derives from it
+    Task<int> t = 5;
+    // error: `Task<int> x = spawn f();`
+    Animal a = Cat();
+    Cat c = a;
+    // error: write `dynamic_cast<Cat?>(a)`, which gives null when it is not one
+    double* d = (double*)vector<double>{1.5};
+    // error: Copy it into an `array<double, N>` and use `a.data()`
+    string s2 = reinterpret_cast<string>(1);
+    // error: to turn a number into text, write `to_string(x)`
+    float? f = 1;
+    println("{:.2f}", f);
+    // error: `println("{:.2f}", f ?? 0.0f)`
+    string text = "a";
+    int? o = 1;
+    println("{}", text < o);
+    // error: turn it into a string: `s < format("{}", x)`
+}
+void conditions() {
+    hashmap<string, int> m;
+    if (m) {}
+    // error: to check whether it has elements, write `!m.empty()`
+    if (C c = C()) {}
+    // error: declare it before the `if`, and write the test as the condition. For this one, write a comparison, or call a method that gives a bool
+    int? n = 1;
+    println("{}", -n);
+    // error: 'n' may be null
+}
+void namesAsValues() {
+    auto a = println;
+    // error: 'println' is a function, not a value
+    auto b = sqrt;
+    // error: 'sqrt' is a function, not a value
+    auto d = vector(1, 2);
+    // error: write what it holds: `vector<int>(n, value)`
+}
+template<typename T> class Box { public: T v; };
+void genericAsValue() {
+    auto a = Box;
+    // error: 'Box' is a generic type, not a value
+}
+int main() { return 0; }

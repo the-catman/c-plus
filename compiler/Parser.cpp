@@ -63,7 +63,8 @@ const Token& Parser::expectNewName(const std::string& context) {
 // What to do instead of writing an operator, which the token after `operator` decides.
 std::string Parser::operatorHelp(size_t ahead) const {
     Tok op = peek(ahead + 1).kind;
-    if (op == Tok::EqEq || op == Tok::NotEq) return "remove it: every struct already has `==` and `!=`, field by field";
+    if (op == Tok::EqEq || op == Tok::NotEq)
+        return "for a struct, remove it: every struct already has `==` and `!=`, field by field. For a class, `==` means the same object, so write a method: `bool same(User other) const { ... }`";
     return "write a method for now, such as `Point add(Point other)`";
 }
 
@@ -81,7 +82,7 @@ const Token& Parser::expect(Tok k, const std::string& givenContext) {
     std::string message = "expected " + wanted + " " + context + ", found " + describeToken(peek());
     if (k == Tok::Semi && check(Tok::Comma)) {
         std::string help = "write two statements, each with its own `;`";
-        if (context == "after the return statement") help = "a function returns one value. To return several, return a struct: `return {1, 2};`";
+        if (context == "after the return statement") help = "a function returns one value. To return several, define a struct with a field for each, make it the return type, and write `return {1, 2};`";
         else if (context == "after the loop's first clause") help = "assign one before the loop: `i = 0; for (j = 1; ...)`, or declare both: `for (int i = 0, j = 1; ...)`";
         else if (context == "after the loop condition") help = "join the conditions with `&&`, or test the second in the body of the loop";
         fail(peek().loc, "C+ has no comma operator", help, spec::Grammar);
@@ -1022,7 +1023,9 @@ void Parser::rejectOtherLanguages() {
              localScopes_.empty() ? "write `const auto x = 1;`: variables that change are not supported outside functions yet"
                                   : "write `auto x = 1;`, or the type in place of `auto`",
              spec::Variables);
-    if (w == "function" || w == "fn" || w == "func" || w == "def") fail(t.loc, "C+ writes a function with its return type", "write `int " + peek(1).text + "(int a) { ... }`: a return type first, `void` if none, and a type for each parameter", spec::Functions);
+    if (w == "function" || w == "fn" || w == "func" || w == "def") fail(t.loc, "C+ writes a function with its return type", peek(2).kind == Tok::LParen && peek(3).kind == Tok::RParen
+                 ? "write `" + std::string(peek(1).text == "main" ? "int " : "void ") + peek(1).text + "() { ... }`: a return type first, `void` if none"
+                 : "write `int " + peek(1).text + "(int a) { ... }`: a return type first, `void` if none, and a type for each parameter", spec::Functions);
 }
 
 void Parser::parseTopLevel(Program& prog) {
@@ -1116,6 +1119,8 @@ void Parser::parseTopLevel(Program& prog) {
             break;
         default: break;
     }
+    if (check(Tok::Ident) && peek(1).kind == Tok::KwOperator) notYet(peek(1).loc, "operator overloading", operatorHelp(1));
+    if (check(Tok::Ident) && peek(1).kind == Tok::Amp && peek(2).kind == Tok::KwOperator) notYet(peek(2).loc, "operator overloading", operatorHelp(2));
     if (!isTypeStart()) {
         checkUnknownType();
         fail(t.loc, "expected a function or an import, found " + describeToken(t),
@@ -1137,20 +1142,16 @@ void Parser::parseTopLevel(Program& prog) {
     if (check(Tok::Ident) && peek(1).kind != Tok::LParen)
         notYet(peek().loc, "global variables",
                ret->is(Type::Kind::Auto)
-                   ? "for a value that never changes, write a constant: `const auto " + peek().text + " = 1;`"
+                   ? "for a value that never changes, write a constant: `const auto " + peek().text + " = ...;`"
                : peek(1).kind == Tok::LBracket
-                   ? "pass the value to the functions that use it, or keep it in a class object. An array is written `array<" + std::string(ret->name) + ", 5>`"
+                   ? "pass the value to the functions that use it, or keep it in a class object. An array is written `array<" + std::string(ret->name) + ", N>`"
                : ret->isPointer() && ret->elem->is(Type::Kind::Char) && peek(1).kind == Tok::Assign && peek(2).kind == Tok::StringLit
                    ? "for text that never changes, write `const string " + peek().text + " = " + "...;`"
                : ret->isPointer()
                    ? "for a pointer that never changes, write a constant, with `const` after the '*': `" +
                          std::string(ret->name) + " const " + peek().text + " = null;`"
                    : ret->isNumber() || ret->is(Type::Kind::Bool) || ret->is(Type::Kind::Char) || ret->is(Type::Kind::String)
-                       ? "for a value that never changes, write a constant: `const " + std::string(ret->name) + " " + peek().text +
-                             " = " + (ret->is(Type::Kind::String) ? "\"\""
-                                      : ret->is(Type::Kind::Bool) ? "false"
-                                      : ret->is(Type::Kind::Char) ? "'a'"
-                                                                  : "0") +
+                       ? "for a value that never changes, write a constant: `const " + std::string(ret->name) + " " + peek().text + " = ..." +
                              ";`. For one that changes, pass it to the functions that use it, or keep it in a class object"
                        : "pass the value to the functions that use it, or keep it in a class object. A function that returns it "
                          "also works, if it never changes");
@@ -1220,6 +1221,11 @@ void Parser::parseOpaqueStruct() {
     const Token& name = expectNewName("for the name of the C struct");
     if (check(Tok::LBrace)) {  // an ordinary struct, except that its fields must all be C types
         pos_ -= 2;
+        struct Inside {
+            bool& flag;
+            explicit Inside(bool& f) : flag(f) { flag = true; }
+            ~Inside() { flag = false; }
+        } inside(inExternStruct_);
         parseRecord();
         prog_->findStruct(name.text)->externC = true;
         return;
@@ -1367,7 +1373,7 @@ const Type* Parser::parseCType(Loc& loc, bool isReturn) {
 static const char* cIntegerEquivalent(const std::string& n);
 
 void Parser::failStd(Loc loc, const Token& name) {
-    std::string n = name.kind == Tok::Ident ? name.text : name.kind == Tok::KwString ? "string" : "";
+    std::string n = name.text.empty() ? tokSpelling(name.kind) : name.text;
     if (n == "string" || n == "vector" || n == "array" || n == "to_string" || n == "format" || n == "println" || n == "print")
         fail(loc, "C+ has no std:: namespace", "built-ins need no prefix: write `" + n + "` instead of `std::" + n + "`",
              spec::Modules);
@@ -1382,9 +1388,23 @@ void Parser::failStd(Loc loc, const Token& name) {
     if (n == "numbers")
         fail(loc, "C+ has no std:: namespace", "math constants are planned. Until then, `acos(-1)` is pi", spec::Math);
     if (n == "optional" || n == "nullopt")
-        fail(loc, "C+ has no std:: namespace", "write `int?`, which is an int or `null`", spec::Optionals);
+        fail(loc, "C+ has no std:: namespace", n == "nullopt" ? "write `null`" : "write `T?`, such as `int?`, which is an int or `null`", spec::Optionals);
+    if (n == "function")
+        fail(loc, "C+ has no std:: namespace", "write a function, and call it by name: C+ has no function values yet", spec::Functions);
+    if (n == "stringstream" || n == "ostringstream" || n == "istringstream")
+        fail(loc, "C+ has no std:: namespace", "build the text with `format(\"{}: {}\", a, b)`", spec::Printing);
+    if (n == "setprecision" || n == "fixed" || n == "hex")
+        fail(loc, "C+ has no std:: namespace", "choose the digits in the format: `println(\"{:.2f}\", x)`", spec::Printing);
+    if (n == "make_pair")
+        fail(loc, "C+ has no std:: namespace", "write a struct with a name for each part, and build it with `{a, b}`", spec::Structs);
+    if (n == "uint8_t" || n == "int8_t" || n == "byte")
+        fail(loc, "C+ has no std:: namespace", "write `char`, one byte from 0 to 255", spec::Char);
+    if (n == "int16_t" || n == "uint16_t")
+        fail(loc, "C+ has no std:: namespace", "write `int`, as this compiler has no 16-bit integers yet", spec::IntegerTypes);
+    if (!cDeclarationOf(n).empty())
+        fail(loc, "C+ has no std:: namespace", "a C function must be declared: `extern \"C\" " + cDeclarationOf(n) + ";`", spec::CFunctions);
     if (n == "exception" || n == "runtime_error" || n == "logic_error" || n == "invalid_argument" || n == "out_of_range")
-        fail(loc, "C+ has no std:: namespace", "write `Error(\"why\")`, or derive a class from `Error`", spec::Errors);
+        fail(loc, "C+ has no std:: namespace", "write `Error(\"why\")`, or derive a class from `Error`. In a `catch`, write `catch (Error e)`", spec::Errors);
     if (const char* use = cIntegerEquivalent(n))
         fail(loc, "C+ has no std:: namespace", "write `" + std::string(use) + "`, which has the same size", spec::IntegerTypes);
     if (n == "pair" || n == "tuple")
@@ -1418,10 +1438,13 @@ void Parser::failStd(Loc loc, const Token& name) {
     if (n == "shared_ptr" || n == "make_shared")
         fail(loc, "C+ has no std:: namespace",
              "a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`", spec::Classes);
-    if (n == "cout" || n == "cerr" || n == "clog" || n == "endl" || n == "printf")
+    if (n == "cerr" || n == "clog")
+        fail(loc, "C+ has no std:: namespace",
+             "`println` prints to standard output. For standard error, declare C's `write`: `extern \"C\" long write(int fd, string s, long n);`, then `write(2, s, s.size());`", spec::Printing);
+    if (n == "cout" || n == "endl" || n == "printf")
         fail(loc, "C+ has no std:: namespace",
              "built-ins need no prefix: `std::cout << x << std::endl;` becomes `println(\"{}\", x);`", spec::Printing);
-    fail(loc, "C+ has no std:: namespace", "write what C+ has instead of `std::" + n + "`: `cplus explain` lists it", spec::Modules);
+    fail(loc, "C+ has no std:: namespace", "leave out `std::`, and see what C+ has instead in the table of `cplus explain cheatsheet`", spec::Modules);
 }
 
 bool Parser::isTypeStart(size_t ahead) const {
@@ -1499,6 +1522,10 @@ void Parser::checkUnknownPointerType() {
     Tok after = peek(i + 1).kind;
     if (after != Tok::Assign && after != Tok::Semi && after != Tok::Comma && after != Tok::RParen) return;
     const Token& t = peek();
+    if (t.text == "uint8_t" || t.text == "int8_t")
+        fail(t.loc, "unknown type '" + t.text + "'", "write `char* " + peek(i).text + "`, as a char is one byte", spec::IntegerTypes);
+    if (t.text == "short" || t.text == "int16_t" || t.text == "uint16_t")
+        fail(t.loc, "unknown type '" + t.text + "'", "write `void* " + peek(i).text + "`, as this compiler has no 16-bit integers yet", spec::IntegerTypes);
     if (t.text == "size_t" || t.text == "int32_t" || t.text == "int64_t" || t.text == "uint32_t" ||
         t.text == "uint64_t" || t.text == "unsigned")
         fail(t.loc, "unknown type '" + t.text + "'",
@@ -1544,6 +1571,26 @@ static const char* cIntegerEquivalent(const std::string& n) {
     return nullptr;
 }
 
+// `Foo<int>`, at the position of its name, where Foo is nothing that has been defined.
+void Parser::failUnknownGeneric(size_t at) {
+    const Token& name = toks_[at];
+    const std::string& n = name.text;
+    int commas = 0, depth = 0;
+    for (size_t i = at + 1; i < toks_.size() && i < at + 64; ++i) {
+        if (toks_[i].kind == Tok::Less) ++depth;
+        else if (toks_[i].kind == Tok::Greater && --depth == 0) break;
+        else if (toks_[i].kind == Tok::Shr && (depth -= 2) <= 0) break;
+        else if (toks_[i].kind == Tok::Comma && depth == 1) ++commas;
+    }
+    std::string params = "typename T";
+    for (int i = 0; i < commas; ++i) params += ", typename T" + std::to_string(i + 2);
+    fail(name.loc, "unknown type '" + n + "'",
+         n == "optional" ? "write `" + toks_[at + 2].text + "?`, which holds a value of that type, or `null`"
+         : n == "function" ? "write a function, and call it by name: C+ has no function values yet"
+                           : "check the spelling, or define it first: `template<" + params + "> class " + n + " { ... };`",
+         spec::Generics);
+}
+
 void Parser::checkUnknownType() {
     if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon) {
         if (peek().text == "std") failStd(peek().loc, peek(2));
@@ -1575,14 +1622,8 @@ void Parser::checkUnknownType() {
             else if (k != Tok::Ident && k != Tok::Comma && k != Tok::Star && k != Tok::Question && k != Tok::IntLit && k != Tok::ColonColon && !isTypeAt(at)) break;
             ++at;
         }
-        if (!isVariable && depth <= 0 && (peek(at).kind == Tok::Ident || peek(at).kind == Tok::Star || peek(at).kind == Tok::Question)) {
-            const std::string& n = peek().text;
-            fail(peek().loc, "unknown type '" + n + "'",
-                 n == "optional" ? "write `int?`, which is an int or `null`"
-                 : n == "function" ? "write a function, and call it by name: C+ has no function values yet"
-                                   : "check the spelling, or define it first: `template<typename T> class " + n + " { ... };`",
-                 spec::Generics);
-        }
+        if (!isVariable && (peek().text == "function" || (depth <= 0 && (peek(at).kind == Tok::Ident || peek(at).kind == Tok::Star || peek(at).kind == Tok::Question))))
+            failUnknownGeneric(pos_);
     }
     // C's spellings of integers, where a wrong guess would put a C struct's fields in the
     // wrong places.
@@ -1591,9 +1632,10 @@ void Parser::checkUnknownType() {
         const Token& next = peek(1);
         bool sign = n == "unsigned" || n == "signed";
         if (n == "short" || n == "int16_t" || n == "uint16_t" || (sign && next.kind == Tok::Ident && next.text == "short"))
-            notYet(peek().loc, "16-bit integer types such as '" + n + "'",
-                   "write `int`. A C struct with such a field can still be used through pointers, by declaring it by name: "
-                   "`extern \"C\" struct name;`");
+            notYet(peek().loc, std::string("16-bit integer types such as '") + (sign ? "unsigned " : "") + (sign && next.kind == Tok::Ident ? next.text : n) + "'",
+                   inExternStruct_ ? "`int` would change its layout. Declare the struct by name, `extern \"C\" struct name;`, and use it through pointers"
+                                   : "write `int`. A C struct with such a field can still be used through pointers, by declaring it by name: "
+                                     "`extern \"C\" struct name;`");
         if ((n == "int8_t" || n == "uint8_t") && next.kind == Tok::Ident)
             notYet(peek().loc, "8-bit integer types such as '" + n + "'", "write `int` for a number, or `char` for a byte, as in `char c = char(n);`");
         if (sign && (next.kind == Tok::KwChar || next.kind == Tok::KwInt || next.kind == Tok::KwLong)) {
@@ -1905,7 +1947,7 @@ size_t Parser::afterAngles(size_t ahead) const {
 
 // `int a[5]`, at the '['. C+ writes `array<int, 5> a`, which stays an array when it is
 // passed around, where a C array turns into a pointer.
-void Parser::failCStyleArray(const Type* elem, const std::string& name) {
+void Parser::failCStyleArray(const Type* elem, const std::string& name, ArrayPlace place) {
     Loc loc = peek().loc;
     // What is in the brackets, and what comes after them.
     std::string size = peek(2).kind == Tok::RBracket && (peek(1).kind == Tok::IntLit || peek(1).kind == Tok::Ident) ? peek(1).text : "";
@@ -1914,8 +1956,12 @@ void Parser::failCStyleArray(const Type* elem, const std::string& name) {
     ++after;
     std::string type = elem->name;
     std::string help;
-    if (peek(after).kind == Tok::LBracket)
-        help = "write an array of arrays: `array<array<" + type + ", " + (peek(after + 1).kind == Tok::IntLit ? peek(after + 1).text : std::string("3")) + ">, " + (size.empty() ? "2" : size) + "> " + name + "`";
+    if (place == ArrayPlace::Parameter)
+        help = "write `vector<" + type + "> " + name + "`, or, to change the caller's array, `" + type + "* " + name + "`, called with `x.data()`";
+    else if (place == ArrayPlace::Field && (size.empty() || peek(1).kind == Tok::Ident))
+        help = "write `vector<" + type + "> " + name + ";`, or `array<" + type + ", N> " + name + ";`, with N a constant";
+    else if (peek(after).kind == Tok::LBracket)
+        help = "write an array of arrays: `array<array<" + type + ", " + (peek(after + 2).kind == Tok::RBracket && peek(after + 1).kind != Tok::RBracket ? peek(after + 1).text : std::string("N")) + ">, " + (size.empty() ? "N" : size) + "> " + name + "`";
     else if (elem->is(Type::Kind::Char) && peek(after).kind == Tok::Assign && peek(after + 1).kind == Tok::StringLit)
         help = "write `string " + name + " = ...;`, as text is a string";
     else if (size.empty() && peek(after).kind == Tok::Assign)
@@ -1976,7 +2022,7 @@ void Parser::parseParams(FuncDecl& fn) {
                     ty = Type::pointerTo(ty);
                 }
             }
-            if (check(Tok::LBracket)) failCStyleArray(ty, pname.text);
+            if (check(Tok::LBracket)) failCStyleArray(ty, pname.text, ArrayPlace::Parameter);
             auto param = std::make_unique<VarDecl>(pname.loc, pname.text, ty, typeLoc);
             param->isParam = true;
             param->isConst = isConst;
@@ -2045,7 +2091,7 @@ void Parser::parseRecord(StructDecl* into) {
             bool isPublic = match(Tok::KwPublic);
             if (check(Tok::KwVirtual))
                 fail(peek().loc, "C+ has no virtual inheritance",
-                     "write `public " + std::string(peek(peek(1).kind == Tok::KwPublic ? 2 : 1).text) + "`. A diamond holds the shared base class twice, and "
+                     "write `public " + std::string(peek(peek(1).kind == Tok::KwPublic || peek(1).kind == Tok::KwProtected || peek(1).kind == Tok::KwPrivate ? 2 : 1).text) + "`. A diamond holds the shared base class twice, and "
                      "`d.B::name` says which is meant",
                      spec::Inheritance);
             if (check(Tok::KwPrivate) || check(Tok::KwProtected))
@@ -2288,7 +2334,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
     if (!isTypeStart()) {
         checkUnknownType();
         fail(t.loc, "expected a field or method, found " + describeToken(t),
-             "write a field, like `int x = 0;`, or a method, like `int area() { ... }`", spec::Structs);
+             t.kind == Tok::Semi ? "remove this ';': the `}` of a method needs none" : "write a field, like `int x = 0;`, or a method, like `int area() { ... }`", spec::Structs);
     }
     Loc typeLoc;
     bool isConst = false;
@@ -2373,8 +2419,8 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         if (match(Tok::Assign)) field.defaultValue = parseAssign();
         else if (check(Tok::LBrace))
             notYet(peek().loc, "brace initializers for fields",
-                   ty->isStruct() ? "write `" + std::string(ty->name) + " " + name.text + " = {1, 2};`" : "write `" + std::string(ty->name) + " " + name.text + " = 5;`");
-        if (check(Tok::LBracket)) failCStyleArray(ty, name.text);
+                   "move what is in the braces after `=`: `" + std::string(ty->name) + " " + name.text + " = ...;`");
+        if (check(Tok::LBracket)) failCStyleArray(ty, name.text, ArrayPlace::Field);
         int existing = sd.fieldIndex(name.text);
         if (existing >= 0) {
             diags_.error(name.loc, std::string(sd.keyword()) + " '" + sd.name + "' already has a field named '" +
@@ -2507,6 +2553,8 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
     std::vector<std::unique_ptr<VarDecl>> decls;
     do {
         if (!decls.empty()) parseLaterStars(ty, decls[0]->name, "variable");
+        if (check(Tok::LBracket) && peek(1).kind == Tok::RBracket)
+            fail(peek().loc, "C+ has no C-style arrays", "write `vector<" + std::string(ty->name) + "> a = {...};`, or `array<" + std::string(ty->name) + ", N> a = {...};`, with N the number of elements", spec::Arrays);
         if (check(Tok::LBracket) || ((check(Tok::Amp) || check(Tok::AmpAmp)) && peek(1).kind == Tok::LBracket))
             notYet(peek().loc, "structured bindings",
                    "name the whole value, and reach into it: `for (auto e : m) ... e.first ... e.second`, or `auto p = f(); ... p.x`");
@@ -2522,10 +2570,10 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
         if (match(Tok::Assign)) {
             var->init = parseAssign();
         } else if (check(Tok::LBrace) || check(Tok::LParen)) {
-            std::string help = "write `" + std::string(ty->name) + " " + name.text + " = value;`";
+            std::string help = "write `" + std::string(ty->name) + " " + name.text + " = ...;`, with the same value";
             if (ty->is(Type::Kind::String)) help = "write `string " + name.text + " = string(3, 'a');`, or `string " + name.text + " = \"text\";`";
             if (ty->isClass()) help = "write `" + std::string(ty->name) + " " + name.text + " = " + ty->name + "(...);`";
-            if (ty->isStruct() && !isHashmap(ty)) help = "write `" + std::string(ty->name) + " " + name.text + " = {1, 2};`";
+            if (ty->isStruct() && !isHashmap(ty)) help = "write `" + std::string(ty->name) + " " + name.text + " = {...};`, with the same values";
             if (isHashmap(ty)) help = "write `" + std::string(ty->name) + " " + name.text + " = {...};`";
             if (ty->isVector())
                 help = "write `" + std::string(ty->name) + " " + name.text + " = " + (ty->elem->isNumber() ? "{1, 2, 3}" : "{...}") + ";` or `auto " + name.text +
@@ -2678,12 +2726,16 @@ StmtPtr Parser::parseFor() {
         if ((ref && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Colon) ||
             (check(Tok::Ident) && peek(1).kind == Tok::Colon)) {
             if (ref) {
-                std::string range = peek(3).kind == Tok::Ident && peek(4).kind == Tok::RParen ? peek(3).text : "items";
+                // All of what comes after the ':', if it is a plain path.
+                std::string range;
+                size_t at = 3;
+                for (; at < 32 && (peek(at).kind == Tok::Ident || peek(at).kind == Tok::Dot); ++at) range += peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text;
+                if (range.empty() || peek(at).kind != Tok::RParen) range = "items";
                 std::string help = std::string("drop the '&': `for (") + (isConst ? "const " : "") + ty->name + " " +
                                    peek(1).text + " : " + range + ")` copies each element, which is cheap";
                 if (!isConst)
-                    help += ". To change the elements, loop over the indexes: `for (long i = 0; i < " + range +
-                            ".size(); i++) " + range + "[i] = ...;`";
+                    help += ". To change the elements of a vector, loop over the indexes: `for (long i = 0; i < " + range +
+                            ".size(); i++) " + range + "[i] = ...;`. Of a hashmap: `for (auto e : " + range + ") " + range + "[e.first] = ...;`";
                 notYet(peek().loc, "references in range-based for loops", help);
             }
             if (ty->is(Type::Kind::Void))
@@ -2701,6 +2753,8 @@ StmtPtr Parser::parseFor() {
         loop->init = parseDeclarators(isConst, ty, typeLoc);
         expect(Tok::Semi, "after the loop's first clause");
     } else {
+        rejectOtherLanguages();
+        checkUnknownType();
         ExprPtr e = parseExpr();
         Loc l = e->loc;
         loop->init = std::make_unique<ExprStmt>(l, std::move(e));
@@ -2741,6 +2795,7 @@ static std::optional<std::optional<BinOp>> assignOp(Tok k) {
 ExprPtr Parser::parseAssign() {
     Nesting nesting(*this);
     ExprPtr lhs = parseTernary();
+    if (check(Tok::Assign) && peek(1).kind == Tok::Greater) notYet(peek().loc, "lambdas", "write a function, and call it by name");
     if (auto op = assignOp(peek().kind)) {
         Loc opLoc = advance().loc;
         ExprPtr rhs = parseAssign();
@@ -2879,7 +2934,7 @@ ExprPtr Parser::parseUnary() {
                 return std::make_unique<SizeofExpr>(loc, ty, nullptr);
             }
             if (!check(Tok::LParen) && isTypeAt(0))
-                fail(peek().loc, "`sizeof` of a type takes parentheses", peek(1).kind == Tok::Less || check(Tok::KwConst) ? std::string("put the whole type in parentheses, as in `sizeof(vector<int>)`") : "write `sizeof(" + peek().text + ")`", spec::Sizeof);
+                fail(peek().loc, "`sizeof` of a type takes parentheses", peek(1).kind == Tok::Less || peek(1).kind == Tok::Star || check(Tok::KwConst) ? std::string("put the whole type in parentheses, as in `sizeof(vector<int>)`") : "write `sizeof(" + peek().text + ")`", spec::Sizeof);
             return std::make_unique<SizeofExpr>(t.loc, nullptr, parseUnary());  // `sizeof x` or `sizeof(x)`
         }
         case Tok::KwAwait: notYet(t.loc, "async and await", "remove `await`: a call waits for its result. To run something without waiting for it: `auto t = spawn f();`, then `t.wait()`");
@@ -3137,6 +3192,11 @@ ExprPtr Parser::parsePrimary() {
                 expect(Tok::RParen, "to close the conversion");
                 return std::make_unique<CastExpr>(loc, ty, std::move(operand));
             }
+            // `auto x = Foo<int>()`, which has been read as a comparison up to here.
+            if (pos_ >= 3 && toks_[pos_ - 2].kind == Tok::Less && toks_[pos_ - 3].kind == Tok::Ident && !classTemplate(toks_[pos_ - 3].text)) {
+                if (isOtherContainer(toks_[pos_ - 3].text)) notYet(toks_[pos_ - 3].loc, "'" + toks_[pos_ - 3].text + "'", "use a `vector<T>` or a `hashmap<K, V>` for now");
+                failUnknownGeneric(pos_ - 3);
+            }
             fail(t.loc, "expected an expression, found " + describeToken(t),
                  "a type name can only start a declaration, e.g. `" + std::string(tokSpelling(t.kind)) + " x = ...;`", spec::Grammar);
         case Tok::KwNull: return std::make_unique<NullLitExpr>(t.loc);
@@ -3238,7 +3298,8 @@ ExprPtr Parser::parsePrimary() {
                 fail(t.loc, "this compiler does not support working out the template arguments of '" + t.text + "' yet",
                      "write e.g. `" + exampleArguments(*tmpl) + "(...)`" + constraintNote(*tmpl), spec::Generics);
             // A variable can have the same name: `Box < 3` is a comparison.
-            if (tmpl && !boundType(t) && check(Tok::Less) && (tmpl->params[0].valueType || isTypeAt(1))) {
+            const bool ownName = injected_ && currentTemplate_ && t.text == currentTemplate_->name;
+            if (tmpl && (!boundType(t) || ownName) && check(Tok::Less) && (tmpl->params[0].valueType || isTypeAt(1))) {
                 --pos_;  // back to the name, to read the whole type
                 Loc loc;
                 const Type* ty = parseBaseType(loc);
@@ -3271,7 +3332,7 @@ ExprPtr Parser::parsePrimary() {
             if (t.text == "make_unique" && check(Tok::Less))
                 fail(t.loc, "C+ has no make_unique", "write `unique<Node>(...)`, which builds a new Node", spec::Unique);
             if (t.text == "make_shared" && check(Tok::Less))
-                fail(t.loc, "C+ has no make_shared", "write `Node(...)`: a class variable is already a counted reference", spec::Classes);
+                fail(t.loc, "C+ has no make_shared", "write `" + std::string(peek(1).kind == Tok::Ident ? peek(1).text : "Node") + "(...)`: a class variable is already a counted reference", spec::Classes);
             // With a name that is no type, what can only be this goes on, so that the error can say so.
             if ((t.text == "unique" || t.text == "local") && check(Tok::Less) &&
                 (isTypeAt(1) || (peek(1).kind == Tok::Ident && peek(2).kind == Tok::Greater && peek(3).kind == Tok::LParen))) {  // `unique<Node>(args)`
@@ -3349,7 +3410,7 @@ ExprPtr Parser::parsePrimary() {
                 else if (peek(close).kind == Tok::RBracket) --depth;
             }
             if (peek(close).kind != Tok::LParen && peek(close).kind != Tok::LBrace)
-                fail(t.loc, "C+ writes a list in braces, as C++ does", "write `vector<int> v = {1, 2, 3};`", spec::Vectors);
+                fail(t.loc, "C+ writes a list in braces, as C++ does", "write the list in braces: `{1, 2, 3}`. `auto` needs the type written: `vector<int>{1, 2, 3}`", spec::Vectors);
             notYet(t.loc, "lambdas", "write a function, and call it by name");
         }
         case Tok::KwElse:

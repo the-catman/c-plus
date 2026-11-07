@@ -23,9 +23,9 @@ void casts() {
     println("{}", reinterpret_cast<int>(s));
     // error: write a number or a pointer here: nothing else can be reinterpreted
     auto built = static_cast<P>(1);
-    // error: build one instead: `P(...)`, or `P{...}`
+    // error: build one instead: `P{...}`
     println("{}", double(a));
-    // error: convert one of its fields instead, e.g. `double(c.x)`
+    // error: convert one of its fields instead, e.g. `double(a.x)`
 }
 void printing() {
     const char* p = null;
@@ -50,7 +50,7 @@ void assigning() {
     x += b;
     // error: convert it first: `int(b)`
     x += s;
-    // error: this compiler cannot read a number from a string yet. Declare C's: `extern "C" int atoi(string text);`, and call `atoi(s)`
+    // error: this compiler cannot read a number from a string yet: declare `extern "C" int atoi(string text);`, then call `atoi(s)`
     x += o;
     // error: 'o' may be null
     x %= 1.5;
@@ -75,7 +75,7 @@ void containers() {
     s.erase(0, 1);
     // error: build it from what stays: `s = s.substr(0, pos) + s.substr(pos + n);`
     s.insert(0, "x");
-    // error: build it: `s.substr(0, pos) + t + s.substr(pos)`
+    // error: build it: `s = s.substr(0, pos) + t + s.substr(pos);`
     println("{}", s.compare("x"));
     // error: compare with `a < b` and `a == b`
     println("{}", s.begin());
