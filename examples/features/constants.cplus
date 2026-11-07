@@ -1,0 +1,10 @@
+// Constants go outside functions, in any order. Variables do not.
+const string GREETING = "hello " + NAME;
+const string NAME = "world";
+const int LIMIT = 10 * 2;
+
+int main() {
+    println("{} {}", GREETING, LIMIT);
+    // expect: hello world 20
+    return 0;
+}

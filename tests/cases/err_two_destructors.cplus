@@ -1,0 +1,7 @@
+class C {
+public:
+    ~C() {}
+    ~C() {}
+};
+int main() { return 0; }
+// error: 'C' already has a destructor

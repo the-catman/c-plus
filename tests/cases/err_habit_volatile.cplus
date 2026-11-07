@@ -1,0 +1,6 @@
+int main() {
+    volatile int x = 1;
+    return 0;
+}
+// error: C+ has no 'volatile'
+// error: use a field of a class and a `Mutex`

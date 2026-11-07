@@ -1,0 +1,12 @@
+// `int` is always 32 bits and `long` always 64. A value only converts to a smaller type when you say so.
+int main() {
+    int small = 2147483647;
+    long big = small;
+    big += 1;
+    println("{} {}", small, big);
+    // expect: 2147483647 2147483648
+    int back = int(big - 1);
+    println("{}", back);
+    // expect: 2147483647
+    return 0;
+}

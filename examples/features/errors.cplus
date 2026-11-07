@@ -1,0 +1,31 @@
+// A function that can fail says so with `throws`. Each call of one says what happens then: `try f()` passes it on, and `try { } catch` handles it.
+class NotFound : public Error {
+public:
+    string key;
+    NotFound(string k) : Error("no " + k), key(k) {}
+};
+
+int look(string key) throws {
+    if (key != "a") throw NotFound(key);
+    return 1;
+}
+
+int twice(string key) throws { return 2 * try look(key); }
+
+int main() throws {
+    println("{}", try twice("a"));
+    // expect: 2
+    try {
+        println("{}", twice("b"));
+    } catch (NotFound e) {
+        println("{} {}", e.what(), e.key);
+    } catch (Error e) {
+        println("other");
+    }
+    // expect: no b b
+    int n = try look("z");
+    println("never {}", n);
+    return 0;
+}
+// exit: 1
+// stderr: uncaught error: NotFound

@@ -1,0 +1,22 @@
+// `hashmap<K, V>` is a value that keeps the order entries were added in.
+int main() {
+    hashmap<string, int> ages = {{"Ada", 36}};
+    ages["Grace"] = 85;
+    ages["Ada"]++;
+    println("{}", ages);
+    // expect: {"Ada": 37, "Grace": 85}
+    println("{} {} {}", ages.contains("Ada"), ages.get("Linus") ?? -1, ages.size());
+    // expect: true -1 2
+    for (auto e : ages) println("{} is {}", e.first, e.second);
+    // expect: Ada is 37
+    // expect: Grace is 85
+    ages.erase("Ada");
+    println("{}", ages.keys());
+    // expect: ["Grace"]
+    hashmap<string, vector<int>> groups;
+    groups["even"].push_back(2);
+    groups["even"].push_back(4);
+    println("{}", groups.at("even"));
+    // expect: [2, 4]
+    return 0;
+}

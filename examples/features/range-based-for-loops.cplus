@@ -1,0 +1,15 @@
+// `for (auto x : v)` goes over a copy of each element, of a vector as it was when the loop started, so changing it inside is safe.
+int main() {
+    vector<int> v = {1, 2, 3};
+    int total = 0;
+    for (auto x : v) {
+        total += x;
+        v.push_back(x * 10);
+    }
+    println("{} {}", total, v.size());
+    // expect: 6 6
+    for (char c : "hi") print("[{}]", c);
+    println();
+    // expect: [h][i]
+    return 0;
+}

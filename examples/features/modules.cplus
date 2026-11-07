@@ -1,0 +1,8 @@
+// `import x;` adds a module that comes with the language. There are no headers, and its members are used with `::`.
+import json;
+
+int main() {
+    println("{}", json::stringify(vector<int>{1, 2}));
+    // expect: [1,2]
+    return 0;
+}

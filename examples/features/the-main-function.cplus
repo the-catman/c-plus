@@ -1,0 +1,8 @@
+// `main` returns the exit code, and can take the arguments as in C++.
+// args: first second
+int main(int argc, char** argv) {
+    println("{} {}", argc, string(argv[1]));
+    // expect: 3 first
+    return 4;
+}
+// exit: 4

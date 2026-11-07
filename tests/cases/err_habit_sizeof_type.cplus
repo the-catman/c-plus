@@ -1,0 +1,6 @@
+int main() {
+    long n = sizeof int;
+    return 0;
+}
+// error: `sizeof` of a type takes parentheses
+// error: write `sizeof(int)`

@@ -1,0 +1,21 @@
+// `weak<Node>` refers to an object without keeping it alive, which is how two objects can refer to each other and still be freed.
+class Node {
+public:
+    string name;
+    Node? child;
+    weak<Node> parent;
+    Node(string n) : name(n) {}
+};
+
+int main() {
+    Node parent = Node("parent");
+    Node child = Node("child");
+    parent.child = child;
+    child.parent = parent;
+    if (auto p = child.parent.lock()) println("{}", p.name);
+    // expect: parent
+    weak<Node> w = Node("gone already");
+    println("{} {}", w.expired(), w.lock()?.name ?? "nothing");
+    // expect: true nothing
+    return 0;
+}

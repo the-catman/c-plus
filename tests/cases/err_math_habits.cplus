@@ -17,7 +17,7 @@ int main() {
 // error: math constants are planned. Until then, `acos(-1)` is pi
 // error: 'M_PI' is not declared
 // error: math constants are planned. Until then, `acos(-1)` is pi and `exp(1)` is e
-// error: there is no function named 'stod'
+// error: this compiler does not support reading a number from a string yet
 // error: this compiler cannot read a number from a string yet
 // error: a C function must be declared before it is called: `extern "C" int atoi(string text);`
 // error: write `fabs`, which returns a float when given floats, as in C++

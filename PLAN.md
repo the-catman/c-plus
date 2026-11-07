@@ -537,6 +537,12 @@ Decided 2026-11-05.
 - Redirects are followed by the runtime, as `fetch` follows them, rather than by libcurl. libcurl would send a PUT again after a 303.
 - WebSockets speak the protocol themselves, on the connection libcurl makes. `curl_ws_*` is left out of many builds of libcurl, such as those of Debian and Ubuntu.
 
+### 2.27 Documentation for models — DECIDED
+What §5 asks for, as built in Phase 4. Decided 2026-11-07.
+- `cplus explain` has the spec, the cheat sheet and the examples built into the compiler at build time, so it works wherever the compiler is, with no repository and no network. A topic is the name of a section, as an error's `spec:` line shows it, or a word someone already knows, such as `hashmap` or `spawn`.
+- The examples corpus is `examples/features/`, one small program for each section of the spec, named after its anchor. They carry the directives of the tests, so the test suite runs them all, in every build. An example cannot go out of date without a test failing, which is what "the test suite doubles as few-shot material" asks for. The tests themselves stay as they are, since they are written to find mistakes and not to teach.
+- Errors are held to the standard by the tools rather than by reading: the arguments are required by the compiler's own types, the test runner fails on any error it sees without a `help` and a `spec`, and a measurement with coverage shows which errors no test reaches.
+
 ## 3. Compiler architecture
 
 ```
@@ -581,6 +587,7 @@ criterion. Phase 2 is in progress: inheritance works, with virtual methods, abst
 `dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, generics with
 constraints, errors, `constexpr` with `if constexpr`, and `unique<T>` with `move`, which is every item of Phase 2.
 The leak report came with Phase 1. Every item of Phase 3 is in too: `hashmap`, the descriptors of types, `json`, `reflect`, `http` with WebSockets, `spawn` with `Task`, and `local`.
+Every item of Phase 4 is in as well: each error has a help, a section of the spec and a test, `cplus explain` answers from inside the compiler, and `examples/features` has a program for each section. Phase 5 is next.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -646,6 +653,8 @@ will confidently write C++ wherever the two differ.
   program when `X` is used, and `constexpr` reports it while compiling. They could become one rule.
 - Printing still goes by a function the compiler writes for each type, while 2.14 says it is built on descriptors. It works, and
   it costs a program nothing it does not print. Moving it would give one way of walking a value, at the cost of a slower `println`.
+- What comes with the language is recognized by how it is spelled: a type's name, as in `isHashmap` and the printing of a `Task`, the positions of fields, as in `json.c`'s `VALUE_*`, and the tokens of `json::parse` joined into one name. It is enough while the tests catch a mismatch at once, and each new built-in adds a case. An attribute on what is built in, and modules that are really scopes, would replace it, and belong with modules of your own.
+- `json::of(x)` writes `x` as text and reads that back, which costs twice what building the value directly would. It stays until someone has to care, as it is a few lines against a walk over every kind of type.
 - `main` takes its arguments as in C++, through raw pointers. A checked form, such as
   `int main(vector<string> args)`, could come later.
 - References (`T&`): whether C+ gets them, and in what form. They decide how

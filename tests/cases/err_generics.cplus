@@ -62,7 +62,7 @@ int main() {
 }
 // error: this compiler does not support generic methods yet
 // error: 'Box' is generic, so its template arguments must be written
-// error: write e.g. `Box<int>(...)`. Working them out from the values is planned
+// error: this compiler does not support working out the template arguments of 'Box' yet
 // error: 'Box' takes 1 template argument, but more were given
 // error: 'Pair' takes 2 template arguments, but 1 was given
 // error: 'Box' takes 1 template argument, but 0 were given

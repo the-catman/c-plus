@@ -1,0 +1,4 @@
+struct S { auto x; };
+int main() { return 0; }
+// error: fields and methods need a written type
+// error: auto is only for local variables

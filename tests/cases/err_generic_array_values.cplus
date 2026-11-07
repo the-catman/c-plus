@@ -1,0 +1,7 @@
+template<typename T> T make() { return T(1, 2); }
+int main() {
+    auto x = make<array<int, 2>>();
+    return 0;
+}
+// error: 'array<int, 2>(...)' takes no values
+// error: use braces to list the elements

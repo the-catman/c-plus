@@ -520,7 +520,10 @@ void Sema::reportUnknownName(const NameExpr& n) {
                n.name + "(...)`";
     else if (funcs_.count(n.name) || (program_->findTemplate(n.name) && program_->findTemplate(n.name)->kind == TemplateDecl::Kind::Function))
         help = "functions can only be called for now, e.g. `" + n.name + "()`";
-    else if (n.name == "cout" || n.name == "endl" || n.name == "cerr") help = "C+ prints with `println(\"{}\", value);`";
+    else if (n.name == "cout" || n.name == "endl" || n.name == "cerr" || n.name == "console") help = "C+ prints with `println(\"{}\", value);`";
+    else if (n.name == "cin") help = "there are no input functions yet. C's can be declared: `extern \"C\" int getchar();`";
+    else if (n.name == "JSON") help = "`import json;`, then `json::parse<T>(text)` and `json::stringify(x)`";
+    else if (n.name == "Math") help = "write `sqrt(x)`, `floor(x)` and the rest with no prefix";
     else if (n.name == "nullptr" || n.name == "NULL") help = "write `null`; only an optional, such as `User?`, can be null";
     else if (n.name == "M_PI" || n.name == "M_E" || n.name == "INFINITY" || n.name == "NAN")
         help = n.name == "INFINITY" || n.name == "NAN"
@@ -571,10 +574,10 @@ void Sema::check(Program& program) {
         }
         auto [it, inserted] = funcs_.emplace(fn->name, fn.get());
         if (!inserted) {
-            diags_.error(fn->nameLoc, "a function named " + q(fn->name) + " is already defined",
-                         "rename one of them; overloading (several functions with one name) is planned but not "
-                         "supported yet",
-                         spec::Functions);
+            bool sameParams = it->second->params.size() == fn->params.size();
+            for (size_t i = 0; sameParams && i < fn->params.size(); ++i) sameParams = it->second->params[i]->declType == fn->params[i]->declType;
+            diags_.error(fn->nameLoc, sameParams ? "a function named " + q(fn->name) + " is already defined" : std::string("this compiler does not support overloaded functions yet"),
+                         sameParams ? "rename one of them, or remove it" : "rename one of them, so that each name is one function", spec::Functions);
             diags_.note(it->second->nameLoc, "the first definition is here");
         }
     }
@@ -971,6 +974,13 @@ void Sema::checkOverrides(StructDecl& sd) {
                         m->isConst == method->isConst && m->isThrows == method->isThrows;
             for (size_t i = 0; same && i < m->params.size(); ++i)
                 same = m->params[i]->declType == method->params[i]->declType;
+            if (!same && m->retType != method->retType && m->retType->isClass() && method->retType->isClass() && m->retType->decl->derivesFrom(method->retType->decl)) {
+                diags_.error(m->nameLoc, "this compiler does not support covariant return types yet",
+                             "return an " + q(method->retType) + ", which can hold the object, and use `dynamic_cast` where the class matters", spec::Inheritance);
+                diags_.note(method->nameLoc, "the method in the base class is here");
+                fits = false;
+                break;
+            }
             if (!same) {
                 diags_.error(m->nameLoc, q(m->name) + " must have the same parameters, return type, `const` and `throws` as the "
                                              "method it replaces",
@@ -1133,8 +1143,6 @@ void Sema::checkStructs(size_t first) {
         } context{diags_, sd->templateOf != nullptr};
         if (sd->templateOf) diags_.pushContext(sd->usedAt, "in " + q(sd->name) + ", which is used here");
         for (auto& f : sd->fields) {
-            if (f.type->is(K::Void) || f.type->is(K::Auto))
-                diags_.error(f.typeLoc, "a field cannot have type " + q(f.type), "", spec::Structs);
             checkStorable(f.type, f.typeLoc);
             if (sd->externC) {
                 std::set<const StructDecl*> seen{sd};
@@ -1205,6 +1213,8 @@ void Sema::checkExternFunction(FuncDecl& fn) {
         else if (t->isOptional())
             help = "in C, only text and pointers can be null. " + std::string(isReturn ? "Declare the result as" : "Pass") +
                    " a plain " + q(t->elem) + " instead";
+        else
+            help = "use one of those, or pass what C needs of it as separate arguments";
         diags_.error(loc, message, help, spec::CFunctions);
     };
     check(fn.retType, fn.retTypeLoc, true);
@@ -1285,7 +1295,7 @@ void Sema::foldConstexpr(VarDecl& v) {
     try {
         value = eval.convert(value, v.type, v.init->loc);
     } catch (ConstError& error) {
-        diags_.error(v.init->loc, "the value of " + q(v.name) + " must be known at compile time, but " + error.message, "", spec::Constexpr);
+        diags_.error(v.init->loc, "the value of " + q(v.name) + " must be known at compile time, but " + error.message, "it must come from literals, constants and calls to `constexpr` functions. For a value only known when the program runs, leave out `constexpr`", spec::Constexpr);
         return;
     }
     putLiteral(v, value);
@@ -1374,7 +1384,7 @@ void Sema::checkIfConstexpr(IfStmt& st, Flow& flow) {
         try {
             taken = eval.isTrue(value, st.cond->loc);
         } catch (ConstError& error) {
-            diags_.error(st.cond->loc, "the condition of `if constexpr` must be a bool or a number, but " + error.message, "", spec::Constexpr);
+            diags_.error(st.cond->loc, "the condition of `if constexpr` must be a bool or a number, but " + error.message, "`if constexpr` is for what is known while compiling, such as `Integer<T>` or `N == 0`. For anything else, write `if`", spec::Constexpr);
         }
     }
     if (st.lazy) {
@@ -1443,7 +1453,7 @@ void Sema::checkFunction(FuncDecl& fn) {
     for (auto& p : fn.params) {
         checkStorable(p->declType, p->typeLoc);
         if (p->declType->is(K::Void))
-            diags_.error(p->typeLoc, "parameters cannot have type void", "", spec::Functions);
+            diags_.error(p->typeLoc, "parameters cannot have type void", "write `()` for no parameters, or give the parameter a type", spec::Functions);
         p->type = p->declType;
         declare(*p);
         markAssigned(flow, p.get(), "");
@@ -1507,7 +1517,7 @@ void Sema::checkFunction(FuncDecl& fn) {
             const FieldDecl& f = sd.fields[init.fieldIndex];
             readyUpTo(init.fieldIndex);
             if (seen[init.fieldIndex])
-                diags_.error(init.loc, "field " + q(f.name) + " is initialized more than once", "", spec::Classes);
+                diags_.error(init.loc, "field " + q(f.name) + " is initialized more than once", "give it one value", spec::Classes);
             seen[init.fieldIndex] = true;
             initField_ = &f;
             checkValue(*init.value, flow, f.type, "for field " + q(f.name));
@@ -1715,8 +1725,7 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
             const Type* t = checkExpr(*v.init, flow);
             rejectCopy(*v.init);
             if (t->is(K::Void))
-                diags_.error(v.init->loc, "cannot store the result of a void function in " + q(v.name), "",
-                             spec::Variables);
+                diags_.error(v.init->loc, "cannot store the result of a void function in " + q(v.name), "call it on a line of its own: it gives nothing to keep", spec::Variables);
             if (t->isNull())
                 diags_.error(v.init->loc, "auto cannot tell what kind of optional " + q(v.name) + " is from null",
                              "write the type, e.g. `User? " + v.name + " = null;`", spec::Optionals);
@@ -1771,6 +1780,8 @@ void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
                ".empty()`";
     else if (t->isArray())
         help = "an array always has its elements. To test one of them, write e.g. `a[0] != 0`";
+    else
+        help = "write a comparison, or call a method that gives a bool";
     diags_.error(e.loc, std::string("the ") + what + " must be a bool, a number, a pointer or an optional, but this is " + q(t),
                  help, spec::Conditions);
 }
@@ -1939,8 +1950,7 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
         case Stmt::Kind::Continue: {
             bool isBreak = s.kind == Stmt::Kind::Break;
             if (loops_.empty())
-                diags_.error(s.loc, std::string(isBreak ? "'break'" : "'continue'") + " can only be used inside a loop",
-                             "", spec::ControlFlow);
+                diags_.error(s.loc, std::string(isBreak ? "'break'" : "'continue'") + " can only be used inside a loop", "use it inside `for`, `while` or `do`. To leave a function, write `return`", spec::ControlFlow);
             else if (isBreak)
                 loops_.back().breaks.push_back(flow);
             else
@@ -2138,6 +2148,7 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
     } else if (from->isNull()) {
         help = "only an optional or a pointer can be null; make the type `" + std::string(to->name) + "?`";
     }
+    if (help.empty()) help = "write a value of type " + q(to) + " here, or change the type that is expected";
     diags_.error(e.loc, "expected " + q(to) + " " + context + ", but this is " + q(from), help,
                  spec::ImplicitConversions);
 }
@@ -2309,7 +2320,7 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
                 diags_.error(a.loc, q(sd.name) + " has no field named " + q(a.designator),
                              guess.empty() ? listFields(sd) : "did you mean " + q(guess) + "?", spec::Structs);
             } else if (seen[idx]) {
-                diags_.error(a.loc, "field " + q(a.designator) + " is given more than once", "", spec::Structs);
+                diags_.error(a.loc, "field " + q(a.designator) + " is given more than once", "name each field once", spec::Structs);
                 idx = -1;
             }
         }
@@ -2367,7 +2378,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     }
     if (e.kind == Expr::Kind::This) {
         if (!owner()) {
-            diags_.error(e.loc, "'this' can only be used inside a method or constructor", "", spec::Methods);
+            diags_.error(e.loc, "'this' can only be used inside a method or constructor", "use it inside a method or constructor. A function gets what it needs as parameters", spec::Methods);
             return e.type = Type::error();
         }
         var = thisVar();
@@ -2408,7 +2419,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
                 diags_.error(ix.index->loc, "an index into a pointer must be an int or long, but this is " + q(indexType),
                              indexType->is(K::Char)       ? "convert the char to its code first: `int(c)`"
                              : indexType->isFloating() ? "convert it first: `int(x)`"
-                                                       : "",
+                                                       : "write an int or a long, such as `p[0]`",
                              spec::Pointers);
             return e.type = baseType->elem;
         }
@@ -2422,7 +2433,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         bool arr = baseType->isArray();
         if (!str && !arr && !baseType->isVector()) {
             diags_.error(e.loc, "'[ ]' picks an element of a vector or an array, or a char of a string, but this is " + q(baseType),
-                         baseType->hasFields() ? "read a field with '.', e.g. `p.x`" : "", spec::Vectors);
+                         baseType->hasFields() ? "read a field with '.', e.g. `p.x`" : "only vectors, arrays, strings, hashmaps and pointers can be indexed", spec::Vectors);
             return e.type;
         }
         const char* what = str ? "a string" : arr ? "an array" : "a vector";
@@ -2432,7 +2443,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
                                             q(indexType),
                          indexType->is(K::Char) ? "convert the char to its code first: `int(c)`"
                          : indexType->isFloating() ? "convert it first: `int(x)`"
-                                                   : "",
+                                                   : "write an int or a long, such as `v[0]`",
                          anchor);
         else if (ix.index->kind == Expr::Kind::IntLit && static_cast<IntLitExpr&>(*ix.index).value < 0)
             diags_.error(ix.index->loc, std::string("an index into ") + what + " cannot be negative",
@@ -2516,6 +2527,8 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
                    : str                  ? "strings have methods like size(), substr(pos, n) and find(text)"
                    : baseType->isArray()  ? "arrays have methods like size(), fill(x) and data(), and elements are read with `a[i]`"
                                           : "vectors have methods like size(), push_back(x) and back(), and elements are read with `v[i]`";
+        else
+            help = "only structs and classes have fields, and " + q(baseType) + " is neither";
         diags_.error(e.loc, q(baseType) + " has no fields, so '." + m.field + "' cannot be used", help,
                      str                     ? spec::Strings
                      : baseType->isVector()  ? spec::Vectors
@@ -2772,16 +2785,22 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
         else if (t->hasFields() || t->isUnique() || t->isLocal())
             help = std::string(t->isClass() ? "a class reference is used directly, so " : t->isUnique() ? "a unique reference is used directly, so " : t->isLocal() ? "a local reference is used directly, so " : "") +
                    "fields and methods are reached with '.': write `" + n + "." + u.arrowMember + "`";
+        else
+            help = "only a pointer can be followed with '->'";
         diags_.error(u.loc, "'->' follows a pointer, but " + q(n) + " is " + q(t), help, spec::Pointers);
         return;
     }
     if (t->isOptional())
         help = "the value inside an optional is `" + n + ".value()`, `" + n + " ?? fallback`, or `v` in `if (auto v = " + n +
                ")`";
+    else if (u.operand->kind == Expr::Kind::This)
+        help = "`this` is used directly: `return this;` gives a copy of a struct, or the same object of a class";
     else if (t->isClass())
         help = "a class reference is used directly: write `" + n + "` without '*'";
     else if (t->isUnique() || t->isLocal())
         help = std::string("a ") + (t->isUnique() ? "unique" : "local") + " reference is used directly: `" + n + ".field`, or `" + n + ".get()` for the object";
+    else
+        help = "only a pointer can be followed. `&x` gives the address of a variable";
     diags_.error(u.loc, "'*' follows a pointer, but this is " + q(t), help, spec::Pointers);
 }
 
@@ -2916,11 +2935,6 @@ const Type* Sema::checkAddressOf(UnaryExpr& u, Flow& flow) {
                      spec::Pointers);
         markAssigned(flow, var, path);
     }
-    if (throughOptionalChain(target)) {
-        diags_.error(u.loc, "'&' cannot take the address of a value reached through '?.'",
-                     "'?.' works on a copy of the value; unwrap the optional into a variable first", spec::Pointers);
-        return Type::error();
-    }
     if (insideContainer(target)) {
         diags_.error(u.loc, "this compiler does not support pointers into vectors and strings yet",
                      "their elements move when a vector grows or a shared string is changed. Copy the element into a "
@@ -2952,7 +2966,7 @@ const Type* Sema::checkPointerBinary(BinaryExpr& b, const Type* l, const Type* r
     if (comparison) {
         if (const Type* common = commonPointer(l, r)) {
             if (!equality && other->isNull())
-                diags_.error(otherSide.loc, "null can only be compared with == and !=", "", spec::Pointers);
+                diags_.error(otherSide.loc, "null can only be compared with == and !=", "write `x == null` or `x != null`", spec::Pointers);
             b.operandType = common;
             return Type::boolTy();
         }
@@ -2972,8 +2986,7 @@ const Type* Sema::checkPointerBinary(BinaryExpr& b, const Type* l, const Type* r
         // How many elements apart two pointers into the same memory are.
         if (l->elem != r->elem)
             diags_.error(b.loc, "'-' between two pointers needs them to point to the same type, but they are " + q(l) +
-                                    " and " + q(r),
-                         "", spec::Pointers);
+                                    " and " + q(r), "subtract pointers into one array, which have the same type", spec::Pointers);
         else if (!pointsToKnownType(l))
             reportUnknownPointee(b.loc, l, "-");
         b.operandType = l;
@@ -3009,7 +3022,7 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
     if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index &&
         !isDeref(target)) {
         checkExpr(target, flow);
-        std::string help = target.kind == Expr::Kind::This ? "'this' always refers to the current object" : "";
+        std::string help = target.kind == Expr::Kind::This ? "'this' always refers to the current object" : "store it in a variable first, and change that";
         if (target.kind == Expr::Kind::MethodCall && target.type && !target.type->isError() &&
             static_cast<MethodCallExpr&>(target).vecMethod != VecMethod::None)
             help = "front() and back() return a copy of the element; to change it, write `v[0] = ...` or "
@@ -3125,7 +3138,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                     diags_.error(u.operand->loc, "'!' needs a bool, a number, a pointer or an optional, but this is " + q(t),
                                  t->isOptional()  ? boolOptionalHelp(spelled(*u.operand, "b"))
                                  : t->is(K::Char) ? "compare the char instead, e.g. `c == '\\0'`"
-                                                  : "",
+                                                  : "make it a bool first, with a comparison or a method such as `s.empty()`",
                                  spec::Conditions);
                 result = Type::boolTy();
             } else {
@@ -3135,7 +3148,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                     diags_.error(u.operand->loc,
                                  std::string("'") + sym + "' needs " + (u.op == UnOp::BitNot ? "an int or a long" : "a number") +
                                      ", but this is " + q(t),
-                                 t->isFloating() ? "'~' flips the bits of an integer" : "", spec::Operators);
+                                 t->isFloating() ? "'~' flips the bits of an integer" : "use it on a number", spec::Operators);
                     break;
                 }
                 result = t;
@@ -3154,8 +3167,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 dropMovedSince(flow, movesBefore);
                 for (auto [side, t] : {std::pair{b.lhs.get(), l}, std::pair{b.rhs.get(), r}})
                     if (!usableAsCondition(t))
-                        diags_.error(side->loc, std::string("both sides of '") + sym + "' must be a bool, a number, a pointer or an optional, but this is " + q(t),
-                                     "", spec::Conditions);
+                        diags_.error(side->loc, std::string("both sides of '") + sym + "' must be a bool, a number, a pointer or an optional, but this is " + q(t), "make it a bool first, by comparing it or asking it, such as `s.empty()` or `x != 0`", spec::Conditions);
                 b.operandType = Type::boolTy();
                 result = Type::boolTy();
                 break;
@@ -3232,7 +3244,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                                  ot->isNumber()    ? "turn the number into a string first with `to_string(n)`"
                                  : ot->is(K::Char) ? "compare chars with chars, e.g. `s[0] == 'a'`, or strings with "
                                                      "strings: `s == \"a\"`"
-                                                   : "",
+                                                   : "turn both sides into strings first, with `to_string(x)`",
                                  spec::Strings);
                 if (comparison) result = Type::boolTy();
                 break;
@@ -3260,6 +3272,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 else if (bad->is(K::String)) help = "strings work with + to join them, and with == != < <= > >= to compare them";
                 else if (equality) help = "both sides of '" + std::string(sym) + "' must have the same type, but they are " + q(l) + " and " + q(r);
                 else if (comparison && (bad->hasFields() || bad->isVector() || bad->isArray())) help = q(bad) + " values can only be compared with == and !=";
+                else if (!bad->isArithmetic() && !bad->is(K::Bool)) help = std::string("'") + sym + "' works on numbers. Use a field or a method of this value that gives one";
                 else if (bad->is(K::Bool) && (b.op == BinOp::BitAnd || b.op == BinOp::BitOr)) help = std::string("use '") + (b.op == BinOp::BitAnd ? "&&" : "||") + "' for logic";
                 diags_.error(side->loc, std::string("'") + sym + "' cannot be used with " + q(bad), help, spec::Operators);
                 if (comparison) result = Type::boolTy();
@@ -3307,7 +3320,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                                      spec::Char);
                     else if (!vt->isError() && !vt->isInteger() && !vt->is(K::Char))
                         diags_.error(a.value->loc, opName + " on a char needs an int or a long, but this is " + q(vt),
-                                     vt->isFloating() ? "convert it first: `int(x)`" : "", spec::Char);
+                                     vt->isFloating() ? "convert it first: `int(x)`" : "use an int or a long", spec::Char);
                 } else if (t->isPointer()) {
                     // `p += n` and `p -= n` move the pointer by n elements.
                     if (*a.op != BinOp::Add && *a.op != BinOp::Sub)
@@ -3316,23 +3329,21 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                     else if (!pointsToKnownType(t))
                         reportUnknownPointee(a.loc, t, opName);
                     else if (!vt->isError() && !vt->isInteger() && !vt->is(K::Char))
-                        diags_.error(a.value->loc, opName + " on a pointer needs an int or a long, but this is " + q(vt), "",
-                                     spec::Pointers);
+                        diags_.error(a.value->loc, opName + " on a pointer needs an int or a long, but this is " + q(vt), "a pointer moves by a whole number of elements, such as `p += 2`", spec::Pointers);
                 } else if (t->is(K::String))
                     diags_.error(a.target->loc, opName + " cannot be used with 'string'",
                                  "the only compound assignment on strings is +=, which appends", spec::Strings);
                 else if (!t->isError() && !t->isNumber())
-                    diags_.error(a.target->loc, opName + " needs a number, but this is " + q(t), "", spec::Operators);
+                    diags_.error(a.target->loc, opName + " needs a number, but this is " + q(t), "use it on a number. Another type is changed with `=`", spec::Operators);
                 else if (!a.value->type->isError() && !a.value->type->isArithmetic())
-                    diags_.error(a.value->loc, opName + " needs a number, but this is " + q(a.value->type), "",
-                                 spec::Operators);
+                    diags_.error(a.value->loc, opName + " needs a number, but this is " + q(a.value->type), "give it a number, or convert the value to one with a cast", spec::Operators);
                 else if ((*a.op == BinOp::Rem || *a.op == BinOp::Shl || *a.op == BinOp::Shr || *a.op == BinOp::BitAnd ||
                           *a.op == BinOp::BitOr || *a.op == BinOp::BitXor) &&
                          (t->isFloating() || a.value->type->isFloating()))
                     diags_.error(t->isFloating() ? a.target->loc : a.value->loc,
                                  opName + " needs an int or a long, but this is " +
                                      q(t->isFloating() ? t : a.value->type),
-                                 *a.op == BinOp::Rem ? "for floating-point numbers, write `x = fmod(x, y)`" : "",
+                                 *a.op == BinOp::Rem ? "for floating-point numbers, write `x = fmod(x, y)`" : "use an int or a long",
                                  spec::Operators);
                 else if (*a.op != BinOp::Shl && *a.op != BinOp::Shr)
                     requireConvertible(*a.value, t, "on the right of " + opName);
@@ -3379,9 +3390,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 if (t->isPointer()) {
                     if (!pointsToKnownType(t)) reportUnknownPointee(i.loc, t, sym);
                 } else if (!t->isNumber() && !t->is(K::Char)) {
-                    diags_.error(i.target->loc,
-                                 std::string("'") + sym + "' needs a number, a char or a pointer, but this is " + q(t), "",
-                                 spec::Operators);
+                    diags_.error(i.target->loc, std::string("'") + sym + "' needs a number, a char or a pointer, but this is " + q(t), "use it on a number, a char or a pointer. A string grows with `s += text`", spec::Operators);
                 }
             }
             result = t;
@@ -3411,7 +3420,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (t->isError() || (!t->isOpaque() && !checkStorable(t, e.loc))) break;
             if (t->is(K::Void) || t->isNull() || t->isOpaque() || t->is(K::Auto))
                 diags_.error(e.loc, "sizeof needs a type with a size, but this is " + q(t),
-                             t->isOpaque() ? q(t) + " is a C type known only by name, so only C knows its size" : "",
+                             t->isOpaque() ? q(t) + " is a C type known only by name, so only C knows its size" : "give it a type that has a size, such as `sizeof(int)`",
                              t->isOpaque() ? spec::CTypes : spec::Sizeof);
             break;
         }
@@ -3681,15 +3690,33 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
                          "`try http::get(url)` does the same, waiting for the answer", spec::Http);
             return Type::error();
         }
+        if (name.starts_with("sto") && !cNumberReader(name).empty()) {
+            diags_.error(nameLoc, "this compiler does not support reading a number from a string yet",
+                         "until it does, declare the C function: `extern \"C\" " + cNumberReader(name) + ";`", spec::Status);
+            return Type::error();
+        }
+        // C functions that people call without a thought, and what is usually wanted.
+        static const std::map<std::string, std::string> cDeclarations = {
+            {"malloc", "void* malloc(long n)"}, {"calloc", "void* calloc(long n, long size)"}, {"realloc", "void* realloc(void* p, long n)"}, {"free", "void free(void* p)"},
+            {"exit", "void exit(int code)"}, {"abort", "void abort()"}, {"strlen", "long strlen(string s)"}, {"strcmp", "int strcmp(string a, string b)"},
+            {"rand", "int rand()"}, {"srand", "void srand(int seed)"}, {"time", "long time(long* out)"}, {"sleep", "int sleep(int seconds)"},
+            {"usleep", "int usleep(int microseconds)"}, {"getenv", "string? getenv(string name)"}, {"system", "int system(string command)"}, {"getchar", "int getchar()"}};
         if (name == "fetch")
             help = "to get what is at a URL: `import http;`, then `try http::get(url)`";
+        else if (name == "sprintf" || name == "snprintf")
+            help = "`format(\"{}\", x)` returns the string";
+        else if (name == "assert")
+            help = "write `if (!ok) throw Error(\"...\");`, or stop the program with a C function";
+        else if (auto c = cDeclarations.find(name); c != cDeclarations.end())
+            help = "a C function must be declared before it is called: `extern \"C\" " + c->second + ";`";
+        else if (name == "sort" || name == "stable_sort" || name == "reverse" || name == "accumulate" || name == "min_element" || name == "max_element")
+            help = "this compiler has no sorting yet, nor the other algorithms of C++. Write the loop";
+        else if (name == "swap")
+            help = "write it with a third variable: `auto t = a; a = b; b = t;`";
         else if (name == "printf" || name == "puts" || name == "putchar")
             help = "C+ prints with println: `printf(\"%d\\n\", x)` becomes `println(\"{}\", x)`";
         else if (std::string reader = cNumberReader(name); !reader.empty())
-            help = (name.starts_with("sto") ? "this compiler cannot read a number from a string yet. Until then, "
-                                              "declare the C function: `extern \"C\" "
-                                            : "a C function must be declared before it is called: `extern \"C\" ") +
-                   reader + ";`";
+            help = "a C function must be declared before it is called: `extern \"C\" " + reader + ";`";
         else if ((name.back() == 'f' || name.back() == 'l') && isMathFunction(stem))
             help = name.back() == 'f' ? "write `" + stem + "`, which returns a float when given floats, as in C++"
                                       : "C+ has no long double; write `" + stem + "`";
@@ -3811,7 +3838,7 @@ const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow)
         const Type* type = checkExpr(a, flow);
         bad = bad || type->isError();
         if (type->is(K::Void)) {
-            diags_.error(a.loc, "this argument has no value", "", spec::Functions);
+            diags_.error(a.loc, "this argument has no value", "a call of a void function gives nothing to pass. Call it first, on a line of its own", spec::Functions);
             bad = true;
             continue;
         }
@@ -4160,9 +4187,12 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     if (!m) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         std::string help;
+        if (isHashmap(t) && call.name == "find") {
+            diags_.error(call.loc, "this compiler does not support find() on a hashmap yet",
+                         "there are no iterators yet: `m.contains(key)` says whether it is there, and `m.get(key)` gives the value or null", spec::HashMaps);
+            return Type::error();
+        }
         if (sd.fieldOwner(call.name)) help = q(call.name) + " is a field; read it without parentheses";
-        else if (isHashmap(t) && call.name == "find")
-            help = "there are no iterators yet: `m.contains(key)` says whether it is there, and `m.get(key)` gives the value or null";
         else if (isHashmap(t) && (call.name == "emplace" || call.name == "try_emplace"))
             help = "write `m.insert({key, value})`, which also keeps the value that is there";
         else if (isHashmap(t) && call.name == "insert_or_assign")
@@ -4177,7 +4207,14 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
                 for (const StructDecl* base : d.bases) collect(*base);
             };
             collect(sd);
-            if (std::string guess = closest(call.name, names); !guess.empty()) help = "did you mean " + q(guess) + "?";
+            if (std::string guess = closest(call.name, names); !guess.empty()) {
+                help = "did you mean " + q(guess) + "?";
+            } else if (names.empty()) {
+                help = q(sd.name) + " has no methods. Write the method inside the type: `void " + call.name + "() { ... }`";
+            } else {
+                help = "its methods are ";
+                for (size_t i = 0; i < names.size(); ++i) help += (i ? ", " : "") + names[i];
+            }
         }
         diags_.error(call.loc, q(sd.name) + " has no method named " + q(call.name), help, spec::Methods);
         return Type::error();
@@ -4465,7 +4502,7 @@ const Type* Sema::checkNew(NewExpr& n, Flow& flow) {
     if (n.count) {
         checkValue(*n.count, flow, Type::longTy(), "as the number of elements in `new " + name + "[...]`");
         if (n.count->kind == Expr::Kind::IntLit && static_cast<IntLitExpr&>(*n.count).value < 0)
-            diags_.error(n.count->loc, "an array cannot have a negative number of elements", "", spec::NewDelete);
+            diags_.error(n.count->loc, "an array cannot have a negative number of elements", "give it zero or more elements", spec::NewDelete);
     }
     if (n.init) {
         checkValue(*n.init, flow, t, "for the value of `new " + name + "`");
@@ -4509,7 +4546,7 @@ const Type* Sema::checkDelete(DeleteExpr& d, Flow& flow) {
         diags_.error(loc, "'" + op + "' frees memory from new through a pointer, but this is " + q(t),
                      t->isVector() || t->is(K::String) ? "a " + std::string(t->isVector() ? "vector" : "string") +
                                                              " frees its memory by itself"
-                                                       : "",
+                                                       : "`delete` is only for what `new` gave",
                      spec::NewDelete);
     return Type::voidTy();
 }
@@ -4598,8 +4635,7 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
         const Type* t = call.args[i]->type;
         const FormatSpec& spec = specs[i - 1];
         if (t->is(K::Void))
-            diags_.error(call.args[i]->loc, "this expression produces no value, so it cannot be printed", "",
-                         spec::Printing);
+            diags_.error(call.args[i]->loc, "this expression produces no value, so it cannot be printed", "call it on a line of its own, and print what it changes", spec::Printing);
         else if (t->isPointer() && t->elem->is(K::Char) && !spec.type && spec.precision < 0) {
             std::string n = spelled(*call.args[i], "p");
             diags_.error(call.args[i]->loc,
@@ -4683,7 +4719,7 @@ const Type* Sema::checkDynamicCast(CastExpr& c, const Type* from, const Type* to
                      from->isWeak() ? "the object may be gone. Write `dynamic_cast<" + std::string(toClass->name) + "?>(" +
                                           spelled(*c.operand, "w") + ".lock())`"
                      : from->isUnique() || from->isLocal() ? "write `dynamic_cast<" + std::string(toClass->name) + "?>(" + spelled(*c.operand, "u") + ".get())`"
-                                        : "",
+                                        : "use it on a class reference",
                      spec::Inheritance);
         return to;
     }
@@ -4724,8 +4760,7 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     }
     if (to->isWeak()) {  // `weak<Node>(object)`
         if (!canConvert(from, to))
-            diags_.error(c.operand->loc, std::string(to->name) + "(x) refers to an object of class " + q(to->elem) + ", but this is " + q(from),
-                         "", spec::Weak);
+            diags_.error(c.operand->loc, std::string(to->name) + "(x) refers to an object of class " + q(to->elem) + ", but this is " + q(from), "pass an object of that class, or of one that derives from it", spec::Weak);
         return to;
     }
     if (from->isWeak()) {
@@ -4758,8 +4793,7 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     if (to->is(K::String) && from->isArray() && from->elem->is(K::Char)) return to;  // its text, up to a zero byte
     if (to->is(K::String) && from->isPointer()) {  // `string(p)` copies the text a `char*` points to
         if (!from->elem->is(K::Char))
-            diags_.error(c.operand->loc, "string(p) copies the text a char* points to, but this is " + q(from), "",
-                         spec::Pointers);
+            diags_.error(c.operand->loc, "string(p) copies the text a char* points to, but this is " + q(from), "give it a `char*`, or `to_string(x)` for a number", spec::Pointers);
         return to;
     }
     if (to->is(K::String)) {
@@ -4821,7 +4855,7 @@ const Type* Sema::checkPointerCast(CastExpr& c, const Type* from, const Type* to
                            "is of a class, write `dynamic_cast<" + std::string(to->elem->name) + "?>(x)`"
                      : from->isArray()         ? "for a pointer to its first element, write `" + spelled(*c.operand, "a") + ".data()`"
                      : isPlaceKind(*c.operand) ? "write `&" + spelled(*c.operand, "x") + "` for its address"
-                                               : "",
+                                               : "give it another pointer",
                      spec::Casts);
         return to;
     }
@@ -4964,8 +4998,7 @@ void Sema::checkCondDecl(CondDecl& d, Flow& flow, const char* stmt) {
         if (declared->is(K::Auto)) v.type = t->elem;
         else if (!canConvert(t->elem, declared))
             diags_.error(v.init->loc, "expected " + q(declared) + " to initialize " + q(v.name) + ", but this " +
-                                          q(t) + " holds " + q(t->elem),
-                         "", spec::ImplicitConversions);
+                                          q(t) + " holds " + q(t->elem), "declare it as what the optional holds, or write `auto`", spec::ImplicitConversions);
         return;
     }
     if (declared->is(K::Auto)) v.type = t;

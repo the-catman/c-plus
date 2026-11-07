@@ -1,0 +1,6 @@
+int main() {
+    int a = 0x;
+    return a;
+}
+// error: '0x' has no digits after the prefix
+// error: write a number such as 0xFF

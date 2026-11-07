@@ -1,0 +1,5 @@
+struct P { int x = 0; };
+P::P() { }
+int main() { return 0; }
+// error: methods and constructors are defined inside their struct
+// error: move this definition into the body of 'P'

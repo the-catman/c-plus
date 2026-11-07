@@ -1,0 +1,9 @@
+// `sizeof` gives a `long`.
+struct Pair { int a = 0; int b = 0; };
+
+int main() {
+    int n = 0;
+    println("{} {} {}", sizeof(long), sizeof n, sizeof(Pair));
+    // expect: 8 4 8
+    return 0;
+}

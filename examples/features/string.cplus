@@ -1,0 +1,18 @@
+// A string is a value, as in C++. Copies do not affect each other.
+int main() {
+    string s = "hello";
+    string copy = s;
+    s += " world";
+    println("{} / {}", s, copy);
+    // expect: hello world / hello
+    println("{} {} {}", s.size(), s.substr(6, 5), s.find("wor"));
+    // expect: 11 world 6
+    println("{} {} {}", s.contains("lo w"), s.starts_with("he"), s.ends_with("x"));
+    // expect: true true false
+    s[0] = 'J';
+    println("{} {}", s, s.find("nope") == string::npos);
+    // expect: Jello world true
+    println("{}", to_string(42) + "!" + string(3, '-'));
+    // expect: 42!---
+    return 0;
+}

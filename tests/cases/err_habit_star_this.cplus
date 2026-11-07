@@ -1,0 +1,7 @@
+struct P { int x = 0; P copy() { return *this; } };
+int main() {
+
+    return 0;
+}
+// error: '*' follows a pointer, but this is 'P'
+// error: `this` is used directly

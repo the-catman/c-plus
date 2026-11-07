@@ -1,0 +1,5 @@
+struct add { int x = 0; };
+int add(int a) { return a; }
+int main() { return 0; }
+// error: 'add' is already the name of a struct
+// error: give the function a different name

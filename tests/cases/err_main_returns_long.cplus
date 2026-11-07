@@ -1,0 +1,3 @@
+long main() { return 0; }
+// error: main must return int, not 'long'
+// error: write `int main()`

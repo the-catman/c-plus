@@ -1,0 +1,6 @@
+int main() {
+    println("{}", double);
+    return 0;
+}
+// error: expected an expression, found
+// error: a type name can only start a declaration

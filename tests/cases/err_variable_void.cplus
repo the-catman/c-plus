@@ -1,0 +1,6 @@
+int main() {
+    void x;
+    return 0;
+}
+// error: variables cannot have type void
+// error: pick a type such as int

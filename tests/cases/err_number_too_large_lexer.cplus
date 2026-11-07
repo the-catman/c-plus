@@ -1,0 +1,5 @@
+int main() {
+    long a = 99999999999999999999;
+    return 0;
+}
+// error: the number 99999999999999999999 is too large for any integer type

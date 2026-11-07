@@ -1,0 +1,6 @@
+int main() {
+    local<Nothing> a = local<Nothing>("x");
+    return 0;
+}
+// error: unknown type 'Nothing'
+// not-error: compares

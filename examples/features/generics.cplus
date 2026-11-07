@@ -1,0 +1,32 @@
+// Generics use C++'s syntax. Each set of types makes its own copy, and is checked when it is used.
+template<typename T> T largest(T a, T b) { return a > b ? a : b; }
+
+template<typename T> class Stack {
+    vector<T> items;
+public:
+    void push(T x) { items.push_back(x); }
+    T pop() {
+        T top = items.back();
+        items.pop_back();
+        return top;
+    }
+    long size() const { return items.size(); }
+};
+
+template<typename T, int N> struct Buffer {
+    array<T, N> items;
+};
+
+int main() {
+    println("{} {}", largest(1, 2), largest<string>("a", "b"));
+    // expect: 2 b
+    Stack<int> s = Stack<int>();
+    s.push(1);
+    s.push(2);
+    println("{} {}", s.pop(), s.size());
+    // expect: 2 1
+    Buffer<int, 4> b;
+    println("{}", b.items.size());
+    // expect: 4
+    return 0;
+}

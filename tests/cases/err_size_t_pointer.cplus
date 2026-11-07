@@ -1,0 +1,6 @@
+int main() {
+    size_t* p = null;
+    return 0;
+}
+// error: unknown type 'size_t'
+// error: use int (32-bit) or long (64-bit)

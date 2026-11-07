@@ -1,0 +1,7 @@
+class A { public: explicit A(int x) {} };
+int main() {
+
+    return 0;
+}
+// error: C+ has no 'explicit'
+// error: a constructor only runs when its name is written

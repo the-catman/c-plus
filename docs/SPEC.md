@@ -1,8 +1,9 @@
 # C+ Language Specification
 
-Draft v0.1. This document is written to be read by people and by language models that
+Version 0.1. This document is written to be read by people and by language models that
 have never seen C+. Compiler errors link to its sections, so heading names are stable:
-rename one only together with `compiler/SpecRefs.h`.
+rename one only together with `compiler/SpecRefs.h`. `cplus explain <topic>` prints any section
+of it, with an example that runs.
 
 C+ is C++-shaped. **Where C+ and C++ mean the same thing, the syntax is identical.** This
 spec spends its words on the places where they differ. Each section says whether the
@@ -1052,6 +1053,8 @@ println("closed with {}", ws.closeCode() ?? 0);
 
 `http::connectWith(request)` opens one with what is in an `http::Request`: `url`, `headers`, `timeout`, for opening it, `maxBytes`, for each message, and `caFile`. An offered `Sec-WebSocket-Protocol` header can be set, but the other headers of opening one cannot. Pings are answered without the program doing anything.
 
+**One thread can wait in `receive()` while another sends**, which is what a WebSocket is for, as a class reference can be shared with [`spawn`](#concurrency). A third can `close()` it: what waits to receive then gets null, and what waits to send gets an error of the kind `"closed"`. Messages and frames stay whole, whichever threads send them. Only one thread receives at a time: a second waits for the first.
+
 Connecting fails with the same kinds as a request, and with `"handshake"` when the server does not open a WebSocket. A server that breaks the protocol ends the connection with `"protocol"`, and one that goes away without a close with `"network"`. After that, or after closing, `receive()` gives null and `send` throws an error of the kind `"closed"`.
 
 `import http;` needs a compiler built with libcurl, which comes from the development files of libcurl, such as `libcurl4-openssl-dev` on Debian or Ubuntu. Only a program that imports it links it, and that program then needs the libcurl of the machine it runs on.
@@ -1074,7 +1077,7 @@ for (auto f : t.fields()) println("{} at {}: {}", f.name, f.offset, f.type.name(
 ```
 
 - `reflect::type<T>()` is the type `T`, and `reflect::of(x)` the type of a value: for a class reference, what the object really is.
-- A `reflect::Type` has `name()`, `kind()`, which is `"int"`, `"struct"`, `"class"`, `"vector"`, `"optional"` and so on, `size()`, which for a class is
+- A `reflect::Type` has `name()`, `kind()`, which is `"int"`, `"struct"`, `"class"`, `"unique"`, `"local"`, `"vector"`, `"optional"` and so on, `size()`, which for a class is
   that of a reference, `length()` for an array, `elem()`, a `reflect::Type?` for what a vector, array, optional or unique reference
   holds, and `fields()`. Two are `==` when they are the same type.
 - A `reflect::Field` has `name`, `offset`, from the start of the struct or object, `type` and `isPublic`. Private fields are there too.
@@ -1881,7 +1884,7 @@ otherwise: a `throws` function does not say which errors it throws.
 
 ## Memory model
 
-Class objects are reference-counted, and the counts are atomic, so objects can later be
+Class objects are reference-counted, and the counts are atomic, so objects can be
 shared between threads. Counting is automatic:
 
 - An object is freed as soon as nothing refers to it, and its destructor runs at that
@@ -1926,7 +1929,14 @@ and any memory from `new` that was never deleted. The test suite runs every prog
 Raw [pointers](#pointers) are not counted: a pointer does not keep alive what it points
 to. Memory from [`new`](#new-and-delete) stays until `delete` frees it.
 
-[`local<T>`](#local-references) is a reference for code on one thread whose counting is too slow.
+There are four ways to refer to an object, all to the same kind of object:
+
+| Written | Count | Across threads | Use |
+|---------|-------|----------------|-----|
+| `Node` | atomic | yes | everything, unless there is a reason |
+| [`unique<Node>`](#unique-references) | none to move it | handed over with `move` | an object with one owner |
+| [`local<Node>`](#local-references) | not atomic | no | code on one thread whose counting is too slow |
+| [`weak<Node>`](#weak-references) | does not keep it alive | yes | a reference back, which breaks a cycle |
 
 ### Local references
 
@@ -2233,7 +2243,9 @@ println("{}", a.wait() + b.wait());
 **What `spawn` takes** is a call of a function or a method written in C+: `spawn f(x)`, `spawn object.method(x)`. The arguments, and what a
 method is called on, are worked out right there, in order, before the thread starts, so an error or a change after that has nothing to do with
 them. For a built-in such as `println`, a C function or a constructor, write a function that does it, and spawn that. Generic functions work,
-and `try` does not belong on the call, since its error goes in the task.
+and `try` does not belong on the call, since its error goes in the task: an argument that can fail is written `spawn f(try g())`.
+
+`spawn` takes all of the call after it, so `spawn f(x).wait()` would wait inside the new thread, for what `f` gave. To wait for the task at once, write `(spawn f(x)).wait()`.
 
 **A thread gets values of its own.** Strings, vectors, hashmaps, structs and arrays are values, so the thread has a copy, which is cheap, and
 what it changes does not show anywhere else. The method of a struct runs on a copy of the struct. A `unique` reference is handed over with
@@ -2313,6 +2325,122 @@ fatal error: two threads used the same memory at the same time, and at least one
 
 Not yet: `async` and `await`, waiting with a time limit, atomic values, condition variables and channels, and starting a C function directly.
 
+## The cplus command
+
+```
+cplus check <file.cplus>                  report errors without building
+cplus build <file.cplus> [-o <output>]    compile to a native executable, named after the file if no -o
+cplus run <file.cplus> [-- <args>...]     build to a temporary file and run it
+cplus explain [<topic>]                   the part of this document on a topic, with an example that runs
+cplus --version
+```
+
+| Option | Takes effect on | Does |
+|--------|-----------------|------|
+| `-O` | `build`, `run` | optimizes |
+| `--debug` | `build`, `run` | a [debug build](#debug-builds), which finds memory errors and leaks |
+| `--race` | `build`, `run` | a build with [the race check](#the-race-check). It cannot go with `--debug` |
+| `-l<name>`, `-L<dir>` | `build`, `run`, `check` | the libraries of [C functions](#c-functions), as for a C compiler |
+| `-Wno-new-delete` | `build`, `run`, `check` | no warning for [`new` and `delete`](#new-and-delete) |
+| `--emit-llvm` | `build` | prints the LLVM IR instead of building |
+
+`cplus explain` with no topic lists them all. A topic is the name of a section, as in the `spec:` line of an error, or a word you know from C++ or JavaScript, such as
+`hashmap`, `spawn` or `try`. `cplus explain cheatsheet` is how C+ differs from C++, on one page. All of it is built into the compiler, so it works away from this repository.
+
+**Exit codes.** `check` and `build` exit with 0 if all is well, with 1 for errors in the program or a failure to build it, and with 2 for a wrong command line. `run` exits with what the program does.
+A program exits with what `main` returns, with 1 for an error that nothing catches, and with 134 when it is stopped by a runtime check or a crash.
+
+## Grammar
+
+The rules of what can be written, in EBNF. `{ x }` is any number of `x`, `[ x ]` is an optional one, and text in quotes is written as it is. What the rules allow can still be an error for other
+reasons, such as the type of a value. What is reported as not supported yet is left out.
+
+```
+program      = { import | item } ;
+import       = "import" name ";" ;
+item         = function | record | generic | constant | extern | attribute ;
+attribute    = "[[" "allow" "(" "new_delete" ")" "]]" [ ";" ] ;
+name         = letter { letter | digit | "_" } ;              (* with `module::name` for what a module has *)
+
+function     = type name "(" [ params ] ")" [ "throws" ] block ;
+params       = param { "," param } ;
+param        = [ "const" ] type name ;
+constant     = ( "const" | "constexpr" ) type name "=" expr { "," name "=" expr } ";"
+             | "constexpr" function ;
+
+record       = ( "struct" | "class" | "interface" ) name [ ":" base { "," base } ] "{" { member } "}" ";" ;
+base         = "public" name ;                                (* a class or an interface; a struct has none *)
+member       = ( "public" | "private" | "protected" ) ":"
+             | type name [ "=" expr ] ";"                     (* a field *)
+             | [ "virtual" ] type name "(" [ params ] ")" [ "const" ] [ "throws" ] [ "override" ] ( block | "=" "0" ";" | ";" )
+             | name "(" [ params ] ")" [ ":" init { "," init } ] block            (* a constructor *)
+             | "~" name "(" ")" block ;                       (* a destructor *)
+init         = name "(" [ args ] ")" | name "{" [ args ] "}" ;
+
+generic      = "template" "<" tparam { "," tparam } ">" ( function | record )
+             | "template" "<" "typename" name ">" "concept" name "=" "requires" "(" params ")" "{" { expr ";" } "}" ";" ;
+tparam       = ( "typename" | "class" | name ) name           (* the third is a constraint, or the type of a value *)
+             | ( "int" | "long" | "bool" | "char" ) name ;
+
+extern       = "extern" '"C"' ( cItem | "{" { cItem } "}" ) ;
+cItem        = type name "(" [ params ] ")" ";" | "struct" name ";" | record ;
+
+type         = [ "const" ] baseType { "*" [ "const" ] } [ "?" ] ;
+baseType     = "int" | "long" | "double" | "float" | "bool" | "char" | "string" | "void" | "auto"
+             | "vector" "<" type ">"
+             | "array" "<" type "," expr ">"
+             | "hashmap" "<" type "," type ">"
+             | "unique" "<" name ">" | "local" "<" name ">" | "weak" "<" name ">"
+             | "Task" "<" type [ "," "throws" ] ">"
+             | name [ "<" targ { "," targ } ">" ] ;           (* a struct, class or C type, or one made from a generic *)
+targ         = type | expr ;
+
+block        = "{" { statement } "}" ;
+statement    = block | ";" | declaration | expr ";"
+             | "if" [ "constexpr" ] "(" condition ")" statement [ "else" statement ]
+             | "while" "(" condition ")" statement
+             | "do" statement "while" "(" expr ")" ";"
+             | "for" "(" ( declaration | [ expr ] ";" ) [ expr ] ";" [ expr ] ")" statement
+             | "for" "(" type name ":" expr ")" statement
+             | "return" [ value ] ";" | "break" ";" | "continue" ";"
+             | "throw" [ expr ] ";"
+             | "try" block catch { catch } ;
+catch        = "catch" "(" ( type [ name ] | "..." ) ")" block ;
+condition    = expr | type name "=" expr ;                    (* the second unwraps an optional *)
+declaration  = [ "const" | "constexpr" ] type declarator { "," declarator } ";" ;
+declarator   = { "*" [ "const" ] } name [ "=" value ] ;
+value        = expr | list ;
+list         = "{" [ item2 { "," item2 } [ "," ] ] "}" ;
+item2        = [ "." name "=" ] value ;
+
+expr         = ternary [ assignOp expr ] ;
+assignOp     = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
+ternary      = coalesce [ "?" expr ":" expr ] ;
+coalesce     = binary [ "??" coalesce ] ;
+binary       = unary { binaryOp unary } ;                     (* by the table in [Operators] *)
+binaryOp     = "||" | "&&" | "|" | "^" | "&" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "<<" | ">>" | "+" | "-" | "*" | "/" | "%" ;
+unary        = ( "!" | "-" | "+" | "~" | "*" | "&" | "++" | "--" ) unary
+             | "try" unary | "spawn" unary
+             | "new" type [ "(" [ args ] ")" | list | "[" expr "]" ]
+             | "delete" [ "[" "]" ] unary
+             | "sizeof" ( "(" type ")" | unary )
+             | "(" type ")" unary
+             | postfix ;
+postfix      = primary { "." name [ "::" name ] [ "(" [ args ] ")" ]
+                       | "?." name [ "(" [ args ] ")" ]
+                       | "->" name [ "(" [ args ] ")" ]
+                       | "[" expr "]" | "++" | "--" } ;
+primary      = literal | name | "this" | "null" | "(" expr ")"
+             | name [ "<" targ { "," targ } ">" ] "(" [ args ] ")"
+             | type list | type "(" [ args ] ")"              (* builds a value, or converts one *)
+             | ( "static_cast" | "reinterpret_cast" | "dynamic_cast" ) "<" type ">" "(" expr ")"
+             | "move" "(" expr ")" ;
+args         = value { "," value } ;
+literal      = integer | float | string | char | "true" | "false" ;
+```
+
+Integers, floats, strings and chars are in [Lexical structure](#lexical-structure). There is no comma operator: a comma only separates declarators, arguments and the items of a list.
+
 ---
 
 ## Implementation status
@@ -2349,9 +2477,9 @@ Not yet: `async` and `await`, waiting with a time limit, atomic values, conditio
 | `new`, `new[]`, `delete`, `delete[]`, with a warning; `[[allow(new_delete)]]`, `-Wno-new-delete` | implemented |
 | Constants outside functions: numbers, `char`, `bool`, `string`, pointers | implemented |
 | `main` with `argc` and `argv` | implemented |
-| `cplus check`, `build`, `run`, `--emit-llvm`, `-O` | implemented |
+| `cplus check`, `build`, `run`, `explain`, `--emit-llvm`, `-O` | implemented |
 | Debug builds with `--debug`: AddressSanitizer, stack traces, misaligned pointer and invalid bool checks, leak report | implemented |
-| Imports and multi-file programs | planned |
+| Programs of more than one file | planned |
 | `constexpr` values and functions, `if constexpr`, array sizes and template arguments worked out while compiling | implemented |
 | `constexpr` methods and structs; a generic `constexpr` function in an array's size | planned |
 | Variables outside functions; constants of other types | planned |

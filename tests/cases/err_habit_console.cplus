@@ -1,0 +1,6 @@
+int main() {
+    console.log("x");
+    return 0;
+}
+// error: 'console' is not declared
+// error: C+ prints with `println("{}", value);`

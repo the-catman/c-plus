@@ -1,0 +1,15 @@
+// A C struct is written with its fields in C's order, and can be passed by value or through a pointer.
+extern "C" {
+    struct ldiv_t {
+        long quot;
+        long rem;
+    };
+    ldiv_t ldiv(long a, long b);
+}
+
+int main() {
+    ldiv_t r = ldiv(17, 5);
+    println("{} {}", r.quot, r.rem);
+    // expect: 3 2
+    return 0;
+}

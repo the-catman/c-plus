@@ -1,0 +1,11 @@
+// A char is one byte, from 0 to 255.
+int main() {
+    char c = 'a';
+    char newline = '\n';
+    println("{} {} {}", c, int(c), int(newline));
+    // expect: a 97 10
+    c++;
+    println("{} {}", c, char(c + 1));
+    // expect: b c
+    return 0;
+}

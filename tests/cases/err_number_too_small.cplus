@@ -1,0 +1,6 @@
+int main() {
+    long a = -9223372036854775809;
+    return 0;
+}
+// error: the number -9223372036854775809 is too small for any integer type
+// error: the smallest long is -9223372036854775808

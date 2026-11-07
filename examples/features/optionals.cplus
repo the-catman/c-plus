@@ -1,0 +1,25 @@
+// `T?` holds a T or null. `?.` follows it if there is one, `??` gives a fallback, and `if (auto x = o)` unwraps it.
+struct User {
+    string name;
+    int? age;
+};
+
+User? find(vector<User> users, string name) {
+    for (auto u : users)
+        if (u.name == name) return u;
+    return null;
+}
+
+int main() {
+    vector<User> users = {{"Ada", 36}, {"Grace", null}};
+    println("{}", find(users, "Ada")?.name ?? "nobody");
+    // expect: Ada
+    println("{}", find(users, "Linus")?.name ?? "nobody");
+    // expect: nobody
+    if (auto u = find(users, "Grace")) println("{} is {}", u.name, u.age ?? 0);
+    // expect: Grace is 0
+    int? n = null;
+    println("{} {}", n == null, n.value_or(7));
+    // expect: true 7
+    return 0;
+}

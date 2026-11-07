@@ -1,0 +1,7 @@
+extern "C" void walk(int (*visit)(int));
+int main() {
+
+    return 0;
+}
+// error: this compiler does not support C callbacks yet
+// error: a C function that takes a function pointer

@@ -1,0 +1,18 @@
+// Casts are written as in C++. One whose value does not fit stops the program instead of wrapping around.
+int main() {
+    double d = 3.9;
+    println("{} {} {}", int(d), static_cast<int>(d), (int)d);
+    // expect: 3 3 3
+    println("{}", char(65));
+    // expect: A
+    int x = 7;
+    void* p = &x;
+    int* back = static_cast<int*>(p);
+    println("{}", *back);
+    // expect: 7
+    long tooBig = 3000000000;
+    int small = int(tooBig);
+    println("never printed {}", small);
+    return 0;
+}
+// trap: 3000000000

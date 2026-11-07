@@ -1,0 +1,11 @@
+// Overflow is not undefined here: it stops the program, and says where.
+int main() {
+    int n = 2147483647;
+    println("before");
+    // expect: before
+    n += 1;
+    println("never {}", n);
+    return 0;
+}
+// trap: integer overflow
+// trap: examples/features/integer-overflow.cplus:6

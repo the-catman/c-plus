@@ -1,0 +1,7 @@
+class N { public: int x = 0; };
+int main() {
+    weak<N>? w = null;
+    return 0;
+}
+// error: a weak reference cannot be optional
+// error: it is already empty when nothing is there

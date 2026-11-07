@@ -1,0 +1,7 @@
+inline int f() { return 1; }
+int main() {
+
+    return 0;
+}
+// error: C+ has no 'inline'
+// error: remove it

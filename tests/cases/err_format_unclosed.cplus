@@ -1,0 +1,6 @@
+int main() {
+    println("{", 1);
+    return 0;
+}
+// error: this format string has a '{' with no matching '}'
+// error: write {{ for a literal '{'

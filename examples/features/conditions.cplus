@@ -1,0 +1,18 @@
+// A condition takes a bool, a number, a pointer or an optional, as in C++. A number is true unless it is zero.
+int main() {
+    int n = 3;
+    if (n) println("not zero");
+    // expect: not zero
+    int* none = null;
+    if (!none) println("no pointer");
+    // expect: no pointer
+    int? o = 5;
+    if (o) println("holds {}", o.value());
+    // expect: holds 5
+    if (auto v = o) println("unwrapped {}", v);
+    // expect: unwrapped 5
+    string s = "text";
+    if (!s.empty() && s[0] != '\0') println("has text");
+    // expect: has text
+    return 0;
+}

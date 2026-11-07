@@ -1,0 +1,6 @@
+int main() {
+    int n = 1;
+    n += "x";
+    return n;
+}
+// error: '+=' needs a number, but this is 'string'

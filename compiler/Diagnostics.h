@@ -29,11 +29,10 @@ class Diagnostics {
 public:
     explicit Diagnostics(const SourceFile& file);
 
-    // help: a concrete fix. spec: a heading anchor in docs/SPEC.md (see SpecRefs.h).
-    void error(Loc loc, const std::string& message, const std::string& help = "",
-               const std::string& spec = "");
-    void warning(Loc loc, const std::string& message, const std::string& help = "",
-                 const std::string& spec = "");
+    // help: a concrete fix. spec: a heading anchor in docs/SPEC.md (see SpecRefs.h). Neither can be left out, as an error is
+    // the first thing someone who has never seen C+ learns from.
+    void error(Loc loc, const std::string& message, const std::string& help, const std::string& spec);
+    void warning(Loc loc, const std::string& message, const std::string& help, const std::string& spec);
     // A note adds context to the diagnostic printed just before it.
     void note(Loc loc, const std::string& message);
 

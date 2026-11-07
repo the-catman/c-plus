@@ -5,6 +5,8 @@
 namespace cplus::spec {
 
 inline constexpr const char* Preprocessor = "no-preprocessor";
+inline constexpr const char* SourceFiles = "source-files";
+inline constexpr const char* Grammar = "grammar";
 inline constexpr const char* Comments = "comments";
 inline constexpr const char* IntegerLiterals = "integer-literals";
 inline constexpr const char* StringLiterals = "string-literals";

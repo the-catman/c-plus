@@ -1,0 +1,6 @@
+int main() {
+    auto f = [](int x) { return x; };
+    return 0;
+}
+// error: this compiler does not support lambdas yet
+// error: write a function, and call it by name

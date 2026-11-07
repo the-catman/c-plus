@@ -1,0 +1,11 @@
+// Functions can be called before they are defined, and there are no headers. There is one function for each name.
+int main() {
+    println("{}", add(2, 3));
+    // expect: 5
+    println("{}", fact(5));
+    // expect: 120
+    return 0;
+}
+
+int add(int a, int b) { return a + b; }
+long fact(long n) { return n <= 1 ? 1 : n * fact(n - 1); }

@@ -1,0 +1,37 @@
+// `import json;` reads and writes values by their types, with nothing to write for a type.
+import json;
+
+struct User {
+    string name;
+    int age = 0;
+    vector<string> tags;
+};
+
+int main() throws {
+    User u = {"Ada", 36, {"math"}};
+    string text = json::stringify(u);
+    println("{}", text);
+    // expect: {"name":"Ada","age":36,"tags":["math"]}
+
+    User back = try json::parse<User>(text);
+    println("{} {}", back.name, back.tags.size());
+    // expect: Ada 1
+
+    try {
+        User bad = json::parse<User>(R"({"name": 5})");
+        println("{}", bad.name);
+    } catch (json::Error e) {
+        println("line {}: {}", e.line, e.what());
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // expect: line 1: line 1, column 10: in name: expected a string, but found a number
+
+    // Text of no known shape.
+    json::Value doc = try json::parse<json::Value>(R"({"items": [{"id": 7}]})");
+    println("{}", doc.get("items")?.at(0)?.get("id")?.whole() ?? -1);
+    // expect: 7
+    println("{}", doc.get("nothing")?.at(0)?.text() ?? "none");
+    // expect: none
+    return 0;
+}

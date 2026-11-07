@@ -1,0 +1,15 @@
+// A constraint says what a generic needs, so a mistake is reported where the generic is used, in plain words.
+template<Number T> T twice(T x) { return x * 2; }
+
+template<typename T> concept Named = requires(T a) { a.name; };
+template<Named T> string nameOf(T x) { return x.name; }
+
+struct User { string name = "Ada"; };
+
+int main() {
+    println("{} {}", twice(2), twice(1.5));
+    // expect: 4 3
+    println("{}", nameOf(User()));
+    // expect: Ada
+    return 0;
+}

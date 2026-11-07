@@ -1,0 +1,10 @@
+// The functions of <cmath> are there with no include and no `std::`.
+int main() {
+    println("{} {} {}", sqrt(16.0), pow(2.0, 10.0), floor(2.7));
+    // expect: 4 1024 2
+    println("{} {} {}", abs(-3), min(1, 2), max(1.5, 0.5));
+    // expect: 3 1 1.5
+    println("{}", fmod(7.5, 2.0));
+    // expect: 1.5
+    return 0;
+}

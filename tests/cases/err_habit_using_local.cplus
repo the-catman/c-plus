@@ -1,0 +1,6 @@
+int main() {
+    using namespace std;
+    return 0;
+}
+// error: C+ has no 'using' declarations
+// error: need no std:: prefix

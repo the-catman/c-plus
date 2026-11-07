@@ -1,0 +1,6 @@
+template<typename T> T make() { return T(1, 2); }
+int main() {
+    int x = make<int>();
+    return x;
+}
+// error: 'int' takes one value, but 2 were given

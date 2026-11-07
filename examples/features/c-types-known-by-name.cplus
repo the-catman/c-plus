@@ -1,0 +1,17 @@
+// A C type that is only pointed to is declared by name. Nothing more of it needs to be known.
+extern "C" {
+    struct FILE;
+    FILE* tmpfile();
+    int fputs(string text, FILE* file);
+    int fclose(FILE* file);
+}
+
+int main() {
+    FILE* f = tmpfile();
+    if (f) {
+        println("{}", fputs("saved", f) >= 0);
+        // expect: true
+        fclose(f);
+    }
+    return 0;
+}

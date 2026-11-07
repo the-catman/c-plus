@@ -1,0 +1,7 @@
+template<typename T> class Stack { public: T v; Stack(T a) : v(a) {} };
+int main() {
+    auto s = Stack(1);
+    return 0;
+}
+// error: this compiler does not support working out the template arguments of 'Stack' yet
+// error: write e.g. `Stack<int>(...)`

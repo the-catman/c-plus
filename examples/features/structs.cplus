@@ -1,0 +1,20 @@
+// A struct is a value. It is copied when assigned, and `==` compares its fields without any code to write.
+struct Point {
+    int x;
+    int y = 0;
+    int sum() const { return x + y; }
+};
+
+int main() {
+    Point a = {1, 2};
+    Point b = a;
+    b.x = 10;
+    println("{} {}", a, b);
+    // expect: {x: 1, y: 2} {x: 10, y: 2}
+    println("{} {}", a == b, a == Point{1, 2});
+    // expect: false true
+    Point named = {.y = 5, .x = 4};
+    println("{}", named.sum());
+    // expect: 9
+    return 0;
+}

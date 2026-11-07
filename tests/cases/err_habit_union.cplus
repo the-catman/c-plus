@@ -1,0 +1,7 @@
+union U { int a; };
+int main() {
+
+    return 0;
+}
+// error: this compiler does not support unions yet
+// error: a struct with a field for each

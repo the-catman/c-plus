@@ -78,8 +78,8 @@ void Diagnostics::report(const char* level, const char* color, Loc loc, const st
     }
     if (!help.empty()) std::fprintf(stderr, "%s%s =%s %shelp:%s %s\n", gutter.c_str(), blue, reset, bold, reset, help.c_str());
     if (!spec.empty())
-        std::fprintf(stderr, "%s%s =%s %sspec:%s docs/SPEC.md#%s\n", gutter.c_str(), blue, reset, bold, reset,
-                     spec.c_str());
+        std::fprintf(stderr, "%s%s =%s %sspec:%s docs/SPEC.md#%s, or run `cplus explain %s`\n", gutter.c_str(), blue, reset, bold, reset,
+                     spec.c_str(), spec.c_str());
     std::fprintf(stderr, "\n");
 }
 

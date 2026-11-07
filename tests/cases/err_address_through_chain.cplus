@@ -1,0 +1,8 @@
+struct P { int x = 0; };
+int main() {
+    P? p = null;
+    int* q = &p?.x;
+    return 0;
+}
+// error: '&' takes the address of a variable, a field, or what a pointer points to, but this is a temporary value
+// error: '?.' gives a copy of the value

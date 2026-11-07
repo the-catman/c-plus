@@ -1,0 +1,4 @@
+interface I { int f() = 1; };
+int main() { return 0; }
+// error: a method of an interface cannot be set to a value
+// error: remove what comes after `=`

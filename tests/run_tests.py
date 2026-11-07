@@ -3,8 +3,9 @@
 
 Usage: python3 tests/run_tests.py <path to cplus> [name filter]
 
-Every tests/cases/*.cplus file is compiled and checked against directives written
-in its comments. A test can use these, one per line, anywhere in the file:
+Every tests/cases/*.cplus and examples/features/*.cplus file is compiled and checked
+against directives written in its comments. A test can use these, one per line, anywhere
+in the file:
 
   // expect: <text>    the next line the program must print (in order)
   // error: <text>     compiling must fail, and the errors must contain <text>
@@ -41,14 +42,17 @@ also get CPLUS_TEST_VARIABLE=1, for tests that read an environment variable.
 
 Tests run at the same time, one per processor, and print in order.
 
-A test of errors must exit with code 1, as anything else is a crash.
+A test of errors must exit with code 1, as anything else is a crash, and every error
+must come with a help and a spec line.
 
 The runner also checks that every spec anchor in compiler/SpecRefs.h is a real
-heading in docs/SPEC.md, so diagnostics never point at a missing section, that every
-program in examples/ compiles without warnings, that very deeply nested code is an
+heading in docs/SPEC.md, so diagnostics never point at a missing section, that each section
+of the spec has an example in examples/features, that `cplus explain` finds every section, that
+every program in examples/ compiles without warnings, that very deeply nested code is an
 error instead of a crash, that no way of copying a unique reference compiles, that a
-crash whose report cannot flush the program's output still says what happened, and that lines
-printed by threads stay together. The check of
+crash whose report cannot flush the program's output still says what happened, that lines
+printed by threads stay together, that a program links what it uses and no more, that mistakes in
+the command line are reported as other errors are, and that the code in the spec compiles. The check of
 copies builds each case by itself, since one test file with many errors would pass with one
 of them missing.
 """
@@ -63,6 +67,11 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CASES = ROOT / "tests" / "cases"
+FEATURES = ROOT / "examples" / "features"
+
+# Sections with nothing to run: a heading over others, or what is about the tools and not the language.
+NO_EXAMPLE = {"c-language-specification", "lexical-structure", "types", "declarations", "statements", "expressions", "source-files",
+              "no-preprocessor", "keywords", "nesting-limits", "debug-builds", "the-cplus-command", "grammar", "implementation-status"}
 
 
 def slugify(heading):
@@ -78,6 +87,134 @@ def check_spec_anchors():
     for r in missing:
         print(f"FAIL spec anchor '{r}' from compiler/SpecRefs.h has no heading in docs/SPEC.md")
     return not missing
+
+
+def spec_sections():
+    in_code = False
+    sections = []
+    for line in (ROOT / "docs" / "SPEC.md").read_text().splitlines():
+        if line.startswith("```"):
+            in_code = not in_code
+        elif not in_code and re.match(r"#+ ", line):
+            sections.append(slugify(line.split(" ", 1)[1]))
+    return sections
+
+
+def check_example_for_each_section():
+    ok = True
+    sections = spec_sections()
+    for section in sections:
+        if section not in NO_EXAMPLE and not (FEATURES / f"{section}.cplus").exists():
+            print(f"FAIL the spec section '{section}' has no example in examples/features")
+            ok = False
+    for path in FEATURES.glob("*.cplus"):
+        if path.stem not in sections:
+            print(f"FAIL {path.relative_to(ROOT)} is not named after a section of the spec")
+            ok = False
+    return ok
+
+
+def check_explain(cplus):
+    """`cplus explain` has every section, and the words people use lead to them."""
+    def explain(*topic):
+        return subprocess.run([cplus, "explain", *topic], capture_output=True, text=True)
+    ok = True
+    for section in spec_sections():
+        if section == "c-language-specification":
+            continue
+        run = explain(section)
+        if run.returncode != 0 or not run.stdout.startswith("#"):
+            print(f"FAIL cplus explain {section}: exit code {run.returncode}\n  " + run.stderr[:300])
+            ok = False
+    checks = [
+        (explain("--check").returncode == 0, "every word and example leads to a section"),
+        (explain("hashmap").stdout.startswith("### Hash maps"), "a word leads to its section"),
+        ("examples/features/hash-maps.cplus" in explain("hash-maps").stdout, "a section shows its example"),
+        ("cplus explain integer-types" in explain("types").stdout, "a section lists what is under it"),
+        ("generics" in explain().stdout and explain().returncode == 0, "no topic lists them all"),
+        (explain("cheatsheet").stdout == (ROOT / "docs" / "CHEATSHEET.md").read_text(), "the cheat sheet is there, byte for byte"),
+        (all(path.read_text() in explain(path.stem).stdout for path in FEATURES.glob("*.cplus")), "each example is there, byte for byte"),
+        (explain("no-such-topic-at-all").returncode == 1, "an unknown topic is an error"),
+        ("cplus explain" in explain("hashmapp").stderr, "an unknown topic says what it may have meant"),
+    ]
+    for passed, what in checks:
+        if not passed:
+            print(f"FAIL cplus explain: {what}")
+            ok = False
+    return ok
+
+
+# Blocks of the spec that are not meant to compile as they are: each shows an error, or is a sketch. What else is not there to
+# compile only lacks what the text around it has defined, which is all right. Anything new has to be looked at.
+SPEC_SKETCHES = (
+    "long big = 5;", "User? find(vector<User> users", "class Box : public Named", "interface Speaker {", "json::Value doc = try",
+    "http::WebSocket ws = try", "int* a, b;", "constexpr int square(int n)", "int x;", "import json;          // a standard module",
+    "if (count) ...", "template<Comparable T>", "template<typename T>",
+)
+
+
+def spec_code_problems(cplus, text, workdir):
+    declaration = re.compile(r"^\s*(import\b|struct\b|class\b|interface\b|template\b|extern\b|constexpr\b|\[\[allow\(new_delete\)\]\];|const\s+\w+\s+[A-Z_]+\s*=)")
+    function = re.compile(r"^\s*(?:[\w:<>,\s\*\?]+?)\s+\**\w+\s*\([^;]*\)\s*(const\s*)?(throws\s*)?\{")
+    needs_context = re.compile(r"is not declared|unknown type|there is no function named|there is no class named|has no field named|has no method named")
+    source = workdir / "spec_block.cplus"
+    problems = []
+    for block in re.finditer(r"^```cpp\n(.*?)^```", text, re.S | re.M):
+        code = block.group(1)
+        if code.startswith(SPEC_SKETCHES):
+            continue
+        if not re.search(r"\bint main\b", code):
+            declarations, statements = [], []
+            lines = code.splitlines()
+            i = 0
+            while i < len(lines):
+                if declaration.match(lines[i]) or function.match(lines[i]):
+                    depth = 0
+                    while i < len(lines):
+                        bare = re.sub(r'"(\\.|[^"\\])*"|//.*$', "", lines[i])
+                        depth += bare.count("{") - bare.count("}")
+                        declarations.append(lines[i])
+                        i += 1
+                        if depth <= 0 and declarations[-1].rstrip().endswith((";", "}")) or depth <= 0 and re.search(r";\s*//", declarations[-1]):
+                            break
+                else:
+                    statements.append(lines[i])
+                    i += 1
+            code = "\n".join(declarations) + "\nint main() throws {\n" + "\n".join(statements) + "\nreturn 0;\n}\n"
+        source.write_text(code)
+        run = subprocess.run([cplus, "check", str(source)], capture_output=True, text=True)
+        if run.returncode not in (0, 1):
+            problems.append(f"the compiler crashed on this block:\n{code}")
+        real = [line for line in run.stderr.splitlines()
+                if line.startswith("error:") and "could not compile" not in line and not needs_context.search(line)]
+        if real:
+            problems.append(f"line {text.count(chr(10), 0, block.start()) + 2}: {real[0]}")
+    return problems
+
+
+def check_spec_code(cplus, workdir):
+    """The code in the documents goes on compiling, so that they cannot drift away from the compiler without a test failing."""
+    ok = True
+    for name in ("SPEC.md", "CHEATSHEET.md"):
+        for problem in spec_code_problems(cplus, (ROOT / "docs" / name).read_text(), workdir):
+            print(f"FAIL docs/{name}: {problem}")
+            ok = False
+    return ok
+
+
+def errors_without_help(stderr):
+    """Every error says how to fix it, and where the rule is."""
+    problems = []
+    blocks = re.split(r"^(?=(?:error|warning|note): )", stderr, flags=re.M)
+    for block in blocks:
+        if not block.startswith("error: ") or block.startswith("error: could not compile"):
+            continue
+        first = block.splitlines()[0]
+        if "= help:" not in block:
+            problems.append("no help: " + first)
+        if "= spec:" not in block:
+            problems.append("no spec: " + first)
+    return problems
 
 
 def check_examples(cplus):
@@ -246,6 +383,41 @@ int main() {
     return True
 
 
+def check_command_line(cplus, workdir):
+    """What is wrong with the command, and not the program, is said as any other error is."""
+    good = workdir / "good.cplus"
+    good.write_text("int main() { return 0; }\n")
+    other = workdir / "other.cplus"
+    other.write_text("int main() { return 0; }\n")
+    text = workdir / "notes.txt"
+    text.write_text("notes\n")
+    missing_dir = workdir / "no" / "such" / "folder"
+    g = str(good)
+    cases = [
+        ([], 2, "no command given"), (["frobnicate"], 2, "unknown command 'frobnicate'"), (["check"], 2, "no source file given"),
+        (["check", g, str(other)], 2, "only one source file can be given"), (["check", g, "--nope"], 2, "unknown option '--nope'"),
+        (["check", g, "-o", "x"], 2, "-o is only used with `cplus build`"), (["build", g, "-o"], 2, "-o needs an output path"),
+        (["run", g, "--emit-llvm"], 2, "--emit-llvm is only used with `cplus build`"), (["build", g, "--", "a"], 2, "'--' is only used with `cplus run`"),
+        (["build", g, "-l"], 2, "-l needs a library name"), (["build", g, "-L"], 2, "-L needs a directory"),
+        (["build", g, "-g"], 2, "'-g' is not an option of cplus"), (["build", g, "-fsanitize=thread"], 2, "is not an option of cplus"),
+        (["build", g, "--debug", "--race"], 2, "--debug and --race cannot be used together"), (["explain", "a", "b"], 2, "explain takes one topic"),
+        (["check", str(text)], 2, "is not a C+ source file"), (["check", str(workdir / "gone.cplus")], 1, "cannot read"),
+        (["build", g, "-o", str(missing_dir / "out")], 1, "cannot write"), (["build", g, "-o", str(workdir / "out"), "-lno_such_library_here"], 1, "linking failed"),
+    ]
+    ok = True
+    for args, code, message in cases:
+        run = subprocess.run([cplus, *args], capture_output=True, text=True)
+        lacking = errors_without_help(run.stderr)
+        if run.returncode != code or message not in run.stderr or lacking:
+            print(f"FAIL cplus {' '.join(args)}: exit code {run.returncode}, expected {code}, and '{message}'. {lacking}\n  " + run.stderr[:300])
+            ok = False
+    run = subprocess.run([cplus, "run", g], capture_output=True, text=True, env=dict(os.environ, TMPDIR=str(missing_dir)))
+    if run.returncode != 1 or "cannot find a folder for temporary files" not in run.stderr or errors_without_help(run.stderr):
+        print(f"FAIL cplus run with no folder for temporary files: exit code {run.returncode}\n  " + run.stderr[:300])
+        ok = False
+    return ok
+
+
 def check_what_is_linked(cplus, workdir):
     """What a program uses of the runtime decides what it links and builds, and nothing else does."""
     source = workdir / "linked.cplus"
@@ -350,6 +522,9 @@ def run_case(cplus, path, workdir):
         wrong = [e for e in re.findall(r"//[ \t]*not-error:[ \t]*(.*?)[ \t]*$", text, re.M) if e in build.stderr]
         if wrong:
             return "compile errors should not contain: " + "; ".join(wrong) + "\n--- stderr ---\n" + build.stderr
+        lacking = errors_without_help(build.stderr)
+        if lacking:
+            return "; ".join(lacking)
         return None
     races = re.findall(r"//[ \t]*race:[ \t]*(.*?)[ \t]*$", text, re.M)
     builds = [[], ["-O"], ["--debug"], ["--debug", "-O"]]
@@ -420,8 +595,10 @@ def main():
     ok = check_spec_anchors()
     if not name_filter:
         ok = check_examples(cplus) and ok
+        ok = check_example_for_each_section() and ok
+        ok = check_explain(cplus) and ok
     passed = failed = 0
-    paths = [p for p in sorted(CASES.glob("*.cplus")) if name_filter in p.name]
+    paths = [p for p in [*sorted(CASES.glob("*.cplus")), *sorted(FEATURES.glob("*.cplus"))] if name_filter in p.name]
     server = None
     with tempfile.TemporaryDirectory(prefix="cplus-tests-") as tmp:
         HAS_RACE[0] = compiler_has_race(cplus, pathlib.Path(tmp))
@@ -439,6 +616,8 @@ def main():
             ok = check_crash_in_output(cplus, pathlib.Path(tmp)) and ok
             ok = check_print_lines(cplus, pathlib.Path(tmp)) and ok
             ok = check_what_is_linked(cplus, pathlib.Path(tmp)) and ok
+            ok = check_command_line(cplus, pathlib.Path(tmp)) and ok
+            ok = check_spec_code(cplus, pathlib.Path(tmp)) and ok
 
         def run_in_own_folder(path):
             workdir = pathlib.Path(tmp) / f"{path.parent.name}-{path.stem}"

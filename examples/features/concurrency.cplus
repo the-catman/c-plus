@@ -1,0 +1,36 @@
+// `spawn` runs a call on a new thread, and gives a Task to get its result from. A thread gets values of its own.
+long sum(vector<long> numbers) {
+    long total = 0;
+    for (long n : numbers) total += n;
+    return total;
+}
+
+int check(int n) throws {
+    if (n < 0) throw Error("below zero");
+    return n;
+}
+
+void report(string text) { println("{}", text); }
+
+int main() throws {
+    Task<long> a = spawn sum({1, 2, 3});
+    auto b = spawn sum({4, 5});
+    println("{}", a.wait() + b.wait());
+    // expect: 15
+
+    Task<int, throws> fine = spawn check(1);
+    println("{}", try fine.wait());
+    // expect: 1
+    auto bad = spawn check(-1);
+    try {
+        println("{}", bad.wait());
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // expect: below zero
+
+    // Nothing has to wait for this one. The program does not end until it has.
+    spawn report("done");
+    // expect: done
+    return 0;
+}

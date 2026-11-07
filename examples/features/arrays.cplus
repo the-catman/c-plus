@@ -1,0 +1,18 @@
+// `array<T, N>` holds its elements itself, and has a size known while compiling. Each element always starts with a value.
+constexpr int N = 3;
+
+int main() {
+    array<int, N> a = {1, 2};
+    array<int, N> b = a;
+    b[2] = 9;
+    println("{} {} {}", a, b, a.size());
+    // expect: [1, 2, 0] [1, 2, 9] 3
+    array<array<int, 2>, 2> grid;
+    grid[1][0] = 5;
+    println("{}", grid);
+    // expect: [[0, 0], [5, 0]]
+    b.fill(1);
+    println("{} {}", b, a == b);
+    // expect: [1, 1, 1] false
+    return 0;
+}

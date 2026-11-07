@@ -1,0 +1,22 @@
+// `local<Node>` is a class reference that only one thread counts, which is much quicker where counting is what takes the time.
+class Node {
+public:
+    string name;
+    Node(string n) : name(n) {}
+};
+
+long lengths(local<Node> n, int times) {
+    long total = 0;
+    for (int i = 0; i < times; i++) {
+        local<Node> copy = n;
+        total += copy.name.size();
+    }
+    return total;
+}
+
+int main() {
+    local<Node> a = local<Node>("abc");
+    println("{}", lengths(a, 1000));
+    // expect: 3000
+    return 0;
+}

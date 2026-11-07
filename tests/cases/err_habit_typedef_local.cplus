@@ -1,0 +1,5 @@
+int main() {
+    typedef int myint;
+    return 0;
+}
+// error: C+ has no typedef

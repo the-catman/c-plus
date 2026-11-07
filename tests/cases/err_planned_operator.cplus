@@ -1,0 +1,6 @@
+struct P { int x = 0; P operator+(P o) { return o; } };
+int main() {
+
+    return 0;
+}
+// error: this compiler does not support operator overloading yet

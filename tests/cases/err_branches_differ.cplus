@@ -1,0 +1,7 @@
+int main() {
+    bool c = true;
+    auto x = c ? 1 : "a";
+    return 0;
+}
+// error: the two branches of ?: have different types, 'int' and 'string'
+// error: make both branches the same type

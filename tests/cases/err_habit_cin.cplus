@@ -1,0 +1,7 @@
+int main() {
+    int n = 0;
+    cin >> n;
+    return 0;
+}
+// error: 'cin' is not declared
+// error: there are no input functions yet

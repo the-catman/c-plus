@@ -1,0 +1,6 @@
+int main() {
+    string s = sprintf("x");
+    return 0;
+}
+// error: there is no function named 'sprintf'
+// error: `format("{}", x)` returns the string

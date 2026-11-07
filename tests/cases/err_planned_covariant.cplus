@@ -1,0 +1,8 @@
+class A { public: virtual A f() { return A(); } };
+class B : public A { public: B f() override { return B(); } };
+int main() {
+
+    return 0;
+}
+// error: this compiler does not support covariant return types yet
+// error: return an 'A'

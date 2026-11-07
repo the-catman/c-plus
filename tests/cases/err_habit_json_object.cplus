@@ -1,0 +1,6 @@
+int main() {
+    auto x = JSON.parse("1");
+    return 0;
+}
+// error: 'JSON' is not declared
+// error: `import json;`

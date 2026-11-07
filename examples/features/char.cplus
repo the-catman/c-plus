@@ -1,0 +1,15 @@
+// The functions of <cctype> are there with no include. A char is a number when you do arithmetic on it.
+int main() {
+    string word = "Hello 42";
+    int letters = 0;
+    int digits = 0;
+    for (char c : word) {
+        if (isalpha(c)) letters++;
+        if (isdigit(c)) digits += c - '0';
+    }
+    println("{} {}", letters, digits);
+    // expect: 5 6
+    println("{} {}", toupper('x'), tolower('Y'));
+    // expect: X y
+    return 0;
+}

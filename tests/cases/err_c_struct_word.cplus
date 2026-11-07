@@ -1,0 +1,4 @@
+extern "C" struct FILE* tmpfile();
+int main() { return 0; }
+// error: C+ writes a C type without the word 'struct'
+// error: `struct FILE;`

@@ -1,0 +1,6 @@
+int main() {
+    auto a = unique<Nothing>("x");
+    return 0;
+}
+// error: unknown type 'Nothing'
+// not-error: compares

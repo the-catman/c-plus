@@ -1,0 +1,6 @@
+void g() {}
+int main() {
+    auto x = g();
+    return 0;
+}
+// error: cannot store the result of a void function in 'x'

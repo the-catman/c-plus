@@ -1,0 +1,7 @@
+typedef int myint;
+int main() {
+
+    return 0;
+}
+// error: C+ has no typedef
+// error: write the type itself

@@ -1,0 +1,5 @@
+struct P { int x = 0; };
+int P::get() { return x; }
+int main() { return 0; }
+// error: methods are defined inside their struct
+// error: move this definition into the body of 'P'

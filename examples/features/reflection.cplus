@@ -1,0 +1,19 @@
+// `import reflect;` lets a running program ask about types.
+import reflect;
+
+struct Point {
+    int x = 0;
+    double y = 0;
+};
+
+int main() {
+    auto t = reflect::type<Point>();
+    println("{} is a {} of {} bytes", t.name(), t.kind(), t.size());
+    // expect: Point is a struct of 16 bytes
+    for (auto f : t.fields()) println("{} at {}: {}", f.name, f.offset, f.type.name());
+    // expect: x at 0: int
+    // expect: y at 8: double
+    println("{}", reflect::of(Point{}).name());
+    // expect: Point
+    return 0;
+}

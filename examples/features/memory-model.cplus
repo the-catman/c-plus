@@ -1,0 +1,24 @@
+// Objects are counted, and freed the moment nothing refers to them, so a destructor is a reliable place to close something.
+class Resource {
+public:
+    string name;
+    Resource(string n) : name(n) { println("open {}", name); }
+    ~Resource() { println("close {}", name); }
+};
+
+void use() {
+    Resource a = Resource("first");
+    Resource b = Resource("second");
+}
+
+int main() {
+    use();
+    // expect: open first
+    // expect: open second
+    // expect: close second
+    // expect: close first
+    Resource("temporary");
+    // expect: open temporary
+    // expect: close temporary
+    return 0;
+}

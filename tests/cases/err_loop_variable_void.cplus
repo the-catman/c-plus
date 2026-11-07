@@ -1,0 +1,7 @@
+int main() {
+    vector<int> v;
+    for (void x : v) {}
+    return 0;
+}
+// error: a loop variable cannot have type void
+// error: write `auto` or the element type

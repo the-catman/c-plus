@@ -1,0 +1,42 @@
+// `import http;` makes requests, each waiting for its answer. A status like 404 is an answer: only `ok` tells.
+import http;
+
+extern "C" string? getenv(string name);
+
+int main() throws {
+    string server = getenv("CPLUS_TEST_HTTP") ?? "http://localhost";
+
+    http::Response r = try http::get(server + "/hello");
+    println("{} {} {}", r.status, r.ok, r.body);
+    // expect: 200 true hello
+    println("{}", r.header("content-type") ?? "none");
+    // expect: text/plain
+
+    http::Response missing = try http::get(server + "/status/404");
+    println("{} {}", missing.status, missing.ok);
+    // expect: 404 false
+
+    try http::post(server + "/echo", "{\"a\": 1}", "application/json");
+    try http::send({.method = "PUT", .url = server + "/echo", .headers = {{"Authorization", "Bearer token"}}, .timeout = 5});
+
+    // What stopped there being an answer is an error.
+    try {
+        http::Response gone = http::get("http://127.0.0.1:1/");
+        println("{}", gone.status);
+    } catch (http::Error e) {
+        println("{}", e.kind);
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // expect: connect
+
+    // A WebSocket: `while (auto m = try ws.receive())` reads until it closes.
+    http::WebSocket ws = try http::connect((getenv("CPLUS_TEST_WS") ?? "ws://localhost") + "/ws/echo");
+    try ws.send("ping");
+    if (auto m = try ws.receive()) println("{}", m.data);
+    // expect: ping
+    ws.close();
+    println("{}", ws.closeCode() ?? 0);
+    // expect: 1000
+    return 0;
+}

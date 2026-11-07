@@ -1,0 +1,7 @@
+enum Color { Red };
+int main() {
+
+    return 0;
+}
+// error: this compiler does not support enums yet
+// error: `const int RED = 0;`

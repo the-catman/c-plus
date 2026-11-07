@@ -1,0 +1,6 @@
+int main() {
+    double x = Math.sqrt(2.0);
+    return 0;
+}
+// error: 'Math' is not declared
+// error: write `sqrt(x)`

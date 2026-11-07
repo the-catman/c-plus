@@ -1,0 +1,6 @@
+template<typename T> struct S { T x; };
+int main() {
+    S<void> s;
+    return 0;
+}
+// error: a field cannot have type void

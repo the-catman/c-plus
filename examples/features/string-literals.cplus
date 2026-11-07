@@ -1,0 +1,12 @@
+// Strings use C++'s escapes. A raw string takes everything as it is written.
+int main() {
+    println("tab\there, \"quotes\", and a byte: \x41");
+    // expect: tab	here, "quotes", and a byte: A
+    string json = R"({"name": "Ada", "path": "C:\temp"})";
+    println("{}", json);
+    // expect: {"name": "Ada", "path": "C:\temp"}
+    string tricky = R"end(it has )" inside)end";
+    println("{}", tricky);
+    // expect: it has )" inside
+    return 0;
+}

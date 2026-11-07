@@ -1,8 +1,8 @@
 # C+
 
 C+ is a compiled language shaped like C++, with safer defaults and more built in. The
-compiler is written in C++20 and generates code through LLVM 18. Phases 1 to 3 of `PLAN.md` are in,
-the batteries among them: reflection, JSON, HTTP, `hashmap` and threads. Next is Phase 4.
+compiler is written in C++20 and generates code through LLVM 18. Phases 1 to 4 of `PLAN.md` are in.
+Next is Phase 5, async.
 
 ## Where things are
 
@@ -15,7 +15,8 @@ the batteries among them: reflection, JSON, HTTP, `hashmap` and threads. Next is
   and `main.cpp` (the driver).
 - `runtime/` is the small C runtime linked into every program.
 - `tests/cases/` holds the language tests. `tests/run_tests.py` documents their directives.
-- `examples/` holds small sample programs.
+- `examples/` holds small sample programs. `examples/features/` has one for each section of the spec, named after its
+  anchor: the tests run them, and `cplus explain` shows them.
 
 ## Writing C+ code
 
@@ -51,7 +52,7 @@ python3 tests/run_tests.py build/cplus
   support ... yet". When a common C or C++ habit is likely, such as `printf`, `#include`,
   `std::`, or `if (n)`, the help says what to write instead.
 - **Spec anchors must exist.** A new entry in `SpecRefs.h` needs a matching heading in
-  `docs/SPEC.md`. The test runner checks this.
+  `docs/SPEC.md`. The test runner checks this. A new heading needs a program in `examples/features/`.
 - **One change updates everything it affects.** When language behavior changes, update
   `docs/SPEC.md`, its implementation status table, `docs/CHEATSHEET.md`, the tests, and
   `PLAN.md` if a decision changed.

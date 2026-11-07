@@ -1,0 +1,8 @@
+class N { public: int x = 0; };
+template<typename T> T? nothing() { return null; }
+int main() {
+    auto x = nothing<weak<N>>();
+    return 0;
+}
+// error: a weak reference cannot be optional
+// error: it is already empty when nothing is there

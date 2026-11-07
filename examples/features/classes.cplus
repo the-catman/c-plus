@@ -1,0 +1,25 @@
+// A class is a reference to a counted object: assigning shares it, and it goes when the last reference does. There is no `new`.
+class User {
+public:
+    string name;
+    User(string n) : name(n) {}
+    ~User() { println("{} is gone", name); }
+};
+
+int main() {
+    User a = User("Ada");
+    User same = a;
+    same.name = "Grace";
+    println("{} {}", a.name, a == same);
+    // expect: Grace true
+    {
+        User other = User("Linus");
+        println("{}", other.name);
+        // expect: Linus
+    }
+    // expect: Linus is gone
+    println("end");
+    // expect: end
+    return 0;
+    // expect: Grace is gone
+}

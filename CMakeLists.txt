@@ -97,8 +97,18 @@ else()
   message(STATUS "No ThreadSanitizer in the C compiler: cplus --race will report that it is missing")
 endif()
 
+# What `cplus explain` shows, built into the compiler.
+file(GLOB CPLUS_FEATURE_EXAMPLES CONFIGURE_DEPENDS examples/features/*.cplus)
+set(CPLUS_EMBEDDED_DOCS ${CMAKE_BINARY_DIR}/embedded_docs.cpp)
+add_custom_command(OUTPUT ${CPLUS_EMBEDDED_DOCS}
+  COMMAND ${CMAKE_COMMAND} -DOUT=${CPLUS_EMBEDDED_DOCS} -DROOT=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/cmake/EmbedDocs.cmake
+  DEPENDS docs/SPEC.md docs/CHEATSHEET.md cmake/EmbedDocs.cmake ${CPLUS_FEATURE_EXAMPLES}
+  COMMENT "Building the docs into the compiler")
+
 add_executable(cplus
   compiler/main.cpp
+  compiler/Explain.cpp
+  ${CPLUS_EMBEDDED_DOCS}
   compiler/Diagnostics.cpp
   compiler/Lexer.cpp
   compiler/Parser.cpp
@@ -106,6 +116,7 @@ add_executable(cplus
   compiler/ConstEval.cpp
   compiler/Codegen.cpp)
 target_include_directories(cplus SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_include_directories(cplus PRIVATE compiler)
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 target_compile_definitions(cplus PRIVATE ${LLVM_DEFINITIONS_LIST}
   CPLUS_VERSION="${PROJECT_VERSION}"

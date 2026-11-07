@@ -78,6 +78,10 @@ long square(long n) { return n * n; }
 | C++ habit | C+ |
 |-----------|----|
 | `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;`; C functions are declared with `extern "C"` |
+| `let x = 1`, `var x = 1`, `function f() { }` | `auto x = 1;`, `void f() { }`: a type or `auto` always comes first |
+| `console.log(x)`, `Math.sqrt(x)` | `println("{}", x)`, `sqrt(x)` |
+| `typedef`, `using`, `inline`, `goto`, `register`, `volatile`, `mutable`, `explicit`, `friend`, `union` | left out, and each says what to write instead. `goto` is a loop or a function, and `volatile` is a `Mutex` |
+| `a = 1, b = 2;` | no comma operator: two statements |
 | `#define MAX 100`, `static const int MAX = 100;` | `const int MAX = 100;`, or `constexpr int MAX = 100;` |
 | `int count = 0;` outside a function | not supported yet. A value that never changes is a `const`; otherwise pass it to the functions that use it |
 | `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `int`. `char*` is a raw pointer, for buffers and text to free |
@@ -109,6 +113,7 @@ long square(long n) { return n * n; }
 | `std::future<int> r = ...; r.get();` | `Task<int> r = spawn f();`, then `r.wait()`, which can be called again |
 | `spawn try f()`, `try spawn f()` | `auto t = spawn f();`, then `try t.wait()` |
 | `spawn println("x")`, `spawn usleep(1)`, `spawn P(1)` | `spawn` takes a C+ function or method. Write a function that does it |
+| `spawn f(x).wait()` | `spawn` takes all of the call after it: `(spawn f(x)).wait()` |
 | `std::mutex m;`, `std::lock_guard<std::mutex> g(m);` | `Mutex m = Mutex();`, `LockGuard g = LockGuard(m);` |
 | `std::atomic<int>` | planned. Use a class field and a `Mutex` |
 | `-fsanitize=thread` | `cplus run app.cplus --race` |
@@ -196,7 +201,7 @@ long square(long n) { return n * n; }
 | `size_t pos = s.find(t)` | `long pos = s.find(t)` or `auto pos`. `string::npos` is `-1`, so `pos != string::npos` and `pos >= 0` both work |
 | `s.substr(pos)` past the end throws | it **stops the program** with file:line, as do a negative position and `s.find(t, -1)` |
 | `s.at(i)`, `s.append(t)` | `s[i]` (always checked), `s += t` |
-| overloaded functions | planned; one function per name for now |
+| overloaded functions | planned; one function per name for now: rename one |
 
 ## Planned. The compiler rejects these today with "does not support ... yet"
 
@@ -210,11 +215,11 @@ long square(long n) { return n * n; }
 | JSON | other names for fields, marking a field to leave out |
 | Reflection | reading a field through its `reflect::Field`, methods |
 | Memory | pointers into vectors and strings |
-| Types | enums, `const` fields, types nested in a type or a function, `short` and other small integers |
-| Functions | default arguments, `auto` parameters and return types, lambdas |
+| Types | enums, unions, unsigned integers, `const` fields, types nested in a type or a function, `short` and other small integers |
+| Functions | overloading, default arguments, `auto` parameters and return types, lambdas |
 | Statements | `switch` |
 | Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
-| Containers | `insert`, `erase` and iterators on vectors; `find` on a hashmap; sorted maps and sets |
+| Containers | `insert`, `erase` and iterators on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |
 | References | `T&` parameters, `for (auto& x : v)` |
 | Structured bindings | `for (auto [k, v] : m)`, `auto [a, b] = f();` |
 | Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
@@ -225,6 +230,7 @@ long square(long n) { return n * n; }
 ## Tools
 
 ```
+cplus explain hashmap       # what the spec says on a topic, with an example that runs; no topic lists them
 cplus check file.cplus      # errors only
 cplus run file.cplus        # build and run
 cplus build file.cplus -o app [-O] [--emit-llvm]

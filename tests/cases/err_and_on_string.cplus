@@ -1,0 +1,6 @@
+int main() {
+    string s = "a";
+    if (s && true) return 1;
+    return 0;
+}
+// error: both sides of '&&' must be a bool, a number, a pointer or an optional, but this is 'string'

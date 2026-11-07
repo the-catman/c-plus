@@ -1,0 +1,27 @@
+// A class can have many base classes, as in C++. There is no virtual inheritance: a diamond holds what it shares twice, and says which.
+class Named {
+public:
+    string name;
+    Named(string n) : name(n) {}
+    string called() const { return "called " + name; }
+};
+class Sized {
+public:
+    int size = 0;
+    Sized(int s) : size(s) {}
+};
+class Box : public Named, public Sized {
+public:
+    Box(string n, int s) : Named(n), Sized(s) {}
+};
+
+int main() {
+    Box box = Box("crate", 3);
+    println("{} {}", box.called(), box.size);
+    // expect: called crate 3
+    Named asNamed = box;
+    Sized asSized = box;
+    println("{} {}", asNamed.name, asSized.size);
+    // expect: crate 3
+    return 0;
+}

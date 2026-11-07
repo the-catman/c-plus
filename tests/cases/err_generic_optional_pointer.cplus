@@ -1,0 +1,7 @@
+template<typename T> T? nothing() { return null; }
+int main() {
+    auto x = nothing<int*>();
+    return 0;
+}
+// error: a pointer cannot be optional
+// error: a pointer can already be null

@@ -1,0 +1,6 @@
+int f() { return 1; }
+int main() {
+    int x = await f();
+    return x;
+}
+// error: this compiler does not support async and await yet

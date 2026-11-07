@@ -1,0 +1,22 @@
+// `println` works as in C++23. Any value can be printed, with nothing to write for its type. `format` gives the string instead.
+struct Point { int x = 1; int y = 2; };
+class User {
+public:
+    string name = "Ada";
+};
+
+int main() {
+    println("{} and {}", 1, "two");
+    // expect: 1 and two
+    print("no newline, ");
+    println("{{braces}}");
+    // expect: no newline, {braces}
+    vector<int> v = {1, 2};
+    string? nothing = null;
+    println("{} {} {} {}", Point{}, User(), v, nothing);
+    // expect: {x: 1, y: 2} User {name: "Ada"} [1, 2] null
+    string text = format("{:.1f}%", 12.34);
+    println("{}", text);
+    // expect: 12.3%
+    return 0;
+}

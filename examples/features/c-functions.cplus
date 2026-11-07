@@ -1,0 +1,14 @@
+// C functions are declared with C+ types. `const char*` is a `string`, and is converted at each call. `size_t` is `long`.
+extern "C" {
+    long strlen(string s);
+    int abs(int n);
+    string? getenv(string name);
+}
+
+int main() {
+    println("{} {}", strlen("hello"), abs(-3));
+    // expect: 5 3
+    println("{}", getenv("THIS_IS_NOT_SET") ?? "not set");
+    // expect: not set
+    return 0;
+}

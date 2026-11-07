@@ -1,0 +1,15 @@
+// The operators of C++, with `??` and `?.` for optionals. `+` joins strings, never a string and a number.
+int main() {
+    println("{} {} {} {}", 7 % 3, 1 << 4, 6 & 3, 6 ^ 3);
+    // expect: 1 16 2 5
+    int x = 5;
+    x += 2;
+    x++;
+    println("{} {}", x, x > 7 && x != 9);
+    // expect: 8 true
+    println("{}", "a" + "b" + 'c' + to_string(1));
+    // expect: abc1
+    println("{} {}", "apple" < "pear", "a" == "a");
+    // expect: true true
+    return 0;
+}

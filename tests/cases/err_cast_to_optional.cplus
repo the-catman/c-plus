@@ -1,0 +1,6 @@
+int main() {
+    auto x = static_cast<int?>(1);
+    return 0;
+}
+// error: a cast converts between numbers, char and bool, but this converts to 'int?'
+// error: no cast is needed

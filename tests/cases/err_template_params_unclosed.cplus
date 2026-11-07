@@ -1,0 +1,3 @@
+template<typename T int N> T f(T x) { return x; }
+int main() { return 0; }
+// error: expected '>' to close the template parameters

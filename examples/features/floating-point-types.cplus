@@ -1,0 +1,14 @@
+// `double` and `float` work as in C++, and print the shortest digits that are exact.
+int main() {
+    double d = 0.1 + 0.2;
+    float f = 0.5;
+    println("{} {}", d, f);
+    // expect: 0.30000000000000004 0.5
+    println("{} {}", 7 / 2, 7 / 2.0);
+    // expect: 3 3.5
+    println("{:.2f} {:e}", 3.14159, 1500.0);
+    // expect: 3.14 1.500000e+03
+    println("{} {}", 1 / 0.0, isnan(0 / 0.0));
+    // expect: inf true
+    return 0;
+}

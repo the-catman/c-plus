@@ -1,0 +1,6 @@
+int main() {
+    goto end;
+    return 0;
+}
+// error: C+ has no goto
+// error: use a loop with `break` or `continue`

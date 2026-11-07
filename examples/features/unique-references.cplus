@@ -1,0 +1,22 @@
+// `unique<Node>` is the one owner of an object. It cannot be copied, only moved, and using what was moved is a compile error.
+class Node {
+public:
+    string name;
+    Node(string n) : name(n) {}
+};
+
+void take(unique<Node> n) { println("took {}", n.name); }
+string look(Node n) { return n.name; }
+
+int main() {
+    unique<Node> a = unique<Node>("x");
+    println("{}", look(a.get()));
+    // expect: x
+    unique<Node> b = move(a);
+    take(move(b));
+    // expect: took x
+    unique<Node>? none = null;
+    println("{}", none == null);
+    // expect: true
+    return 0;
+}

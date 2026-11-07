@@ -1,0 +1,11 @@
+// Numbers convert to bool, as in C++. A bool does not convert to a number.
+int main() {
+    bool yes = true;
+    bool fromNumber = 5;
+    println("{} {} {}", yes, fromNumber, !yes);
+    // expect: true true false
+    int n = yes ? 1 : 0;
+    println("{}", n);
+    // expect: 1
+    return 0;
+}

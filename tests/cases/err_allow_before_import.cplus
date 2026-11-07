@@ -1,0 +1,3 @@
+[[allow(new_delete)]] import json;
+int main() { return 0; }
+// error: [[allow(new_delete)]] is written before a function

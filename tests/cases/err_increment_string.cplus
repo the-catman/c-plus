@@ -1,0 +1,6 @@
+int main() {
+    string s = "a";
+    s++;
+    return 0;
+}
+// error: '++' needs a number, a char or a pointer, but this is 'string'

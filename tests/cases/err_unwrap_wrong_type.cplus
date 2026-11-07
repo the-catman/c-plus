@@ -1,0 +1,6 @@
+int main() {
+    int? o = 1;
+    if (string s = o) return 1;
+    return 0;
+}
+// error: expected 'string' to initialize 's', but this 'int?' holds 'int'

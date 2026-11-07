@@ -1,0 +1,23 @@
+// Pointers work as in C++, for the code that needs an address. Following a null one stops the program.
+struct Point { int x = 0; };
+
+void bump(int* n) { *n += 1; }
+
+int main() {
+    int n = 41;
+    int* p = &n;
+    bump(p);
+    println("{} {}", n, *p);
+    // expect: 42 42
+    Point pt;
+    Point* pp = &pt;
+    pp->x = 10;
+    println("{}", pt.x);
+    // expect: 10
+    int* none = null;
+    if (!none) println("no pointer");
+    // expect: no pointer
+    println("{}", *none);
+    return 0;
+}
+// trap: null pointer

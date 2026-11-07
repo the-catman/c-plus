@@ -1,0 +1,4 @@
+// error: this /* comment is never closed
+// error: add */ where the comment should end
+int main() { return 0; }
+/* this never ends

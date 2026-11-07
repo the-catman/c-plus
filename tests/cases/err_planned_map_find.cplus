@@ -1,0 +1,7 @@
+int main() {
+    hashmap<int, int> m;
+    auto x = m.find(1);
+    return 0;
+}
+// error: this compiler does not support find() on a hashmap yet
+// error: `m.contains(key)`

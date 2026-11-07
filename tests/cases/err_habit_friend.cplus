@@ -1,0 +1,7 @@
+class A { friend class B; };
+int main() {
+
+    return 0;
+}
+// error: C+ has no 'friend'
+// error: make what it needs public

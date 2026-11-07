@@ -1,0 +1,7 @@
+class A { mutable int x = 0; };
+int main() {
+
+    return 0;
+}
+// error: C+ has no 'mutable'
+// error: take `const` off the method that changes it

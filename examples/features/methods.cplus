@@ -1,0 +1,15 @@
+// Methods are written inside their type. `const` says one does not change the fields, and a field is used by its name or as `this.x`.
+struct Counter {
+    int n = 0;
+    void add(int by) { n += by; }
+    int doubled() const { return this.n * 2; }
+};
+
+int main() {
+    Counter c;
+    c.add(3);
+    c.add(4);
+    println("{} {}", c.n, c.doubled());
+    // expect: 7 14
+    return 0;
+}

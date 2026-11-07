@@ -1,0 +1,14 @@
+// Declared as in C++, except that a variable has to be given a value before it is read.
+int main() {
+    int a = 1, b = 2;
+    auto c = a + b;
+    const string name = "Ada";
+    {
+        int a = 10;          // hides the other in this block
+        println("{}", a);
+        // expect: 10
+    }
+    println("{} {} {}", a, c, name);
+    // expect: 1 3 Ada
+    return 0;
+}

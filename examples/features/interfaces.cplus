@@ -1,0 +1,27 @@
+// An interface is methods only. A class can have any number of them.
+interface Shape {
+    double area() const;
+    string name() const;
+};
+class Square : public Shape {
+    double side;
+public:
+    Square(double s) : side(s) {}
+    double area() const override { return side * side; }
+    string name() const override { return "square"; }
+};
+class Circle : public Shape {
+    double r;
+public:
+    Circle(double radius) : r(radius) {}
+    double area() const override { return 3 * r * r; }
+    string name() const override { return "circle"; }
+};
+
+int main() {
+    vector<Shape> shapes = {Square(2), Circle(1)};
+    for (auto s : shapes) println("{} {}", s.name(), s.area());
+    // expect: square 4
+    // expect: circle 3
+    return 0;
+}

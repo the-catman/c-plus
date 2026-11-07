@@ -1,0 +1,6 @@
+int main() {
+    void* p = malloc(1);
+    return 0;
+}
+// error: there is no function named 'malloc'
+// error: declared before it is called: `extern "C" void* malloc(long n);`

@@ -1,0 +1,4 @@
+namespace app { }
+int main() { return 0; }
+// error: C+ has no namespaces; each file is a module
+// error: remove the namespace block

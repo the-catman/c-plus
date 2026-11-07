@@ -1,0 +1,18 @@
+// `constexpr` is worked out while compiling, so it can size an array, and a mistake in it is a compile error.
+constexpr int square(int n) { return n * n; }
+constexpr int SIZE = square(3);
+
+template<typename T> string describe(T x) {
+    if constexpr (Integer<T>) return "an integer";
+    else if constexpr (same_as<T, string>) return "a string";
+    else return "something else";
+}
+
+int main() {
+    array<int, SIZE> a;
+    println("{}", a.size());
+    // expect: 9
+    println("{}, {}, {}", describe(1), describe("x"), describe(1.5));
+    // expect: an integer, a string, something else
+    return 0;
+}

@@ -2,5 +2,5 @@ int main() {
     map<string, int> m;
     return 0;
 }
-// error: unknown type 'map'
+// error: this compiler does not support sorted maps yet
 // error: write `hashmap<K, V>`

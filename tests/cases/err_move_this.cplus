@@ -1,0 +1,7 @@
+class C {
+public:
+    void take() { C other = move(this); }
+};
+int main() { return 0; }
+// error: 'this' cannot be moved, since the object is still in use
+// error: write `this` to pass a reference to it

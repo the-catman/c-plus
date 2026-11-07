@@ -1,0 +1,6 @@
+int main() {
+    int* p = null, * const q = null;
+    return 0;
+}
+// error: a const pointer
+// error: is declared on its own

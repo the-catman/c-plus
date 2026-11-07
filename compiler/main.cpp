@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "Codegen.h"
+#include "Explain.h"
 #include "Lexer.h"
 #include "Parser.h"
 #include "Sema.h"
@@ -26,6 +27,7 @@ static const char* kUsage =
     "  cplus build <file.cplus> [-o <output>] [-O]   compile to a native executable\n"
     "  cplus build <file.cplus> --emit-llvm [-O]     print the LLVM IR instead\n"
     "  cplus run <file.cplus> [-O] [-- <args>...]    build to a temporary file and run it\n"
+    "  cplus explain [<topic>]                       what the language says on a topic, with an example\n"
     "  cplus --version\n"
     "\n"
     "build and run also take -l<library> and -L<directory>, as a C compiler does, for\n"
@@ -49,8 +51,14 @@ struct Options {
     std::vector<std::string> programArgs;
 };
 
+// An error about the command or its surroundings, and not the program, said as the others are.
+static void toolError(const std::string& message, const std::string& help) {
+    std::fprintf(stderr, "error: %s\n  = help: %s\n  = spec: docs/SPEC.md#the-cplus-command, or run `cplus explain the-cplus-command`\n", message.c_str(), help.c_str());
+}
+
 static int usageError(const std::string& message) {
-    std::fprintf(stderr, "error: %s\n\n%s", message.c_str(), kUsage);
+    toolError(message, "write the command as one of those below");
+    std::fprintf(stderr, "\n%s", kUsage);
     return 2;
 }
 
@@ -67,7 +75,7 @@ static int runProcess(const std::vector<std::string>& argv) {
     }
     if (pid == 0) {
         execvp(args[0], args.data());
-        std::fprintf(stderr, "error: could not run %s: %s\n", args[0], std::strerror(errno));
+        toolError(std::string("could not run ") + args[0] + ": " + std::strerror(errno), "this is the C compiler that links programs, named when cplus was built. Install it, or run cmake and build cplus again");
         _exit(127);
     }
     int status = 0;
@@ -108,7 +116,7 @@ static bool readFile(const std::string& path, std::string& out) {
 static int build(const Options& opts, const std::string& exePath) {
     std::string text;
     if (!readFile(opts.input, text)) {
-        std::fprintf(stderr, "error: cannot read %s: %s\n", opts.input.c_str(), std::strerror(errno));
+        toolError("cannot read " + opts.input + ": " + std::strerror(errno), "check the name of the file, which is relative to the folder this runs in");
         return 1;
     }
     SourceFile file(opts.input, std::move(text));
@@ -119,22 +127,20 @@ static int build(const Options& opts, const std::string& exePath) {
 
     const std::string runtimeLib = opts.race ? CPLUS_RUNTIME_LIB_RACE : opts.debug ? CPLUS_RUNTIME_LIB_DEBUG : CPLUS_RUNTIME_LIB;
     if (runtimeLib.empty() && !opts.emitLLVM && opts.race) {
-        std::fprintf(stderr, "error: --race needs ThreadSanitizer, which the C compiler did not have when this "
-                             "compiler was built\n  = help: install the sanitizer libraries for your C compiler, "
-                             "such as `libclang-rt-18-dev` on Debian or Ubuntu, then run cmake and build again\n");
+        toolError("--race needs ThreadSanitizer, which the C compiler did not have when this compiler was built",
+                  "install the sanitizer libraries for your C compiler, such as `libclang-rt-18-dev` on Debian or Ubuntu, then run cmake and build again");
         return 1;
     }
     if (runtimeLib.empty() && !opts.emitLLVM) {
-        std::fprintf(stderr, "error: --debug needs AddressSanitizer, which the C compiler did not have when this "
-                             "compiler was built\n  = help: install the sanitizer libraries for your C compiler, "
-                             "such as `libclang-rt-18-dev` on Debian or Ubuntu, then run cmake and build again\n");
+        toolError("--debug needs AddressSanitizer, which the C compiler did not have when this compiler was built",
+                  "install the sanitizer libraries for your C compiler, such as `libclang-rt-18-dev` on Debian or Ubuntu, then run cmake and build again");
         return 1;
     }
 
     Codegen codegen(file, CodegenOptions{opts.optimize, opts.debug, opts.race});
     std::string error;
     if (!codegen.generate(program, error)) {
-        std::fprintf(stderr, "error: %s\n", error.c_str());
+        toolError(error, "this is about the machine the program is being built for, and not the program: see the implementation status in the spec");
         return 1;
     }
     if (opts.emitLLVM) {
@@ -143,7 +149,7 @@ static int build(const Options& opts, const std::string& exePath) {
     }
     std::string objPath = exePath + ".o";
     if (!codegen.writeObjectFile(objPath, error)) {
-        std::fprintf(stderr, "error: %s\n", error.c_str());
+        toolError(error, "check that the folder of the output exists and can be written to, or choose another with -o");
         return 1;
     }
     std::vector<std::string> link{CPLUS_LINKER, objPath, runtimeLib};
@@ -165,14 +171,12 @@ static int build(const Options& opts, const std::string& exePath) {
     std::error_code ec;
     fs::remove(objPath, ec);
     if (rc != 0) {
-        std::fprintf(stderr, "error: linking failed (the linker exited with code %d)\n", rc);
         bool callsC = false;
         for (auto& f : program.funcs) callsC = callsC || f->isExtern;
-        if (callsC)
-            std::fprintf(stderr, "  = help: if a C function is undefined, name its library with -l, e.g. `cplus "
-                                 "%s %s -lsqlite3`, and its directory with -L if it is not installed in the usual "
-                                 "place\n",
-                         opts.command.c_str(), opts.input.c_str());
+        toolError("linking failed (the linker exited with code " + std::to_string(rc) + ")",
+                  callsC ? "if a C function is undefined, name its library with -l, e.g. `cplus " + opts.command + " " + opts.input +
+                               " -lsqlite3`, and its directory with -L if it is not installed in the usual place"
+                         : "what the linker printed above says why. Check the -l and -L options, and that the folder of the output can be written to");
         return 1;
     }
     return 0;
@@ -189,6 +193,10 @@ static int compilerMain(int argc, char** argv) {
     if (opts.command == "--help" || opts.command == "-h" || opts.command == "help") {
         std::fputs(kUsage, stdout);
         return 0;
+    }
+    if (opts.command == "explain") {
+        if (argc > 3) return usageError("explain takes one topic");
+        return explainTopic(argc == 3 ? argv[2] : "");
     }
     if (opts.command != "build" && opts.command != "run" && opts.command != "check")
         return usageError("unknown command '" + opts.command + "'");
@@ -237,8 +245,7 @@ static int compilerMain(int argc, char** argv) {
         return usageError("--debug and --race cannot be used together, as each watches the program's memory in its own way; build once with each");
     if (opts.input.empty()) return usageError("no source file given");
     if (fs::path(opts.input).extension() != ".cplus") {
-        std::fprintf(stderr, "error: %s is not a C+ source file\n  = help: C+ source files end in .cplus\n",
-                     opts.input.c_str());
+        toolError(opts.input + " is not a C+ source file", "C+ source files end in .cplus");
         return 2;
     }
 
@@ -250,9 +257,7 @@ static int compilerMain(int argc, char** argv) {
     std::error_code tempError;
     fs::path tempDir = fs::temp_directory_path(tempError);
     if (tempError) {
-        std::fprintf(stderr, "error: cannot find a folder for temporary files: %s\n"
-                             "  = help: set the environment variable TMPDIR to a folder that exists\n",
-                     tempError.message().c_str());
+        toolError(std::string("cannot find a folder for temporary files: ") + tempError.message().c_str(), "set the environment variable TMPDIR to a folder that exists");
         return 1;
     }
     std::string tmpl = (tempDir / "cplus-run-XXXXXX").string();

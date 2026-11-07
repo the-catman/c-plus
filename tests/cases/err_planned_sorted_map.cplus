@@ -1,0 +1,6 @@
+int main() {
+    map<int, int> m;
+    return 0;
+}
+// error: this compiler does not support sorted maps yet
+// error: write `hashmap<K, V>`

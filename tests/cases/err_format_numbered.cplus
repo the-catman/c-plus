@@ -1,0 +1,6 @@
+int main() {
+    println("{0}", 1);
+    return 0;
+}
+// error: this compiler does not support numbered placeholders like {0} yet
+// error: write {} for each value, in order

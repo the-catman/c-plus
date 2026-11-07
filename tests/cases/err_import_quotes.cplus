@@ -1,0 +1,4 @@
+import "json";
+int main() { return 0; }
+// error: module names are written without quotes or angle brackets
+// error: write `import http;`

@@ -1,0 +1,6 @@
+int main() {
+    register int x = 1;
+    return 0;
+}
+// error: C+ has no 'register'
+// error: remove it

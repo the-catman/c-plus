@@ -1,0 +1,6 @@
+int main() {
+    int* p = null;
+    p += 1.5;
+    return 0;
+}
+// error: '+=' on a pointer needs an int or a long, but this is 'double'

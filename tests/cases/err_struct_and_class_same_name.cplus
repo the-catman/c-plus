@@ -1,0 +1,5 @@
+struct P { int x = 0; };
+class P { public: int x = 0; };
+int main() { return 0; }
+// error: the name 'P' is already used by another struct or class
+// error: rename one of them

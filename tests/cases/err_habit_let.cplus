@@ -1,0 +1,6 @@
+int main() {
+    let x = 1;
+    return 0;
+}
+// error: C+ declares a variable with its type, or `auto`
+// error: write `auto x = 1;`

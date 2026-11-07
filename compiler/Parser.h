@@ -57,9 +57,9 @@ private:
     bool match(Tok k);
     const Token& expect(Tok k, const std::string& context);
     Loc afterPrev() const;
-    [[noreturn]] void fail(Loc loc, const std::string& message, const std::string& help = "",
-                           const std::string& spec = "");
-    [[noreturn]] void notYet(Loc loc, const std::string& feature, const std::string& help = "");
+    [[noreturn]] void fail(Loc loc, const std::string& message, const std::string& help, const std::string& spec);
+    [[noreturn]] void notYet(Loc loc, const std::string& feature, const std::string& help);
+    void rejectOtherLanguages();  // at the start of something: a word of another language, which is not a name here
     [[noreturn]] void failStd(Loc loc, const Token& name);
     const Type* parseBaseType(Loc& loc);
     ExprPtr parseCoalesce();

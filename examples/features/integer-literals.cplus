@@ -1,0 +1,10 @@
+// Integers can be written in four bases, with ' to separate digits. A leading zero is an error, as C reads it as octal.
+int main() {
+    println("{} {} {} {}", 255, 0xFF, 0o377, 0b1111'1111);
+    // expect: 255 255 255 255
+    long big = 1'000'000'000'000;
+    long alsoLong = 42L;
+    println("{} {}", big, alsoLong);
+    // expect: 1000000000000 42
+    return 0;
+}

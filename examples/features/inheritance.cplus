@@ -1,0 +1,24 @@
+// As in C++, except that `override` is required, and an object is reached by a reference, never a pointer.
+class Animal {
+public:
+    string name;
+    Animal(string n) : name(n) {}
+    virtual string sound() const { return "..."; }
+    string speak() const { return name + " says " + sound(); }
+};
+class Dog : public Animal {
+public:
+    Dog(string n) : Animal(n) {}
+    string sound() const override { return "woof"; }
+};
+
+int main() {
+    Animal a = Dog("Rex");
+    println("{}", a.speak());
+    // expect: Rex says woof
+    if (auto d = dynamic_cast<Dog?>(a)) println("{} is a dog", d.name);
+    // expect: Rex is a dog
+    println("{}", dynamic_cast<Dog?>(Animal("x")) == null);
+    // expect: true
+    return 0;
+}

@@ -1,0 +1,7 @@
+class C {
+public:
+    C();
+};
+int main() { return 0; }
+// error: write the constructor body here
+// error: C+ has no separate definitions

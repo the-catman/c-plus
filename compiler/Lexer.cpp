@@ -139,7 +139,7 @@ Token Lexer::next() {
     Loc loc = locHere();
     std::string shown = (unsigned char)c >= 0x80 ? "a non-ASCII character" : std::string("'") + c + "'";
     diags_.error(loc, "unexpected character " + shown + " in source",
-                 "identifiers and operators use ASCII; non-ASCII text belongs inside a string");
+                 "identifiers and operators use ASCII; non-ASCII text belongs inside a string", spec::SourceFiles);
     advance();
     while (pos_ < src_.size() && ((unsigned char)peek() & 0xC0) == 0x80) advance();  // rest of a UTF-8 sequence
     return next();

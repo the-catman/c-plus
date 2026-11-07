@@ -1,0 +1,6 @@
+int main() {
+    assert(1 > 0);
+    return 0;
+}
+// error: there is no function named 'assert'
+// error: write `if (!ok) throw Error("...");`

@@ -1,0 +1,4 @@
+extern "C" int fclose(struct FILE* f);
+int main() { return 0; }
+// error: C+ writes a C type without the word 'struct'
+// error: declare the type once inside extern "C", `struct FILE;`, and then write `FILE*`

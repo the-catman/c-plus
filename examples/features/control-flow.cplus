@@ -1,0 +1,19 @@
+// As in C++, with conditions that take a bool, a number, a pointer or an optional.
+int main() {
+    int n = 3;
+    while (n--) print("{} ", n);
+    println();
+    // expect: 2 1 0 
+    for (int i = 0; i < 5; i++) {
+        if (i == 1) continue;
+        if (i == 3) break;
+        print("{} ", i);
+    }
+    println();
+    // expect: 0 2 
+    int d = 0;
+    do d++; while (d < 3);
+    println("{} {}", d, d > 2 ? "big" : "small");
+    // expect: 3 big
+    return 0;
+}

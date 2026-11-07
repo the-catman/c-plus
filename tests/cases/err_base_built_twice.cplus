@@ -1,0 +1,7 @@
+class A { public: A(int x) {} };
+class B : public A {
+public:
+    B() : A(1), A(2) {}
+};
+int main() { return 0; }
+// error: the base class A is built more than once

@@ -1,0 +1,6 @@
+int main() {
+    int*? p = null;
+    return 0;
+}
+// error: a pointer cannot be optional
+// error: a pointer can already be null

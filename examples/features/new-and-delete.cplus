@@ -1,0 +1,17 @@
+// `new` and `delete` work on memory of your own, for what a class is not the right fit for. Each one warns, unless you say you mean it.
+[[allow(new_delete)]];
+
+struct Point { int x = 0; int y = 0; };
+
+int main() {
+    int* n = new int(5);
+    Point* p = new Point{1, 2};
+    int* numbers = new int[3];
+    numbers[2] = *n + p->y;
+    println("{} {}", numbers[0], numbers[2]);
+    // expect: 0 7
+    delete[] numbers;
+    delete p;
+    delete n;
+    return 0;
+}
