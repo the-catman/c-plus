@@ -155,8 +155,12 @@ static int build(const Options& opts, const std::string& exePath) {
         if (import.path == "http") link.insert(link.end(), {CPLUS_CURL_LINK, "-lpthread"});
 #endif
     link.push_back("-lm");  // the math functions, part of the C standard library
-    if (program.usesThreads) link.push_back("-lpthread");
+    if (program.linksThreads) link.push_back("-lpthread");
     link.insert(link.end(), {"-o", exePath});
+    if (std::getenv("CPLUS_SHOW_LINK")) {  // for the tests, and for finding out why a program does not link
+        for (auto& part : link) std::fprintf(stderr, "%s ", part.c_str());
+        std::fprintf(stderr, "\n");
+    }
     int rc = runProcess(link);
     std::error_code ec;
     fs::remove(objPath, ec);

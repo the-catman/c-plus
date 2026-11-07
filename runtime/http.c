@@ -34,15 +34,16 @@ enum { REPLY_WAIT_MS = 10000 };
 // How long the server's answer to opening a WebSocket can be.
 enum { MAX_HANDSHAKE = 64 * 1024 };
 
+// How long waiting on a WebSocket goes before it looks again at whether another thread is closing it.
+enum { WAIT_SLICE_MS = 100 };
+
+// How long a reply to a ping waits for another thread to finish sending what it is sending. A connection so busy it takes longer than
+// this is not one that a missing reply will upset.
+enum { REPLY_LOCK_TRIES = 1000 };
+
 static const int64_t NO_LIMIT = INT64_MAX;
 
 // ---- Shared by both --------------------------------------------------------
-
-static void* memory(size_t size) {
-    void* p = malloc(size ? size : 1);
-    if (!p) cplus_stop("out of memory", "this program asked for more memory than the system could give it");
-    return p;
-}
 
 // `what` says which kind of failure this is, as http::Error's `kind`.
 __attribute__((format(printf, 4, 5)))
@@ -62,7 +63,7 @@ static bool fail_as(const char* what, cplus_string* kind, cplus_string* problem,
 // A C+ string as C text, or null if it has a null byte in it, which C would take for its end.
 static char* c_text(const cplus_string* s) {
     if (s->length > 0 && memchr(s->data, 0, (size_t)s->length)) return NULL;
-    char* text = memory((size_t)s->length + 1);
+    char* text = cplus_malloc((size_t)s->length + 1);
     if (s->length > 0) memcpy(text, s->data, (size_t)s->length);
     text[s->length] = 0;
     return text;
@@ -211,7 +212,7 @@ static bool name_is(const char* name, size_t length, const char* wanted) {
 
 static struct curl_slist* add_header(struct curl_slist* list, const char* text) {
     struct curl_slist* longer = curl_slist_append(list, text);
-    if (!longer) cplus_stop("out of memory", "this program asked for more memory than the system could give it");
+    if (!longer) cplus_malloc((size_t)-1);  // reports that there is none
     return longer;
 }
 
@@ -234,7 +235,7 @@ static struct curl_slist* request_headers(const cplus_string* lines, bool sends_
             at = next;
             continue;
         }
-        char* text = memory(length + 1);
+        char* text = cplus_malloc(length + 1);
         memcpy(text, at, length);
         if (length == name + 2) {  // no value: libcurl would take `name:` as leaving that header out
             text[name] = ';';
@@ -375,11 +376,11 @@ bool cplus_http_send(const cplus_string* method, const cplus_string* url, const 
             left_origin = left_origin || !same_origin(current, next);
             if (redirect_becomes_get(code, verb)) {
                 free(verb);
-                verb = memory(4);
+                verb = cplus_malloc(4);
                 memcpy(verb, "GET", 4);
                 body_gone = true;
             }
-            char* copy = memory(strlen(next) + 1);
+            char* copy = cplus_malloc(strlen(next) + 1);
             strcpy(copy, next);
             free(current);
             current = copy;
@@ -399,8 +400,16 @@ enum { OP_CONTINUE = 0, OP_TEXT = 1, OP_BINARY = 2, OP_CLOSE = 8, OP_PING = 9, O
 // The close codes that say why a connection failed. 1006 never goes over the wire: it says there was no close at all.
 enum { CLOSE_NORMAL = 1000, CLOSE_PROTOCOL = 1002, CLOSE_NO_CODE = 1005, CLOSE_ABNORMAL = 1006, CLOSE_BAD_TEXT = 1007, CLOSE_TOO_LARGE = 1009 };
 
+// A class reference can be shared with another thread, and what a WebSocket is for is one thread waiting for messages while another
+// sends them. libcurl must not see two calls on one handle at once. On a bare connection neither of its calls ever waits, so `io` is held
+// only around each one, and waiting happens outside it. `reading` and `writing` keep whole messages and frames together, and are never
+// held the other way around: a reader takes `writing` to answer a ping, and nothing that holds `writing` takes `reading`.
 typedef struct {
-    CURL* curl;  // null once the connection is gone
+    pthread_mutex_t io;       // `curl`, `closing`, `close_code` and `close_reason`
+    pthread_mutex_t reading;  // what has come in, and the message being put together
+    pthread_mutex_t writing;  // what goes out
+    CURL* curl;               // null once the connection is gone
+    bool closing;             // a close has begun, so whatever else is waiting stops
     curl_socket_t socket;
     int64_t max_bytes;
     unsigned char* in;  // what came in: in[used] to in[filled] has not been looked at
@@ -422,18 +431,52 @@ typedef struct {
 } frame;
 
 static void end_connection(websocket* ws) {
+    pthread_mutex_lock(&ws->io);
     if (ws->curl) curl_easy_cleanup(ws->curl);
     ws->curl = NULL;
+    pthread_mutex_unlock(&ws->io);
 }
 
-// 1 when ready, 0 when the time ran out, -1 on failure.
-static int wait_for_socket(websocket* ws, short events, int64_t deadline) {
+// Whether the connection has gone, or another thread has begun to close it.
+static bool is_over(websocket* ws) {
+    pthread_mutex_lock(&ws->io);
+    bool over = !ws->curl || ws->closing;
+    pthread_mutex_unlock(&ws->io);
+    return over;
+}
+
+static void set_close_code(websocket* ws, int code) {
+    pthread_mutex_lock(&ws->io);
+    ws->close_code = code;
+    pthread_mutex_unlock(&ws->io);
+}
+
+static void set_close_reason(websocket* ws, const unsigned char* reason, size_t length) {
+    pthread_mutex_lock(&ws->io);
+    memcpy(ws->close_reason, reason, length);
+    ws->close_reason_length = length;
+    pthread_mutex_unlock(&ws->io);
+}
+
+// `writing`, if it can be had soon, for a reply that must not leave the reader stuck behind a sender that is stuck itself.
+static bool lock_writing_soon(websocket* ws) {
+    for (int tries = 0; tries < REPLY_LOCK_TRIES; tries++) {
+        if (pthread_mutex_trylock(&ws->writing) == 0) return true;
+        usleep(1000);
+    }
+    return false;
+}
+
+// `closer` is for what closing or opening the connection does itself, and which does not stop for it.
+// 1 when ready, 0 when the time ran out, -1 on failure or when the connection is over.
+static int wait_for_socket(websocket* ws, short events, int64_t deadline, bool closer) {
     for (;;) {
-        int wait = -1;
+        if (!closer && is_over(ws)) return -1;
+        int wait = WAIT_SLICE_MS;
         if (deadline != NO_LIMIT) {
             int64_t left = deadline - now_ms();
             if (left <= 0) return 0;
-            wait = left > INT_MAX ? INT_MAX : (int)left;
+            if (left < wait) wait = (int)left;
         }
         struct pollfd p = {ws->socket, events, 0};
         int got = poll(&p, 1, wait);
@@ -443,13 +486,15 @@ static int wait_for_socket(websocket* ws, short events, int64_t deadline) {
 }
 
 // 1 when all of it went, 0 when the time ran out, -1 on failure.
-static int write_all(websocket* ws, const void* data, size_t length, int64_t deadline) {
+static int write_all(websocket* ws, const void* data, size_t length, int64_t deadline, bool closer) {
     const char* at = data;
     while (length > 0) {
         size_t sent = 0;
-        CURLcode rc = curl_easy_send(ws->curl, at, length, &sent);
+        pthread_mutex_lock(&ws->io);
+        CURLcode rc = ws->curl ? curl_easy_send(ws->curl, at, length, &sent) : CURLE_SEND_ERROR;
+        pthread_mutex_unlock(&ws->io);
         if (rc == CURLE_AGAIN) {
-            int ready = wait_for_socket(ws, POLLOUT, deadline);
+            int ready = wait_for_socket(ws, POLLOUT, deadline, closer);
             if (ready <= 0) return ready;
             continue;
         }
@@ -461,7 +506,7 @@ static int write_all(websocket* ws, const void* data, size_t length, int64_t dea
 }
 
 // 1 when more came in, 0 when the time ran out, -1 on failure, -2 when the other side ended the connection.
-static int read_more(websocket* ws, int64_t deadline) {
+static int read_more(websocket* ws, int64_t deadline, bool closer) {
     if (ws->used > 0) {
         memmove(ws->in, ws->in + ws->used, ws->filled - ws->used);
         ws->filled -= ws->used;
@@ -469,16 +514,16 @@ static int read_more(websocket* ws, int64_t deadline) {
     }
     if (ws->capacity - ws->filled < 4096) {  // grows with what has come, never with what a frame says will
         size_t capacity = ws->capacity ? ws->capacity * 2 : 16384;
-        unsigned char* in = realloc(ws->in, capacity);
-        if (!in) cplus_stop("out of memory", "this program asked for more memory than the system could give it");
-        ws->in = in;
+        ws->in = cplus_realloc(ws->in, capacity);
         ws->capacity = capacity;
     }
     for (;;) {
         size_t got = 0;
-        CURLcode rc = curl_easy_recv(ws->curl, ws->in + ws->filled, ws->capacity - ws->filled, &got);
+        pthread_mutex_lock(&ws->io);
+        CURLcode rc = ws->curl ? curl_easy_recv(ws->curl, ws->in + ws->filled, ws->capacity - ws->filled, &got) : CURLE_RECV_ERROR;
+        pthread_mutex_unlock(&ws->io);
         if (rc == CURLE_AGAIN) {
-            int ready = wait_for_socket(ws, POLLIN, deadline);
+            int ready = wait_for_socket(ws, POLLIN, deadline, closer);
             if (ready <= 0) return ready;
             continue;
         }
@@ -491,12 +536,12 @@ static int read_more(websocket* ws, int64_t deadline) {
 
 // What a client sends is masked, with a key the server cannot guess, for the sake of proxies that would otherwise take a
 // frame for a request of their own.
-static int send_frame(websocket* ws, int opcode, const void* payload, size_t length, int64_t deadline) {
+static int send_frame(websocket* ws, int opcode, const void* payload, size_t length, int64_t deadline, bool closer) {
     unsigned char key[4];
     if (getentropy(key, sizeof key) != 0) return -1;
     size_t head = length < 126 ? 6 : length < 65536 ? 8 : 14;
     if (length > SIZE_MAX - head) return -1;
-    unsigned char* out = memory(head + length);
+    unsigned char* out = cplus_malloc(head + length);
     out[0] = (unsigned char)(0x80 | opcode);
     if (length < 126) {
         out[1] = (unsigned char)(0x80 | length);
@@ -511,7 +556,7 @@ static int send_frame(websocket* ws, int opcode, const void* payload, size_t len
     memcpy(out + head - 4, key, 4);
     const unsigned char* in = payload;
     for (size_t i = 0; i < length; i++) out[head + i] = in[i] ^ key[i & 3];
-    int result = write_all(ws, out, head + length, deadline);
+    int result = write_all(ws, out, head + length, deadline, closer);
     free(out);
     return result;
 }
@@ -519,8 +564,11 @@ static int send_frame(websocket* ws, int opcode, const void* payload, size_t len
 // Gives up on the connection, since the other side broke the protocol, telling it why if that can still be done.
 static int32_t give_up(websocket* ws, int code, const char* what, const char* why, cplus_string* kind, cplus_string* problem) {
     unsigned char body[2] = {(unsigned char)(code >> 8), (unsigned char)code};
-    send_frame(ws, OP_CLOSE, body, 2, now_ms() + 1000);
-    ws->close_code = code;
+    if (lock_writing_soon(ws)) {
+        send_frame(ws, OP_CLOSE, body, 2, now_ms() + 1000, false);
+        pthread_mutex_unlock(&ws->writing);
+    }
+    set_close_code(ws, code);
     end_connection(ws);
     fail_as(what, kind, problem, "%s", why);
     return -1;
@@ -579,9 +627,7 @@ static bool is_utf8(const char* text, size_t length) {
 static void add_to_message(websocket* ws, const frame* f) {
     if (ws->message_capacity - ws->message_length < f->length) {
         size_t capacity = (ws->message_length + f->length) * 2;
-        char* message = realloc(ws->message, capacity);
-        if (!message) cplus_stop("out of memory", "this program asked for more memory than the system could give it");
-        ws->message = message;
+        ws->message = cplus_realloc(ws->message, capacity);
         ws->message_capacity = capacity;
     }
     if (f->length > 0) memcpy(ws->message + ws->message_length, f->payload, f->length);
@@ -590,9 +636,8 @@ static void add_to_message(websocket* ws, const frame* f) {
 
 static bool is_sendable_close_code(int code) { return (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014) || (code >= 3000 && code <= 4999); }
 
-// 1 with a text message in `out`, 2 with a binary one, 0 when the connection closed as it should, -1 on failure.
-int32_t cplus_ws_receive(websocket* ws, cplus_string* out, double timeout, cplus_string* kind, cplus_string* problem) {
-    if (!ws->curl) return 0;
+static int32_t receive_message(websocket* ws, cplus_string* out, double timeout, cplus_string* kind, cplus_string* problem) {
+    if (is_over(ws)) return 0;
     int64_t deadline = deadline_after(timeout);
     for (;;) {
         frame f;
@@ -601,21 +646,28 @@ int32_t cplus_ws_receive(websocket* ws, cplus_string* out, double timeout, cplus
         int got = next_frame(ws, &f, &code, &why);
         if (got < 0) return give_up(ws, code, code == CLOSE_TOO_LARGE ? "too-large" : "protocol", why, kind, problem);
         if (got == 0) {
-            int more = read_more(ws, deadline);
+            int more = read_more(ws, deadline, false);
             if (more == 1) continue;
             if (more == 0) {  // what has come stays, for the next call
                 fail_as("timeout", kind, problem, "nothing came in the %g seconds of this WebSocket's timeout", timeout);
                 return -1;
             }
-            ws->close_code = CLOSE_ABNORMAL;
+            if (is_over(ws)) return 0;  // another thread closed it, or is doing so
+            set_close_code(ws, CLOSE_ABNORMAL);
             end_connection(ws);
             fail_as("network", kind, problem, more == -2 ? "the connection ended without a WebSocket close" : "the connection failed");
             return -1;
         }
         if (f.opcode == OP_PING) {
             int64_t reply_by = deadline != NO_LIMIT ? deadline : now_ms() + REPLY_WAIT_MS;
-            if (send_frame(ws, OP_PONG, f.payload, f.length, reply_by) != 1) {
-                ws->close_code = CLOSE_ABNORMAL;
+            int replied = 1;
+            if (lock_writing_soon(ws)) {
+                replied = send_frame(ws, OP_PONG, f.payload, f.length, reply_by, false);
+                pthread_mutex_unlock(&ws->writing);
+            }
+            if (replied != 1) {
+                if (is_over(ws)) return 0;
+                set_close_code(ws, CLOSE_ABNORMAL);
                 end_connection(ws);
                 fail_as("network", kind, problem, "the connection failed while answering a ping");
                 return -1;
@@ -627,11 +679,13 @@ int32_t cplus_ws_receive(websocket* ws, cplus_string* out, double timeout, cplus
                 close_code = (f.payload[0] << 8) | f.payload[1];
                 if (!is_sendable_close_code(close_code)) return give_up(ws, CLOSE_PROTOCOL, "protocol", "the server sent a close with a code that is not allowed", kind, problem);
                 if (!is_utf8((const char*)f.payload + 2, f.length - 2)) return give_up(ws, CLOSE_BAD_TEXT, "protocol", "the server sent a close whose reason is not valid UTF-8", kind, problem);
-                memcpy(ws->close_reason, f.payload + 2, f.length - 2);
-                ws->close_reason_length = f.length - 2;
+                set_close_reason(ws, f.payload + 2, f.length - 2);
             }
-            send_frame(ws, OP_CLOSE, f.payload, f.length >= 2 ? 2 : 0, now_ms() + 1000);
-            ws->close_code = close_code;
+            if (lock_writing_soon(ws)) {
+                send_frame(ws, OP_CLOSE, f.payload, f.length >= 2 ? 2 : 0, now_ms() + 1000, false);
+                pthread_mutex_unlock(&ws->writing);
+            }
+            set_close_code(ws, close_code);
             end_connection(ws);
             return 0;
         } else if (f.opcode != OP_PONG) {
@@ -657,26 +711,48 @@ int32_t cplus_ws_receive(websocket* ws, cplus_string* out, double timeout, cplus
     }
 }
 
+// 1 with a text message in `out`, 2 with a binary one, 0 when the connection closed as it should, -1 on failure.
+int32_t cplus_ws_receive(websocket* ws, cplus_string* out, double timeout, cplus_string* kind, cplus_string* problem) {
+    pthread_mutex_lock(&ws->reading);
+    int32_t result = receive_message(ws, out, timeout, kind, problem);
+    pthread_mutex_unlock(&ws->reading);
+    return result;
+}
+
 bool cplus_ws_send(websocket* ws, const cplus_string* data, bool binary, double timeout, cplus_string* kind, cplus_string* problem) {
-    if (!ws->curl) return fail_as("closed", kind, problem, "this WebSocket is closed");
+    if (is_over(ws)) return fail_as("closed", kind, problem, "this WebSocket is closed");
     if (!binary && !is_utf8(data->data, (size_t)data->length))
         return fail_as("bad-request", kind, problem, "this text is not valid UTF-8, which a text message must be: use sendBinary for other bytes");
-    int sent = send_frame(ws, binary ? OP_BINARY : OP_TEXT, data->data, (size_t)data->length, deadline_after(timeout));
+    pthread_mutex_lock(&ws->writing);
+    int sent = send_frame(ws, binary ? OP_BINARY : OP_TEXT, data->data, (size_t)data->length, deadline_after(timeout), false);
+    pthread_mutex_unlock(&ws->writing);
     if (sent == 1) return true;
+    if (is_over(ws)) return fail_as("closed", kind, problem, "this WebSocket is closed");
     // Part of the frame may have gone, so nothing else can be sent on this connection.
-    ws->close_code = CLOSE_ABNORMAL;
+    set_close_code(ws, CLOSE_ABNORMAL);
     end_connection(ws);
     if (sent == 0) return fail_as("timeout", kind, problem, "sending took longer than this WebSocket's timeout of %g seconds", timeout);
     return fail_as("network", kind, problem, "the connection failed while sending");
 }
 
-// Sends a close, then waits a little for the other side's, dropping what else comes.
+int32_t cplus_ws_close_code(websocket* ws);
+
+// Sends a close, then waits a little for the other side's, dropping what else comes. What another thread is waiting for stops, by
+// seeing `closing`: a sender with an error, and a reader with null.
 void cplus_ws_close(websocket* ws) {
-    if (!ws->curl) return;
+    pthread_mutex_lock(&ws->io);
+    bool first = ws->curl && !ws->closing;
+    if (first) ws->closing = true;
+    pthread_mutex_unlock(&ws->io);
+    if (!first) return;
     int64_t deadline = now_ms() + CLOSE_WAIT_MS;
     unsigned char body[2] = {CLOSE_NORMAL >> 8, CLOSE_NORMAL & 0xFF};
     int code = CLOSE_ABNORMAL;
-    if (send_frame(ws, OP_CLOSE, body, 2, deadline) == 1) {
+    pthread_mutex_lock(&ws->writing);
+    int sent = send_frame(ws, OP_CLOSE, body, 2, deadline, true);
+    pthread_mutex_unlock(&ws->writing);
+    pthread_mutex_lock(&ws->reading);
+    if (sent == 1) {
         for (;;) {
             frame f;
             int ignored = 0;
@@ -684,34 +760,49 @@ void cplus_ws_close(websocket* ws) {
             int got = next_frame(ws, &f, &ignored, &why);
             if (got < 0) break;
             if (got == 0) {
-                if (read_more(ws, deadline) != 1) break;
+                if (read_more(ws, deadline, true) != 1) break;
                 continue;
             }
             if (f.opcode == OP_CLOSE) {
                 code = f.length >= 2 ? (f.payload[0] << 8) | f.payload[1] : CLOSE_NO_CODE;
-                if (f.length > 2 && is_utf8((const char*)f.payload + 2, f.length - 2)) {
-                    memcpy(ws->close_reason, f.payload + 2, f.length - 2);
-                    ws->close_reason_length = f.length - 2;
-                }
+                if (f.length > 2 && is_utf8((const char*)f.payload + 2, f.length - 2)) set_close_reason(ws, f.payload + 2, f.length - 2);
                 break;
             }
             if (now_ms() >= deadline) break;
         }
     }
-    ws->close_code = code;
+    // A thread that was reading may have got the other side's close by now, and with it the real code.
+    if (cplus_ws_close_code(ws) == 0) set_close_code(ws, code);
     end_connection(ws);
+    pthread_mutex_unlock(&ws->reading);
 }
 
-void cplus_ws_free(websocket* ws) {
-    cplus_ws_close(ws);
+static void free_websocket(websocket* ws) {
+    pthread_mutex_destroy(&ws->io);
+    pthread_mutex_destroy(&ws->reading);
+    pthread_mutex_destroy(&ws->writing);
     free(ws->in);
     free(ws->message);
     free(ws);
 }
 
-int32_t cplus_ws_close_code(const websocket* ws) { return ws->close_code; }
+void cplus_ws_free(websocket* ws) {
+    cplus_ws_close(ws);
+    free_websocket(ws);
+}
 
-void cplus_ws_close_reason(const websocket* ws, cplus_string* out) { cplus_str_append(out, ws->close_reason, (int64_t)ws->close_reason_length); }
+int32_t cplus_ws_close_code(websocket* ws) {
+    pthread_mutex_lock(&ws->io);
+    int32_t code = ws->close_code;
+    pthread_mutex_unlock(&ws->io);
+    return code;
+}
+
+void cplus_ws_close_reason(websocket* ws, cplus_string* out) {
+    pthread_mutex_lock(&ws->io);
+    cplus_str_append(out, ws->close_reason, (int64_t)ws->close_reason_length);
+    pthread_mutex_unlock(&ws->io);
+}
 
 static void base64(const unsigned char* in, size_t length, char* out) {
     static const char digits[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -821,6 +912,21 @@ static bool has_item(const char* list, size_t length, const char* item, size_t i
     return false;
 }
 
+// Whether any of the lines of this header has the item, as a header that comes twice is the one list, in two parts.
+static bool header_has_item(const char* lines, size_t length, const char* wanted, const char* item) {
+    const char* at = lines;
+    const char* end = lines + length;
+    while (at < end) {
+        const char* stop = memmem(at, (size_t)(end - at), "\r\n", 2);
+        if (!stop) stop = end;
+        const char* value;
+        size_t value_length;
+        if (find_header(at, (size_t)(stop - at), wanted, &value, &value_length) && has_item(value, value_length, item, strlen(item))) return true;
+        at = stop + 2;
+    }
+    return false;
+}
+
 // Reads the server's answer up to where frames start, which may already be there, and checks everything it has to say.
 static bool read_handshake(websocket* ws, const char* accept, const cplus_string* asked, int64_t deadline, double timeout, cplus_string* kind, cplus_string* problem) {
     const char* blank;
@@ -829,7 +935,7 @@ static bool read_handshake(websocket* ws, const char* accept, const cplus_string
         blank = have ? memmem(ws->in + ws->used, have, "\r\n\r\n", 4) : NULL;
         if (blank) break;
         if (have > MAX_HANDSHAKE) return fail_as("handshake", kind, problem, "the server's answer to opening a WebSocket is too long");
-        int more = read_more(ws, deadline);
+        int more = read_more(ws, deadline, true);
         if (more == 0) return fail_as("timeout", kind, problem, "this took longer than its timeout of %g seconds", timeout);
         if (more < 0) return fail_as("handshake", kind, problem, "the server ended the connection instead of opening a WebSocket");
     }
@@ -844,8 +950,7 @@ static bool read_handshake(websocket* ws, const char* accept, const cplus_string
     size_t headers_length = length - (size_t)(headers - text);
     const char* value;
     size_t value_length;
-    if (!find_header(headers, headers_length, "upgrade", &value, &value_length) || !has_item(value, value_length, "websocket", 9) ||
-        !find_header(headers, headers_length, "connection", &value, &value_length) || !has_item(value, value_length, "upgrade", 7))
+    if (!header_has_item(headers, headers_length, "upgrade", "websocket") || !header_has_item(headers, headers_length, "connection", "upgrade"))
         return fail_as("handshake", kind, problem, "the server answered with status 101, but not with an upgrade to a WebSocket");
     if (!find_header(headers, headers_length, "sec-websocket-accept", &value, &value_length) || value_length != strlen(accept) || memcmp(value, accept, value_length) != 0)
         return fail_as("handshake", kind, problem, "the server's Sec-WebSocket-Accept does not match what was sent, so it may not understand WebSockets");
@@ -876,7 +981,7 @@ static char* handshake_request(CURLU* url, const char* key, const cplus_string* 
     size_t ignored_length;
     bool has_agent = headers->length && find_header(headers->data, (size_t)headers->length, "user-agent", &ignored, &ignored_length);
     size_t room = strlen(path ? path : "/") + (query ? strlen(query) : 0) + (host ? strlen(host) : 0) + (port ? strlen(port) : 0) + strlen(key) + (size_t)headers->length + 256;
-    char* text = memory(room);
+    char* text = cplus_malloc(room);
     int n = snprintf(text, room,
                      "GET %s%s%s HTTP/1.1\r\nHost: %s%s%s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n%s",
                      path ? path : "/", query ? "?" : "", query ? query : "", host ? host : "", port ? ":" : "", port ? port : "", key,
@@ -906,7 +1011,7 @@ websocket* cplus_ws_connect(const cplus_string* url, const cplus_string* headers
         return fail_as("bad-request", kind, problem, "a URL for a WebSocket must start with ws:// or wss://"), NULL;
     }
     const char* rest = text + (secure ? 6 : 5);
-    char* real = memory(strlen(rest) + 9);
+    char* real = cplus_malloc(strlen(rest) + 9);
     strcpy(real, secure ? "https://" : "http://");
     strcat(real, rest);
     free(text);
@@ -927,8 +1032,11 @@ websocket* cplus_ws_connect(const cplus_string* url, const cplus_string* headers
         } else if (user) {
             fail_as("bad-request", kind, problem, "a URL for a WebSocket cannot hold a name and password, which nothing would send: use an Authorization header");
         } else {
-            ws = calloc(1, sizeof *ws);
-            if (!ws) cplus_stop("out of memory", "this program asked for more memory than the system could give it");
+            ws = cplus_malloc(sizeof *ws);
+            memset(ws, 0, sizeof *ws);
+            pthread_mutex_init(&ws->io, NULL);
+            pthread_mutex_init(&ws->reading, NULL);
+            pthread_mutex_init(&ws->writing, NULL);
             ws->max_bytes = max_bytes;
             ws->curl = curl_easy_init();
             int64_t deadline = deadline_after(timeout);
@@ -966,7 +1074,7 @@ websocket* cplus_ws_connect(const cplus_string* url, const cplus_string* headers
                         sha1((const unsigned char*)joined, strlen(joined), digest);
                         base64(digest, sizeof digest, accept);
                         char* request = handshake_request(parsed, key, headers);
-                        int wrote = write_all(ws, request, strlen(request), deadline);
+                        int wrote = write_all(ws, request, strlen(request), deadline, true);
                         free(request);
                         if (wrote == 0) fail_as("timeout", kind, problem, "this took longer than its timeout of %g seconds", timeout);
                         else if (wrote < 0) fail_as("network", kind, problem, "the connection failed while opening a WebSocket");
@@ -982,8 +1090,7 @@ websocket* cplus_ws_connect(const cplus_string* url, const cplus_string* headers
     curl_url_cleanup(parsed);
     if (!opened && ws) {
         end_connection(ws);
-        free(ws->in);
-        free(ws);
+        free_websocket(ws);
         ws = NULL;
     }
     return ws;

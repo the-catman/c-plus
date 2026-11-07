@@ -257,8 +257,11 @@ int64_t cplus_hash_bytes(const char* data, int64_t size) {
     return (int64_t)(v[0] ^ v[1] ^ v[2] ^ v[3]);
 }
 
+static int leak_checking(void);
+
 // Called as the program starts.
 void cplus_start(void) {
+    leak_checking();  // it keeps what it finds out, which must not happen in two threads at once
     uint64_t seeds[2];
     if (getentropy(seeds, sizeof seeds) == 0) {  // otherwise the fixed ones stay, which still work
         cplus_hash_seed = (int64_t)seeds[0];
@@ -542,6 +545,18 @@ _Noreturn static void out_of_memory(void) {
     fflush(stdout);
     fputs("fatal error: out of memory\n", stderr);
     stop_program();
+}
+
+void* cplus_malloc(size_t size) {
+    void* memory = malloc(size ? size : 1);
+    if (!memory) out_of_memory();
+    return memory;
+}
+
+void* cplus_realloc(void* memory, size_t size) {
+    void* moved = realloc(memory, size ? size : 1);
+    if (!moved) out_of_memory();
+    return moved;
 }
 
 // ---- new and delete --------------------------------------------------------

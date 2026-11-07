@@ -83,7 +83,6 @@ void Parser::syncStatement() {
 
 // ---- Declarations ----------------------------------------------------------
 
-// What `throw` takes, for a program with errors. Its tokens have no place in the file.
 // A generic with arguments that could be given to it, for advice.
 static std::string exampleArguments(const TemplateDecl& t) {
     if (t.name == "hashmap" && t.nameLoc.line == 0) return "hashmap<string, int>";
@@ -92,21 +91,13 @@ static std::string exampleArguments(const TemplateDecl& t) {
     return written + ">";
 }
 
+// Code written in C+ that comes with the language. Its tokens have no place in the file.
 void Parser::addBuiltinSource(const SourceFile& source) {
     Lexer lexer(source, diags_);
     std::vector<Token> tokens = lexer.lexAll();
     tokens.pop_back();  // its end of file
     for (Token& t : tokens) t.loc = Loc{};
     toks_.insert(toks_.end() - 1, tokens.begin(), tokens.end());  // after the program, so an attribute can still come first
-}
-
-// The modules that come with the language, which an import adds to the program.
-static const char* const kBuiltinModules[] = {"http", "json", "reflect"};
-
-static bool isBuiltinModule(const std::string& name) {
-    for (const char* module : kBuiltinModules)
-        if (name == module) return true;
-    return false;
 }
 
 // `json::parse`, for a module that is imported, becomes one identifier, which then is a name like any other.
@@ -156,7 +147,16 @@ void Parser::addBuiltins() {
     bool usesError = false, definesError = false, usesMap = false, definesMap = false;
     bool usesSpawn = false, usesTask = false, definesTask = false;
     bool usesMutex = false, definesMutex = false, usesGuard = false, definesGuard = false;
-    Loc spawnLoc;
+    Loc spawnLoc, guardLoc;
+    // A function or variable of the program with one of these names, as in `int Mutex(int x)`: a type comes before it.
+    auto declaresName = [&](size_t i) {
+        if (i == 0 || i + 1 >= toks_.size()) return false;
+        Tok before = toks_[i - 1].kind, after = toks_[i + 1].kind;
+        bool typeBefore = before == Tok::KwInt || before == Tok::KwLong || before == Tok::KwBool || before == Tok::KwString || before == Tok::KwVoid ||
+                          before == Tok::KwAuto || before == Tok::KwDouble || before == Tok::KwFloat || before == Tok::KwChar || before == Tok::Ident ||
+                          before == Tok::Star || before == Tok::Greater || before == Tok::Shr || before == Tok::Question;
+        return typeBefore && (after == Tok::LParen || after == Tok::Assign || after == Tok::Semi);
+    };
     std::set<std::string> modules;
     Loc errorModuleLoc;
     std::string errorModule;  // a module that throws, and has objects in maps
@@ -179,7 +179,16 @@ void Parser::addBuiltins() {
         }
         usesTask = usesTask || (k == Tok::Ident && toks_[i].text == "Task");
         usesMutex = usesMutex || (k == Tok::Ident && toks_[i].text == "Mutex");
-        usesGuard = usesGuard || (k == Tok::Ident && toks_[i].text == "LockGuard");
+        if (k == Tok::Ident && toks_[i].text == "LockGuard" && !usesGuard) {
+            usesGuard = true;
+            guardLoc = toks_[i].loc;
+        }
+        if (k == Tok::Ident && declaresName(i)) {
+            definesMap = definesMap || toks_[i].text == "hashmap";
+            definesTask = definesTask || toks_[i].text == "Task";
+            definesMutex = definesMutex || toks_[i].text == "Mutex";
+            definesGuard = definesGuard || toks_[i].text == "LockGuard";
+        }
         if ((k == Tok::KwClass || k == Tok::KwStruct || k == Tok::KwInterface) && i + 1 < toks_.size() && toks_[i + 1].kind == Tok::Ident) {
             definesError = definesError || toks_[i + 1].text == "Error";
             definesMap = definesMap || toks_[i + 1].text == "hashmap";
@@ -193,15 +202,22 @@ void Parser::addBuiltins() {
         usesMap = true;    // what a json::Value holds an object in, and an http::Request its headers
         if (definesError)
             diags_.error(errorModuleLoc, "'" + errorModule + "' uses the built-in class 'Error', but this program has its own",
-                         "rename your class, or derive it from the built-in one by leaving yours out of this name", spec::Errors);
+                         "rename your class. One of your own for errors can derive from the built-in one: `class AppError : public Error { ... };`", spec::Errors);
+        if (definesMap)
+            diags_.error(errorModuleLoc, "'" + errorModule + "' uses the built-in type 'hashmap', but this program has its own",
+                         "rename yours", spec::HashMaps);
     }
     prog_->usesThreads = usesSpawn;
+    if (usesGuard && definesMutex && !definesGuard)
+        diags_.error(guardLoc, "'LockGuard' works with the built-in class 'Mutex', but this program has its own",
+                     "rename your class, or write a guard of your own for it", spec::Mutex);
     if (usesSpawn && definesTask)
         diags_.error(spawnLoc, "`spawn` gives a built-in class 'Task', but this program has its own",
-                     "rename your class", spec::Concurrency);
+                     "rename yours", spec::Concurrency);
     bool builtinTask = (usesSpawn || usesTask) && !definesTask;
     usesError = usesError || builtinTask;  // what a task that fails holds
     usesMutex = usesMutex || usesGuard;
+    prog_->linksThreads = usesSpawn || builtinTask || (usesMutex && !definesMutex);
     if (usesError && !definesError) {
         static const SourceFile builtin("<built-in>",
                                         "class Error {\n"
@@ -229,7 +245,7 @@ void Parser::addBuiltins() {
         static const SourceFile builtin("<built-in>", kMutexSource);
         addBuiltinSource(builtin);
     }
-    if (usesGuard && !definesGuard) {
+    if (usesGuard && !definesGuard && !definesMutex) {
         static const SourceFile builtin("<built-in>", kLockGuardSource);
         addBuiltinSource(builtin);
     }
@@ -1281,8 +1297,8 @@ bool Parser::isTypeStart(size_t ahead) const {
                            (peek(ahead + 2).kind == Tok::Ident && peek(ahead + 3).kind == Tok::Comma);
                 // So is `unique`: `unique < n` is a comparison.
                 if (peek(ahead).text == "unique" || peek(ahead).text == "local") return isTypeAt(ahead + 2);
-                return peek(ahead).text == "vector" || peek(ahead).text == "unordered_map" || peek(ahead).text == "map" ||
-                       classTemplate(peek(ahead).text);
+                if (peek(ahead).text == "unordered_map" || peek(ahead).text == "map") return isTypeAt(ahead + 2);
+                return peek(ahead).text == "vector" || classTemplate(peek(ahead).text);
             }
             // `Box b`: reports that its arguments are missing.
             if (classTemplate(peek(ahead).text) && !boundType(peek(ahead)) && peek(ahead + 1).kind == Tok::Ident) return true;

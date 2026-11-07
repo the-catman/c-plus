@@ -538,7 +538,7 @@ void Sema::reportUnknownName(const NameExpr& n) {
 void Sema::check(Program& program) {
     program_ = &program;
     for (auto& imp : program.imports) {
-        if (imp.path != "http" && imp.path != "json" && imp.path != "reflect")
+        if (!isBuiltinModule(imp.path))
             diags_.error(imp.loc, "this compiler does not support modules yet, except for `http`, `json` and `reflect`, so '" + imp.path + "' cannot be imported",
                          "remove the import for now; built-ins like println need no import", spec::Status);
 #ifndef CPLUS_CURL_LINK
@@ -652,7 +652,7 @@ void Sema::checkNewStructs() {
         if (sd.templateOf) diags_.popContext();
         if (isHashmap(&sd.type)) {
             mapMethod(&sd.type, "__same");  // for ==, wherever it is hidden in other types
-            if (program_->usesDescriptors()) mapMethod(&sd.type, "__put");  // for reading JSON, which goes by descriptors
+            if (program_->buildsFromDescriptors()) mapMethod(&sd.type, "__put");  // for reading JSON, which goes by descriptors
         }
         // A generic class's other methods wait until they are used, as in C++, so that it
         // can have methods that not all of its arguments allow.
@@ -818,6 +818,7 @@ void Sema::checkMembers(StructDecl& sd) {
 
 bool Sema::canAccess(const StructDecl& sd, Access access, const StructDecl* through) const {
     if (access == Access::Public || owner() == &sd) return true;
+    if (fn_ && fn_->nameLoc.line == 0 && sd.nameLoc.line == 0) return true;  // what comes with the language, among itself
     if (access != Access::Protected || !owner() || !owner()->derivesFrom(&sd)) return false;
     return through && through->derivesFrom(owner());
 }
@@ -1606,6 +1607,7 @@ const Type* Sema::checkSpawn(SpawnExpr& s, Flow& flow) {
     }
     refused = refuseLocal(target->retType, call.loc, "what this call returns") || refused;
     if (refused) return Type::error();
+    if (diags_.hasErrors() && !program_->findTemplate("Task")) return Type::error();  // it has a Task of its own, as was reported
     const Type* task = parser_.taskType(target->retType, target->isThrows, call.loc);
     adoptTypes();
     s.target = target;
@@ -2661,7 +2663,17 @@ const Type* Sema::checkMapIndex(IndexExpr& ix, Flow& flow, const Type* map) {
     bool adds = isPlaceKind(*ix.base) && hasDefault(value);
     if (adds && !ix.mapTarget) {
         const Expr* root = nullptr;
-        if (storageOf(*ix.base, root) == Storage::Variable) {
+        Storage storage = storageOf(*ix.base, root);
+        if (storage == Storage::Pointer && followedPointer(*root).type->constElem) {
+            std::string n = spelled(*ix.base, "m");
+            if (ix.base->kind == Expr::Kind::Unary) n = "(" + n + ")";  // `*p.at(key)` would be `*(p.at(key))`
+            const Expr& ptr = followedPointer(*root);
+            diags_.error(ix.loc, "'[ ]' adds a key that is missing, so it cannot be used through " + q(spelled(ptr, "the pointer")) + ", a " + q(ptr.type),
+                         "to only read, write `" + n + ".at(key)`, which stops the program if the key is missing, or `" + n + ".get(key)`, which gives null",
+                         spec::HashMaps);
+            constMapReported_ = &ix;
+        }
+        if (storage == Storage::Variable) {
             const VarDecl* rootVar = rootVariable(*root);
             bool inConstMethod = rootVar == thisVar() && fn_->isConst;
             if (rootVar && (inConstMethod || rootVar->isConst)) {
@@ -2671,7 +2683,7 @@ const Type* Sema::checkMapIndex(IndexExpr& ix, Flow& flow, const Type* map) {
                              "to only read, write `" + n + ".at(key)`, which stops the program if the key is missing, or `" + n +
                                  ".get(key)`, which gives null",
                              spec::HashMaps);
-                constMapReported_ = rootVar;
+                constMapReported_ = &ix;
             }
         }
     }
@@ -2705,7 +2717,11 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
     }
     const VarDecl* rootVar = rootVariable(*root);
     if (!rootVar) return false;  // an unknown name, already reported
-    if (rootVar == constMapReported_) return false;
+    for (const Expr* at = &target; at;) {  // `m[key]` itself was reported, and also what is changed through it
+        if (at == constMapReported_) return false;
+        at = at->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(at)->base.get()
+             : at->kind == Expr::Kind::Index ? static_cast<const IndexExpr*>(at)->base.get() : nullptr;
+    }
     bool element = containsIndex(target);
     bool inString = target.kind == Expr::Kind::Index && static_cast<const IndexExpr&>(target).base->type &&
                     static_cast<const IndexExpr&>(target).base->type->is(K::String);
@@ -3049,6 +3065,12 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             break;
         }
         case Expr::Kind::Try: {
+            if (static_cast<TryExpr&>(e).operand->kind == Expr::Kind::Spawn) {
+                diags_.error(e.loc, "`try` belongs on waiting for the task, not on starting it",
+                             "write `auto t = spawn f();`, then `try t.wait()`. If an argument can fail, the `try` goes on that: `spawn f(try g())`", spec::Concurrency);
+                result = Type::error();
+                break;
+            }
             ++tryPrefixes_;
             result = checkExpr(*static_cast<TryExpr&>(e).operand, flow);
             --tryPrefixes_;
@@ -3887,18 +3909,19 @@ static std::string jsonProblem(const Program& program, const Type* t, bool readi
         if (sd.constructor && !sd.constructor->params.empty())
             return where + " has a constructor that needs arguments, which JSON does not know. Give it a constructor without parameters, or none";
     }
-    std::vector<const FieldDecl*> fields;
-    std::function<void(const StructDecl&)> collect = [&](const StructDecl& d) {
-        for (const StructDecl* base : d.bases) collect(*base);
-        for (auto& f : d.fields) fields.push_back(&f);
+    std::vector<std::pair<const FieldDecl*, bool>> fields;  // each with whether a constructor can give it its value
+    std::function<void(const StructDecl&, bool)> collect = [&](const StructDecl& d, bool built) {
+        built = built || d.constructor;
+        for (const StructDecl* base : d.bases) collect(*base, built);
+        for (auto& f : d.fields) fields.push_back({&f, built});
     };
-    collect(sd);
+    collect(sd, false);
     size_t shown = 0;
     std::set<std::string> names;
-    for (const FieldDecl* f : fields) {
+    for (auto [f, built] : fields) {
         std::string inner = path.empty() ? f->name : path + "." + f->name;
         if (f->access != Access::Public) {
-            if (reading && !sd.constructor && !f->defaultValue && needsValue(f->type))
+            if (reading && !built && !f->defaultValue && needsValue(f->type))
                 return where + " has a private field " + q(f->name) + " that needs a value, which JSON cannot give it. Give the field a default value";
             continue;
         }
@@ -4084,7 +4107,11 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     if (t->is(K::String)) return checkStringMethod(call, flow);
     if (!t->hasFields()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
-        diags_.error(call.loc, q(t) + " has no methods, so '." + call.name + "()' cannot be used", "", spec::Methods);
+        if (&call == spawned_ && (call.name == "wait" || call.name == "done"))
+            diags_.error(call.loc, "`spawn` takes all of the call after it, so this asks for '." + call.name + "()' on what the function gives, and not on the task",
+                         "put the `spawn` in parentheses: `(spawn f(x))." + call.name + "()`", spec::Concurrency);
+        else
+            diags_.error(call.loc, q(t) + " has no methods, so '." + call.name + "()' cannot be used", "remove the call, or use a value of a type that has this method", spec::Methods);
         return Type::error();
     }
     const StructDecl& sd = *t->decl;

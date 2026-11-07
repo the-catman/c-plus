@@ -41,6 +41,8 @@ also get CPLUS_TEST_VARIABLE=1, for tests that read an environment variable.
 
 Tests run at the same time, one per processor, and print in order.
 
+A test of errors must exit with code 1, as anything else is a crash.
+
 The runner also checks that every spec anchor in compiler/SpecRefs.h is a real
 heading in docs/SPEC.md, so diagnostics never point at a missing section, that every
 program in examples/ compiles without warnings, that very deeply nested code is an
@@ -244,6 +246,36 @@ int main() {
     return True
 
 
+def check_what_is_linked(cplus, workdir):
+    """What a program uses of the runtime decides what it links and builds, and nothing else does."""
+    source = workdir / "linked.cplus"
+    exe = workdir / "linked"
+    ok = True
+    def link_line(text):
+        source.write_text(text)
+        run = subprocess.run([cplus, "build", str(source), "-o", str(exe)], capture_output=True, text=True,
+                             env=dict(os.environ, CPLUS_SHOW_LINK="1"))
+        return run.stderr
+    threads = {"a Mutex": "int main() { Mutex m = Mutex(); m.lock(); m.unlock(); return 0; }\n",
+               "a LockGuard": "int main() { Mutex m = Mutex(); LockGuard g = LockGuard(m); return 0; }\n",
+               "spawn": "void f() {}\nint main() { spawn f(); return 0; }\n"}
+    for what, text in threads.items():
+        if "-lpthread" not in link_line(text):
+            print(f"FAIL a program with {what} is written on threads, but does not link them")
+            ok = False
+    if "-lpthread" in link_line("int main() { return 0; }\n"):
+        print("FAIL a program with no threads links them")
+        ok = False
+    # Reflection only looks at types, so what makes values for JSON is not there for it.
+    source.write_text("import reflect;\nclass N { public: int x = 0; };\nstruct S { hashmap<string, N> m; };\nint main() { println(\"{}\", reflect::type<S>().name()); return 0; }\n")
+    run = subprocess.run([cplus, "build", str(source), "--emit-llvm"], capture_output=True, text=True)
+    made = [name for name in ("#make", "#put") if name in run.stdout]
+    if run.returncode != 0 or made:
+        print(f"FAIL a program that only imports reflect has what JSON needs: {made}\n  " + run.stderr[:300])
+        ok = False
+    return ok
+
+
 def build_c_library(source, workdir):
     obj = workdir / (source.stem + ".o")
     cc = os.environ.get("CC", "cc")
@@ -309,6 +341,9 @@ def run_case(cplus, path, workdir):
                                capture_output=True, text=True)
         if build.returncode == 0:
             return "expected a compile error, but it compiled"
+        is_usage = build.returncode == 2 and "usage:" in build.stderr
+        if build.returncode != 1 and not is_usage:
+            return f"a compile error must exit with 1, but this was {build.returncode}, which is a crash\n--- stderr ---\n" + build.stderr
         missing = [e for e in errors if e not in build.stderr]
         if missing:
             return "compile errors did not contain: " + "; ".join(missing) + "\n--- stderr ---\n" + build.stderr
@@ -403,9 +438,10 @@ def main():
             ok = check_unique_copies(cplus, pathlib.Path(tmp)) and ok
             ok = check_crash_in_output(cplus, pathlib.Path(tmp)) and ok
             ok = check_print_lines(cplus, pathlib.Path(tmp)) and ok
+            ok = check_what_is_linked(cplus, pathlib.Path(tmp)) and ok
 
         def run_in_own_folder(path):
-            workdir = pathlib.Path(tmp) / path.stem
+            workdir = pathlib.Path(tmp) / f"{path.parent.name}-{path.stem}"
             workdir.mkdir()
             return run_case(cplus, path, workdir)
 

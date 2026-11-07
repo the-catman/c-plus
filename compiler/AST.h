@@ -873,6 +873,15 @@ inline bool holdsUnique(const Type* t) {
     return holdsUnique(t, seen);
 }
 
+// The modules that come with the language, which an import adds to the program. See Builtins.h.
+inline constexpr const char* kBuiltinModules[] = {"http", "json", "reflect"};
+
+inline bool isBuiltinModule(const std::string& name) {
+    for (const char* module : kBuiltinModules)
+        if (name == module) return true;
+    return false;
+}
+
 // Whether a value of this type holds a local reference, inside whatever it leads to, which is what must not reach another
 // thread. `seen` stops at a type already looked at.
 inline bool holdsLocal(const Type* t, std::vector<const StructDecl*>& seen) {
@@ -931,11 +940,15 @@ struct Program {
     std::vector<std::unique_ptr<TemplateDecl>> templates;
     bool allowNewDelete = false;  // `[[allow(new_delete)]];` at the top of the file
     bool usesThreads = false;     // it has a `spawn`: printing then has to keep lines together, and main to wait
+    bool linksThreads = false;    // it uses the part of the runtime that is written on the system's threads
 
     // Whether this program can ask about types while it runs, which only json and reflect do.
-    bool usesDescriptors() const {
+    bool usesDescriptors() const { return imported("json") || imported("reflect"); }
+    // Whether it can also make values from them, which only json does.
+    bool buildsFromDescriptors() const { return imported("json"); }
+    bool imported(const char* module) const {
         for (auto& import : imports)
-            if (import.path == "json" || import.path == "reflect") return true;
+            if (import.path == module) return true;
         return false;
     }
 

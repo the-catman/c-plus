@@ -1,0 +1,48 @@
+// What a constructor gives a value is not required from JSON, whichever class in a family has that constructor.
+import json;
+
+class Inner { public: string name = "from a constructor"; };
+
+class Base {
+public:
+    int id;
+};
+class SetsBaseField : public Base {
+public:
+    int v = 0;
+    SetsBaseField() { id = 7; }
+};
+
+class PrivateInBase {
+    Inner i;
+public:
+    PrivateInBase() : i(Inner()) {}
+    string name() const { return i.name; }
+};
+class Derived : public PrivateInBase {
+public:
+    int v = 0;
+};
+
+class PublicInBase {
+public:
+    Inner shown;
+    PublicInBase() : shown(Inner()) {}
+};
+class DerivedShown : public PublicInBase {
+public:
+    int v = 0;
+};
+
+int main() throws {
+    SetsBaseField a = try json::parse<SetsBaseField>("{}");
+    println("{} {}", a.id, a.v);
+    // expect: 7 0
+    Derived b = try json::parse<Derived>(R"({"v": 3})");
+    println("{} {}", b.name(), b.v);
+    // expect: from a constructor 3
+    DerivedShown c = try json::parse<DerivedShown>("{}");
+    println("{}", c.shown.name);
+    // expect: from a constructor
+    return 0;
+}

@@ -1,0 +1,9 @@
+// The same for variables.
+int main() {
+    int Mutex = 1;
+    string Task = "t";
+    int LockGuard = 2;
+    println("{} {} {}", Mutex, Task, LockGuard);
+    // expect: 1 t 2
+    return 0;
+}

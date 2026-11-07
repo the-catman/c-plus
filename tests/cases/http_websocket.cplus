@@ -145,6 +145,12 @@ int main() throws {
     // expect: 13
     // expect: true
 
+    // A header in two lines is one list, as HTTP has it.
+    http::WebSocket split = try http::connect(ws() + "/ws/split-headers");
+    try split.send("still a WebSocket");
+    println("{}", try received(split));
+    // expect: text: still a WebSocket
+
     // A subprotocol the program offered.
     http::WebSocket chat = try http::connectWith({.url = ws() + "/ws/protocol", .headers = {{"Sec-WebSocket-Protocol", "other, chat"}}});
     try chat.send("yes");

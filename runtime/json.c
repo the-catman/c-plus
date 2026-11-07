@@ -229,7 +229,8 @@ static void write_value(writer* w, const cplus_type* t, const char* place) {
             return;
         case CPLUS_KIND_STRUCT: write_fields(w, t, place); return;
         case CPLUS_KIND_CLASS: write_object(w, place); return;
-        case CPLUS_KIND_UNIQUE: write_object(w, place); return;
+        case CPLUS_KIND_UNIQUE:
+        case CPLUS_KIND_LOCAL: write_object(w, place); return;
         case CPLUS_KIND_MAP: write_map(w, t, place); return;
         case CPLUS_KIND_JSON_VALUE: write_json_value(w, t, place); return;
         case CPLUS_KIND_WEAK: put(w, "null"); return;
@@ -478,8 +479,7 @@ static bool read_double(reader* r, double* out, const char* type) {
     if (!scan_number(r, &whole)) return false;
     char small[64];
     size_t size = (size_t)(r->at - begin);
-    char* text = size < sizeof small ? small : malloc(size + 1);
-    if (!text) cplus_stop("out of memory", "");
+    char* text = size < sizeof small ? small : cplus_malloc(size + 1);
     memcpy(text, begin, size);
     text[size] = 0;
     *out = strtod(text, NULL);
@@ -586,6 +586,38 @@ static void start_value(const cplus_type* t, void* place) {
 
 static bool read_value(reader* r, const cplus_type* t, char* place);
 
+// Whether a value still lacks what it cannot be without: a reference, somewhere in it, that is empty.
+static bool lacks_value(const cplus_type* t, const char* place) {
+    switch (t->kind) {
+        case CPLUS_KIND_CLASS:
+        case CPLUS_KIND_UNIQUE:
+        case CPLUS_KIND_LOCAL: return *(char* const*)place == NULL;
+        case CPLUS_KIND_STRUCT:
+            for (int64_t i = 0; i < t->field_count; i++)
+                if ((t->fields[i].flags & CPLUS_FIELD_REQUIRED) && lacks_value(t->fields[i].type, place + t->fields[i].offset)) return true;
+            return false;
+        case CPLUS_KIND_ARRAY:
+            for (int64_t i = 0; i < t->length; i++)
+                if (lacks_value(t->elem, place + i * t->elem->size)) return true;
+            return false;
+        default: return false;
+    }
+}
+
+// The text was wrong, and this object will never be seen. A destructor takes it for granted that a class reference is not empty, so
+// if one still is, it must not run, and the fields are let go of one by one.
+static void give_up_on_object(const cplus_type* t, char* object) {
+    bool lacking = false;
+    for (int64_t i = 0; i < t->field_count && !lacking; i++)
+        lacking = (t->fields[i].flags & CPLUS_FIELD_REQUIRED) && lacks_value(t->fields[i].type, object + t->fields[i].offset);
+    if (!lacking) {
+        t->release(&object);
+        return;
+    }
+    for (int64_t i = t->field_count; i-- > 0;) clear_place(t->fields[i].type, object + t->fields[i].offset);
+    cplus_free_class(object);
+}
+
 static bool read_fields(reader* r, const cplus_type* t, char* base) {
     const char* opening = r->at;
     skip_space(r);
@@ -593,8 +625,11 @@ static bool read_fields(reader* r, const cplus_type* t, char* base) {
     opening = r->at++;
     if (!go_deeper(r)) return false;
     bool small[32] = {false};
-    bool* seen = t->field_count <= 32 ? small : calloc((size_t)t->field_count, 1);
-    if (!seen) cplus_stop("out of memory", "");
+    bool* seen = small;
+    if (t->field_count > 32) {
+        seen = cplus_malloc((size_t)t->field_count);
+        memset(seen, 0, (size_t)t->field_count);
+    }
     bool ok = false;
     const char* closing = NULL;
     skip_space(r);
@@ -756,13 +791,15 @@ static bool read_map_key(reader* r, const cplus_field* key, char* entry) {
         char number[32];
         char* stop = NULL;
         ok = digits.length > 0 && digits.length < (int64_t)sizeof number;
+        for (int64_t i = digits.data && digits.data[0] == '-' ? 1 : 0; ok && i < digits.length; i++) ok = digits.data[i] >= '0' && digits.data[i] <= '9';
+        ok = ok && !(digits.length == 1 && digits.data[0] == '-');
         long long value = 0;
         if (ok) {
             memcpy(number, digits.data, (size_t)digits.length);
             number[digits.length] = 0;
             errno = 0;
             value = strtoll(number, &stop, 10);
-            ok = errno == 0 && *stop == 0 && number[0] != ' ';
+            ok = errno == 0 && *stop == 0;
         }
         if (ok && key->type->kind == CPLUS_KIND_INT) {
             ok = value >= INT32_MIN && value <= INT32_MAX;
@@ -786,8 +823,7 @@ static bool read_map(reader* r, const cplus_type* t, char* place) {
     if (!go_deeper(r)) return false;
     clear_place(t, place);
     start_value(t, place);
-    char* entry = malloc((size_t)entry_type->size);
-    if (!entry) cplus_stop("out of memory", "");
+    char* entry = cplus_malloc((size_t)entry_type->size);
     bool ok = false;
     skip_space(r);
     if (r->at < r->end && *r->at == '}') {
@@ -926,7 +962,7 @@ static bool read_value(reader* r, const cplus_type* t, char* place) {
                 const unsigned char* b = (const unsigned char*)text.data;
                 if (text.length == 1) *place = (char)b[0];
                 else if (text.length == 2 && b[0] >= 0xC2 && b[0] <= 0xC3) *place = (char)(((b[0] & 3) << 6) | (b[1] & 0x3F));  // up to 255
-                else ok = fail_at(r, begin, "expected a string of one char, but this has more");
+                else ok = fail_at(r, begin, text.length == 0 ? "expected a string of one char, but this is empty" : "expected a string of one char, but this has more");
             }
             cplus_str_release(text.owner);
             return ok;
@@ -957,12 +993,21 @@ static bool read_value(reader* r, const cplus_type* t, char* place) {
             }
             return read_value(r, t->elem, place + t->length);
         case CPLUS_KIND_STRUCT: return read_fields(r, t, place);
-        case CPLUS_KIND_CLASS:
+        case CPLUS_KIND_CLASS: {
             if (r->at == r->end || *r->at != '{') return fail_at(r, r->at, "expected an object for a '%s', but found %s", t->name, next_thing(r));
+            // What it replaces stays until it has all been read, so that a failure leaves an object that was already whole as it was.
+            char* object = NULL;
+            t->make(&object);
+            if (!read_fields(r, t, object)) {
+                give_up_on_object(t, object);
+                return false;
+            }
             clear_place(t, place);
-            t->make(place);
-            return read_fields(r, t, *(char**)place);
-        case CPLUS_KIND_UNIQUE: return read_value(r, t->elem, place);
+            *(char**)place = object;
+            return true;
+        }
+        case CPLUS_KIND_UNIQUE:
+        case CPLUS_KIND_LOCAL: return read_value(r, t->elem, place);
         case CPLUS_KIND_MAP: return read_map(r, t, place);
         case CPLUS_KIND_JSON_VALUE:
             clear_place(t, place);
@@ -974,7 +1019,7 @@ static bool read_value(reader* r, const cplus_type* t, char* place) {
 }
 
 // Fills `out`, which holds zero bytes. On failure, `problem` says why, and `out` still is a value to release.
-int32_t cplus_json_read(const cplus_string* text, const cplus_type* type, void* out, cplus_string* problem, int32_t* line, int32_t* column) {
+bool cplus_json_read(const cplus_string* text, const cplus_type* type, void* out, cplus_string* problem, int32_t* line, int32_t* column) {
     reader r = {.start = text->data, .at = text->data, .end = text->data + text->length, .problem = problem, .line = line, .column = column};
     start_value(type, out);
     if (!read_value(&r, type, out)) return 0;

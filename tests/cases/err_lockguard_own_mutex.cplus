@@ -1,0 +1,8 @@
+class Mutex { public: int x = 0; };
+int main() {
+    Mutex m = Mutex();
+    LockGuard g = LockGuard(m);
+    return 0;
+}
+// error: 'LockGuard' works with the built-in class 'Mutex', but this program has its own
+// error: rename your class, or write a guard of your own for it

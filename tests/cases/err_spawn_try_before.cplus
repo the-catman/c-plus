@@ -1,0 +1,10 @@
+int f() throws { throw Error("x"); }
+int g() throws { return 1; }
+int takes(int n) { return n; }
+int main() throws {
+    try spawn f();
+    auto t = try spawn takes(g());
+    return 0;
+}
+// error: `try` belongs on waiting for the task, not on starting it
+// error: If an argument can fail, the `try` goes on that: `spawn f(try g())`

@@ -1,0 +1,74 @@
+// One thread waiting for messages while another sends them is what a WebSocket is for, and a third can close it under them.
+import http;
+
+extern "C" {
+    string? getenv(string name);
+    int usleep(int microseconds);
+}
+
+string ws() { return getenv("CPLUS_TEST_WS") ?? "missing"; }
+
+long readSome(http::WebSocket socket, long wanted) throws {
+    long count = 0;
+    while (count < wanted) {
+        if (auto m = try socket.receive()) count += m.data.starts_with("message ") ? 1 : 0;
+        else break;
+    }
+    return count;
+}
+
+void sendMany(http::WebSocket socket, int times) throws {
+    for (int i = 0; i < times; i++) try socket.send("message " + to_string(i));
+}
+
+string readOne(http::WebSocket socket) throws {
+    if (auto m = try socket.receive()) return m.data;
+    return "(closed)";
+}
+
+void sendForever(http::WebSocket socket) throws {
+    string large = string(1000000, 'x');
+    while (true) try socket.send(large);
+}
+
+int main() throws {
+    // Sent from two threads, read on a third, with every frame whole.
+    http::WebSocket socket = try http::connect(ws() + "/ws/echo");
+    Task<long, throws> reader = spawn readSome(socket, 600);
+    Task<void, throws> first = spawn sendMany(socket, 300);
+    Task<void, throws> second = spawn sendMany(socket, 300);
+    try first.wait();
+    try second.wait();
+    println("{}", try reader.wait());
+    // expect: 600
+    socket.close();
+    println("{}", socket.closeCode() ?? 0);
+    // expect: 1000
+
+    // Closed while a thread waits for a message that will never come: it gets null, at once.
+    http::WebSocket quiet = try http::connect(ws() + "/ws/echo");
+    Task<string, throws> waiting = spawn readOne(quiet);
+    usleep(50000);
+    quiet.close();
+    println("{}", try waiting.wait());
+    // expect: (closed)
+    // Whichever thread got the other side's close, the code is the one it sent.
+    println("{}", quiet.closeCode() ?? 0);
+    // expect: 1000
+
+    // Closed while a thread is stuck sending to a server that does not read: it gets an error, and close does not wait for it for long.
+    http::WebSocket stuck = try http::connect(ws() + "/ws/hang");
+    Task<void, throws> sender = spawn sendForever(stuck);
+    usleep(100000);
+    stuck.close();
+    try {
+        sender.wait();
+        println("no error");
+    } catch (http::Error e) {
+        println("{}", e.kind);
+    } catch (Error e) {
+        println("another error");
+    }
+    // expect: closed
+    return 0;
+}

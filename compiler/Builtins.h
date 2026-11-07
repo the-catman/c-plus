@@ -32,14 +32,14 @@ private:
     vector<int> table_;                    // open addressing: an entry's position + 1, 0 if free, -1 if erased
     long live_ = 0;
 
-    long __find(K key, long hash) const {
+    long __find(const K* key, long hash) const {
         if (table_.empty()) return -1;
         long mask = table_.size() - 1;
         long place = hash & mask;
         while (true) {
             int found = table_[place];
             if (found == 0) return -1;
-            if (found > 0 && hashes_[found - 1] == hash && entries_[found - 1].first == key) return found - 1;
+            if (found > 0 && hashes_[found - 1] == hash && entries_[found - 1].first == *key) return found - 1;
             place = (place + 1) & mask;
         }
     }
@@ -82,25 +82,25 @@ private:
 
     long __place(K key) {
         long hash = __hash(key);
-        long position = __find(key, hash);
+        long position = __find(&key, hash);
         if (position >= 0) return position;
         V value = V();
-        position = __find(key, hash);  // the constructor of V may have added it
+        position = __find(&key, hash);  // the constructor of V may have added it
         return position >= 0 ? position : __add(key, hash, __move(value));
     }
 
     long __place_to_assign(K key, V nothing) {
         long hash = __hash(key);
-        long position = __find(key, hash);
+        long position = __find(&key, hash);
         return position >= 0 ? position : __add(key, hash, __move(nothing));
     }
 
-    long __existing(K key) const { return __find(key, __hash(key)); }
+    long __existing(K key) const { return __find(&key, __hash(key)); }
 
     // For reading JSON, which has no key or value until it has read them.
     void __put(hashmap_entry<K, V> entry) {
         long hash = __hash(entry.first);
-        long position = __find(entry.first, hash);
+        long position = __find(&entry.first, hash);
         if (position < 0) __add(entry.first, hash, __move(entry.second));
         else entries_[position].second = __move(entry.second);
     }
@@ -113,7 +113,8 @@ private:
         if (live_ != other->live_) return false;
         for (long i = 0; i < entries_.size(); i++) {
             if (hashes_[i] < 0) continue;
-            long position = other->__find(entries_[i].first, hashes_[i]);
+            K key = entries_[i].first;
+            long position = other->__find(&key, hashes_[i]);
             if (position < 0 || entries_[i].second != other->entries_[position].second) return false;
         }
         return true;
@@ -122,11 +123,11 @@ private:
 public:
     long size() const { return live_; }
     bool empty() const { return live_ == 0; }
-    bool contains(K key) const { return __existing(key) >= 0; }
-    long count(K key) const { return __existing(key) >= 0 ? 1 : 0; }
+    bool contains(K key) const { return __find(&key, __hash(key)) >= 0; }
+    long count(K key) const { return __find(&key, __hash(key)) >= 0 ? 1 : 0; }
 
     V? get(K key) const {
-        long position = __existing(key);
+        long position = __find(&key, __hash(key));
         if (position < 0) return null;
         return entries_[position].second;
     }
@@ -134,14 +135,14 @@ public:
     // Keeps the value that is there, if there is one, as in C++.
     bool insert(hashmap_entry<K, V> entry) {
         long hash = __hash(entry.first);
-        if (__find(entry.first, hash) >= 0) return false;
+        if (__find(&entry.first, hash) >= 0) return false;
         __add(entry.first, hash, __move(entry.second));
         return true;
     }
 
     long erase(K key) {
         long hash = __hash(key);
-        long position = __find(key, hash);
+        long position = __find(&key, hash);
         if (position < 0) return 0;
         long mask = table_.size() - 1;
         long place = hash & mask;
@@ -190,6 +191,7 @@ inline constexpr const char* kJsonSource = R"cplus(
 extern "C" {
     bool cplus_json_read(void* text, void* type, void* out, void* problem, int* line, int* column);
     void cplus_json_write(void* value, void* type, int indent, void* out);
+    void cplus_stop(string message, string help);
 }
 
 class json::Error : public Error {
@@ -256,6 +258,7 @@ public:
         items_.push_back(value);
     }
 
+private:
     void __become(int kind) {
         kind_ = kind;
         flag_ = false;
@@ -287,7 +290,8 @@ template<__JsonWritable T> json::Value json::of(T value) {
     string problem;
     int line = 0;
     int column = 0;
-    cplus_json_read((void*)&text, __type_of(json::Value), (void*)&out, (void*)&problem, &line, &column);
+    // What was just written is valid JSON, and writing stops at the depth that reading does.
+    if (!cplus_json_read((void*)&text, __type_of(json::Value), (void*)&out, (void*)&problem, &line, &column)) cplus_stop("json::of could not read what it wrote, which is a bug in C+", problem);
     return out;
 }
 
@@ -655,7 +659,7 @@ http::WebSocket http::connectWith(http::Request request) throws {
     void* socket = cplus_ws_connect((void*)&request.url, (void*)&lines, request.timeout, request.maxBytes, (void*)&request.caFile,
                                     (void*)&kind, (void*)&problem);
     if (socket == null) throw http::Error(problem, kind, request.url);
-    return http::WebSocket(socket, http::__urlForError(request.url));
+    return http::WebSocket(socket, http::__urlForError(request.url));  // it can be printed, which shows every field
 }
 
 http::WebSocket http::connect(string url) throws {

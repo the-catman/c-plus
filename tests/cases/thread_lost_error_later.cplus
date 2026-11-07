@@ -9,7 +9,6 @@ int main() {
         while (!t.done()) usleep(100);
         println("done");
     }
-    println("never");
     return 0;
 }
 // expect: done

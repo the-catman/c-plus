@@ -1,0 +1,17 @@
+// The first thing two threads do with the runtime, at the same time, with nothing used before them.
+extern "C" int usleep(int microseconds);
+
+long grow() {
+    usleep(30000);
+    vector<int> v;
+    for (int i = 0; i < 100; i++) v.push_back(i);
+    return v.size();
+}
+
+int main() {
+    Task<long> a = spawn grow();
+    Task<long> b = spawn grow();
+    println("{}", a.wait() + b.wait());
+    // expect: 200
+    return 0;
+}

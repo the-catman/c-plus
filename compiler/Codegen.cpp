@@ -118,6 +118,7 @@ struct Codegen::Impl {
     std::unordered_map<const Type*, llvm::GlobalVariable*> descriptors;
     std::map<std::pair<const Type*, bool>, llvm::Function*> countFunctions;
     bool usesDescriptors = false;  // a program that imports json or reflect: a class then says what it really is
+    bool buildsFromDescriptors = false;  // one that imports json, which makes values from them too
     bool usesThreads = false;      // a program with a `spawn`
 
     // A vector is a pointer to a buffer laid out as the runtime's cplus_vec: a header of
@@ -1425,7 +1426,9 @@ struct Codegen::Impl {
             case K::Int: case K::Long: case K::Char: return llvm::ConstantInt::get(llvmType(t), 0);
             case K::Float: case K::Double: return llvm::ConstantFP::get(llvmType(t), 0.0);
             case K::String: return llvm::Constant::getNullValue(stringTy);
-            case K::Struct: return buildAggregate(*t->decl, {});
+            case K::Struct:
+                if (const FuncDecl* ctor = t->decl->constructor; ctor && ctor->params.empty()) return construct(*t->decl, {});
+                return buildAggregate(*t->decl, {});
             case K::Class: case K::Vector: case K::Pointer: case K::Weak: case K::Unique: case K::Local:
                 return llvm::ConstantPointerNull::get(b.getPtrTy());
             case K::Optional: return zeroValue(t);  // null
@@ -2268,9 +2271,6 @@ struct Codegen::Impl {
         return b.CreateGEP(elem, leftPtr ? l : r, n, "ptr");
     }
 
-    // Whether two values are equal: strings by contents, structs field by field, and
-    // class references by identity.
-    // A number for a word, which depends on the seed each run of the program starts with: see cplus_start.
     llvm::Value* hashWord(llvm::Value* word) {
         llvm::Value* x = b.CreateXor(word, b.CreateLoad(b.getInt64Ty(), hashSeed, "seed"));
         x = b.CreateXor(x, b.CreateLShr(x, 33));
@@ -2329,6 +2329,9 @@ struct Codegen::Impl {
         return f;
     }
 
+    // Whether two values are equal: strings by contents, structs field by field, and
+    // class references by identity.
+    // A number for a word, which depends on the seed each run of the program starts with: see cplus_start.
     llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
         switch (t->kind) {
             case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer: case K::Unique: case K::Local:
@@ -2815,25 +2818,12 @@ struct Codegen::Impl {
                 llvm::Value* slot = b.CreateStructGEP(closureTy, closure, next++);
                 callArgs.push_back(inMemory(p->type) ? slot : b.CreateLoad(llvmType(p->type), slot, p->name));
             }
-            llvm::FunctionCallee callee = funcs.at(&target);
-            if (selfType && dispatch && target.vtableSlot >= 0)
-                callee = llvm::FunctionCallee(funcs.at(&target)->getFunctionType(),
-                                              vtableSlot(loadVtable(callArgs[0]), kVtableMethods + target.vtableSlot, target.name.c_str()));
             llvm::Value* errorSlot = nullptr;
             if (target.isThrows) {
                 errorSlot = entryAlloca(b.getPtrTy(), "error");
                 b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), errorSlot);
-                callArgs.push_back(errorSlot);
             }
-            llvm::Value* result = nullptr;
-            if (inMemory(target.retType)) {
-                result = entryAlloca(llvmType(target.retType), "result");
-                callArgs.insert(callArgs.begin(), result);
-                b.CreateCall(callee, callArgs);
-            } else {
-                llvm::CallInst* inst = b.CreateCall(callee, callArgs);
-                if (!target.retType->is(K::Void)) result = inst;
-            }
+            llvm::Value* result = emitCall(target, std::move(callArgs), selfType && dispatch, errorSlot);
             if (selfType) releaseValue(selfType->isClass() ? b.CreateLoad(b.getPtrTy(), selfSlot, "self") : peekValue(selfType, selfSlot), selfType);
             b.CreateCall(rtFree, {closure});
             auto finish = [&] {
@@ -2882,20 +2872,25 @@ struct Codegen::Impl {
     // writes it to memory the caller gives it, as a hidden first argument.
     // With `dispatch`, a virtual method is found through the vtable of `this`, the first of `args`.
     llvm::Value* callFunction(const FuncDecl& f, std::vector<llvm::Value*> args, bool dispatch = false) {
+        llvm::Value* result = emitCall(f, std::move(args), dispatch, f.isThrows ? errorPlace() : nullptr);
+        if (f.isThrows) leaveOnError();
+        return result;
+    }
+
+    // The call itself, with `errorPlace` where an error goes, for a function that can fail.
+    llvm::Value* emitCall(const FuncDecl& f, std::vector<llvm::Value*> args, bool dispatch, llvm::Value* errorPlace) {
         llvm::FunctionCallee callee = funcs.at(&f);
         if (dispatch && f.vtableSlot >= 0)
             callee = llvm::FunctionCallee(funcs.at(&f)->getFunctionType(),
                                           vtableSlot(loadVtable(args[0]), kVtableMethods + f.vtableSlot, f.name.c_str()));
-        if (f.isThrows) args.push_back(errorPlace());
+        if (f.isThrows) args.push_back(errorPlace);
         if (inMemory(f.retType)) {
             llvm::AllocaInst* result = entryAlloca(llvmType(f.retType), "result");
             args.insert(args.begin(), result);
             b.CreateCall(callee, args);
-            if (f.isThrows) leaveOnError();
             return result;
         }
         llvm::CallInst* inst = b.CreateCall(callee, args);
-        if (f.isThrows) leaveOnError();
         return f.retType->is(K::Void) ? nullptr : inst;
     }
 
@@ -3951,8 +3946,9 @@ struct Codegen::Impl {
     }
 
     // The fields of a struct or class, those of its base classes first, as each is measured from `offset`.
-    void addFieldsOf(const StructDecl& sd, uint64_t offset, std::vector<llvm::Constant*>& out) {
-        for (const StructDecl* base : sd.bases) addFieldsOf(*base, offset + baseOffset(sd, *base), out);
+    void addFieldsOf(const StructDecl& sd, uint64_t offset, std::vector<llvm::Constant*>& out, bool built = false) {
+        built = built || sd.constructor;  // this one, or one that derives from it, can give the fields their values
+        for (const StructDecl* base : sd.bases) addFieldsOf(*base, offset + baseOffset(sd, *base), out, built);
         const llvm::StructLayout* layout = mod->getDataLayout().getStructLayout(types.at(&sd).layout);
         size_t before = !sd.isClass ? 0 : sd.bases.empty() ? 2 : sd.bases.size();
         auto* fieldTy = llvm::StructType::get(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy(), b.getInt64Ty()});
@@ -3960,7 +3956,7 @@ struct Codegen::Impl {
             const FieldDecl& f = sd.fields[i];
             bool isPublic = f.access == Access::Public;
             int64_t flags = (isPublic ? CPLUS_FIELD_PUBLIC : 0) |
-                            (isPublic && !f.defaultValue && !sd.constructor && mustBeGiven(f.type) ? CPLUS_FIELD_REQUIRED : 0);
+                            (isPublic && !f.defaultValue && !built && mustBeGiven(f.type) ? CPLUS_FIELD_REQUIRED : 0);
             out.push_back(llvm::ConstantStruct::get(fieldTy, {cstring(f.name), b.getInt64(offset + layout->getElementOffset(i + before)),
                                                               typeDescriptor(f.type), b.getInt64(flags)}));
         }
@@ -3987,7 +3983,8 @@ struct Codegen::Impl {
             case K::String: kind = CPLUS_KIND_STRING; break;
             case K::Weak: kind = CPLUS_KIND_WEAK; break;
             case K::Vector: kind = CPLUS_KIND_VECTOR; elem = typeDescriptor(t->elem); break;
-            case K::Unique: case K::Local: kind = CPLUS_KIND_UNIQUE; elem = typeDescriptor(t->elem); break;
+            case K::Unique: kind = CPLUS_KIND_UNIQUE; elem = typeDescriptor(t->elem); break;
+            case K::Local: kind = CPLUS_KIND_LOCAL; elem = typeDescriptor(t->elem); break;
             case K::Array: kind = CPLUS_KIND_ARRAY; length = t->length; elem = typeDescriptor(t->elem); break;
             case K::Optional:
                 kind = CPLUS_KIND_OPTIONAL;
@@ -4000,6 +3997,7 @@ struct Codegen::Impl {
                     kind = CPLUS_KIND_MAP;
                     elem = typeDescriptor(sd.fields[0].type->elem);
                     length = (int64_t)mod->getDataLayout().getStructLayout(types.at(&sd).layout)->getElementOffset(1);
+                    if (!buildsFromDescriptors) break;
                     auto* f = internalFunction("cplus." + sd.name + "#put", b.getVoidTy(), {b.getPtrTy(), b.getPtrTy()});
                     {
                         SavedPoint saved(*this);
@@ -4025,7 +4023,7 @@ struct Codegen::Impl {
             default: break;
         }
         uint64_t size = t->is(K::Void) || t->isOpaque() || t->isNull() ? 0 : mod->getDataLayout().getTypeAllocSize(llvmType(t));
-        bool canHold = !t->is(K::Void) && !t->isOpaque() && !t->isNull();
+        bool canHold = buildsFromDescriptors && !t->is(K::Void) && !t->isOpaque() && !t->isNull();  // for JSON, which makes values
         g->setInitializer(llvm::ConstantStruct::get(
             descriptorType(), {b.getInt64(kind), cstring(t->name), b.getInt64(size), elem, b.getInt64(length), fields, b.getInt64(fieldCount),
                                canHold ? makeFunction(t) : none, canHold ? countFunction(t, true) : none, canHold ? countFunction(t, false) : none, put}));
@@ -4081,7 +4079,11 @@ struct Codegen::Impl {
         llvm::Value* left = place(info.equals->getArg(0));
         llvm::Value* right = place(info.equals->getArg(1));
         b.CreateRet(callFunction(*sd.ownMethod("__same"), {left, right}));
+        defineFieldCounting(sd, info);
+    }
 
+    // Retaining and releasing a struct, field by field, the last declared first.
+    void defineFieldCounting(const StructDecl& sd, TypeInfo& info) {
         if (!info.retain) return;
         for (auto [f, which] : {std::pair{info.retain, true}, std::pair{info.release, false}}) {
             startHelper(f);
@@ -4150,17 +4152,7 @@ struct Codegen::Impl {
             b.CreateRet(b.getInt1(true));
             b.SetInsertPoint(differBB);
             b.CreateRet(b.getInt1(false));
-
-            if (!info.retain) return;
-            for (auto [f, which] : {std::pair{info.retain, true}, std::pair{info.release, false}}) {
-                startHelper(f);
-                for (size_t i = sd.fields.size(); i-- > 0;) {
-                    if (!isManaged(sd.fields[i].type)) continue;
-                    llvm::Value* v = loadField(sd, f->getArg(0), i);
-                    which ? retainValue(v, sd.fields[i].type) : releaseValue(v, sd.fields[i].type);
-                }
-                b.CreateRetVoid();
-            }
+            defineFieldCounting(sd, info);
             return;
         }
 
@@ -4334,6 +4326,7 @@ struct Codegen::Impl {
         if (!setupTarget(error)) return false;
         if (opts.debug || opts.race) setupLineTable();
         usesDescriptors = program.usesDescriptors();
+        buildsFromDescriptors = program.buildsFromDescriptors();
         usesThreads = program.usesThreads;
         stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy()}, "cplus.string");
         // Named types are created first and given bodies after, so they can refer to

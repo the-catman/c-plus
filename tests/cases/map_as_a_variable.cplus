@@ -1,0 +1,10 @@
+// `map` is not a word of the language, so a variable can have that name, even where `map <` starts a statement.
+int main() {
+    int map = 3;
+    int unordered_map = 5;
+    map < 4 ? println("less") : println("more");
+    // expect: less
+    unordered_map < 4 ? println("less") : println("more");
+    // expect: more
+    return 0;
+}

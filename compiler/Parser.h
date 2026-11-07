@@ -1,7 +1,7 @@
-#include <set>
 #pragma once
 
 #include <deque>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -66,7 +66,7 @@ private:
     void addBuiltins();  // what is written in C+ itself, for a program that uses it. See Builtins.h
     void joinThrowingTasks();
     void joinModuleNames(const std::set<std::string>& modules);
-    void addBuiltinSource(const SourceFile& source);  // `class Error`, for a program that uses errors and has none of its own
+    void addBuiltinSource(const SourceFile& source);
     void parseThrowsMark(FuncDecl& fn);
     StmtPtr parseTry();
     ExprPtr parseMemberAccess(ExprPtr e, const char* after, std::string qualifier = "");

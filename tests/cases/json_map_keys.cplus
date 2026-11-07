@@ -1,0 +1,37 @@
+// A key of a map of numbers is what a whole number is written as, and two different keys cannot turn into one.
+import json;
+
+void attempt(string text) {
+    try {
+        hashmap<int, int> m = json::parse<hashmap<int, int>>(text);
+        println("{}", m);
+    } catch (json::Error e) {
+        println("{}", e.what());
+    } catch (Error e) {
+        println("another error");
+    }
+}
+
+int main() {
+    attempt(R"({"5": 1, "-6": 2, "0": 3})");
+    // expect: {5: 1, -6: 2, 0: 3}
+    attempt(R"({"\t5": 3})");
+    // expect: line 1, column 2: this key must be a whole number that fits in an int
+    attempt(R"({"\n5": 3})");
+    // expect: line 1, column 2: this key must be a whole number that fits in an int
+    attempt(R"({" 5": 3})");
+    // expect: line 1, column 2: this key must be a whole number that fits in an int
+    attempt(R"({"+6": 1})");
+    // expect: line 1, column 2: this key must be a whole number that fits in an int
+    attempt(R"({"7\u0000x": 2})");
+    // expect: line 1, column 2: this key must be a whole number that fits in an int
+    attempt(R"({"-": 2})");
+    // expect: line 1, column 2: this key must be a whole number that fits in an int
+    attempt(R"({"": 2})");
+    // expect: line 1, column 2: this key must be a whole number that fits in an int
+    attempt(R"({"1.5": 2})");
+    // expect: line 1, column 2: this key must be a whole number that fits in an int
+    attempt(R"({"3000000000": 2})");
+    // expect: line 1, column 2: this key must be a whole number that fits in an int
+    return 0;
+}

@@ -1,0 +1,19 @@
+// Reflection says what a local reference is, which is not a unique one: copies of it share the object.
+import reflect;
+class N { public: int x = 0; };
+struct Holds {
+    local<N> a;
+    unique<N> b;
+    N c;
+};
+int main() {
+    println("{} {}", reflect::type<local<N>>().kind(), reflect::type<local<N>>().name());
+    // expect: local local<N>
+    println("{}", reflect::type<local<N>>().elem()?.name() ?? "none");
+    // expect: N
+    for (auto f : reflect::type<Holds>().fields()) println("{}: {}", f.name, f.type.kind());
+    // expect: a: local
+    // expect: b: unique
+    // expect: c: class
+    return 0;
+}

@@ -1,0 +1,14 @@
+// `m[key]` adds a key that is missing, which what points to const must not do.
+struct Holds { hashmap<string, int> m; };
+int main() {
+    hashmap<string, int> m;
+    const hashmap<string, int>* p = &m;
+    println("{}", (*p)["x"]);
+    Holds h;
+    const Holds* q = &h;
+    println("{}", q->m["x"]);
+    return 0;
+}
+// error: '[ ]' adds a key that is missing, so it cannot be used through 'p', a 'const hashmap<string, int>*'
+// error: '[ ]' adds a key that is missing, so it cannot be used through 'q', a 'const Holds*'
+// error: write `(*p).at(key)`

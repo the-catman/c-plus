@@ -16,14 +16,6 @@ enum { THREAD_STACK = 8 * 1024 * 1024 };
 // As large as the one the main thread's crash handler runs on.
 enum { CRASH_STACK = 64 * 1024 };
 
-static const char* const out_of_memory_help = "this program asked for more memory than the system could give it";
-
-static void* memory(size_t size) {
-    void* p = malloc(size);
-    if (!p) cplus_stop("out of memory", out_of_memory_help);
-    return p;
-}
-
 // ---- Starting threads ------------------------------------------------------
 
 // How many threads are running. The program does not end while any is, so that what they are doing gets done, and so
@@ -46,7 +38,7 @@ static void* thread_main(void* given) {
     free(given);
 #ifdef CPLUS_OWN_CRASH_HANDLER
     // Running out of stack can only be reported from another stack, and each thread has to have one of its own.
-    stack_t crash = {.ss_sp = memory(CRASH_STACK), .ss_size = CRASH_STACK};
+    stack_t crash = {.ss_sp = cplus_malloc(CRASH_STACK), .ss_size = CRASH_STACK};
     sigaltstack(&crash, NULL);
 #endif
     start.entry(start.closure);
@@ -63,7 +55,7 @@ static void* thread_main(void* given) {
 }
 
 void cplus_thread_start(void (*entry)(void*), void* closure) {
-    thread_start* start = memory(sizeof *start);
+    thread_start* start = cplus_malloc(sizeof *start);
     start->entry = entry;
     start->closure = closure;
     pthread_attr_t attributes;
@@ -98,7 +90,7 @@ typedef struct {
 } task_state;
 
 task_state* cplus_task_new(void) {
-    task_state* task = memory(sizeof *task);
+    task_state* task = cplus_malloc(sizeof *task);
     pthread_mutex_init(&task->lock, NULL);
     pthread_cond_init(&task->changed, NULL);
     task->done = false;
@@ -155,7 +147,7 @@ void cplus_task_lost_error(const cplus_string* text) {
 
 // The kind that checks: a thread that locks one twice would otherwise wait for itself forever without a word.
 pthread_mutex_t* cplus_mutex_new(void) {
-    pthread_mutex_t* mutex = memory(sizeof *mutex);
+    pthread_mutex_t* mutex = cplus_malloc(sizeof *mutex);
     pthread_mutexattr_t attributes;
     pthread_mutexattr_init(&attributes);
     pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_ERRORCHECK);

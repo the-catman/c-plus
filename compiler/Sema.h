@@ -104,7 +104,7 @@ private:
     bool fieldHides(const std::string& name) const;
     FuncDecl* mapMethod(const Type* map, const std::string& name);
     const Type* checkMapIndex(IndexExpr& ix, Flow& flow, const Type* map);
-    const VarDecl* constMapReported_ = nullptr;  // `m` of a `m[key]` that was reported, so that it is said once
+    const Expr* constMapReported_ = nullptr;  // a `m[key]` that was reported, so that it is said once
     void putLiteral(VarDecl& v, const ConstValue& value);
     bool constraintHolds(const ConstraintExpr& c);
     void checkNow(FuncDecl& fn);  // for a function that runs while compiling, whose body must be checked first

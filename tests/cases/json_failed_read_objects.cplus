@@ -1,0 +1,105 @@
+// Text that fails to read cannot leave a class reference empty for a destructor to find, nor lose what was already whole.
+import json;
+
+class Inner {
+public:
+    string name = "inner";
+    int n = 0;
+};
+
+// It has no constructor, so nothing has given `inner` a value yet when the text turns out to be wrong.
+class NeedsInner {
+public:
+    Inner inner;
+    string other;
+    ~NeedsInner() { println("~NeedsInner {}", inner.name); }
+};
+
+class NeedsUnique {
+public:
+    unique<Inner> held;
+    ~NeedsUnique() { println("~NeedsUnique {}", held.name); }
+};
+
+struct Pair {
+    Inner left;
+    Inner right;
+};
+class NeedsPair {
+public:
+    Pair pair;
+    string text;
+    ~NeedsPair() { println("~NeedsPair {}", pair.right.name); }
+};
+
+// A constructor made it whole, so its destructor is due.
+class Built {
+public:
+    Inner inner;
+    int n = 0;
+    Built() : inner(Inner()) { println("Built()"); }
+    ~Built() { println("~Built {}", inner.name); }
+};
+
+// A default that a failed read must not take away from an object that goes on to be destroyed.
+class HasDefault {
+public:
+    Inner inner = Inner();
+    ~HasDefault() { println("~HasDefault {}", inner.name); }
+};
+
+template<__JsonReadable T> void attempt(string text) {
+    try {
+        T value = json::parse<T>(text);
+        println("read it");
+    } catch (json::Error e) {
+        println("{}", e.what());
+    } catch (Error e) {
+        println("another error");
+    }
+}
+
+int main() {
+    // A key that is missing.
+    attempt<NeedsInner>("{}");
+    // expect: line 1, column 2: this 'NeedsInner' has no "inner", which it needs. A field that can be left out has a default value, or is optional
+    attempt<NeedsUnique>("{}");
+    // expect: line 1, column 2: this 'NeedsUnique' has no "held", which it needs. A field that can be left out has a default value, or is optional
+
+    // A value that is wrong, with what it needs still to come.
+    attempt<NeedsInner>(R"({"other": 5, "inner": {}})");
+    // expect: line 1, column 11: in other: expected a string, but found a number
+    attempt<NeedsInner>(R"({"inner": 5})");
+    // expect: line 1, column 11: in inner: expected an object for a 'Inner', but found a number
+    attempt<NeedsInner>(R"({"inner": {"n": "x"}})");
+    // expect: line 1, column 17: in inner.n: expected a number, but found a string
+
+    // Part of a struct has come, and part has not.
+    attempt<NeedsPair>(R"({"pair": {"left": {}}, "text": 1})");
+    // expect: line 1, column 21: in pair: this 'Pair' has no "right", which it needs. A field that can be left out has a default value, or is optional
+
+    // All that it needs has come, so what it holds is whole, and its destructor can run.
+    attempt<NeedsInner>(R"({"inner": {"name": "whole"}, "other": 5})");
+    // expect: ~NeedsInner whole
+    // expect: line 1, column 39: in other: expected a string, but found a number
+
+    // Built by its constructor.
+    attempt<Built>(R"({"n": "x"})");
+    // expect: Built()
+    // expect: ~Built inner
+    // expect: line 1, column 7: in n: expected a number, but found a string
+
+    // The default is still there for the destructor, as the object that would replace it did not make it.
+    attempt<HasDefault>(R"({"inner": {"n": "x"}})");
+    // expect: ~HasDefault inner
+    // expect: line 1, column 17: in inner.n: expected a number, but found a string
+    attempt<HasDefault>(R"({"inner": 5})");
+    // expect: ~HasDefault inner
+    // expect: line 1, column 11: in inner: expected an object for a 'Inner', but found a number
+
+    // One in a vector that was read, and one after it that cannot be whole.
+    attempt<vector<NeedsInner>>(R"([{"inner": {}, "other": "a"}, {}])");
+    // expect: ~NeedsInner inner
+    // expect: line 1, column 32: in [1]: this 'NeedsInner' has no "inner", which it needs. A field that can be left out has a default value, or is optional
+    return 0;
+}

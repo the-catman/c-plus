@@ -1,0 +1,20 @@
+// A char is one character, and the error says which way a string is not that.
+import json;
+struct A { char c = 'x'; };
+void attempt(string text) {
+    try {
+        A a = json::parse<A>(text);
+        println("{}", a.c);
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+}
+int main() {
+    attempt(R"({"c": "y"})");
+    // expect: y
+    attempt(R"({"c": ""})");
+    // expect: line 1, column 7: in c: expected a string of one char, but this is empty
+    attempt(R"({"c": "yz"})");
+    // expect: line 1, column 7: in c: expected a string of one char, but this has more
+    return 0;
+}

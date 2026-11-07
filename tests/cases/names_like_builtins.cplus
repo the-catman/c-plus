@@ -1,0 +1,11 @@
+// A name that the language only has for those who ask for it is free for a program to use for something else.
+int Mutex(int x) { return x + 1; }
+string LockGuard() { return "a function"; }
+int Task(int n) { return n * 2; }
+int hashmap(int n) { return n * 3; }
+
+int main() {
+    println("{} {} {} {}", Mutex(1), LockGuard(), Task(2), hashmap(2));
+    // expect: 2 a function 4 6
+    return 0;
+}

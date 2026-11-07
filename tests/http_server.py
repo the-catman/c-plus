@@ -404,6 +404,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             lines[2] = "Sec-WebSocket-Accept: bm90IHRoZSByaWdodCBvbmU="
         elif script == "no-accept":
             lines = lines[:2]
+        elif script == "split-headers":
+            lines = ["Upgrade: h2c", "Upgrade: websocket", "Connection: keep-alive", "Connection: Upgrade", f"Sec-WebSocket-Accept: {accept}"]
         elif script == "extension":
             lines.append("Sec-WebSocket-Extensions: permessage-deflate")
         elif script == "protocol":

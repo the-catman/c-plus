@@ -21,6 +21,7 @@ enum {
     CPLUS_KIND_STRUCT,    // `fields`, measured from where the struct is
     CPLUS_KIND_CLASS,     // `fields`, measured from the start of the object. The value is a pointer to the object
     CPLUS_KIND_UNIQUE,    // `elem` is the class
+    CPLUS_KIND_LOCAL,     // `elem` is the class, the same as for CPLUS_KIND_UNIQUE to everything but reflection
     CPLUS_KIND_WEAK,
     CPLUS_KIND_MAP,       // a hashmap. Its entries are a vector at its start, of type `elem`, whose fields are the key
                           // and the value, and `length` is where the vector of hashes is. -1 there is an erased entry

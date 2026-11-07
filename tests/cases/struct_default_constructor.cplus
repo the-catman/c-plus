@@ -1,0 +1,44 @@
+// A struct with a constructor that takes nothing is made by it, wherever a default value is needed.
+import json;
+
+struct P {
+    int x;
+    P() : x(5) {}
+};
+struct Holds {
+    P p;
+    array<P, 2> ps;
+    int after = 9;
+};
+
+class Made {
+public:
+    P p;
+    Holds h;
+};
+
+P makeOne() { P p = {}; return p; }
+
+int main() throws {
+    Holds a = {};
+    println("{} {} {} {}", a.p.x, a.ps[0].x, a.ps[1].x, a.after);
+    // expect: 5 5 5 9
+    Holds b = Holds{};
+    println("{}", b.p.x);
+    // expect: 5
+    auto v = vector<Holds>(1);
+    println("{}", v[0].p.x);
+    // expect: 5
+    hashmap<string, Holds> m;
+    println("{}", m["k"].p.x);
+    // expect: 5
+    Made c = Made();
+    println("{} {}", c.p.x, c.h.p.x);
+    // expect: 5 5
+    println("{}", makeOne().x);
+    // expect: 5
+    Holds read = try json::parse<Holds>("{}");
+    println("{} {}", read.p.x, read.ps[1].x);
+    // expect: 5 5
+    return 0;
+}

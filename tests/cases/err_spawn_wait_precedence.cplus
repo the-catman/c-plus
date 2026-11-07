@@ -1,0 +1,9 @@
+int f(int n) { return n; }
+int main() {
+    int x = spawn f(1).wait();
+    bool d = spawn f(1).done();
+    return x;
+}
+// error: `spawn` takes all of the call after it, so this asks for '.wait()' on what the function gives, and not on the task
+// error: `spawn` takes all of the call after it, so this asks for '.done()' on what the function gives, and not on the task
+// error: put the `spawn` in parentheses: `(spawn f(x)).wait()`

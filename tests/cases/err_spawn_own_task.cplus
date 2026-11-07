@@ -5,4 +5,4 @@ int main() {
     return 0;
 }
 // error: `spawn` gives a built-in class 'Task', but this program has its own
-// error: rename your class
+// error: rename yours

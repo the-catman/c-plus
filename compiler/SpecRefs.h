@@ -55,6 +55,7 @@ inline constexpr const char* NewDelete = "new-and-delete";
 inline constexpr const char* Modules = "modules";
 inline constexpr const char* Http = "http";
 inline constexpr const char* Concurrency = "concurrency";
+inline constexpr const char* Mutex = "mutex";
 inline constexpr const char* Status = "implementation-status";
 
 }  // namespace cplus::spec

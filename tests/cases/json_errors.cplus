@@ -159,7 +159,7 @@ int main() {
 // expect: line 1, column 1: this string has no closing quote
 // expect: line 1, column 3: this is not valid UTF-8, which all JSON text must be
 // expect: line 1, column 1: expected a string of one char, but this has more
-// expect: line 1, column 1: expected a string of one char, but this has more
+// expect: line 1, column 1: expected a string of one char, but this is empty
 // expect: line 1, column 2: in [0]: expected a number, but found the end of the text
 // expect: line 1, column 1: this array has no closing ']'
 // expect: line 1, column 4: in [1]: expected a number, but found the end of the text

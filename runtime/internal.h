@@ -3,6 +3,8 @@
 
 // What the files of the runtime share with each other. Programs do not see any of this.
 
+#include <stddef.h>
+
 #include "reflect.h"
 
 // A build under AddressSanitizer has that to report crashes. Every other build reports them itself: see on_crash in runtime.c.
@@ -32,6 +34,9 @@ void* cplus_object_start(void* object);
 void cplus_print_f64(cplus_string* out, double value);
 void cplus_print_f32(cplus_string* out, float value);
 _Noreturn void cplus_stop(const char* message, const char* help);
+void* cplus_malloc(size_t size);                // stops the program when there is no more
+void* cplus_realloc(void* memory, size_t size);
+void cplus_free_class(void* object);
 
 // How many bytes the valid UTF-8 character at `s` takes, or 0 if it is not one.
 static inline int cplus_utf8_length(const unsigned char* s, int64_t left) {

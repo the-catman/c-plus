@@ -21,6 +21,7 @@ const char* cplus_type_kind(const cplus_type* t) {
         case CPLUS_KIND_STRUCT: case CPLUS_KIND_JSON_VALUE: return "struct";
         case CPLUS_KIND_CLASS: return "class";
         case CPLUS_KIND_UNIQUE: return "unique";
+        case CPLUS_KIND_LOCAL: return "local";
         case CPLUS_KIND_WEAK: return "weak";
         case CPLUS_KIND_MAP: return "hashmap";
         default: return "pointer";
@@ -39,7 +40,7 @@ int32_t cplus_type_field_public(const cplus_type* t, int64_t i) { return (t->fie
 // What an object really is, given what it is known as. The value is at `place`.
 const cplus_type* cplus_type_real(const cplus_type* t, const void* place) {
     if (t->kind == CPLUS_KIND_OPTIONAL && t->length < 0) t = t->elem;
-    if (t->kind == CPLUS_KIND_UNIQUE) t = t->elem;
+    if (t->kind == CPLUS_KIND_UNIQUE || t->kind == CPLUS_KIND_LOCAL) t = t->elem;
     if (t->kind != CPLUS_KIND_CLASS) return t;
     const char* object = *(const char* const*)place;
     if (!object) return t;

@@ -1,0 +1,7 @@
+import json;
+struct hashmap { int x = 0; };
+int main() {
+    return 0;
+}
+// error: 'json' uses the built-in type 'hashmap', but this program has its own
+// error: rename yours

@@ -1,0 +1,7 @@
+import json;
+int main() {
+    json::Value v;
+    v.__become(99);
+    return 0;
+}
+// error: '__become' is private in 'json::Value'

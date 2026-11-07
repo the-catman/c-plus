@@ -1,0 +1,11 @@
+// One error on a const map does not hide the next one.
+int main() {
+    const hashmap<string, int> m = {{"a", 1}};
+    hashmap<string, int> other;
+    println("{}", m["a"]);
+    m = other;
+    m["b"]++;
+    return 0;
+}
+// error: '[ ]' adds a key that is missing, so it cannot be used on the const 'm'
+// error: 'm' is const and cannot be assigned to
