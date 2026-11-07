@@ -115,7 +115,22 @@ static std::string q(const std::string& s) { return "'" + s + "'"; }
 // An expression as it might be written in source, for help texts: `node.next`, or
 // `fallback` when it is something more complicated.
 // `*p`, written so that what comes after it applies to all of it.
-static std::string asBase(const std::string& n) { return !n.empty() && n[0] == '*' ? "(" + n + ")" : n; }
+static std::string asBase(const std::string& n) {
+    bool spaced = false;  // a space outside brackets and quotes, as in `p + n`
+    int depth = 0;
+    bool quoted = false;
+    for (size_t i = 0; i < n.size(); ++i) {
+        const char c = n[i];
+        if (quoted) {
+            if (c == '\\') ++i;
+            else if (c == '"') quoted = false;
+        } else if (c == '"') quoted = true;
+        else if (c == '(' || c == '[' || c == '{') ++depth;
+        else if (c == ')' || c == ']' || c == '}') --depth;
+        else if (c == ' ' && depth == 0) spaced = true;
+    }
+    return !n.empty() && (n[0] == '*' || spaced) ? "(" + n + ")" : n;
+}
 
 // A string that can be shown as it is written, without a quote, a backslash or a control character.
 static bool showsAsWritten(const std::string& text) {
@@ -155,6 +170,12 @@ static bool namesOnePlace(const Expr& e) {
             return namesOnePlace(*ix.base) && !plainKey(*ix.index).empty();
         }
         case Expr::Kind::Borrow: return namesOnePlace(*static_cast<const BorrowExpr&>(e).operand);
+        case Expr::Kind::Binary: {  // `p + n`, a pointer or a number, and nothing that is only a value made here, as `a + b` of strings would be
+            auto& b = static_cast<const BinaryExpr&>(e);
+            const bool arithmetic = b.op == BinOp::Add || b.op == BinOp::Sub || b.op == BinOp::Mul || b.op == BinOp::Div || b.op == BinOp::Rem;
+            auto pure = [](const Expr& x) { return x.kind == Expr::Kind::IntLit || namesOnePlace(x); };
+            return arithmetic && e.type && (e.type->isPointer() || e.type->isInteger()) && pure(*b.lhs) && pure(*b.rhs);
+        }
         default: return isDeref(e) && namesOnePlace(*static_cast<const UnaryExpr&>(e).operand);
     }
 }
@@ -185,7 +206,7 @@ static std::string spelled(const Expr& e, const std::string& fallback) {
     }
     if (isDeref(e)) {
         std::string base = spelled(*static_cast<const UnaryExpr&>(e).operand, "");
-        if (!base.empty()) return "*" + base;
+        if (!base.empty()) return "*" + (base[0] == '*' ? base : asBase(base));
     }
     if (e.kind == Expr::Kind::Index) {  // `v[0]` or `v[i]`
         auto& ix = static_cast<const IndexExpr&>(e);
@@ -396,10 +417,12 @@ std::string Sema::loopCopyNote(const Expr& e) {
     const VarDecl* var = lookup(static_cast<const NameExpr*>(x)->name);
     auto found = var ? loopCopies_.find(var) : loopCopies_.end();
     if (found == loopCopies_.end()) return "";
-    const std::string list = found->second;
+    const auto& [list, isMap] = found->second;
     const std::string name = q(var->name);
-    if (list.empty()) return ". " + name + " is a copy of the element, so to change the element, loop with an index and change it there";
-    return ". " + name + " is a copy of the element, so to change the element, loop with an index, `for (long i = 0; i < " + list + ".size(); ++i)`, and change `" + list + "[i]`";
+    if (list.empty()) return ". " + name + " is a copy of the element, so this does not change what the loop goes over";
+    if (isMap) return ". " + name + " is a copy of the entry, so to change the map, store it back in `" + asBase(list) + "[" + var->name + ".first]`";
+    const std::string i = freshName(list + " " + var->name, {"i", "j", "k", "index"});
+    return ". " + name + " is a copy of the element, so to change the element, loop with an index, `for (long " + i + " = 0; " + i + " < " + asBase(list) + ".size(); ++" + i + ")`, and change `" + asBase(list) + "[" + i + "]`";
 }
 
 static const char* const kStoreFirst = "store it in a variable first, change that, and store it back where it came from";
@@ -470,7 +493,7 @@ std::string Sema::storeItBack(const Expr& recv, const std::string& method, bool 
     if (storesInRoot)
         if (const std::string held = constHolderHelp(*root, canCopy); !held.empty()) return held;
     const std::string inTurn = "unwrap each optional, change the copy and store each one back in turn";
-    const CopiedFrom from = copiedFrom(*root);
+    const CopiedFrom from = storesInRoot ? copiedFrom(*root) : CopiedFrom{};  // read as it was written, which gives the same object
     if (from.isInside) return "start from `" + from.place + "`, as `" + static_cast<const MethodCallExpr&>(*root).name + "()` gives a copy. Then " + inTurn;
     std::string name = !from.place.empty() ? from.place : spelled(*root, "");
     if (!canCopy) return "move each optional out with `move(...).value()`, change it, and move it back in turn";
@@ -503,16 +526,29 @@ static std::string copyOnTheWay(const Expr& e) {
         x = x->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(x)->base.get() : static_cast<const IndexExpr*>(x)->base.get();
         if (x->type && (x->type->isClass() || x->type->isPointer())) return "";
     }
-    if (x->kind == Expr::Kind::Ternary) return "?:";
-    if (x->kind == Expr::Kind::Coalesce) return "??";
+    // What `?:`, `??` and the like give is only a copy of something the program has when one of them names it
+    auto aPlace = [](const Expr& y) { return isPlaceKind(y) || y.kind == Expr::Kind::OptValue; };
+    if (x->kind == Expr::Kind::Ternary) {
+        auto& t = *static_cast<const TernaryExpr*>(x);
+        return aPlace(*t.thenExpr) || aPlace(*t.elseExpr) ? "?:" : "";
+    }
+    if (x->kind == Expr::Kind::Coalesce) {
+        auto& c = *static_cast<const CoalesceExpr*>(x);
+        return aPlace(*c.lhs) || aPlace(*c.rhs) ? "??" : "";
+    }
     if (x->kind != Expr::Kind::MethodCall) return "";
     auto* call = static_cast<const MethodCallExpr*>(x);
-    static const char* const copies[] = {"back", "front", "at", "get", "value", "value_or", "values", "items", "keys"};
-    if (std::find_if(std::begin(copies), std::end(copies), [&](const char* name) { return call->name == name; }) == std::end(copies)) return "";
+    static const char* const copies[] = {"back", "front", "at", "get", "value"};
+    static const char* const ofPlaces[] = {"value_or", "values", "items", "keys"};  // a copy of what the program has, when it was called on that
+    auto among = [&](auto& names) { return std::find_if(std::begin(names), std::end(names), [&](const char* name) { return call->name == name; }) != std::end(names); };
     const Type* t = call->receiver ? call->receiver->type : nullptr;
     const bool ofContainer = call->vecMethod != VecMethod::None || call->lowered ||
-                             (t && (t->isVector() || t->isArray() || t->is(K::String) || t->isOptional() || isHashmap(t)));
-    return ofContainer ? call->name + "()" : "";
+                             (t && (t->isVector() || t->isArray() || t->is(K::String) || t->isOptional() || isHashmap(t) || isJsonValue(t)));
+    if (!ofContainer) return "";
+    if (among(copies)) return call->name + "()";
+    if (among(ofPlaces) && call->receiver && (aPlace(*call->receiver) || (call->name == "value_or" && !call->args.empty() && aPlace(*call->args[0]))))
+        return call->name + "()";
+    return "";
 }
 
 // Whether `e` lies in the copy of an optional's value that `?.` works on, rather than
@@ -2464,7 +2500,13 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
     st.rangeVar->type = rangeType;
 
     VarDecl& v = *st.var;
-    loopCopies_[&v] = st.range && (st.range->type ? !isHashmap(st.range->type) : true) && namesOnePlace(*st.range) ? spelled(*st.range, "") : "";
+    // A map is gone over as `m.items()`, its entries, which are copies whose keys say where each one is
+    const Expr* list = st.range.get();
+    const bool isMap = list && list->kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr*>(list)->name == "items" &&
+                       static_cast<const MethodCallExpr*>(list)->receiver && static_cast<const MethodCallExpr*>(list)->receiver->type &&
+                       isHashmap(static_cast<const MethodCallExpr*>(list)->receiver->type);
+    if (isMap) list = static_cast<const MethodCallExpr*>(list)->receiver.get();
+    loopCopies_[&v] = {list && namesOnePlace(*list) ? spelled(*list, "") : "", isMap};
     if (v.declType->is(K::Auto)) {
         v.type = elem;
     } else {
@@ -5790,12 +5832,12 @@ const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Ty
                                             ? "write `?.` in place of `.` before " + q(call.name) + ", which does nothing when it is null"
                                             : "to change it, " + std::string(kStoreFirst))
                      : !changes && !inner->isClass() && !inner->isUnique() && !inner->isLocal()
-                         ? "read with `" + n + "?." + call.name + callArgs + "`, which is null when " + n + " is"
+                         ? "read with `" + std::string(fails ? "try " : "") + n + "?." + call.name + callArgs + "`, which is null when " + n + " is"
                      : opt->elem->isUnique() || opt->elem->isLocal()
                          ? "write `" + n + "?." + call.name + (call.args.empty() ? "()" : "(...)") + "`, which does nothing when " + n + " is null"
                      : opt->elem->isClass()
                          ? "write `" + n + "?." + call.name + (call.args.empty() ? "()" : "(...)") + "`, which does nothing when " + n + " is null, or unwrap it: `if (auto " + freshName(n) + " = " + n + ") " + freshName(n) + "." + call.name + (call.args.empty() ? "()" : "(...)") + ";`"
-                         : (call.name == "push_back" || call.name == "pop_back" || call.name == "clear" || call.name == "fill" ? std::string() : "read with `" + n + "?." + call.name + (call.args.empty() ? "()" : "(...)") + "`. ") +
+                         : (changes ? std::string() : "read with `" + n + "?." + call.name + (call.args.empty() ? "()" : "(...)") + "`. ") +
                                changeForm(*call.receiver, "." + call.name + (call.args.empty() ? "()" : "(...)"), "To change it, ", "unwrap it, change the copy and store it back", fails ? "try " : ""),
                      spec::Optionals);
         return Type::error();

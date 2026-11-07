@@ -205,7 +205,7 @@ private:
     void reportUnknownName(const NameExpr& n);
 
     VarDecl* lookup(const std::string& name);
-    std::map<const VarDecl*, std::string> loopCopies_;  // the variable of each `for (auto x : list)`, and the list as written
+    std::map<const VarDecl*, std::pair<std::string, bool>> loopCopies_;  // the variable of each `for (auto x : list)`, the list as written, and whether it is a map
     void declare(VarDecl& v);
     std::string suggestName(const std::string& name);
 

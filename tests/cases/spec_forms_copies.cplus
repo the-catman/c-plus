@@ -1,0 +1,14 @@
+// The forms the spec writes about what gives a copy, which must compile and do what it says.
+struct Made {
+    int x = 0;
+    Made with(int n) { x = n; return this; }
+};
+Made make(int n) { Made m = {}; m.x = n; return m; }
+
+int main() {
+    bool f = false;
+    Made m = (f ? make(1) : make(2)).with(5);
+    println("{}", m.x);
+    // expect: 5
+    return 0;
+}

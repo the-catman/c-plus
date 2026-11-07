@@ -1,0 +1,47 @@
+// Loops over what is a copy, what JSON gives, and the operators when nothing they name is a place.
+import json;
+struct S {
+    int x = 0;
+    void set() { x = 1; }
+    void add(long n) { x = x + int(n); }
+    int readT() const throws { return x; }
+};
+class Node { public: int n = 0; };
+
+void loops(vector<S?>* p) {
+    for (auto o : *p) {
+        o?.set();
+        // error: 'o' is a copy of the element, so to change the element, loop with an index, `for (long i = 0; i < (*p).size(); ++i)`, and change `(*p)[i]`
+    }
+    hashmap<string, S?> m;
+    for (auto e : m) {
+        e.second?.set();
+        // error: 'e' is a copy of the entry, so to change the map, store it back in `m[e.first]`
+    }
+    for (auto o : m.values()) {
+        o?.set();
+        // error: 'o' is a copy of the element, so this does not change what the loop goes over
+    }
+    long i = 3;
+    vector<S?> w;
+    for (auto o : w) {
+        o?.add(i);
+        // error: loop with an index, `for (long j = 0; j < w.size(); ++j)`, and change `w[j]`
+    }
+}
+void jsonItems() {
+    json::Value doc = json::parse<json::Value>("[]");
+    doc.items()[0].set("b", json::of(2));
+    // error: 'set' may change the struct, but 'items()' gives a copy of it
+}
+void readsThatCanFail() throws {
+    S? o = S{};
+    int r = o.readT();
+    // error: read with `try o?.readT()`, which is null when o is
+}
+void weakOnes() {
+    auto w = make_shared<weak<Node>>();
+    // error: a weak reference is made from a class variable: `weak<Node> w = node;`, which does not keep the object alive
+}
+
+int main() { return 0; }

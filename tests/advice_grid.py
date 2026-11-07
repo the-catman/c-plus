@@ -16,6 +16,7 @@ struct S {
     void add(int n) { x = x + n; }
     void merge(S other) { x = x + other.x; }
     int read() const { return x; }
+    S with(int n) { x = n; return this; }
 };
 struct H {
     vector<int> items;
@@ -35,6 +36,8 @@ public:
     S? o;
 };
 struct WithPointer { S* p; };
+S makeS(int n) { S s = {}; s.x = n; return s; }
+S? maybeS(bool f) { if (f) return makeS(3); return null; }
 vector<int>? gives() { return vector<int>{1}; }
 S? givesS() { return S{}; }
 """
@@ -107,6 +110,9 @@ SAME = [  # (declared, wrong, printed, expected)
     # The value is a class object, so only the optionals of values are stored back, and `const` on the root does not matter
     ("KS made = KS();\nmade.o = S{};\nconst KS? k = made;", "k?.o?.set();", "made.o?.x", "7"),
     ("KS made = KS();\nmade.o = S{};\nconst vector<KS?> w = {made};", "w[0]?.o?.set();", "made.o?.x", "7"),
+    ('KS made = KS();\nmade.o = S{};\nhashmap<string, KS> mk = {{"a", made}};', 'mk.get("a")?.o?.set();', "made.o?.x", "7"),
+    ('KS made = KS();\nmade.o = S{};\nhashmap<string, KS?> mk = {{"a", made}};', 'mk.at("a")?.o?.set();', "made.o?.x", "7"),
+    ('KS made = KS();\nmade.o = S{};\nhashmap<string, KS?> mk = {{"a", made}};', 'mk.at("a")?.o?.set();', "mk.size()", "1"),
     ("vector<unique<C>>? u = vector<unique<C>>{};", "u?.clear();", "u?.size()", "0"),
 ]
 
@@ -125,6 +131,14 @@ READ_ONLY = [
     ("vector<int>? o = vector<int>{1};", "long n = o.size();"),
     ('hashmap<string, vector<int>> m = {{"a", vector<int>{1}}};', 'long n = m.get("a").size();'),
     ("S? o = S{};", "int r = o.read();"),
+]
+
+# Methods that change: reading with `?.` would be an error of its own, so the help must not offer it.
+CHANGING = [
+    ("S? o = S{};", "o.set();"),
+    ("S? o = S{};", "o.add(N);"),
+    ("vector<int>? o = vector<int>{1};", "o.push_back(N);"),
+    ('hashmap<string, int>? hm = hashmap<string, int>{};', 'hm.insert({"a", 1});'),
 ]
 
 # Shapes the compiler cannot be sure of: it must either give no code, or give code that does what was meant. What it
@@ -177,6 +191,9 @@ ELSEWHERE = [  # (definitions, wrong, main, expected)
     # When there is nothing there, what `?.` did was nothing
     ("void f(vector<unique<C>>?* p) { @ }", "(*p)?.clear();", 'vector<unique<C>>? u = null;\nf(&u);\nprintln("{}", u.has_value());', "false"),
     ("void f(vector<int>?* p) { @ }", "(*p)?.clear();", 'vector<int>? o = null;\nf(&o);\nprintln("{}", o.has_value());', "false"),
+    ("void f(H* p, long n) { @ }", "(p + n)->os.set();", 'H h = {};\nh.os = S{};\nf(&h, 0);\nprintln("{}", h.os?.x);', "7"),
+    ("void f(H* p, long n) { @ }", "(*(p + n)).os.set();", 'H h = {};\nh.os = S{};\nf(&h, 0);\nprintln("{}", h.os?.x);', "7"),
+    ("void f(H* p, long n) { @ }", "(p + n)->os?.set();", 'H h = {};\nh.os = S{};\nf(&h, 0);\nprintln("{}", h.os?.x);', "7"),
 ]
 
 # What is not wrong, and must stay that way: through a pointer, or a class, a method that gave a copy reaches the real thing.
@@ -190,6 +207,10 @@ VALID = [  # (definitions, main, expected)
     ("class Box { public: S s; };\nstruct InABox { Box b; };", "vector<InABox> v = {InABox{.b = Box()}};\nv.back().b.s.set();\nprintln(\"{}\", v[0].b.s.x);", "7"),
     ("struct Reader { int x = 3; int area() const { return x * x; } };", "vector<Reader> v = {Reader{}};\nprintln(\"{}\", v.back().area());", "9"),
     ("", "S a = {};\nWithPointer? o = WithPointer{.p = &a};\no?.p[0].set();\nprintln(\"{}\", a.x);", "7"),
+    ("", "bool f = false;\nS u = (f ? makeS(1) : makeS(2)).with(5);\nprintln(\"{}\", u.x);", "5"),
+    ("", "bool f = false;\nS u = (maybeS(f) ?? S{}).with(6);\nprintln(\"{}\", u.x);", "6"),
+    ("", "bool f = false;\nS u = maybeS(f).value_or(S{}).with(7);\nprintln(\"{}\", u.x);", "7"),
+    ("", "bool f = true;\nS u = (f ? makeS(1) : makeS(2));\nprintln(\"{}\", (f ? u : makeS(4)).read());", "1"),
     ("", "S a = {};\nWithPointer? o = WithPointer{.p = &a};\no?.p->set();\nprintln(\"{}\", a.x);", "7"),
     ("", "S a = {};\nhashmap<string, WithPointer> m = {{\"a\", WithPointer{.p = &a}}};\nm.get(\"a\")?.p[0].set();\nprintln(\"{}\", a.x);", "7"),
     ("", "S a = {};\nH h = {};\nh.os = S{};\nH* const p = &h;\nif (auto v = p[0].os) { v.set(); p[0].os = v; }\nprintln(\"{}\", p[0].os?.x);", "7"),
@@ -266,6 +287,10 @@ def run_case(cplus, workdir, index, declared, wrong, kind, printed=None, expecte
             return f"{shown}: the help does not say what is const: {text}"
         if "cannot be copied" not in text and "change a copy" in text and ("unique" in declared):
             return f"{shown}: says to change a copy of what cannot be copied: {text}"
+        return None
+    if kind == "changing":
+        if "read with" in text:
+            return f"{shown}: offers a way to read, but the method changes it, so that would be an error too: {text}"
         return None
     if kind == "read_only":
         if "change" in text.lower():
@@ -362,6 +387,8 @@ def problems(cplus, workdir):
         cases.append((declared, wrong, "const", None, None, ""))
     for declared, wrong in READ_ONLY:
         cases.append((declared, wrong, "read_only", None, None, ""))
+    for declared, wrong in CHANGING:
+        cases.append((declared, wrong, "changing", None, None, ""))
 
     def one(item):
         index, (declared, wrong, kind, printed, expected, extra) = item

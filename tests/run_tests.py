@@ -637,7 +637,6 @@ SHEET_BODY = """    int n = 1; long someLong = 1; double someDouble = 1; double 
     %s
 """
 SHEET_VARIANTS = [
-    'Settable a = {}; Settable b = {}; bool first = true;',
     'int* p = &n; int* q = &n; User u = User("a"); User? opt = null; hashmap<string, int> m; int a = 1; int b = 2;',
     'Point p; Point* q = &p; User? u = null; User? user = null; int? opt = 1; unique<Node> a = unique<Node>("x"); unique<Node> b = unique<Node>("y"); weak<Node> w; Node node = Node("x");',
     'char* p = null; Both d = Both(); local<Node> a = local<Node>("x"); local<Node> b = a; bool? opt = null; Mutex m = Mutex(); Task<long> r = spawn sum(v);',
@@ -645,6 +644,7 @@ SHEET_VARIANTS = [
     'array<int, 3> a = {1, 2, 3}; array<char, 8> b; http::Response r; http::WebSocket ws = try http::connect("ws://x"); http::Request request; hashmap<string, int> m; int e = 1; string v2 = "s";',
     'unique<Node> u = unique<Node>("x"); json::Value a = json::object(); auto e = json::Error("m", 1, 2); auto g = reflect::type<Point>(); int w = 1; Task<long> t2 = spawn sum(v);',
     'string a = "a"; string b = "b"; http::Error e = http::Error("m", "kind", "u"); auto f = reflect::type<Point>().fields()[0];',
+    'Settable a = {}; Settable b = {}; bool first = true;',  # last: the habits are only tried with the first
 ]
 
 # What the cheat sheet writes that is not code to compile: what is left out, what is typed at a shell, what a program prints.

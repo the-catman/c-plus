@@ -128,6 +128,13 @@ int main() {
     // expect: 1 1
     println("{}", tryIt());
     // expect: 2
+    // A map, through the key of each entry
+    hashmap<string, S?> entries = {{"a", S{}}};
+    for (auto e : entries) {
+        if (auto v = e.second) { v.set(); entries[e.first] = v; }
+    }
+    println("{}", entries["a"]?.x);
+    // expect: 1
     // What takes the place of make_shared
     auto node = Node();
     println("{}", node.value);

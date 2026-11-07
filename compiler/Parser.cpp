@@ -1627,7 +1627,9 @@ void Parser::failMakePointer(const Token& t) {
         fail(t.loc, message, "write the value itself, as in `" + whole + " x = null;`: an optional needs no pointer", anchor);
     if (first.kind == Tok::Ident && first.text == "Task")
         fail(t.loc, message, "start a task with `spawn`: `auto t = spawn f(...);` gives a `" + whole + "`, which is already a counted reference", anchor);
-    if (first.kind == Tok::Ident && (first.text == "unique" || first.text == "local" || first.text == "weak"))
+    if (first.kind == Tok::KwWeak)
+        fail(t.loc, message, "a weak reference is made from a class variable: `" + whole + " w = node;`, which does not keep the object alive", anchor);
+    if (first.kind == Tok::Ident && (first.text == "unique" || first.text == "local"))
         fail(t.loc, message, "write `" + whole + "(...)` itself: it already refers to its own object", anchor);
     if (first.kind != Tok::Ident)
         fail(t.loc, message, "write the value itself, as in `int(3)`: a value needs no pointer", anchor);
