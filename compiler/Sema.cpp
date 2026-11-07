@@ -685,11 +685,18 @@ static bool isReferenceInCpp(const Expr& e) {
     }
 }
 
-// Whether `e` is, or may be, something the program has: a place, or a `?:` with one in either branch, however deep.
+// Whether `e` is, or may be, something the program has: a place, or a `?:` with one in either branch, however deep, and also
+// through a field or an element of one, as in `(g ? a : make()).in`.
 static bool holdsAPlace(const Expr& e) {
-    if (e.kind != Expr::Kind::Ternary) return reachesAPlace(e);
-    auto& t = static_cast<const TernaryExpr&>(e);
-    return holdsAPlace(*t.thenExpr) || holdsAPlace(*t.elseExpr);
+    switch (e.kind) {
+        case Expr::Kind::Ternary: {
+            auto& t = static_cast<const TernaryExpr&>(e);
+            return holdsAPlace(*t.thenExpr) || holdsAPlace(*t.elseExpr);
+        }
+        case Expr::Kind::Member: return reachesAPlace(e) || holdsAPlace(*static_cast<const MemberExpr&>(e).base);
+        case Expr::Kind::Index: return reachesAPlace(e) || holdsAPlace(*static_cast<const IndexExpr&>(e).base);
+        default: return reachesAPlace(e);
+    }
 }
 
 // What gave a copy of something the program has, on the way to `e`, as it is written: `back()` in `v.back().p`, `?:` in

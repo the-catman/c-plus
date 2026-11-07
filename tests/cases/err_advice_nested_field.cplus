@@ -1,0 +1,17 @@
+// A `?:` inside another, holding a variable through a field, holds it for the outer one too: changing what it gives would
+// change only a copy. This is the only error in the file, so the test fails if it is not reported.
+struct S {
+    int x = 0;
+    void set() { x = 1; }
+};
+struct In { S in; };
+In makeIn() { return In{}; }
+
+void throughAField(In a) {
+    bool f = true;
+    bool g = true;
+    (f ? (g ? a : makeIn()).in : S{}).set();
+    // error: 'set' may change the struct, but '?:' gives a copy of it
+}
+
+int main() { return 0; }
