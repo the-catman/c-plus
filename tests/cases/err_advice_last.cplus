@@ -1,0 +1,84 @@
+// What the last reading found: advice that would quietly change a copy, go in a circle, or not compile.
+import json;
+struct P { int x = 0; void set() { x = 1; } };
+struct Holder { vector<int> items; P? p; };
+struct Outer { Holder? h; };
+void nested() {
+    Outer? o = Outer{.h = Holder{}};
+    o?.h?.items.push_back(1);
+    // error: unwrap each optional, change the copy and store each one back: `if (auto a = o) { if (auto b = a.h) { b.items.push_back(...); a.h = b; } o = a; }`
+}
+void fromAMap() {
+    hashmap<string, P> m;
+    m.get("a")?.set();
+    // error: `get()` gives a copy. Change the value in place: `m["a"].set(...)`
+}
+void fromBack() {
+    vector<P?> w;
+    w.back()?.set();
+    // error: `if (auto v = w[w.size() - 1]) { v.set(...); w[w.size() - 1] = v; }`
+}
+struct WithV { P? o; };
+void namedV() {
+    WithV v;
+    v.o?.set();
+    // error: `if (auto inner = v.o) { inner.set(...); v.o = inner; }`
+    vector<P?> w;
+    w[0]?.set();
+}
+vector<int>? gives() { return null; }
+void notAPlace() {
+    gives().push_back(1);
+    // error: store it in a variable first: `auto opt = gives();`. Then `if (auto v = opt) { v.push_back(...); opt = v; }`
+    println("{}", gives()[0]);
+    // error: store it in a variable first: `auto opt = gives();`. Then `if (auto v = opt) { v[i] = ...; opt = v; }`
+}
+void text() {
+    string? o = "x";
+    string s = "y";
+    println("{}", o + s);
+    // error: it may be null: write `(o ?? "none")`, with the parentheses, which is its value, or "none" when it is null
+    println("{}", s + o);
+    // error: it may be null: write `(o ?? "none")`, with the parentheses
+}
+class Conn { public: string name = "a"; int* buf = null; };
+void jsonOfPointers() {
+    Conn c = Conn();
+    println("{}", json::stringify(c));
+    // error: Make it a private field, which is left out of JSON, and reach it through methods of the class
+    vector<int*> v;
+    println("{}", json::stringify(v));
+    // error: Copy what they point to into values of type 'int', and use those
+    void* p = null;
+    println("{}", json::stringify(p));
+    // error: Use a type with values, such as a struct, as JSON cannot hold an address
+}
+class U { public: int x = 0; };
+[[allow(new_delete)]]
+void newUnique() {
+    auto p = new unique<U>;
+    // error: give the value: `new unique<U>(unique<U>(...))`
+}
+void keyToEscape() {
+    hashmap<string, int> q;
+    q.at("a\"b") = 1;
+    // error: `at()` gives a copy. Change the value in place: `q[key] = ...`
+}
+void floatRemainder() {
+    float x = 1;
+    x %= 2.5;
+    // error: write `x = float(fmod(x, y))`
+}
+class Hidden { int secret = 1; public: int shown = 2; };
+void firstPublic() {
+    Hidden z = Hidden();
+    println("{}", int(z));
+    // error: convert one of its fields instead, e.g. `int(z.shown)`
+}
+void overAMap() {
+    hashmap<string, int> m;
+    for (string k : m) {}
+    // error: the entries of the hashmap are
+    // error: write `for (auto k : ...)`, with `k.first` and `k.second`, or loop over `m.keys()`
+}
+int main() { return 0; }

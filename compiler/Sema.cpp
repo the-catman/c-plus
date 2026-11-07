@@ -137,7 +137,8 @@ static std::string spelled(const Expr& e, const std::string& fallback = "opt") {
         auto& ix = static_cast<const IndexExpr&>(e);
         std::string base = spelled(*ix.base, "");
         std::string index = ix.index->kind == Expr::Kind::IntLit ? std::to_string(static_cast<const IntLitExpr&>(*ix.index).value)
-                            : ix.index->kind == Expr::Kind::StringLit ? "\"" + static_cast<const StringLitExpr&>(*ix.index).value + "\""
+                            : ix.index->kind == Expr::Kind::StringLit
+                                ? (static_cast<const StringLitExpr&>(*ix.index).value.find_first_of("\"\\\n\t") == std::string::npos ? "\"" + static_cast<const StringLitExpr&>(*ix.index).value + "\"" : std::string("key"))
                                                                       : spelled(*ix.index, "");
         if (!base.empty() && !index.empty()) return asBase(base) + "[" + index + "]";
     }
@@ -174,7 +175,28 @@ static bool throughOptionalChain(const Expr& e) {
 static bool isPlaceKind(const Expr& e);
 
 // A name for what is inside the optional `name`, which is not its own: `if (auto v = v)` would hide the one to store back in.
-static std::string nameInside(const std::string& name) { return name == "v" ? "inner" : "v"; }
+static std::string nameInside(const std::string& name) {
+    for (size_t at = name.find('v'); at != std::string::npos; at = name.find('v', at + 1)) {
+        const bool startsWord = at == 0 || !(std::isalnum((unsigned char)name[at - 1]) || name[at - 1] == '_');
+        const bool endsWord = at + 1 == name.size() || !(std::isalnum((unsigned char)name[at + 1]) || name[at + 1] == '_');
+        if (startsWord && endsWord) return "inner";
+    }
+    return "v";
+}
+
+// Changing what is in an optional, as what was written has it: `if (auto v = o) { v.x = 1; o = v; }`. What is not a place to store it back in goes in one first.
+static std::string storeBackForm(const Expr& base, const std::string& change) {
+    std::string name = spelled(base, "");
+    std::string before;
+    if (name.empty() || !isPlaceKind(base)) {
+        before = "store it in a variable first: `auto opt = " + (name.empty() ? std::string("...") : name) + ";`. Then ";
+        name = "opt";
+    }
+    const std::string inner = nameInside(name);
+    return before + "`if (auto " + inner + " = " + name + ") { " + inner + change + "; " + name + " = " + inner + "; }`";
+}
+
+static std::string changingACopyHelp(const Expr& target, const std::string& change);
 
 // What is written after a value on the way to `e`: `.a.b`, and `e` is then left at the value.
 static std::string pathTo(const Expr*& e) {
@@ -197,10 +219,24 @@ static std::string storeItBack(const Expr& recv, const std::string& method) {
     while (x->kind == Expr::Kind::OptValue) {
         paths.push_back(path);
         const Expr* base = static_cast<const OptValueExpr*>(x)->chain->base.get();
-        if (base->kind == Expr::Kind::OptChain) {
-            x = static_cast<const OptChainExpr*>(base)->body.get();
-            path = pathTo(x);
+        if (base->kind == Expr::Kind::OptChain) base = static_cast<const OptChainExpr*>(base)->body.get();
+        const Expr* below = base;
+        const std::string pathBelow = pathTo(below);
+        if (below->kind == Expr::Kind::OptValue) {
+            x = below;
+            path = pathBelow;
             continue;
+        }
+        // `m.get(key)?.set()`, where the value is there to be changed in place.
+        if (paths.size() == 1 && base->kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr*>(base)->name == "get") {
+            const std::string inPlace = changingACopyHelp(*base, paths[0] + "." + method + args);
+            if (inPlace.rfind("`get()`", 0) == 0) return inPlace;
+        }
+        if (base->kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr*>(base)->receiver && isPlaceKind(*static_cast<const MethodCallExpr*>(base)->receiver)) {
+            auto& call = *static_cast<const MethodCallExpr*>(base);
+            const std::string v = asBase(spelled(*call.receiver, ""));
+            if (!v.empty() && call.name == "back") { name = v + "[" + v + ".size() - 1]"; spellable = true; break; }
+            if (!v.empty() && call.name == "front") { name = v + "[0]"; spellable = true; break; }
         }
         const std::string written = spelled(*base, "");
         spellable = !written.empty() && isPlaceKind(*base);
@@ -250,7 +286,7 @@ static std::string textHelp(const Type* t, const char* op = "+", const std::stri
                "never added as a character code";
     if (t->is(K::Bool)) return "`format(\"{}\", b)` turns a bool into \"true\" or \"false\"";
     if (t->is(K::Void) || t->isError()) return "this call gives nothing to add. Call it on a line of its own, or have the function return a string";
-    if (t->isOptional() && t->elem->is(K::String)) return "it may be null: `" + n + " ?? \"none\"` is its value, or \"none\" when it is null";
+    if (t->isOptional() && t->elem->is(K::String)) return "it may be null: write `(" + n + " ?? \"none\")`, with the parentheses, which is its value, or \"none\" when it is null";
     if (t->isOptional()) return "it may be null: `to_string(" + n + " ?? 0)` for a number, or `format(\"{}\", " + n + ")`, which gives its value or \"null\"";
     return "`format(\"{}\", value)` turns any value that can be printed into a string";
 }
@@ -355,6 +391,12 @@ static std::vector<const FieldDecl*> allFields(const StructDecl& sd) {
     for (auto& f : sd.fields) out.push_back(&f);
     return out;
 }
+static const FieldDecl* firstPublicField(const StructDecl& sd) {
+    for (const FieldDecl* f : allFields(sd))
+        if (f->access == Access::Public) return f;
+    return nullptr;
+}
+
 static bool comesWithTheLanguage(const StructDecl& sd) { return (sd.templateOf ? sd.templateOf->nameLoc.line : sd.nameLoc.line) == 0; }
 
 // What is private in what comes with the language is not there, as far as a program can tell.
@@ -2163,10 +2205,11 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
         v.type = elem;
     } else {
         v.type = v.declType;
+        const bool overMap = elem->isStruct() && elem->decl->templateOf && elem->decl->templateOf->nameLoc.line == 0 && elem->decl->templateName == "hashmap_entry";
         if (!canConvert(elem, v.type))
-            diags_.error(v.typeLoc, "the elements of " + std::string(isHashmap(st.range->type) ? q(st.range->type) : q(rangeType)) + " are " + q(elem) + ", which cannot be stored in " +
+            diags_.error(v.typeLoc, "the " + std::string(overMap ? "entries of the hashmap" : "elements of " + q(rangeType)) + " are " + q(elem) + ", which cannot be stored in " +
                                         q(v.type) + " " + q(v.name),
-                         isHashmap(st.range->type) ? "write `for (auto " + v.name + " : ...)`, with `" + v.name + ".first` and `" + v.name + ".second`, or `for (auto " + v.name + " : " + spelled(*st.range, "m") + ".keys())`"
+                         overMap ? "write `for (auto " + v.name + " : ...)`, with `" + v.name + ".first` and `" + v.name + ".second`, or loop over `m.keys()`"
                          : "write `for (auto " + v.name + " : ...)` or `for (" + std::string(elem->name) + " " + v.name + " : ...)`",
                          spec::RangeFor);
     }
@@ -2221,7 +2264,7 @@ static std::string pointerHelp(const Expr& e, const Type* from, const Type* to) 
 }
 
 // What to say about changing what a method gave. In C++ `v.back()` is the element, and here it is a copy. `change` is the rest of what was written.
-static std::string changingACopyHelp(const Expr& target, const std::string& change = " = ...") {
+static std::string changingACopyHelp(const Expr& target, const std::string& change) {
     const std::string fallback = "this value is a temporary copy, so changing it would have no effect. Store it in a variable first, change that, and store it back where it came from";
     const Expr* x = &target;
     const std::string path = pathTo(x) + change;
@@ -2245,7 +2288,10 @@ static std::string changingACopyHelp(const Expr& target, const std::string& chan
         return "`value()` gives a copy. Unwrap it, change that and store it back: `if (auto " + inner + " = " + v + ") { " + inner + path + "; " + v + " = " + inner + "; }`";
     }
     if (isHashmap(t) && (call.name == "get" || call.name == "at")) {
-        const std::string key = call.args.empty() ? "key" : call.args[0]->kind == Expr::Kind::StringLit ? "\"" + static_cast<const StringLitExpr&>(*call.args[0]).value + "\"" : spelled(*call.args[0], "key");
+        const std::string key = call.args.empty() ? "key"
+                                : call.args[0]->kind == Expr::Kind::StringLit
+                                    ? (static_cast<const StringLitExpr&>(*call.args[0]).value.find_first_of("\"\\\n\t") == std::string::npos ? "\"" + static_cast<const StringLitExpr&>(*call.args[0]).value + "\"" : std::string("key"))
+                                    : spelled(*call.args[0], "key");
         return "`" + call.name + "()` gives a copy. Change the value in place: `" + v + "[" + key + "]" + path + "`";
     }
     return fallback;
@@ -2642,7 +2688,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
             std::string n = spelled(*ix.base, "items");
             diags_.error(e.loc, q(baseType) + " may be null, so it cannot be indexed directly",
                          baseType->elem->isVector() || baseType->elem->isArray() || baseType->elem->is(K::String) || isHashmap(baseType->elem) || baseType->elem->isPointer()
-                             ? "unwrap it first: `if (auto " + nameInside(n) + " = " + n + ") ... " + nameInside(n) + "[i]`. To change an element, store it back: `if (auto " + nameInside(n) + " = " + n + ") { " + nameInside(n) + "[i] = ...; " + n + " = " + nameInside(n) + "; }`"
+                             ? "unwrap it first: `if (auto " + nameInside(n) + " = " + n + ") ... " + nameInside(n) + "[i]`. To change an element, store it back: " + storeBackForm(*ix.base, "[i] = ...")
                              : "remove the `[ ]`: unwrap it, as `" + n + " ?? value`, for the " + q(baseType->elem) + " inside",
                          spec::Optionals);
             return e.type;
@@ -2931,7 +2977,7 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
         case Storage::Object: return true;
         case Storage::Temporary:
             diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action,
-                         changingACopyHelp(target), spec::Variables);
+                         changingACopyHelp(target, " = ..."), spec::Variables);
             return false;
         case Storage::Pointer: {
             const Expr& ptr = followedPointer(*root);
@@ -3243,7 +3289,7 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
     if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index &&
         !isDeref(target)) {
         checkExpr(target, flow);
-        std::string help = target.kind == Expr::Kind::This ? "assign to its fields, or to a variable: 'this' always refers to the current object" : changingACopyHelp(target);
+        std::string help = target.kind == Expr::Kind::This ? "assign to its fields, or to a variable: 'this' always refers to the current object" : changingACopyHelp(target, " = ...");
         diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action, help,
                      spec::Variables);
         return false;
@@ -3569,7 +3615,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                     diags_.error(t->isFloating() ? a.target->loc : a.value->loc,
                                  opName + " needs an int or a long, but this is " +
                                      q(t->isFloating() ? t : a.value->type),
-                                 *a.op == BinOp::Rem ? (t->isInteger() ? "for floating-point numbers, write `x = " + std::string(t->name) + "(fmod(x, y))`" : std::string("for floating-point numbers, write `x = fmod(x, y)`")) : "use an int or a long",
+                                 *a.op == BinOp::Rem ? (t->isInteger() || t->is(K::Float) ? "for floating-point numbers, write `x = " + std::string(t->name) + "(fmod(x, y))`" : std::string("for floating-point numbers, write `x = fmod(x, y)`")) : "use an int or a long",
                                  spec::Operators);
                 else if (*a.op != BinOp::Shl && *a.op != BinOp::Shr)
                     requireConvertible(*a.value, t, "on the right of " + opName);
@@ -3928,8 +3974,8 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             help = q(name) + " is a variable, and C+ has no function values yet. Write a function, and call it by name";
         } else if (name == "fetch")
             help = "to get what is at a URL: `import http;`, then `try http::get(url)`";
-        else if (name == "vector" || name == "array" || name == "hashmap")
-            help = name == "vector" ? "write what it holds: `vector<int>(n, value)`" : name == "array" ? "write what it holds: `array<int, 3>{1, 2, 3}`" : "write what it holds: `hashmap<string, int>()`";
+        else if (name == "vector" || name == "array")
+            help = name == "vector" ? "write what it holds: `vector<int>(n, value)`" : "write what it holds: `array<int, 3>{1, 2, 3}`";
         else if (name == "pthread_create")
             help = "write `auto t = spawn f(x);`, then `t.wait()`, which gives what `f` returned";
         else if (name == "sprintf" || name == "snprintf")
@@ -4180,21 +4226,23 @@ bool Sema::checkConstraints(TemplateDecl& t, const std::vector<TemplateArg>& arg
 
 // Why a value of this type cannot be turned into JSON, or made from it. `path` is how it was reached, and `seen` stops
 // at a struct or class already looked at, since a type can lead back to itself. A private field is left out of JSON.
-static std::string jsonProblem(const Program& program, const Type* t, bool reading, const std::string& path, std::vector<const StructDecl*>& seen) {
+static std::string jsonProblem(const Program& program, const Type* t, bool reading, const std::string& path, std::vector<const StructDecl*>& seen, bool inList = false) {
     std::string where = path.empty() ? q(t) : q(path) + ", a " + q(t) + ",";
     if (t->isNumber() || t->is(K::Bool) || t->is(K::Char) || t->is(K::String) || t->isWeak()) return "";
-    if (t->isOptional() || t->isVector() || t->isArray() || t->isUnique() || t->isLocal()) return jsonProblem(program, t->elem, reading, path, seen);
+    if (t->isOptional() || t->isVector() || t->isArray() || t->isUnique() || t->isLocal()) return jsonProblem(program, t->elem, reading, path, seen, inList || t->isVector() || t->isArray());
     if (isJsonValue(t)) return "";
     if (isHashmap(t)) {
         const Type* key = t->decl->templateArgs[0].type;
         if (!key->is(K::String) && !key->is(K::Int) && !key->is(K::Long))
             return where + " has keys of type " + q(key) + ", while a JSON object has strings. Use a string, an int or a long for the key, which is written as a string";
-        return jsonProblem(program, t->decl->templateArgs[1].type, reading, path.empty() ? "[key]" : path + "[key]", seen);
+        return jsonProblem(program, t->decl->templateArgs[1].type, reading, path.empty() ? "[key]" : path + "[key]", seen, true);
     }
     if (!t->hasFields())
         return where + " is a pointer, which only means something to this program. " +
-               (path.empty() ? (reading ? "Read what it points to: `json::parse<" + std::string(t->isPointer() ? t->elem->name : t->name) + ">`" : std::string("Write `*p` for what it points to"))
-                             : std::string("Make it a private field, which is left out of JSON"));
+               (t->isPointer() && t->elem->is(K::Void) ? std::string("Use a type with values, such as a struct, as JSON cannot hold an address")
+                : inList ? "Copy what they point to into values of type " + q(t->isPointer() ? t->elem : t) + ", and use those"
+                : path.empty() ? (reading ? "Read what it points to: `json::parse<" + std::string(t->isPointer() ? t->elem->name : t->name) + ">`" : std::string("Write `*p` for what it points to"))
+                                     : std::string("Make it a private field, which is left out of JSON, and reach it through methods of the class"));
     const StructDecl& sd = *t->decl;
     for (const StructDecl* d : seen)
         if (d == &sd) return "";
@@ -4814,7 +4862,7 @@ const Type* Sema::checkNew(NewExpr& n, Flow& flow) {
         diags_.error(n.loc,
                      (n.count ? "`new " + name + "[n]` cannot make its elements" : "`new " + name + "` cannot make its value") +
                          " on its own, because " + why,
-                     !n.count && (t->isUnique() || t->isLocal()) ? "give the value: `new " + name + "(...)`"
+                     !n.count && (t->isUnique() || t->isLocal()) ? "give the value: `new " + name + "(" + name + "(...))`"
                      : n.count ? "use a vector, which can start empty and grow with push_back: `vector<" + name + "> v;`"
                              : "give the value: `new " + name + "{...}` or `new " + name + "(...)`",
                      spec::NewDelete);
@@ -5146,7 +5194,7 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
         diags_.error(c.operand->loc, "'" + cast + "' converts a number, a char or a bool, but this is " + q(from),
                      from->isOptional() ? unwrapHelp(spelled(*c.operand))
                      : from->isVector() || from->isArray() ? "convert one of its elements instead, e.g. `" + std::string(to->name) + "(" + asBase(spelled(*c.operand, "v")) + "[0])`"
-                     : from->hasFields() && !isHashmap(from) && !allFields(*from->decl).empty() ? "convert one of its fields instead, e.g. `" + std::string(to->name) + "(" + asBase(spelled(*c.operand, "x")) + "." + allFields(*from->decl)[0]->name + ")`"
+                     : from->hasFields() && !isHashmap(from) && firstPublicField(*from->decl) ? "convert one of its fields instead, e.g. `" + std::string(to->name) + "(" + asBase(spelled(*c.operand, "x")) + "." + firstPublicField(*from->decl)->name + ")`"
                                          : std::string("give it a number, a char or a bool"),
                      spec::Casts);
     return to;
@@ -5467,7 +5515,7 @@ const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Ty
                      opt->elem->isClass()
                          ? "write `" + n + "?." + call.name + "(...)`, which does nothing when " + n + " is null, or unwrap it: `if (auto v = " + n + ") v." + call.name + "(...);`"
                          : (call.name == "push_back" || call.name == "pop_back" || call.name == "clear" || call.name == "fill" ? std::string() : "read with `" + n + "?." + call.name + "(...)`. ") +
-                               "To change it, unwrap it, change the copy and store it back: `if (auto " + nameInside(n) + " = " + n + ") { " + nameInside(n) + "." + call.name + "(...); " + n + " = " + nameInside(n) + "; }`",
+                               "To change it, unwrap it, change the copy and store it back: " + storeBackForm(*call.receiver, "." + call.name + "(...)"),
                      spec::Optionals);
         return Type::error();
     }

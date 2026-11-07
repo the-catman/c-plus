@@ -94,6 +94,7 @@ long square(long n) { return n * n; }
 | `std::vector<int>`, `std::string`, `std::to_string` | `vector<int>`, `string`, `to_string`, with no `std::` |
 | `std::`, `using namespace std` | no `std::`; built-ins have no prefix |
 | prototypes / headers | none. Define each function once, in any order |
+| a function or a lambda inside a function | write it at the top level of the file, and pass it what it needs |
 | `int x;` then read `x` | compile error until `x` is assigned on every path |
 | `int i = someLong;`, `int i = 2.5;` | error: a conversion that can lose information needs a cast: `int(x)`, which stops the program if `x` does not fit |
 | `float f = someDouble;` | error: write `float(x)`. Only a double written as a number, `float f = 0.5;`, converts by itself |

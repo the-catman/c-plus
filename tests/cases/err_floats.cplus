@@ -59,7 +59,7 @@ int main() {
 // error: '~' needs an int or a long, but this is 'double'
 // error: '<<' needs an int or a long, but this is 'double'
 // error: '%=' needs an int or a long, but this is 'float'
-// error: for floating-point numbers, write `x = fmod(x, y)`
+// error: for floating-point numbers, write `x = float(fmod(x, y))`
 // error: {:.2f} formats a float or a double, but this is 'int'
 // error: write {} for an integer, or convert it first: `double(n)`
 // error: {:.2f} formats a float or a double, but this is 'string'

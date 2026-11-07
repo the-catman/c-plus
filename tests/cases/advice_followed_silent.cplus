@@ -108,6 +108,24 @@ int main() {
     us[0].name = "changed";
     println("{}", us[1].name);
     // expect: n
+    // Where a vector named v holds optionals, and what is inside has another name
+    {
+        vector<P?> v = {P{}};
+        if (auto inner = v[0]) { inner.set(); v[0] = inner; }
+        println("{}", v);
+    }
+    // expect: [{x: 1}]
+    // `(o ?? "none")`, with the parentheses
+    {
+        string? o = "x";
+        string joined = (o ?? "none") + "y";
+        println("{}", joined);
+    }
+    // expect: xy
+    // More than one dimension
+    array<array<array<int, 4>, 3>, 2> cube;
+    println("{}", cube[1][2][3]);
+    // expect: 0
     // Standard error
     string err = "to standard error\n";
     write(2, err, err.size());

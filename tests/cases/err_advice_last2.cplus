@@ -1,0 +1,41 @@
+// What the last reading found, of what is read before types are checked.
+void stdHex() {
+    int x = 255;
+    println("{}", std::hex);
+    // error: this compiler does not support other bases in `println` yet (`{:x}` is planned). Print the number with `{}`
+}
+void functionInside() {
+    function g() { }
+    // error: C+ has no functions inside functions
+    // error: write `void g() { ... }` at the top level of the file, and pass it what it needs
+}
+void functionInC() {
+    int g(int a) { return a; }
+    // error: C+ has no functions inside functions
+    // error: write it at the top level of the file, and pass it what it needs
+}
+int builtOptional() {
+    return optional<int>(3);
+    // error: a value converts by itself: `return 3;`, or `null`. The type is written `int?`, as in `string? s = null;`
+}
+void twoSizes(int a[][3]) {}
+// error: write `array<array<int, 3>, N> a`, or `vector<vector<int>> a`
+void threeSizes() {
+    int m[2][3][4];
+    // error: write an array of arrays: `array<array<array<int, 4>, 3>, 2> m`
+}
+void numberArgument() {
+    Buffer<int, 3> b;
+    // error: check the spelling, or define it first: `template<typename T, int N2> class Buffer { ... };`
+}
+struct WithBraces {
+    int x{5};
+    // error: move what is in the braces after `=`: `int x = ...;`
+    // not-error: remove this ';'
+};
+void makeOfInt() {
+    auto p = make_shared<int>(3);
+    // error: write the value itself, as in `int(3)`: a value needs no pointer
+}
+def main(args) { }
+// error: write `int main(int argc, char** argv) { ... }`: a return type first, and a type for each parameter
