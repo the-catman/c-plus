@@ -147,6 +147,17 @@ static std::string spelled(const Expr& e, const std::string& fallback = "opt") {
         auto& c = static_cast<const CallExpr&>(e);
         return c.callee + (c.args.empty() ? "()" : "(...)");
     }
+    if (e.kind == Expr::Kind::OptChain) {  // `u?.name`
+        auto& c = static_cast<const OptChainExpr&>(e);
+        std::string path;
+        const Expr* x = c.body.get();
+        while (x->kind == Expr::Kind::Member) {
+            path = "." + static_cast<const MemberExpr*>(x)->field + path;
+            x = static_cast<const MemberExpr*>(x)->base.get();
+        }
+        std::string base = spelled(*c.base, "");
+        if (x->kind == Expr::Kind::OptValue && !base.empty() && !path.empty()) return asBase(base) + "?" + path;
+    }
     if (e.kind == Expr::Kind::MethodCall) {
         auto& c = static_cast<const MethodCallExpr&>(e);
         std::string base = c.receiver ? spelled(*c.receiver, "") : "";
@@ -174,29 +185,88 @@ static bool throughOptionalChain(const Expr& e) {
 // Whether `e` lies in the copy of an optional's value that `?.` works on, rather than
 static bool isPlaceKind(const Expr& e);
 
-// A name for what is inside the optional `name`, which is not its own: `if (auto v = v)` would hide the one to store back in.
-static std::string nameInside(const std::string& name) {
-    for (size_t at = name.find('v'); at != std::string::npos; at = name.find('v', at + 1)) {
-        const bool startsWord = at == 0 || !(std::isalnum((unsigned char)name[at - 1]) || name[at - 1] == '_');
-        const bool endsWord = at + 1 == name.size() || !(std::isalnum((unsigned char)name[at + 1]) || name[at + 1] == '_');
-        if (startsWord && endsWord) return "inner";
+static bool hasWord(const std::string& text, const std::string& word) {
+    for (size_t at = text.find(word); at != std::string::npos; at = text.find(word, at + 1)) {
+        const bool starts = at == 0 || !(std::isalnum((unsigned char)text[at - 1]) || text[at - 1] == '_');
+        const size_t end = at + word.size();
+        const bool ends = end == text.size() || !(std::isalnum((unsigned char)text[end]) || text[end] == '_');
+        if (starts && ends) return true;
     }
-    return "v";
+    return false;
 }
 
-// Changing what is in an optional, as what was written has it: `if (auto v = o) { v.x = 1; o = v; }`. What is not a place to store it back in goes in one first.
-static std::string storeBackForm(const Expr& base, const std::string& change) {
-    std::string name = spelled(base, "");
+// A name for a new variable, which means nothing yet in `avoid`: `if (auto v = v)` would hide the one to store back in.
+static std::string freshName(const std::string& avoid) {
+    for (const char* name : {"v", "inner", "item", "held", "unwrapped"})
+        if (!hasWord(avoid, name)) return name;
+    return "unwrapped2";
+}
+
+// A string in a form that can be copied into a program, or nothing.
+static std::string quotedKey(const Expr& key) {
+    if (key.kind != Expr::Kind::StringLit) return spelled(key, "key");
+    const std::string& text = static_cast<const StringLitExpr&>(key).value;
+    return text.find_first_of("\"\\\n\t") == std::string::npos ? "\"" + text + "\"" : "key";
+}
+
+// Where what a method of a container gave really is, as it would be written, or nothing for what only exists as the copy.
+// `isInside` says that place holds the value itself, where the method gave an optional of it.
+static std::string placeOfCopy(const Expr& e, bool& isInside) {
+    isInside = false;
+    if (e.kind != Expr::Kind::MethodCall) return "";
+    auto& call = static_cast<const MethodCallExpr&>(e);
+    if (call.lowered && call.name == "at") {  // `m.at(key)`, which has become something else by now
+        if (call.lowered->kind != Expr::Kind::Index || !isPlaceKind(*static_cast<const IndexExpr&>(*call.lowered).base)) return "";
+        return spelled(*call.lowered, "");
+    }
+    if (!call.receiver || !call.receiver->type || !isPlaceKind(*call.receiver)) return "";
+    const std::string v = asBase(spelled(*call.receiver, ""));
+    if (v.empty()) return "";
+    const Type* t = call.receiver->type;
+    if (t->isVector() || t->isArray() || t->is(K::String)) {
+        if (call.name == "back") return v + "[" + v + ".size() - 1]";
+        if (call.name == "front") return v + "[0]";
+    }
+    if (isHashmap(t) && (call.name == "get" || call.name == "at") && !call.args.empty()) {
+        isInside = call.name == "get";
+        return v + "[" + quotedKey(*call.args[0]) + "]";
+    }
+    return "";
+}
+
+// How to change what is in an optional, as what was written has it: `if (auto v = o) { v.x = 1; o = v; }`. `change` is what is done to it,
+// `opening` starts the sentence, `how` says what the code does, and `other` is what else is in the statement, whose names must keep their meaning.
+static std::string changeForm(const Expr& base, const std::string& change, const std::string& opening, const std::string& how, const std::string& other = "") {
+    bool isInside = false;
+    const std::string place = placeOfCopy(base, isInside);
+    if (isInside) {  // `m.get(k)`: what it gave a copy of can be changed where it is
+        auto& call = static_cast<const MethodCallExpr&>(base);
+        return opening + "write `if (" + asBase(spelled(*call.receiver, "")) + ".contains(" + quotedKey(*call.args[0]) + ")) " + place + change + ";`, which changes it in the map";
+    }
+    std::string name = !place.empty() ? place : spelled(base, "");
     std::string before;
-    if (name.empty() || !isPlaceKind(base)) {
-        before = "store it in a variable first: `auto opt = " + (name.empty() ? std::string("...") : name) + ";`. Then ";
+    if (place.empty() && (name.empty() || !isPlaceKind(base))) {
+        before = "store it in a variable first, as this only exists as a copy: `auto opt = " + (name.empty() ? std::string("...") : name) + ";`. Then ";
         name = "opt";
     }
-    const std::string inner = nameInside(name);
-    return before + "`if (auto " + inner + " = " + name + ") { " + inner + change + "; " + name + " = " + inner + "; }`";
+    const std::string inner = freshName(name + " " + change + " " + other);
+    return opening + before + how + ": `if (auto " + inner + " = " + name + ") { " + inner + change + "; " + name + " = " + inner + "; }`";
+}
+
+// The same for what cannot be copied, which is moved out and back.
+static std::string moveBackForm(const std::string& name, const std::string& change) {
+    const std::string inner = freshName(name + " " + change);
+    return "`auto " + inner + " = move(" + name + ").value(); " + inner + change + "; " + name + " = move(" + inner + ");`";
 }
 
 static std::string changingACopyHelp(const Expr& target, const std::string& change);
+
+// The names in the arguments of a call, for what must not hide them.
+static std::string argumentsText(const std::vector<ExprPtr>& args) {
+    std::string out;
+    for (auto& a : args) out += spelled(*a, "") + " ";
+    return out;
+}
 
 // What is written after a value on the way to `e`: `.a.b`, and `e` is then left at the value.
 static std::string pathTo(const Expr*& e) {
@@ -214,8 +284,7 @@ static std::string storeItBack(const Expr& recv, const std::string& method) {
     std::vector<std::string> paths;  // from each value inside to the next, the last one first
     const Expr* x = &recv;
     std::string path = pathTo(x);
-    std::string name = "opt";
-    bool spellable = false;
+    const Expr* root = nullptr;
     while (x->kind == Expr::Kind::OptValue) {
         paths.push_back(path);
         const Expr* base = static_cast<const OptValueExpr*>(x)->chain->base.get();
@@ -227,38 +296,31 @@ static std::string storeItBack(const Expr& recv, const std::string& method) {
             path = pathBelow;
             continue;
         }
-        // `m.get(key)?.set()`, where the value is there to be changed in place.
-        if (paths.size() == 1 && base->kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr*>(base)->name == "get") {
-            const std::string inPlace = changingACopyHelp(*base, paths[0] + "." + method + args);
-            if (inPlace.rfind("`get()`", 0) == 0) return inPlace;
-        }
-        if (base->kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr*>(base)->receiver && isPlaceKind(*static_cast<const MethodCallExpr*>(base)->receiver)) {
-            auto& call = *static_cast<const MethodCallExpr*>(base);
-            const std::string v = asBase(spelled(*call.receiver, ""));
-            if (!v.empty() && call.name == "back") { name = v + "[" + v + ".size() - 1]"; spellable = true; break; }
-            if (!v.empty() && call.name == "front") { name = v + "[0]"; spellable = true; break; }
-        }
-        const std::string written = spelled(*base, "");
-        spellable = !written.empty() && isPlaceKind(*base);
-        if (spellable) name = written;
+        root = base;
         break;
     }
-    std::string before = spellable ? "" : "store it in a variable first: `auto opt = ...;`. Then ";
-    if (paths.size() <= 1) {
-        const std::string inner = nameInside(name);
-        return before + "unwrap the optional, change the copy and store it back: `if (auto " + inner + " = " + name + ") { " + inner + (paths.empty() ? "" : paths[0]) + "." + method + args + "; " + name + " = " + inner + "; }`";
-    }
+    if (!root || paths.empty()) return "unwrap the optional, change the copy and store it back where it came from";
+    if (paths.size() == 1) return changeForm(*root, paths[0] + "." + method + args, "", "unwrap the optional, change the copy and store it back");
     // `if (auto a = o) { if (auto b = a.h) { b.x.f(...); a.h = b; } o = a; }`
+    bool isInside = false;
+    std::string place = placeOfCopy(*root, isInside);
+    std::string name = !place.empty() && !isInside ? place : spelled(*root, "");
+    if (name.empty() || (place.empty() && !isPlaceKind(*root)) || isInside)
+        return "store it in a variable first, as this only exists as a copy: `auto opt = ...;`. Then unwrap each optional, change the copy and store each one back in turn";
+    std::string used = name;
     std::string open, close;
     std::string outer = name;
     for (size_t i = paths.size(); i-- > 0;) {
-        const std::string inner(1, (char)('a' + (paths.size() - 1 - i)));
+        char letter = 'a';
+        while (hasWord(used, std::string(1, letter))) ++letter;
+        const std::string inner(1, letter);
+        used += " " + inner;
         open += "if (auto " + inner + " = " + outer + ") { ";
         close = " " + outer + " = " + inner + "; }" + close;
         outer = inner + (i ? paths[i] : "");
         if (i == 0) open += inner + paths[0] + "." + method + args + ";";
     }
-    return before + "unwrap each optional, change the copy and store each one back: `" + open + close + "`";
+    return "unwrap each optional, change the copy and store each one back: `" + open + close + "`";
 }
 
 // in a class object that the optional refers to.
@@ -391,9 +453,9 @@ static std::vector<const FieldDecl*> allFields(const StructDecl& sd) {
     for (auto& f : sd.fields) out.push_back(&f);
     return out;
 }
-static const FieldDecl* firstPublicField(const StructDecl& sd) {
+static const FieldDecl* firstNumberField(const StructDecl& sd) {
     for (const FieldDecl* f : allFields(sd))
-        if (f->access == Access::Public) return f;
+        if (f->access == Access::Public && (f->type->isNumber() || f->type->is(K::Char) || f->type->is(K::Bool))) return f;
     return nullptr;
 }
 
@@ -2275,31 +2337,43 @@ static std::string changingACopyHelp(const Expr& target, const std::string& chan
     const std::string path = pathTo(x) + change;
     if (x->kind != Expr::Kind::MethodCall) return fallback;
     auto& call = static_cast<const MethodCallExpr&>(*x);
-    if (call.lowered && call.name == "at") {  // `m.at(key)`, which has become something else by now
-        const std::string written = spelled(*call.lowered, "");
-        if (written.empty()) return fallback;
-        return "`at()` gives a copy. Change the value in place: `" + written + path + "`";
-    }
-    if (!call.receiver || !call.receiver->type || !isPlaceKind(*call.receiver)) return fallback;
-    const std::string v = asBase(spelled(*call.receiver, ""));
-    if (v.empty()) return fallback;
-    const Type* t = call.receiver->type;
-    if (t->isVector() || t->isArray() || t->is(K::String)) {
-        if (call.name == "back") return "`back()` gives a copy. Change it in place: `" + v + "[" + v + ".size() - 1]" + path + "`";
-        if (call.name == "front") return "`front()` gives a copy. Change it in place: `" + v + "[0]" + path + "`";
-    }
-    if (t->isOptional() && call.name == "value") {
-        const std::string inner = nameInside(v);
-        return "`value()` gives a copy. Unwrap it, change that and store it back: `if (auto " + inner + " = " + v + ") { " + inner + path + "; " + v + " = " + inner + "; }`";
-    }
-    if (isHashmap(t) && (call.name == "get" || call.name == "at")) {
-        const std::string key = call.args.empty() ? "key"
-                                : call.args[0]->kind == Expr::Kind::StringLit
-                                    ? (static_cast<const StringLitExpr&>(*call.args[0]).value.find_first_of("\"\\\n\t") == std::string::npos ? "\"" + static_cast<const StringLitExpr&>(*call.args[0]).value + "\"" : std::string("key"))
-                                    : spelled(*call.args[0], "key");
-        return "`" + call.name + "()` gives a copy. Change the value in place: `" + v + "[" + key + "]" + path + "`";
+    bool isInside = false;
+    const std::string place = placeOfCopy(*x, isInside);
+    if (!place.empty()) return "`" + call.name + "()` gives a copy. Change it in place: `" + place + path + "`";
+    if (call.name == "value" && call.receiver && call.receiver->type && call.receiver->type->isOptional() && isPlaceKind(*call.receiver)) {
+        const std::string v = asBase(spelled(*call.receiver, ""));
+        if (!v.empty()) {
+            const std::string inner = freshName(v + " " + path);
+            return "`value()` gives a copy. Unwrap it, change that and store it back: `if (auto " + inner + " = " + v + ") { " + inner + path + "; " + v + " = " + inner + "; }`";
+        }
     }
     return fallback;
+}
+
+// The same, for what is in something const, where there is no place to change.
+std::string Sema::copyHelp(const Expr& target, const std::string& change) {
+    const Expr* x = &target;
+    for (bool walking = true; walking;) {
+        switch (x->kind) {
+            case Expr::Kind::Member: x = static_cast<const MemberExpr*>(x)->base.get(); break;
+            case Expr::Kind::Index: x = static_cast<const IndexExpr*>(x)->base.get(); break;
+            case Expr::Kind::MethodCall: {
+                auto& call = *static_cast<const MethodCallExpr*>(x);
+                if (call.receiver) x = call.receiver.get();
+                else if (call.lowered) x = call.lowered.get();
+                else walking = false;
+                break;
+            }
+            default: walking = false;
+        }
+    }
+    if (x->kind == Expr::Kind::Name) {
+        const std::string& name = static_cast<const NameExpr*>(x)->name;
+        const VarDecl* holder = lookup(name);
+        if (holder && holder->isConst && holder->type && !holder->type->isClass())
+            return q(name) + " is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change `x`";
+    }
+    return changingACopyHelp(target, change);
 }
 
 void Sema::rejectCopy(const Expr& e) {
@@ -2693,7 +2767,8 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
             std::string n = spelled(*ix.base, "items");
             diags_.error(e.loc, q(baseType) + " may be null, so it cannot be indexed directly",
                          baseType->elem->isVector() || baseType->elem->isArray() || baseType->elem->is(K::String) || isHashmap(baseType->elem) || baseType->elem->isPointer()
-                             ? "unwrap it first: `if (auto " + nameInside(n) + " = " + n + ") ... " + nameInside(n) + "[i]`. To change an element, store it back: " + storeBackForm(*ix.base, "[i] = ...")
+                             ? !isCopyable(baseType) ? "to reach an element, move it out and back: " + moveBackForm(n, "[i]...")
+                               : "unwrap it first: `if (auto " + freshName(n) + " = " + n + ") ... " + freshName(n) + "[i]`. " + changeForm(*ix.base, "[i] = ...", "To change an element, ", "unwrap it, change the copy and store it back")
                              : "remove the `[ ]`: unwrap it, as `" + n + " ?? value`, for the " + q(baseType->elem) + " inside",
                          spec::Optionals);
             return e.type;
@@ -2982,7 +3057,7 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
         case Storage::Object: return true;
         case Storage::Temporary:
             diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action,
-                         changingACopyHelp(target, " = ..."), spec::Variables);
+                         copyHelp(target, " = ..."), spec::Variables);
             return false;
         case Storage::Pointer: {
             const Expr& ptr = followedPointer(*root);
@@ -3294,7 +3369,7 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
     if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index &&
         !isDeref(target)) {
         checkExpr(target, flow);
-        std::string help = target.kind == Expr::Kind::This ? "assign to its fields, or to a variable: 'this' always refers to the current object" : changingACopyHelp(target, " = ...");
+        std::string help = target.kind == Expr::Kind::This ? "assign to its fields, or to a variable: 'this' always refers to the current object" : copyHelp(target, " = ...");
         diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action, help,
                      spec::Variables);
         return false;
@@ -4244,7 +4319,7 @@ static std::string jsonProblem(const Program& program, const Type* t, bool readi
     }
     if (!t->hasFields())
         return where + " is a pointer, which only means something to this program. " +
-               (t->isPointer() && t->elem->is(K::Void) ? std::string("Use a type with values, such as a struct, as JSON cannot hold an address")
+               (t->isOpaque() || (t->isPointer() && (t->elem->is(K::Void) || t->elem->isOpaque())) ? std::string("Use a type with values, such as a struct, as JSON cannot hold an address")
                 : inList ? "Copy what they point to into values of type " + q(t->isPointer() ? t->elem : t) + ", and use those"
                 : path.empty() ? (reading ? "Read what it points to: `json::parse<" + std::string(t->isPointer() ? t->elem->name : t->name) + ">`" : std::string("Write `*p` for what it points to"))
                                      : std::string("Make it a private field, which is left out of JSON, and reach it through methods of the class"));
@@ -4281,7 +4356,7 @@ static std::string jsonProblem(const Program& program, const Type* t, bool readi
     if (!fields.empty() && !shown)
         return where + " has no public fields, so nothing of it would go in JSON. " +
                (sd.templateOf && sd.templateOf->nameLoc.line == 0 && sd.role == StructDecl::Role::Opaque ? std::string("Write what it gives: `t.wait()`")
-                : comesWithTheLanguage(sd) ? std::string("Pass the values it protects or holds instead") : std::string("Put what belongs there under `public:`"));
+                : comesWithTheLanguage(sd) ? std::string("Pass the values it protects or holds instead") : std::string("Put what JSON should hold under `public:`. It holds values, such as numbers and strings, and not pointers"));
     if (!reading && sd.isClass)  // what is written is whatever the object really is
         for (auto& other : program.structs)
             if (other->defined && other.get() != &sd && other->derivesFrom(&sd))
@@ -4576,7 +4651,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
                 (static_cast<const MethodCallExpr&>(recv).receiver && static_cast<const MethodCallExpr&>(recv).receiver->type && !static_cast<const MethodCallExpr&>(recv).receiver->type->hasFields())) ) {
         // In C++ this changes the element. Here what the method gave is a copy, so it would quietly do nothing.
         diags_.error(call.loc, q(m->name) + " may change the struct, but '" + static_cast<const MethodCallExpr&>(recv).name + "()' gives a copy of it",
-                     changingACopyHelp(recv, "." + m->name + "(...)"), spec::Structs);
+                     copyHelp(recv, "." + m->name + "(...)"), spec::Structs);
     } else if (!m->isConst) {
         // A method that may change fields changes the struct value it is called on,
         // wherever that value is stored.
@@ -4630,7 +4705,7 @@ void Sema::checkChangingReceiver(const Expr& recv, const char* method, const cha
     }
     if (!isPlaceKind(recv)) {
         diags_.error(recv.loc, std::string(method) + "() changes the " + what + ", so it must be called on a variable or a field",
-                     changingACopyHelp(recv, std::string(".") + method + "(...)"), anchor);
+                     copyHelp(recv, std::string(".") + method + "(...)"), anchor);
         return;
     }
     const VarDecl* var = nullptr;
@@ -5199,7 +5274,7 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
         diags_.error(c.operand->loc, "'" + cast + "' converts a number, a char or a bool, but this is " + q(from),
                      from->isOptional() ? unwrapHelp(spelled(*c.operand))
                      : from->isVector() || from->isArray() ? "convert one of its elements instead, e.g. `" + std::string(to->name) + "(" + asBase(spelled(*c.operand, "v")) + "[0])`"
-                     : from->hasFields() && !isHashmap(from) && firstPublicField(*from->decl) ? "convert one of its fields instead, e.g. `" + std::string(to->name) + "(" + asBase(spelled(*c.operand, "x")) + "." + firstPublicField(*from->decl)->name + ")`"
+                     : from->hasFields() && !isHashmap(from) && firstNumberField(*from->decl) ? "convert one of its fields instead, e.g. `" + std::string(to->name) + "(" + asBase(spelled(*c.operand, "x")) + "." + firstNumberField(*from->decl)->name + ")`"
                                          : std::string("give it a number, a char or a bool"),
                      spec::Casts);
     return to;
@@ -5517,10 +5592,11 @@ const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Ty
     else {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         diags_.error(call.loc, q(opt) + " may be null, so " + q(call.name) + " cannot be called on it directly",
-                     opt->elem->isClass()
-                         ? "write `" + n + "?." + call.name + "(...)`, which does nothing when " + n + " is null, or unwrap it: `if (auto v = " + n + ") v." + call.name + "(...);`"
+                     opt->elem->isClass() || opt->elem->isUnique() || opt->elem->isLocal()
+                         ? "write `" + n + "?." + call.name + "(...)`, which does nothing when " + n + " is null, or unwrap it: `if (auto " + freshName(n) + " = " + n + ") " + freshName(n) + "." + call.name + "(...);`"
+                         : !isCopyable(opt) ? "to change it, move it out and back: " + moveBackForm(n, "." + call.name + "(...)")
                          : (call.name == "push_back" || call.name == "pop_back" || call.name == "clear" || call.name == "fill" ? std::string() : "read with `" + n + "?." + call.name + "(...)`. ") +
-                               "To change it, unwrap it, change the copy and store it back: " + storeBackForm(*call.receiver, "." + call.name + "(...)"),
+                               changeForm(*call.receiver, "." + call.name + "(...)", "To change it, ", "unwrap it, change the copy and store it back", argumentsText(call.args)),
                      spec::Optionals);
         return Type::error();
     }

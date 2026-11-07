@@ -7,4 +7,4 @@ int main() {
     println("{}", json::stringify(Secret()));
     return 0;
 }
-// error: 'Secret' has no public fields, so nothing of it would go in JSON. Put what belongs there under `public:`
+// error: 'Secret' has no public fields, so nothing of it would go in JSON. Put what JSON should hold under `public:`

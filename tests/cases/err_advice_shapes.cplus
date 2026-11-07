@@ -1,0 +1,90 @@
+// What is between angle brackets and square brackets, printed whole, and the types that JSON cannot hold.
+import json;
+const int X = 2;
+const int R = 2;
+const int C = 3;
+struct H { int y = 0; };
+struct P { int x = 0; };
+struct AddressOnly {
+private:
+    int* p;
+};
+struct Named { string name; };
+struct Aged {
+    string name;
+    int age = 0;
+};
+template <typename T>
+struct St { T x; };
+extern "C" struct FILE;
+
+void arraysInParameters(int a[2][3]) { }
+// error: write `array<array<int, 3>, 2> a`, or `vector<vector<int>> a`, which are copies. To change the caller's, write `array<array<int, 3>, 2>* a`, called with `&x`, and use `(*a)[0][0]`
+void openArraysInParameters(int a[][3]) { }
+// error: write `array<array<int, 3>, N> a`, or `vector<vector<int>> a`, which are copies. To change the caller's, write `array<array<int, 3>, N>* a`, called with `&x`, and use `(*a)[0][0]`, with N the number of rows
+struct WithArray { int a[R][C]; };
+// error: write an array of arrays: `array<array<int, C>, R> a`
+
+void arrays() {
+    int n = 2;
+    int m = 3;
+    int a[n][m];
+    // error: write `array<array<int, m>, n> a` if those are constants, or `auto a = vector<vector<int>>(n, vector<int>(m));` if they are only known while the program runs
+    int b[][3] = {{1, 2, 3}};
+    // error: write an array of arrays: `array<array<int, 3>, N> b`, with N the number of rows
+    int c[X][X + 1];
+    // error: write `array<array<int, X + 1>, X> c` if those are constants, or `auto c = vector<vector<int>>(X, vector<int>(X + 1));` if they are only known while the program runs
+    char names[3][20] = {"a", "b", "c"};
+    // error: write `array<string, 3> names = {...};`
+}
+void wholeTypes() {
+    optional<vector<int>> a = null;
+    // error: write `vector<int>?`, which holds a value of that type, or `null`
+    optional<int*> b = null;
+    // error: write `int*`, which can already be null
+    optional<const int> c = null;
+    // error: write `const int?`, which holds a value of that type, or `null`
+    auto d = make_shared<P>();
+    // error: write `P(...)`. A class variable is already a counted reference. A struct is a value, which is copied, so to share one make it a class
+    auto e = make_shared<vector<int>>();
+    // error: write `vector<int>(...)`. It is a value, which is copied, so to share one hold it in a class
+    auto f = make_shared<St<int>>();
+    // error: write `St<int>(...)`. A class variable is already a counted reference
+    Foo<int, X> g;
+    // error: define it first: `template<typename T, int N2> class Foo { ... };`
+    Bar<X> h;
+    // error: define it first: `template<int N> class Bar { ... };`
+}
+void json_() {
+    AddressOnly s = {};
+    println("{}", json::stringify(s));
+    // error: 'AddressOnly' has no public fields, so nothing of it would go in JSON. Put what JSON should hold under `public:`. It holds values, such as numbers and strings, and not pointers
+    FILE* f = null;
+    println("{}", json::stringify(f));
+    // error: 'FILE*' is a pointer, which only means something to this program. Use a type with values, such as a struct, as JSON cannot hold an address
+    auto r = json::parse<FILE*>("1");
+    // error: 'FILE*' is a pointer, which only means something to this program. Use a type with values, such as a struct, as JSON cannot hold an address
+}
+void valuesAndFields() {
+    Named? u;
+    println("{}", "x" + u?.name);
+    // error: it may be null: write `(u?.name ?? "none")`, with the parentheses
+    Aged both;
+    println("{}", int(both));
+    // error: convert one of its fields instead, e.g. `int(both.age)`
+    Named onlyText;
+    println("{}", int(onlyText));
+    // error: give it a number, a char or a bool
+}
+void functionInside() {
+    void g() { }
+    // error: C+ has no functions inside functions
+    void h(int a) { }
+    // error: C+ has no functions inside functions
+    void i;
+    // error: variables cannot have type void
+    void j();
+    // error: variables cannot have type void
+}
+
+int main() { return 0; }

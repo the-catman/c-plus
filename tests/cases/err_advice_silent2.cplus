@@ -14,7 +14,7 @@ void nestedOptional() {
 P? findIt() { return null; }
 void notAVariable() {
     findIt()?.set();
-    // error: store it in a variable first: `auto opt = ...;`. Then unwrap the optional
+    // error: store it in a variable first, as this only exists as a copy: `auto opt = findIt();`. Then unwrap the optional, change the copy and store it back: `if (auto v = opt) { v.set(...); opt = v; }`
 }
 void copies() {
     string s = "a";
@@ -25,17 +25,17 @@ void copies() {
     // error: `value()` gives a copy. Unwrap it, change that and store it back: `if (auto v = o) { v.x = ...; o = v; }`
     hashmap<string, int> m;
     m.get("a") = 1;
-    // error: `get()` gives a copy. Change the value in place: `m["a"] = ...`
+    // error: `get()` gives a copy. Change it in place: `m["a"] = ...`
     hashmap<string, vector<int>> lists;
     lists.at("a").push_back(1);
-    // error: `at()` gives a copy. Change the value in place: `lists["a"].push_back(...)`
+    // error: `at()` gives a copy. Change it in place: `lists["a"].push_back(...)`
     vector<P> v = {P{}};
     v.back().set();
     // error: 'set' may change the struct, but 'back()' gives a copy of it
     // error: `back()` gives a copy. Change it in place: `v[v.size() - 1].set(...)`
     vector<int>? w = vector<int>{1};
     w[0] = 1;
-    // error: To change an element, store it back: `if (auto v = w) { v[i] = ...; w = v; }`
+    // error: To change an element, unwrap it, change the copy and store it back: `if (auto v = w) { v[i] = ...; w = v; }`
 }
 void strings() {
     string s = "hello";

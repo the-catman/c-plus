@@ -50,7 +50,7 @@ void backOfVector() {
     // error: `front()` gives a copy. Change it in place: `v[0].x = ...`
     hashmap<string, int> m;
     m.at("a") = 3;
-    // error: `at()` gives a copy. Change the value in place: `m["a"] = ...`
+    // error: `at()` gives a copy. Change it in place: `m["a"] = ...`
 }
 void throughPointers() {
     P p;

@@ -11,7 +11,7 @@ void nested() {
 void fromAMap() {
     hashmap<string, P> m;
     m.get("a")?.set();
-    // error: `get()` gives a copy. Change the value in place: `m["a"].set(...)`
+    // error: write `if (m.contains("a")) m["a"].set(...);`, which changes it in the map
 }
 void fromBack() {
     vector<P?> w;
@@ -29,9 +29,9 @@ void namedV() {
 vector<int>? gives() { return null; }
 void notAPlace() {
     gives().push_back(1);
-    // error: store it in a variable first: `auto opt = gives();`. Then `if (auto v = opt) { v.push_back(...); opt = v; }`
+    // error: To change it, store it in a variable first, as this only exists as a copy: `auto opt = gives();`. Then unwrap it, change the copy and store it back: `if (auto v = opt) { v.push_back(...); opt = v; }`
     println("{}", gives()[0]);
-    // error: store it in a variable first: `auto opt = gives();`. Then `if (auto v = opt) { v[i] = ...; opt = v; }`
+    // error: To change an element, store it in a variable first, as this only exists as a copy: `auto opt = gives();`. Then unwrap it, change the copy and store it back: `if (auto v = opt) { v[i] = ...; opt = v; }`
 }
 void text() {
     string? o = "x";
@@ -62,7 +62,7 @@ void newUnique() {
 void keyToEscape() {
     hashmap<string, int> q;
     q.at("a\"b") = 1;
-    // error: `at()` gives a copy. Change the value in place: `q[key] = ...`
+    // error: `at()` gives a copy. Change it in place: `q[key] = ...`
 }
 void floatRemainder() {
     float x = 1;

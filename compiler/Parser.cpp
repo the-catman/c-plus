@@ -1576,6 +1576,33 @@ static const char* cIntegerEquivalent(const std::string& n) {
     return nullptr;
 }
 
+// Whether a template argument is a value: a number, or a constant.
+bool Parser::isValueArgument(const Token& k) {
+    if (k.kind == Tok::IntLit) return true;
+    return k.kind == Tok::Ident && !isTypeName(k) && !classTemplate(k.text) && constHooks().constant(k.text);
+}
+
+// The tokens from `at` as they would be written, up to the `>` of the `<` before them. `end` is left at that `>`.
+std::string Parser::writtenBetweenAngles(size_t at, size_t& end) const {
+    std::string out;
+    int depth = 1;
+    for (end = at; end < toks_.size() && end < at + 64; ++end) {
+        const Token& k = toks_[end];
+        if (k.kind == Tok::Less) ++depth;
+        else if (k.kind == Tok::Greater && --depth == 0) break;
+        else if (k.kind == Tok::Shr && (depth -= 2) <= 0) {
+            if (depth == 0) out += ">";  // the first of the two closes what is inside
+            break;
+        }
+        const std::string text = k.text.empty() ? tokSpelling(k.kind) : k.text;
+        const bool isWord = k.kind == Tok::Ident || k.kind == Tok::KwConst || k.kind == Tok::KwInt || k.kind == Tok::KwLong || k.kind == Tok::KwString || k.kind == Tok::KwBool || k.kind == Tok::KwChar || k.kind == Tok::KwDouble || k.kind == Tok::KwFloat;
+        if (isWord && !out.empty() && (std::isalnum((unsigned char)out.back()) || out.back() == '_')) out += " ";
+        out += text;
+        if (k.kind == Tok::Comma) out += " ";
+    }
+    return out;
+}
+
 // `Foo<int>`, at the position of its name, where Foo is nothing that has been defined.
 void Parser::failUnknownGeneric(size_t at) {
     const Token& name = toks_[at];
@@ -1585,7 +1612,7 @@ void Parser::failUnknownGeneric(size_t at) {
     size_t i = at + 1;
     for (; i < toks_.size() && i < at + 64; ++i) {
         if (toks_[i].kind == Tok::Less && ++depth == 1) {
-            params = toks_[i + 1].kind == Tok::IntLit ? "int N" : "typename T";
+            params = isValueArgument(toks_[i + 1]) ? "int N" : "typename T";
             count = 1;
         } else if (toks_[i].kind == Tok::Less) {
             ++depth;
@@ -1595,13 +1622,17 @@ void Parser::failUnknownGeneric(size_t at) {
             break;
         } else if (toks_[i].kind == Tok::Comma && depth == 1) {
             ++count;
-            params += ", " + std::string(toks_[i + 1].kind == Tok::IntLit ? "int N" : "typename T") + std::to_string(count);
+            params += ", " + std::string(isValueArgument(toks_[i + 1]) ? "int N" : "typename T") + std::to_string(count);
         }
     }
     const bool built = i + 1 < toks_.size() && toks_[i + 1].kind == Tok::LParen;
+    size_t closing = 0;
+    const std::string inside = writtenBetweenAngles(at + 2, closing);
+    const bool isPointer = !inside.empty() && inside.back() == '*';
     fail(name.loc, "unknown type '" + n + "'",
-         n == "optional" && built ? "a value converts by itself: `return 3;`, or `null`. The type is written `" + toks_[at + 2].text + "?`, as in `string? s = null;`"
-         : n == "optional" ? "write `" + toks_[at + 2].text + "?`, which holds a value of that type, or `null`"
+         n == "optional" && isPointer ? "write `" + inside + "`, which can already be null"
+         : n == "optional" && built ? "a value converts by itself: `return 3;`, or `null`. The type is written `" + inside + "?`, as in `string? s = null;`"
+         : n == "optional" ? "write `" + inside + "?`, which holds a value of that type, or `null`"
          : n == "function" ? "write a function, and call it by name: C+ has no function values yet"
                            : "check the spelling, or define it first: `template<" + params + "> class " + n + " { ... };`",
          spec::Generics);
@@ -1973,23 +2004,40 @@ void Parser::failCStyleArray(const Type* elem, const std::string& name, ArrayPla
     std::string type = elem->name;
     // Every dimension, for an array of arrays of them.
     std::vector<std::string> sizes;
-    for (size_t at = 0; peek(at).kind == Tok::LBracket && sizes.size() < 8;) {
-        size_t close = at + 1;
-        while (close < at + 32 && peek(close).kind != Tok::RBracket && peek(close).kind != Tok::Eof) ++close;
-        sizes.push_back(close == at + 2 ? peek(at + 1).text : "N");
-        at = close + 1;
+    bool anyName = false, anyMissing = false;
+    size_t past = 0;
+    while (peek(past).kind == Tok::LBracket && sizes.size() < 8) {
+        size_t close = past + 1;
+        std::string written;
+        while (close < past + 32 && peek(close).kind != Tok::RBracket && peek(close).kind != Tok::Eof) {
+            written += (written.empty() ? "" : " ") + (peek(close).text.empty() ? std::string(tokSpelling(peek(close).kind)) : peek(close).text);
+            anyName = anyName || peek(close).kind == Tok::Ident;
+            ++close;
+        }
+        anyMissing = anyMissing || written.empty();
+        sizes.push_back(written.empty() ? "N" : written);
+        past = close + 1;
     }
-    std::string nested = type;
-    for (size_t i = sizes.size(); i-- > 0;) nested = "array<" + nested + ", " + sizes[i] + ">";
+    std::string nested = type, nestedVectors = type, builtVectors;
+    for (size_t i = sizes.size(); i-- > 0;) {
+        nested = "array<" + nested + ", " + sizes[i] + ">";
+        builtVectors = "vector<" + nestedVectors + ">(" + sizes[i] + (builtVectors.empty() ? "" : ", " + builtVectors) + ")";
+        nestedVectors = "vector<" + nestedVectors + ">";
+    }
+    const std::string note = anyMissing ? ", with N the number of rows" : "";
     std::string help;
-    if (place == ArrayPlace::Parameter && sizes.size() > 1)
-        help = "write `" + nested + " " + name + "`, or `vector<vector<" + type + ">> " + name + "`";
+    if (sizes.size() > 1 && elem->is(Type::Kind::Char) && peek(past).kind == Tok::Assign && peek(past + 1).kind == Tok::LBrace)
+        help = "write `array<string, " + sizes[0] + "> " + name + " = {...};`" + note;
+    else if (place == ArrayPlace::Parameter && sizes.size() > 1)
+        help = "write `" + nested + " " + name + "`, or `" + nestedVectors + " " + name + "`, which are copies. To change the caller's, write `" + nested + "* " + name + "`, called with `&x`, and use `(*" + name + ")[0][0]`" + note;
+    else if (place != ArrayPlace::Field && sizes.size() > 1 && anyName)
+        help = "write `" + nested + " " + name + "` if those are constants, or `auto " + name + " = " + builtVectors + ";` if they are only known while the program runs" + note;
+    else if (sizes.size() > 1)
+        help = "write an array of arrays: `" + nested + " " + name + "`" + note;
     else if (place == ArrayPlace::Parameter)
         help = "write `vector<" + type + "> " + name + "`, or, to change the caller's array, `" + type + "* " + name + "`, called with `x.data()`";
     else if (place == ArrayPlace::Field && (size.empty() || peek(1).kind == Tok::Ident))
         help = "write `vector<" + type + "> " + name + ";`, or `array<" + type + ", N> " + name + ";`, with N a constant";
-    else if (peek(after).kind == Tok::LBracket)
-        help = "write an array of arrays: `" + nested + " " + name + "`";
     else if (elem->is(Type::Kind::Char) && peek(after).kind == Tok::Assign && peek(after + 1).kind == Tok::StringLit)
         help = "write `string " + name + " = ...;`, as text is a string";
     else if (size.empty() && peek(after).kind == Tok::Assign)
@@ -2577,8 +2625,19 @@ void Parser::parseLaterStars(const Type* ty, const std::string& firstName, const
 }
 
 StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
-    if (ty->is(Type::Kind::Void))
+    if (ty->is(Type::Kind::Void)) {
+        if (peek().kind == Tok::Ident && peek(1).kind == Tok::LParen) {  // `void g() { ... }`
+            int depth = 1;
+            size_t at = 2;
+            for (; depth > 0 && peek(at).kind != Tok::Eof; ++at) {
+                if (peek(at).kind == Tok::LParen) ++depth;
+                else if (peek(at).kind == Tok::RParen) --depth;
+            }
+            if (peek(at).kind == Tok::LBrace)
+                fail(peek().loc, "C+ has no functions inside functions", "write it at the top level of the file, and pass it what it needs", spec::Functions);
+        }
         fail(typeLoc, "variables cannot have type void", "pick a type such as int, or use auto", spec::Variables);
+    }
     std::vector<std::unique_ptr<VarDecl>> decls;
     do {
         if (!decls.empty()) parseLaterStars(ty, decls[0]->name, "variable");
@@ -3382,10 +3441,22 @@ ExprPtr Parser::parsePrimary() {
                 return call;
             }
             if (isTypeName(t) && match(Tok::LBrace)) return parseInitList(t.loc, &prog_->findStruct(t.text)->type);
-            if (t.text == "make_unique" && check(Tok::Less))
-                fail(t.loc, "C+ has no make_unique", "write `unique<Node>(...)`, which builds a new Node", spec::Unique);
+            if (t.text == "make_unique" && check(Tok::Less)) {
+                size_t closing = 0;
+                const std::string whole = writtenBetweenAngles(pos_ + 1, closing);
+                fail(t.loc, "C+ has no make_unique", "write `unique<" + whole + ">(...)`, which builds a new " + whole, spec::Unique);
+            }
             if (t.text == "make_shared" && check(Tok::Less))
-                fail(t.loc, "C+ has no make_shared", peek(1).kind == Tok::Ident ? "write `" + std::string(peek(1).text) + "(...)`: a class variable is already a counted reference" : std::string("write the value itself, as in `int(3)`: a value needs no pointer"), spec::Classes);
+            {
+                size_t closing = 0;
+                const std::string whole = writtenBetweenAngles(pos_ + 1, closing);
+                fail(t.loc, "C+ has no make_shared",
+                     peek(1).kind == Tok::Ident && peek(2).kind == Tok::Less && classTemplate(peek(1).text) == nullptr
+                         ? "write `" + whole + "(...)`. It is a value, which is copied, so to share one hold it in a class"
+                     : peek(1).kind == Tok::Ident ? "write `" + whole + "(...)`. A class variable is already a counted reference. A struct is a value, which is copied, so to share one make it a class"
+                                                : std::string("write the value itself, as in `int(3)`: a value needs no pointer"),
+                     spec::Classes);
+            }
             // With a name that is no type, what can only be this goes on, so that the error can say so.
             if ((t.text == "unique" || t.text == "local") && check(Tok::Less) &&
                 (isTypeAt(1) || (peek(1).kind == Tok::Ident && peek(2).kind == Tok::Greater && peek(3).kind == Tok::LParen))) {  // `unique<Node>(args)`

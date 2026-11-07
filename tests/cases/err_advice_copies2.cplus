@@ -1,0 +1,80 @@
+// Where what a method gave a copy of really is, so that following the help changes that place, and not a copy nobody reads.
+struct S {
+    int x = 0;
+    void set() { x = 1; }
+};
+struct Holder { vector<int> items; };
+struct Outer { Holder? h; };
+struct InnerOne { vector<int>? v; };
+class N {
+public:
+    void go() { }
+};
+hashmap<string, S> makeMap() {
+    hashmap<string, S> m;
+    return m;
+}
+
+void inTheMap() {
+    hashmap<string, vector<int>> m;
+    hashmap<string, S> ms;
+    m.get("a").push_back(2);
+    // error: To change it, write `if (m.contains("a")) m["a"].push_back(...);`, which changes it in the map
+    m.get("a")[0] = 5;
+    // error: To change an element, write `if (m.contains("a")) m["a"][i] = ...;`, which changes it in the map
+    ms.get("a").set();
+    // error: To change it, write `if (ms.contains("a")) ms["a"].set(...);`, which changes it in the map
+    ms.get("a")?.set();
+    // error: write `if (ms.contains("a")) ms["a"].set(...);`, which changes it in the map, or mark 'set' `const`
+}
+void inTheVector() {
+    vector<vector<int>?> vs;
+    vs.back().push_back(2);
+    // error: unwrap it, change the copy and store it back: `if (auto v = vs[vs.size() - 1]) { v.push_back(...); vs[vs.size() - 1] = v; }`
+    vs.front()[0] = 2;
+    // error: unwrap it, change the copy and store it back: `if (auto v = vs[0]) { v[i] = ...; vs[0] = v; }`
+}
+void anOptionalInTheMap() {
+    hashmap<string, vector<int>?> m;
+    hashmap<string, S?> ms;
+    m.at("a").push_back(2);
+    // error: unwrap it, change the copy and store it back: `if (auto v = m["a"]) { v.push_back(...); m["a"] = v; }`
+    ms.at("k")?.set();
+    // error: unwrap the optional, change the copy and store it back: `if (auto v = ms["k"]) { v.set(...); ms["k"] = v; }`
+}
+void aTemporary() {
+    makeMap().at("a").set();
+    // error: this value is a temporary copy, so changing it would have no effect. Store it in a variable first
+}
+void namesThatMustKeepTheirMeaning() {
+    Outer? a;
+    a?.h?.items.push_back(1);
+    // error: `if (auto b = a) { if (auto c = b.h) { c.items.push_back(...); b.h = c; } a = b; }`
+    InnerOne inner;
+    inner.v.push_back(2);
+    // error: `if (auto item = inner.v) { item.push_back(...); inner.v = item; }`
+    vector<int>? o;
+    int v = 2;
+    o.push_back(v);
+    // error: `if (auto inner = o) { inner.push_back(...); o = inner; }`
+}
+void whatCannotBeCopied() {
+    unique<N>? o;
+    o.go();
+    // error: write `o?.go(...)`, which does nothing when o is null, or unwrap it: `if (auto v = o) v.go(...);`
+    vector<unique<N>>? vs;
+    vs.clear();
+    // error: to change it, move it out and back: `auto v = move(vs).value(); v.clear(...); vs = move(v);`
+    vs[0].go();
+    // error: to reach an element, move it out and back: `auto v = move(vs).value(); v[i]...; vs = move(v);`
+}
+void constMaps() {
+    const hashmap<string, vector<int>> m = {};
+    m.at("a").push_back(1);
+    // error: 'm' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change `x`
+    const hashmap<string, S> ms = {};
+    ms.at("a").x = 1;
+    // error: 'ms' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change `x`
+}
+
+int main() { return 0; }

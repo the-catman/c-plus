@@ -1,0 +1,97 @@
+// What the errors about copies say to write, which must change the place that was meant.
+struct S {
+    int x = 0;
+    void set() { x = 1; }
+};
+struct Holder { vector<int> items; };
+struct Outer { Holder? h; };
+struct P { int x = 0; };
+class Node {
+public:
+    int value = 7;
+};
+class N {
+public:
+    int n = 1;
+};
+vector<int>? gives() { return vector<int>{1}; }
+const int X = 2;
+const int R = 2;
+const int C = 3;
+struct WithArray { array<array<int, C>, R> a; };
+void bump(array<array<int, 3>, 2>* a) { (*a)[0][0] = 9; }
+
+int main() {
+    hashmap<string, vector<int>> m = {{"a", vector<int>{1}}};
+    if (m.contains("a")) m["a"].push_back(2);
+    if (m.contains("a")) m["a"][0] = 5;
+    if (m.contains("b")) m["b"].push_back(2);
+    println("{} {}", m["a"], m.contains("b"));
+    // expect: [5, 2] false
+    hashmap<string, S> ms = {{"a", S{}}};
+    if (ms.contains("a")) ms["a"].set();
+    println("{}", ms["a"].x);
+    // expect: 1
+    vector<vector<int>?> vs = {vector<int>{1}, vector<int>{2}};
+    if (auto v = vs[vs.size() - 1]) { v.push_back(3); vs[vs.size() - 1] = v; }
+    if (auto v = vs[0]) { v[0] = 4; vs[0] = v; }
+    println("{}", vs);
+    // expect: [[4], [2, 3]]
+    hashmap<string, vector<int>?> mo = {{"a", vector<int>{1}}};
+    if (auto v = mo["a"]) { v.push_back(2); mo["a"] = v; }
+    println("{}", mo["a"]);
+    // expect: [1, 2]
+    hashmap<string, S?> mso = {{"k", S{}}};
+    if (auto v = mso["k"]) { v.set(); mso["k"] = v; }
+    println("{}", mso["k"]?.x);
+    // expect: 1
+    auto opt = gives();
+    if (auto v = opt) { v.push_back(2); opt = v; }
+    println("{}", opt);
+    // expect: [1, 2]
+    // A name of its own at each level, when the optional is called `a`
+    Outer? a = Outer{.h = Holder{}};
+    if (auto b = a) { if (auto c = b.h) { c.items.push_back(1); b.h = c; } a = b; }
+    println("{}", a?.h?.items);
+    // expect: [1]
+    // What cannot be copied
+    vector<unique<N>>? un = vector<unique<N>>{};
+    auto v = move(un).value();
+    v.push_back(unique<N>());
+    un = move(v);
+    println("{}", un?.size());
+    // expect: 1
+    // What is written for a C-style array
+    int n = 2;
+    int mm = 3;
+    auto grid = vector<vector<int>>(n, vector<int>(mm));
+    grid[1][2] = 6;
+    println("{}", grid);
+    // expect: [[0, 0, 0], [0, 0, 6]]
+    array<array<int, X + 1>, X> fixed = {};
+    fixed[1][2] = 8;
+    println("{}", fixed[1][2]);
+    // expect: 8
+    array<array<int, 3>, 2> toChange = {};
+    bump(&toChange);
+    println("{}", toChange[0][0]);
+    // expect: 9
+    array<string, 3> names = {"a", "b", "c"};
+    println("{}", names[2]);
+    // expect: c
+    WithArray w = {};
+    w.a[1][2] = 3;
+    println("{}", w.a[1][2]);
+    // expect: 3
+    // What takes the place of make_shared
+    auto node = Node();
+    println("{}", node.value);
+    // expect: 7
+    auto value = P();
+    println("{}", value.x);
+    // expect: 0
+    auto list = vector<int>();
+    println("{}", list.size());
+    // expect: 0
+    return 0;
+}
