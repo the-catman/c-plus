@@ -4,11 +4,15 @@ struct Made {
     Made with(int n) { x = n; return this; }
 };
 Made make(int n) { Made m = {}; m.x = n; return m; }
+vector<Made> list() { return {make(1)}; }
 
 int main() {
     bool f = false;
     Made m = (f ? make(1) : make(2)).with(5);
     println("{}", m.x);
+    // expect: 5
+    Made n = list().back().with(5);
+    println("{}", n.x);
     // expect: 5
     return 0;
 }

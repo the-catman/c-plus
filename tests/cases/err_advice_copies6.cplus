@@ -1,0 +1,54 @@
+// What `?:` and `=` give when they are copies of places, and loops whose variables are not copies.
+struct S {
+    int x = 0;
+    void set() { x = 1; }
+    int bump() { x = x + 1; return x; }
+};
+class C {
+public:
+    S? o;
+    void goT() throws { }
+};
+class Plain { public: int n = 0; };
+
+void usedResults() {
+    S a = {};
+    S b = {};
+    bool f = true;
+    int r = (f ? a : b).bump();
+    // error: `?:` gives a copy of what it chose. Call it on each in place: `(f ? a.bump() : b.bump())`
+    (a = b).set();
+    // error: 'set' may change the struct, but '=' gives a copy of it
+    // error: `=` gives a copy of what was assigned. Assign first, then change it in place: `a = ...; a.set();`
+}
+void loopsOverObjects(vector<C> cs, vector<vector<S?>> g, hashmap<string, vector<S?>> m) {
+    for (auto k : cs) {
+        k.o?.set();
+        // error: unwrap the optional, change the copy and store it back: `if (auto v = k.o) { v.set(); k.o = v; }`
+        // not-error: is a copy of the element
+    }
+    for (auto row : g) {
+        for (auto c : row) {
+            c?.set();
+            // error: 'c' is a copy of an element of a copy, so to change the elements, loop over the outer list with indexes, and change them there
+        }
+    }
+    const vector<S?> cw = {S{}};
+    for (auto o : cw) {
+        o?.set();
+        // error: 'o' is a copy of an element of 'cw', which is const, so its elements cannot change
+    }
+}
+void optionalsOfOther(hashmap<string, int>? o, array<int, 2>? a, C? k) throws {
+    int n = o.at("a");
+    // error: read with `o?.at(...)`, which is null when o is
+    a.data();
+    // error: `data()` needs the value itself, and `?.` gives a copy. Unwrap it, use `v.data()`, and store it back: `if (auto v = a) { ... v.data() ...; a = v; }`
+    k.goT();
+    // error: write `try k?.goT()`, which does nothing when k is null, or unwrap it: `if (auto v = k) try v.goT();`
+}
+void doubleDeref(S** pp, long n) {
+    (*(*pp + n)).set();
+}
+
+int main() { return 0; }

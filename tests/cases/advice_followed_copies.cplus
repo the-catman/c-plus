@@ -19,6 +19,10 @@ struct Risky {
     int x = 0;
     void risky() throws { x = 2; }
 };
+struct Counted {
+    int n = 0;
+    int bump() { n = n + 1; return n; }
+};
 struct Wrapped {
     unique<N> held = unique<N>();
     int n = 1;
@@ -135,6 +139,13 @@ int main() {
     }
     println("{}", entries["a"]?.x);
     // expect: 1
+    // A result that is used, from the one `?:` chose
+    Counted first = {};
+    Counted second = {};
+    bool takeFirst = true;
+    int got = (takeFirst ? first.bump() : second.bump());
+    println("{} {}", got, first.n);
+    // expect: 1 1
     // What takes the place of make_shared
     auto node = Node();
     println("{}", node.value);

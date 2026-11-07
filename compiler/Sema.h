@@ -128,7 +128,7 @@ private:
     // A call to a function that can fail, or a `throw`, must have somewhere for the error to go.
     void checkCanFail(const FuncDecl& callee, Loc loc, const Expr* receiver = nullptr);
     std::string whereAnErrorCanGo() const;
-    std::string copyHelp(const Expr& target, const std::string& change);
+    std::string copyHelp(const Expr& target, const std::string& change, bool givesValue = false);
     std::string freshName(const std::string& avoid, std::initializer_list<const char*> names = {"v", "inner", "item", "held", "unwrapped"});
     std::string constHolderHelp(const Expr& e, bool canCopy = true);
     std::string loopCopyNote(const Expr& e);
@@ -205,7 +205,14 @@ private:
     void reportUnknownName(const NameExpr& n);
 
     VarDecl* lookup(const std::string& name);
-    std::map<const VarDecl*, std::pair<std::string, bool>> loopCopies_;  // the variable of each `for (auto x : list)`, the list as written, and whether it is a map
+    // The variable of each `for (auto x : list)`, which is a copy of the element
+    struct LoopCopy {
+        std::string list;          // as written, or empty when it is not a place
+        bool isMap = false;        // its entries, whose keys say where each one is
+        bool overACopy = false;    // the list is itself the variable of another loop
+        std::string constList;     // the const variable the list is in
+    };
+    std::map<const VarDecl*, LoopCopy> loopCopies_;
     void declare(VarDecl& v);
     std::string suggestName(const std::string& name);
 

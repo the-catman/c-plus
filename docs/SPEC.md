@@ -727,9 +727,10 @@ Building a vector:
   a compile error.
 - `front()` and `back()` return a copy. To change the last element, write
   `v[v.size() - 1] = x`. Changing what they give, `v.back().x = 1` or a method that changes a struct, `v.back().set()` or `v.back().p.set()`, is an
-  error, as in C++ it would change the element, and here it would do nothing. So is changing what `?:`, `??` and
-  `value_or()` give when what they choose from is a variable, a field or an element, `(f ? a : b).set()`, and what is in
-  the `values()` or `items()` of a hash map. `(f ? make(1) : make(2)).with(5)` changes nothing the program has, and is allowed.
+  error, as in C++ it would change the element, and here it would do nothing. So is changing what `?:` gives when both
+  of what it chooses from are variables, fields or elements, as `(f ? a : b).set()` would change `a` in C++, what `??`,
+  `value_or()` and `=` give of one, and what is in the `values()` or `items()` of a hash map. What a function gave changes
+  nothing the program has, so `(f ? make(1) : make(2)).with(5)` and `list().back().with(5)` are allowed.
 - `==` and `!=` compare the sizes and then each pair of elements, in order. Ordering with
   `<` is planned.
 - A vector prints as `[1, 2, 3]`, with strings in quotes: `["Ada", "Linus"]`.

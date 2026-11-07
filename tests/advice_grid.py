@@ -38,6 +38,8 @@ public:
 struct WithPointer { S* p; };
 S makeS(int n) { S s = {}; s.x = n; return s; }
 S? maybeS(bool f) { if (f) return makeS(3); return null; }
+vector<S> listS() { return {makeS(1)}; }
+hashmap<string, S> tableS() { return {{"a", makeS(1)}}; }
 vector<int>? gives() { return vector<int>{1}; }
 S? givesS() { return S{}; }
 """
@@ -106,6 +108,9 @@ SAME = [  # (declared, wrong, printed, expected)
     ("S a = {};\nS b = {};\nbool f = true;", "(f ? a : b).set();", "a.x", "7"),
     ("S a = {};\nS b = {};\nbool f = false;", "(f ? a : b).x = N;", "b.x", "5"),
     ("Plain a = {};\nPlain b = {};\nbool f = true;", "(f ? a : b).p.set();", "a.p.x", "7"),
+    ("vector<S> ws = {S{}, S{}};\nbool f = true;", "(f ? ws.back() : ws.front()).set();", "ws[1].x", "7"),
+    ("vector<S> ws = {S{}, S{}};\nbool f = false;", "(f ? ws.back() : ws.front()).x = N;", "ws[0].x", "5"),
+    ('hashmap<string, S> m = {{"a", S{}}, {"b", S{}}};\nbool f = true;', '(f ? m["a"] : m["b"]).set();', 'm["a"].x', "7"),
     ("vector<unique<C>?> w;\nw.push_back(unique<C>());", "w[w.size() - 1].go();", "w[0]?.n", "2"),
     # The value is a class object, so only the optionals of values are stored back, and `const` on the root does not matter
     ("KS made = KS();\nmade.o = S{};\nconst KS? k = made;", "k?.o?.set();", "made.o?.x", "7"),
@@ -131,6 +136,7 @@ READ_ONLY = [
     ("vector<int>? o = vector<int>{1};", "long n = o.size();"),
     ('hashmap<string, vector<int>> m = {{"a", vector<int>{1}}};', 'long n = m.get("a").size();'),
     ("S? o = S{};", "int r = o.read();"),
+    ('hashmap<string, int>? hm = hashmap<string, int>{};', 'int n = hm.at("a");'),
 ]
 
 # Methods that change: reading with `?.` would be an error of its own, so the help must not offer it.
@@ -155,6 +161,10 @@ NOT_SIMPLE = [
     ("O? o = O{.h = H{}};", "o.value().h.value().items.clear();"),
     ("S? o = null;\nS d = {};", "o.value_or(d).set();"),
     ("vector<S?> w = {S{}};", "w[w.size() - 1].set();"),
+    ('hashmap<string, S> m = {{"a", S{}}, {"b", S{}}};\nbool f = true;', '(f ? m.at("a") : m.at("b")).set();'),
+    ("S? a = S{};\nS? b = S{};\nbool f = true;", "(f ? a.value() : b.value()).set();"),
+    ("S a = {};\nS b = {};\nbool f = true;\nbool g = false;", "(f ? (g ? a : b) : (g ? b : a)).set();"),
+    ("H? hh = H{.os = S{}};", "(hh?.os ?? S{}).set();"),
     ("S? o = null;\nS d = {};", "(o ?? d).set();"),
     ('hashmap<string, S> m = {{"a", S{}}};', "m.values()[0].set();"),
 ]
@@ -194,6 +204,8 @@ ELSEWHERE = [  # (definitions, wrong, main, expected)
     ("void f(H* p, long n) { @ }", "(p + n)->os.set();", 'H h = {};\nh.os = S{};\nf(&h, 0);\nprintln("{}", h.os?.x);', "7"),
     ("void f(H* p, long n) { @ }", "(*(p + n)).os.set();", 'H h = {};\nh.os = S{};\nf(&h, 0);\nprintln("{}", h.os?.x);', "7"),
     ("void f(H* p, long n) { @ }", "(p + n)->os?.set();", 'H h = {};\nh.os = S{};\nf(&h, 0);\nprintln("{}", h.os?.x);', "7"),
+    ("void f(H** pp, long n) { @ }", "(*(*pp + n)).os?.set();", 'H h = {};\nh.os = S{};\nH* q = &h;\nf(&q, 0);\nprintln("{}", h.os?.x);', "7"),
+    ("void f(hashmap<char, H*> m, long n) { @ }", "(m['\"'] + n)->os?.set();", 'H h = {};\nh.os = S{};\nhashmap<char, H*> m = {{\'"\', &h}};\nf(m, 0);\nprintln("{}", h.os?.x);', "7"),
 ]
 
 # What is not wrong, and must stay that way: through a pointer, or a class, a method that gave a copy reaches the real thing.
@@ -211,6 +223,12 @@ VALID = [  # (definitions, main, expected)
     ("", "bool f = false;\nS u = (maybeS(f) ?? S{}).with(6);\nprintln(\"{}\", u.x);", "6"),
     ("", "bool f = false;\nS u = maybeS(f).value_or(S{}).with(7);\nprintln(\"{}\", u.x);", "7"),
     ("", "bool f = true;\nS u = (f ? makeS(1) : makeS(2));\nprintln(\"{}\", (f ? u : makeS(4)).read());", "1"),
+    ("", "S u = maybeS(true).value().with(5);\nprintln(\"{}\", u.x);", "5"),
+    ("", "S u = listS().back().with(5);\nprintln(\"{}\", u.x);", "5"),
+    ("", "S u = tableS().at(\"a\").with(5);\nprintln(\"{}\", u.x);", "5"),
+    ("", "S a = {};\nbool f = true;\nS u = (f ? a : makeS(2)).with(9);\nprintln(\"{} {}\", u.x, a.x);", "9 1"),
+    ("class Holder { public: S s; };", "Holder h1 = Holder();\nHolder h2 = Holder();\nbool f = true;\n(f ? h1 : h2).s.set();\nprintln(\"{}\", h1.s.x);", "7"),
+    ("", "S a = {};\nS* p = &a;\nbool f = true;\n(f ? p : p)->set();\nprintln(\"{}\", a.x);", "7"),
     ("", "S a = {};\nWithPointer? o = WithPointer{.p = &a};\no?.p->set();\nprintln(\"{}\", a.x);", "7"),
     ("", "S a = {};\nhashmap<string, WithPointer> m = {{\"a\", WithPointer{.p = &a}}};\nm.get(\"a\")?.p[0].set();\nprintln(\"{}\", a.x);", "7"),
     ("", "S a = {};\nH h = {};\nh.os = S{};\nH* const p = &h;\nif (auto v = p[0].os) { v.set(); p[0].os = v; }\nprintln(\"{}\", p[0].os?.x);", "7"),
