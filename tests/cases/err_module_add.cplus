@@ -1,0 +1,58 @@
+// What a module has comes with the language: a program can use it, and cannot add to it.
+import json;
+
+struct json::Mine { int x = 1; };
+// error: 'json::Mine' would add to the module 'json', which a program cannot do
+class json::Yours { public: int x = 1; };
+// error: 'json::Yours' would add to the module 'json', which a program cannot do
+interface json::Speaker { string speak() const; };
+// error: 'json::Speaker' would add to the module 'json', which a program cannot do
+int json::mine() { return 2; }
+// error: 'json::mine' would add to the module 'json', which a program cannot do
+const int json::LIMIT = 3;
+// error: 'json::LIMIT' would add to the module 'json', which a program cannot do
+constexpr int json::OTHER = 3;
+// error: 'json::OTHER' would add to the module 'json', which a program cannot do
+template<typename json::T> void generic() {}
+// error: 'json::T' would add to the module 'json', which a program cannot do
+template<typename T> concept json::Addable = requires(T a, T b) { a + b; };
+// error: 'json::Addable' would add to the module 'json', which a program cannot do
+extern "C" int json::abs(int n);
+// error: 'json::abs' would add to the module 'json', which a program cannot do
+extern "C" struct json::FILE;
+// error: 'json::FILE' would add to the module 'json', which a program cannot do
+void parameter(int json::number) {}
+// error: 'json::number' would add to the module 'json', which a program cannot do
+class Holder {
+public:
+    int json::field = 4;
+    // error: 'json::field' would add to the module 'json', which a program cannot do
+};
+class Other {
+public:
+    int json::method() { return 1; }
+    // error: 'json::method' would add to the module 'json', which a program cannot do
+};
+void locals() {
+    int json::local = 5;
+    // error: 'json::local' would add to the module 'json', which a program cannot do
+}
+void loops() {
+    for (auto json::item : vector<int>{1}) {}
+    // error: 'json::item' would add to the module 'json', which a program cannot do
+}
+void conditions() {
+    int? value = 1;
+    if (auto json::inside = value) {}
+    // error: 'json::inside' would add to the module 'json', which a program cannot do
+}
+void catches() {
+    try {
+    } catch (Error json::problem) {
+    }
+    // error: 'json::problem' would add to the module 'json', which a program cannot do
+}
+int main() {
+    return 0;
+}
+// error: leave out the `json::`, and use the name by itself

@@ -653,8 +653,7 @@ will confidently write C++ wherever the two differ.
   program when `X` is used, and `constexpr` reports it while compiling. They could become one rule.
 - Printing still goes by a function the compiler writes for each type, while 2.14 says it is built on descriptors. It works, and
   it costs a program nothing it does not print. Moving it would give one way of walking a value, at the cost of a slower `println`.
-- What comes with the language is recognized by how it is spelled: a type's name, as in `isHashmap` and the printing of a `Task`, the positions of fields, as in `json.c`'s `VALUE_*`, and the tokens of `json::parse` joined into one name. It is enough while the tests catch a mismatch at once, and each new built-in adds a case. An attribute on what is built in, and modules that are really scopes, would replace it, and belong with modules of your own.
-- `json::of(x)` writes `x` as text and reads that back, which costs twice what building the value directly would. It stays until someone has to care, as it is a few lines against a walk over every kind of type.
+- What a module has is one token with `::` in it, not a scope, which is what `joinModuleNames` makes. A program cannot tell, since it cannot declare such a name (`err_module_add`). Real scopes come with a program's own modules, which need them.
 - `main` takes its arguments as in C++, through raw pointers. A checked form, such as
   `int main(vector<string> args)`, could come later.
 - References (`T&`): whether C+ gets them, and in what form. They decide how

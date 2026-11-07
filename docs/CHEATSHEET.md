@@ -174,6 +174,7 @@ long square(long n) { return n * n; }
 | `for (auto [k, v] : m)`, `for (const auto& [k, v] : m)` | structured bindings are planned: `for (auto e : m)`, then `e.first` and `e.second` |
 | `nlohmann::json`, `JSON.parse(text)`, `JSON.stringify(x)` | `import json;`, then `try json::parse<User>(text)` or `try json::parse<json::Value>(text)`, and `json::stringify(x)` |
 | `NLOHMANN_DEFINE_TYPE_...`, `to_json`, `from_json` | not needed: the compiler knows the fields of every type |
+| `struct json::Mine { ... };`, `namespace json { ... }` | a module's names are its own, and a program cannot add to them: `struct Mine { ... };` |
 | `fetch(url)`, `await fetch(url)`, `curl_easy_perform` | `import http;`, then `try http::get(url)`, which waits for the answer. `http::fetch` is planned, with async |
 | `res.text()`, `res.json()`, `res.headers.get(x)` | `r.body`, `try json::parse<T>(r.body)`, `r.header(x)` |
 | `http::get(url, options)`, `fetch(url, {method: "PUT"})` | one function per name for now: `try http::send({.method = "PUT", .url = url})` |

@@ -445,7 +445,56 @@ def check_what_is_linked(cplus, workdir):
     if run.returncode != 0 or made:
         print(f"FAIL a program that only imports reflect has what JSON needs: {made}\n  " + run.stderr[:300])
         ok = False
+    # json::of makes its value directly, as text between the two would cost twice as much.
+    source.write_text("import json;\nint main() { println(\"{}\", json::of(1).whole()); return 0; }\n")
+    run = subprocess.run([cplus, "build", str(source), "--emit-llvm"], capture_output=True, text=True)
+    body = re.search(r'define [^\n]*"cplus\.json::of<int>"[^\n]*\n(.*?)^}', run.stdout, re.S | re.M)
+    calls = re.findall(r'call [^@\n]*@"?([^"(\s]+)', body.group(1)) if body else []
+    through_text = [name for name in calls if "json_write" in name or "json_read" in name or "stringify" in name or "parse" in name]
+    if run.returncode != 0 or through_text or "cplus_json_build" not in calls:
+        print(f"FAIL json::of goes through text: it calls {calls}\n  " + run.stderr[:300])
+        ok = False
     return ok
+
+
+def check_source_rules(root=ROOT):
+    """What the review of the code found twice over, and which no behavior would show: one of a thing, in one place."""
+    def text(name):
+        return (root / name).read_text()
+    runtime = "".join(path.read_text() for path in sorted((root / "runtime").glob("*.c")))
+    codegen = text("compiler/Codegen.cpp")
+    parser = text("compiler/Parser.cpp")
+    sema = text("compiler/Sema.cpp")
+    builtins = text("compiler/Builtins.h")
+    broken = []
+    def rule(holds, what):
+        if not holds:
+            broken.append(what)
+    # Running out of memory says one thing, from one place.
+    rule("static void* memory(" not in runtime, "runtime: memory() written again instead of cplus_malloc")
+    rule('cplus_stop("out of memory"' not in runtime, "runtime: its own out of memory message instead of cplus_malloc")
+    # How a call is made, and how a struct's fields are retained and released, are each written once.
+    rule(len(re.findall(r"\w+\.insert\(\w+\.begin\(\), result\)", codegen)) == 1, "Codegen: spawn writes its own way of making a call")
+    rule(codegen.count("for (auto [f, which] : {std::pair{info.retain") == 1, "Codegen: a second copy of what a struct's fields do on retain and release")
+    # What a lookup in a hashmap passes around is a borrowed key.
+    rule("__find(K key" not in builtins, "Builtins: __find copies its key")
+    # The list of modules is in one place.
+    rule('imp.path != "json"' not in sema, "Sema: its own list of the modules")
+    rule("kBuiltinModules[]" not in parser and "kBuiltinModules[]" in text("compiler/AST.h"), "Parser: its own list of the modules")
+    # A declaration in Builtins.h and its definition in the runtime agree.
+    rule("int32_t cplus_json_read" not in runtime, "json.c: cplus_json_read is not the bool that Builtins.h says")
+    # A URL is cleaned once, where an error is made.
+    rule("http::WebSocket(socket, http::__urlForError" not in builtins, "Builtins: a URL cleaned twice")
+    # What comes with the language says what it is, and the compiler finds its fields by name.
+    rule('sd.templateName == "Task"' not in codegen, "Codegen: knows a Task by its name")
+    rule("sd.fields[0].type->elem" not in codegen and "self, 0, \"entries\"" not in codegen, "Codegen: knows the fields of a hashmap by their places")
+    rule("fields[0].type->elem" not in sema, "Sema: knows the fields of a hashmap by their places")
+    # What is not code that is true any more.
+    rule(text("compiler/Parser.h").startswith("#pragma once"), "Parser.h: something before #pragma once")
+    rule("What `throw` takes" not in parser, "Parser: a comment for something that moved")
+    for what in broken:
+        print(f"FAIL {what}")
+    return not broken
 
 
 def build_c_library(source, workdir):
@@ -616,6 +665,7 @@ def main():
             ok = check_crash_in_output(cplus, pathlib.Path(tmp)) and ok
             ok = check_print_lines(cplus, pathlib.Path(tmp)) and ok
             ok = check_what_is_linked(cplus, pathlib.Path(tmp)) and ok
+            ok = check_source_rules() and ok
             ok = check_command_line(cplus, pathlib.Path(tmp)) and ok
             ok = check_spec_code(cplus, pathlib.Path(tmp)) and ok
 

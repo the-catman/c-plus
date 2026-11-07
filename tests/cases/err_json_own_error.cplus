@@ -7,3 +7,4 @@ int main() {
     return 0;
 }
 // error: 'json' uses the built-in class 'Error', but this program has its own
+// error: rename your class. One of your own for errors can derive from the built-in one: `class AppError : public Error { ... };`

@@ -1,0 +1,16 @@
+// A WebSocket prints as what it is, which shows neither an address nor a secret in its URL.
+import http;
+
+extern "C" string? getenv(string name);
+
+int main() throws {
+    string ws = getenv("CPLUS_TEST_WS") ?? "missing";
+    http::WebSocket socket = try http::connect(ws + "/ws/echo?token=secret");
+    println("{}", socket);
+    // expect: http::WebSocket {...}
+    string shown = format("{}", socket);
+    println("{}", shown.contains("secret"));
+    // expect: false
+    socket.close();
+    return 0;
+}

@@ -56,6 +56,7 @@ private:
     bool check(Tok k) const { return peek().kind == k; }
     bool match(Tok k);
     const Token& expect(Tok k, const std::string& context);
+    const Token& expectNewName(const std::string& context);
     Loc afterPrev() const;
     [[noreturn]] void fail(Loc loc, const std::string& message, const std::string& help, const std::string& spec);
     [[noreturn]] void notYet(Loc loc, const std::string& feature, const std::string& help);

@@ -1,0 +1,16 @@
+// An object that refers to itself has no value to make.
+import json;
+
+class Node {
+public:
+    Node? next;
+};
+
+int main() {
+    Node a = Node();
+    a.next = a;
+    json::Value v = json::of(a);
+    println("{}", v.size());
+    return 0;
+}
+// trap: an object refers to itself, directly or through others, so it cannot be made into a json::Value

@@ -1792,8 +1792,9 @@ struct Codegen::Impl {
             b.CreateUnreachable();
             b.SetInsertPoint(foundBB);
         }
-        const Type* entries = mapType->decl->fields[0].type;
-        llvm::Value* slot = fieldAddress(mapType, self, 0, "entries");
+        int entriesField = hashmapEntriesField(*mapType->decl);
+        const Type* entries = mapType->decl->fields[entriesField].type;
+        llvm::Value* slot = fieldAddress(mapType, self, entriesField, "entries");
         llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "entries");
         if (write) buf = reserve(slot, buf, entries, b.getInt64(0));
         if (hold) {
@@ -3946,13 +3947,28 @@ struct Codegen::Impl {
     }
 
     // The fields of a struct or class, those of its base classes first, as each is measured from `offset`.
+    // A field that the compiler or the runtime needs of what comes with the language, wherever Builtins.h has it.
+    static int builtinField(const StructDecl& sd, const char* name) {
+        int index = sd.fieldIndex(name);
+        if (index < 0) llvm::report_fatal_error(llvm::Twine("Builtins.h has no field ") + name + " in " + sd.name);
+        return index;
+    }
+
     void addFieldsOf(const StructDecl& sd, uint64_t offset, std::vector<llvm::Constant*>& out, bool built = false) {
         built = built || sd.constructor;  // this one, or one that derives from it, can give the fields their values
         for (const StructDecl* base : sd.bases) addFieldsOf(*base, offset + baseOffset(sd, *base), out, built);
         const llvm::StructLayout* layout = mod->getDataLayout().getStructLayout(types.at(&sd).layout);
         size_t before = !sd.isClass ? 0 : sd.bases.empty() ? 2 : sd.bases.size();
         auto* fieldTy = llvm::StructType::get(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy(), b.getInt64Ty()});
-        for (size_t i = 0; i < sd.fields.size(); ++i) {
+        // json.c knows a json::Value's fields by their places in the descriptor, whatever their order in Builtins.h.
+        static const char* const kJsonValueFields[] = {"kind_", "flag_", "number_", "isWhole_", "whole_", "text_", "items_", "fields_"};
+        std::vector<size_t> order;
+        if (isJsonValue(&sd.type)) {
+            for (const char* name : kJsonValueFields) order.push_back((size_t)builtinField(sd, name));
+        } else {
+            for (size_t i = 0; i < sd.fields.size(); ++i) order.push_back(i);
+        }
+        for (size_t i : order) {
             const FieldDecl& f = sd.fields[i];
             bool isPublic = f.access == Access::Public;
             int64_t flags = (isPublic ? CPLUS_FIELD_PUBLIC : 0) |
@@ -3995,8 +4011,12 @@ struct Codegen::Impl {
                 const StructDecl& sd = *t->decl;
                 if (isHashmap(t)) {
                     kind = CPLUS_KIND_MAP;
-                    elem = typeDescriptor(sd.fields[0].type->elem);
-                    length = (int64_t)mod->getDataLayout().getStructLayout(types.at(&sd).layout)->getElementOffset(1);
+                    // json.c finds these by where they are, and `first` and `second` are what a program sees.
+                    const StructDecl& entry = *sd.fields[builtinField(sd, "entries_")].type->elem->decl;
+                    if (builtinField(sd, "entries_") != 0 || builtinField(entry, "first") != 0 || builtinField(entry, "second") != 1)
+                        llvm::report_fatal_error("Builtins.h has moved a field of hashmap that json.c finds by its place");
+                    elem = typeDescriptor(sd.fields[builtinField(sd, "entries_")].type->elem);
+                    length = (int64_t)mod->getDataLayout().getStructLayout(types.at(&sd).layout)->getElementOffset(builtinField(sd, "hashes_"));
                     if (!buildsFromDescriptors) break;
                     auto* f = internalFunction("cplus." + sd.name + "#put", b.getVoidTy(), {b.getPtrTy(), b.getPtrTy()});
                     {
@@ -4033,15 +4053,17 @@ struct Codegen::Impl {
     // A hashmap prints as `{"a": 1, "b": 2}`, in order, and is equal to one with the same entries in any order.
     // See Builtins.h for what it holds. The insertion point is at the start of the print helper.
     void defineMapHelpers(const StructDecl& sd, TypeInfo& info) {
-        const Type* entries = sd.fields[0].type;
-        const Type* hashes = sd.fields[1].type;
+        int entriesField = builtinField(sd, "entries_");
+        int hashesField = builtinField(sd, "hashes_");
+        const Type* entries = sd.fields[entriesField].type;
+        const Type* hashes = sd.fields[hashesField].type;
         const Type* entry = entries->elem;
         const Type* keyType = sd.templateArgs[0].type;
         const Type* valueType = sd.templateArgs[1].type;
         llvm::Value* self = info.print->getArg(0);
         llvm::Value* out = info.print->getArg(1);
-        llvm::Value* buf = loadField(sd, self, 0);
-        llvm::Value* hashBuf = loadField(sd, self, 1);
+        llvm::Value* buf = loadField(sd, self, entriesField);
+        llvm::Value* hashBuf = loadField(sd, self, hashesField);
         llvm::Value* any = entryAlloca(b.getInt1Ty(), "any");
         b.CreateStore(b.getInt1(false), any);
         printText(out, "{");
@@ -4127,8 +4149,9 @@ struct Codegen::Impl {
             llvm::Value* written = b.CreateLoad(stringTy, text, "written");
             printValue(out, written, Type::stringTy());
             releaseValue(written, Type::stringTy());
-        } else if (sd.templateOf && sd.templateOf->nameLoc.line == 0 && (sd.templateName == "Task" || sd.templateName == "__TaskThrows")) {
-            printText(out, "{...}");  // what it holds may still be being written
+        } else if (sd.role == StructDecl::Role::Opaque) {
+            if (!sd.isClass) printText(out, sd.name + " ");
+            printText(out, "{...}");
         } else {
             printText(out, "{");
             bool first = true;

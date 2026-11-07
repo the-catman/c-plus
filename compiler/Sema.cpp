@@ -2176,7 +2176,7 @@ void Sema::checkLooseValue(Expr& e, Flow& flow) {
 void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
     list.type = type;
     if (isHashmap(type) && !list.elements.empty()) {  // its entries, as `{key, value}`
-        const Type* entry = type->decl->fields[0].type->elem;
+        const Type* entry = type->decl->fields[hashmapEntriesField(*type->decl)].type->elem;
         for (auto& el : list.elements) {
             if (!el.designator.empty()) {
                 diags_.error(el.loc, "a hashmap's { } list holds its entries, not named fields",

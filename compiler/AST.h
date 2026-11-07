@@ -709,6 +709,10 @@ struct StructDecl {
     bool opaque = false;   // `extern "C" struct sqlite3;`: a C type known only by name
     bool externC = false;  // defined inside `extern "C"`: every field must be a C type
     bool isInterface = false;  // `interface Speaker { ... }`: a class with only methods that have no body
+    // What comes with the language says what it is, with `__role(...)` in its source: see Builtins.h.
+    // Opaque: it prints as its name, as what it holds is the runtime's, or may still be being written.
+    enum class Role { None, Hashmap, JsonValue, Opaque };
+    Role role = Role::None;
     const TemplateDecl* templateOf = nullptr;  // for `Box<int>`: the generic it is made from
     std::vector<TemplateArg> templateArgs;
     std::string templateName;   // for `Box<int>`: `Box`, the name its constructor has
@@ -902,12 +906,11 @@ inline bool holdsLocal(const Type* t) {
     return holdsLocal(t, seen);
 }
 
-// Whether this is the language's `hashmap<K, V>`, and not one that a program wrote. See Builtins.h.
-inline bool isHashmap(const Type* t) {
-    return t->isStruct() && t->decl->templateOf && t->decl->templateOf->nameLoc.line == 0 && t->decl->templateOf->name == "hashmap";
-}
+// Whether this is the language's `hashmap<K, V>`, and not one that a program wrote.
+inline bool isHashmap(const Type* t) { return t->isStruct() && t->decl->role == StructDecl::Role::Hashmap; }
+inline int hashmapEntriesField(const StructDecl& map) { return map.fieldIndex("entries_"); }
 
-inline bool isJsonValue(const Type* t) { return t->isStruct() && t->decl->nameLoc.line == 0 && t->decl->name == "json::Value"; }
+inline bool isJsonValue(const Type* t) { return t->isStruct() && t->decl->role == StructDecl::Role::JsonValue; }
 
 // Whether a value of this type can be the key of a hashmap: whether `==` on it looks only at things that can
 // be hashed, and it can be copied. `seen` stops at a struct already looked at.

@@ -1565,9 +1565,10 @@ import json;          // a standard module
 import net.server;    // planned: the file net/server.cplus, relative to the project root
 ```
 
-Members of a module are used with `::`, as in `json::parse<User>(text)`. There is no `std::`
-namespace and no `using`; built-ins need no prefix. The compiler only accepts single-file programs so far, and
-reports an error for any other `import`. Only what a program imports is linked into it.
+Members of a module are used with `::`, as in `json::parse<User>(text)`. What a module has is its own: a program
+cannot declare a name such as `json::Mine`. There is no `std::` namespace and no `using`; built-ins need no prefix.
+The compiler only accepts single-file programs so far, and reports an error for any other `import`. Only what a
+program imports is linked into it.
 
 Nobody writes header files. For a library, the compiler can generate a `.hplus` interface
 file from a module: a readable summary of its public API, with declarations but no
@@ -1779,6 +1780,8 @@ println("{{literal braces}}");
   A class object prints its type name first: `User {name: "Ada", born: 1815}`. All fields
   print, private ones included. An object met again while it is being printed prints as
   `User {...}`, so an object that refers back to itself does not print forever.
+- What holds something of the runtime's prints as its name: `Task<int> {...}`, `Mutex {...}`, `LockGuard {...}`,
+  `http::WebSocket {...}`, `reflect::Type {...}`. Its fields would only show addresses that change, or a secret in a URL.
 - There is no `printf`, `cout` or `std::`.
 
 `format` takes the same arguments as `print` and returns the text as a string instead of
@@ -2263,7 +2266,7 @@ what it changes does not show anywhere else. The method of a struct runs on a co
 - `t.wait()` waits for the thread, and gives what the function returned, or throws what it threw, as what it really is. It can be called again, and
   gives the same. A value that holds a `unique` reference is taken out by the first one, and using it after a second **stops the program**.
 - `t.done()` says whether the thread has finished, without waiting.
-- A `Task` is a class reference, so copies are the same task. It prints as `Task<int> {...}`.
+- A `Task` is a class reference, so copies are the same task. It [prints](#printing) as `Task<int> {...}`.
 
 **Letting go of a task does not stop its thread or wait for it**, so `spawn save(data);` is fine by itself, unlike C++'s `std::async`. What it
 would have returned is dropped. An error that nothing can ever see any more is not: as with one that gets out of `main`, it is printed, and the

@@ -1,0 +1,24 @@
+// What holds things of the runtime's prints as what it is, as its fields would only show addresses, which change.
+import json;
+import reflect;
+
+void work() {}
+
+int main() {
+    Mutex m = Mutex();
+    println("{}", m);
+    // expect: Mutex {...}
+    LockGuard g = LockGuard(m);
+    println("{}", g);
+    // expect: LockGuard {...}
+    Task<void> t = spawn work();
+    t.wait();
+    println("{}", t);
+    // expect: Task<void> {...}
+    println("{}", reflect::type<int>());
+    // expect: reflect::Type {...}
+    // A class that a program wrote, with a field that is one of these.
+    println("{}", vector<reflect::Type>{reflect::type<string>()});
+    // expect: [reflect::Type {...}]
+    return 0;
+}

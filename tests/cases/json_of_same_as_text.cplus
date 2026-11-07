@@ -1,0 +1,183 @@
+// json::of makes the value directly. What it makes is what writing the value as text and reading that gives.
+import json;
+
+extern "C" double strtod(string text, void* end);
+
+struct Point { int x; double y; };
+struct Inner { string name; vector<int> numbers; int? missing; };
+struct Outer {
+    Inner inner;
+    array<long, 2> pair;
+    json::Value any;
+    string hidden_ = "shown, as it is public";
+private:
+    int secret = 1;
+};
+class Animal {
+public:
+    string name = "generic";
+    virtual int legs() const { return 0; }
+};
+class Dog : public Animal {
+public:
+    int age = 3;
+    int legs() const override { return 4; }
+private:
+    string secret = "left out";
+};
+class Node {
+public:
+    int value = 1;
+    Node? next;
+    weak<Node> parent;
+    Node(int v) : value(v) {}
+};
+class Parts {
+public:
+    unique<Node> only = unique<Node>(7);
+    local<Node> near = local<Node>(8);
+    unique<Node>? none;
+};
+
+
+
+template<typename T> void same(string name, T value) throws {
+    json::Value direct = json::of(value);
+    json::Value read = try json::parse<json::Value>(json::stringify(value));
+    bool asValues = direct == read;
+    bool asText = json::stringify(direct) == json::stringify(read);
+    bool asWhole = direct.whole() == read.whole();
+    println("{}: {} {} {} {}", name, asValues, asText, asWhole, json::stringify(direct));
+}
+
+int main() throws {
+    try same("int", 42);
+    // expect: int: true true true 42
+    try same("negative", -2147483647 - 1);
+    // expect: negative: true true true -2147483648
+    try same("long max", 9223372036854775807L);
+    // expect: long max: true true true 9223372036854775807
+    try same("long, more than a double holds", 9007199254740993L);
+    // expect: long, more than a double holds: true true true 9007199254740993
+    try same("double", 0.1);
+    // expect: double: true true true 0.1
+    try same("whole double", 3.0);
+    // expect: whole double: true true true 3
+    try same("large double", 1e300);
+    // expect: large double: true true true 1e+300
+    try same("whole double too large for a long", 1e19);
+    // expect: whole double too large for a long: true true true 1e+19
+    try same("negative zero", -0.0);
+    // expect: negative zero: true true true 0
+    try same("float", 0.1f);
+    // expect: float: true true true 0.1
+    try same("infinity", 1 / 0.0);
+    // expect: infinity: true true true null
+    try same("not a number", strtod("nan", null));
+    // expect: not a number: true true true null
+    try same("float infinity", float(1 / 0.0));
+    // expect: float infinity: true true true null
+    try same("true", true);
+    // expect: true: true true true true
+    try same("false", false);
+    // expect: false: true true true false
+    try same("char", 'a');
+    // expect: char: true true true "a"
+    try same("char above ASCII", char(200));
+    // expect: char above ASCII: true true true "È"
+    try same("char zero", '\0');
+    // expect: char zero: true true true "\u0000"
+    try same("string", "plain");
+    // expect: string: true true true "plain"
+    try same("empty string", "");
+    // expect: empty string: true true true ""
+    try same("UTF-8", "héllo ✓ 😀");
+    // expect: UTF-8: true true true "héllo ✓ 😀"
+    try same("not UTF-8", "a\xFFb\xC3");
+    // expect: not UTF-8: true true true "a�b�"
+    try same("with what is escaped", "q\"\\\n\t" + string(1, '\0'));
+    // expect: with what is escaped: true true true "q\"\\\n\t\u0000"
+    try same("vector", vector<int>{1, 2, 3});
+    // expect: vector: true true true [1,2,3]
+    try same("empty vector", vector<int>());
+    // expect: empty vector: true true true []
+    try same("vector of vectors", vector<vector<string>>{{"a"}, {}, {"b", "c"}});
+    // expect: vector of vectors: true true true [["a"],[],["b","c"]]
+    try same("array", array<double, 3>{1.5, 2, 0.25});
+    // expect: array: true true true [1.5,2,0.25]
+    try same("array of structs", array<Point, 2>{Point{1, 2.5}, Point{3, 4}});
+    // expect: array of structs: true true true [{"x":1,"y":2.5},{"x":3,"y":4}]
+    int? nothing;
+    int? something = 5;
+    try same("no optional", nothing);
+    // expect: no optional: true true true null
+    try same("an optional", something);
+    // expect: an optional: true true true 5
+    Animal? noAnimal;
+    Animal? aDog = Dog();
+    try same("no object in an optional", noAnimal);
+    // expect: no object in an optional: true true true null
+    try same("an object in an optional", aDog);
+    // expect: an object in an optional: true true true {"name":"generic","age":3}
+    try same("struct", Point{1, 2.5});
+    // expect: struct: true true true {"x":1,"y":2.5}
+    json::Value inside = json::object();
+    inside.set("k", json::of(1));
+    try same("struct of everything", Outer{.inner = Inner{"n", {1, 2}, null}, .pair = {5, 6}, .any = inside});
+    // expect: struct of everything: true true true {"inner":{"name":"n","numbers":[1,2],"missing":null},"pair":[5,6],"any":{"k":1},"hidden_":"shown, as it is public"}
+    try same("class by what it is", Dog());
+    // expect: class by what it is: true true true {"name":"generic","age":3}
+    Animal asBase = Dog();
+    try same("class through its base", asBase);
+    // expect: class through its base: true true true {"name":"generic","age":3}
+    Node first = Node(1);
+    first.next = Node(2);
+    Node shared = Node(9);
+    first.parent = shared;
+    try same("objects in a chain, with a weak one left out", first);
+    // expect: objects in a chain, with a weak one left out: true true true {"value":1,"next":{"value":2,"next":null}}
+    try same("the same object twice, which is no circle", vector<Node>{shared, shared});
+    // expect: the same object twice, which is no circle: true true true [{"value":9,"next":null},{"value":9,"next":null}]
+    try same("unique and local", Parts());
+    // expect: unique and local: true true true {"only":{"value":7,"next":null},"near":{"value":8,"next":null},"none":null}
+    hashmap<string, int> byName = {{"a", 1}, {"gone", 2}, {"b", 3}};
+    byName.erase("gone");
+    try same("map", byName);
+    // expect: map: true true true {"a":1,"b":3}
+    try same("empty map", hashmap<string, int>());
+    // expect: empty map: true true true {}
+    try same("map by int", hashmap<int, string>{{-1, "x"}, {2, "y"}});
+    // expect: map by int: true true true {"-1":"x","2":"y"}
+    try same("map by long", hashmap<long, bool>{{9007199254740993L, true}});
+    // expect: map by long: true true true {"9007199254740993":true}
+    try same("keys that are not UTF-8", hashmap<string, int>{{"\xFF", 1}, {"\xFE", 2}, {"é", 3}});
+    // expect: keys that are not UTF-8: true true true {"�":2,"é":3}
+    try same("map of what holds objects", hashmap<string, vector<Dog>>{{"dogs", {Dog()}}});
+    // expect: map of what holds objects: true true true {"dogs":[{"name":"generic","age":3}]}
+    try same("a value", try json::parse<json::Value>("{\"a\":[1,2.5,null,true,\"x\"]}"));
+    // expect: a value: true true true {"a":[1,2.5,null,true,"x"]}
+    try same("values in a vector", vector<json::Value>{json::of(1), json::object(), json::array()});
+    // expect: values in a vector: true true true [1,{},[]]
+
+    // What it makes is its own: changing the value later does not change what was made, and the other way around.
+    vector<int> numbers = {1};
+    json::Value made = json::of(numbers);
+    numbers.push_back(2);
+    println("{}", json::stringify(made));
+    // expect: [1]
+    json::Value copied = json::of(made);
+    copied.push(json::of(3));
+    println("{} {}", json::stringify(made), json::stringify(copied));
+    // expect: [1] [1,3]
+
+    // Up to the limit that writing and reading have.
+    Node chain = Node(0);
+    for (int i = 1; i < 255; i++) {
+        Node link = Node(i);
+        link.next = chain;
+        chain = link;
+    }
+    println("{}", json::of(chain) == try json::parse<json::Value>(json::stringify(chain)));
+    // expect: true
+    return 0;
+}

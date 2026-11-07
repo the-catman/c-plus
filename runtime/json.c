@@ -876,6 +876,21 @@ static bool read_map(reader* r, const cplus_type* t, char* place) {
 }
 
 // A value of any shape, into a json::Value that holds nothing.
+// The exact number too, if what it is written as is whole: a double cannot hold every long, which an id may need.
+static void note_whole_number(const cplus_field* f, char* place, const char* written, size_t size) {
+    char text[32];
+    bool whole = size < sizeof text;
+    for (size_t i = 0; whole && i < size; i++) whole = written[i] == '-' || (written[i] >= '0' && written[i] <= '9');
+    if (!whole) return;
+    memcpy(text, written, size);
+    text[size] = 0;
+    errno = 0;
+    long long value = strtoll(text, NULL, 10);
+    if (errno != 0) return;
+    place[f[VALUE_IS_WHOLE].offset] = 1;
+    *(int64_t*)(place + f[VALUE_WHOLE].offset) = value;
+}
+
 static bool read_json_value(reader* r, const cplus_type* t, char* place) {
     const cplus_field* f = t->fields;
     int32_t* kind = (int32_t*)(place + f[VALUE_KIND].offset);
@@ -905,21 +920,7 @@ static bool read_json_value(reader* r, const cplus_type* t, char* place) {
     *kind = IS_NUMBER;
     double* number = (double*)(place + f[VALUE_NUMBER].offset);
     if (!read_double(r, number, "a double")) return false;
-    // The exact number too, if it is whole: a double cannot hold every long, which an id may need.
-    char text[32];
-    size_t size = (size_t)(r->at - begin);
-    bool whole = size < sizeof text;
-    for (size_t i = 0; whole && i < size; i++) whole = begin[i] == '-' || (begin[i] >= '0' && begin[i] <= '9');
-    if (whole) {
-        memcpy(text, begin, size);
-        text[size] = 0;
-        errno = 0;
-        long long value = strtoll(text, NULL, 10);
-        if (errno == 0) {
-            place[f[VALUE_IS_WHOLE].offset] = 1;
-            *(int64_t*)(place + f[VALUE_WHOLE].offset) = value;
-        }
-    }
+    note_whole_number(f, place, begin, (size_t)(r->at - begin));
     return true;
 }
 
@@ -1019,6 +1020,225 @@ static bool read_value(reader* r, const cplus_type* t, char* place) {
 }
 
 // Fills `out`, which holds zero bytes. On failure, `problem` says why, and `out` still is a value to release.
+// ---- json::of --------------------------------------------------------------
+//
+// A json::Value that holds what a value would be written as, by the same rules as the writer, with no text in between.
+
+typedef struct {
+    const cplus_type* value;  // json::Value
+    const char* objects[MAX_DEPTH];
+    int object_count;
+    int depth;
+} builder;
+
+static void build_value(builder* b, const cplus_type* t, const char* place, char* out);
+
+static void build_enter(builder* b) {
+    if (++b->depth > MAX_DEPTH) stop_too_deep();
+}
+
+static void set_kind(builder* b, char* out, int32_t kind) { *(int32_t*)(out + b->value->fields[VALUE_KIND].offset) = kind; }
+
+// What the writer would make of it, which is what shows whether it is whole, and how a float reads as a double.
+static void build_fraction(builder* b, char* out, const cplus_string* written, bool finite) {
+    if (finite) {
+        const cplus_field* f = b->value->fields;
+        char text[64];
+        size_t size = (size_t)written->length < sizeof text - 1 ? (size_t)written->length : sizeof text - 1;
+        memcpy(text, written->data, size);
+        text[size] = 0;
+        set_kind(b, out, IS_NUMBER);
+        *(double*)(out + f[VALUE_NUMBER].offset) = strtod(text, NULL);
+        note_whole_number(f, out, text, size);
+    }
+    cplus_str_release(written->owner);
+}
+
+// What is not UTF-8 becomes the character for that, as JSON text must be.
+static void build_text(builder* b, char* out, const char* data, int64_t size) {
+    cplus_string* text = (cplus_string*)(out + b->value->fields[VALUE_TEXT].offset);
+    set_kind(b, out, IS_STRING);
+    for (int64_t i = 0; i < size;) {
+        int length = cplus_utf8_length((const unsigned char*)data + i, size - i);
+        if (length) {
+            cplus_str_append(text, data + i, length);
+            i += length;
+        } else {
+            append_utf8(text, 0xFFFD);
+            i++;
+        }
+    }
+}
+
+static void build_list(builder* b, const cplus_type* elem, const char* first, int64_t count, char* out) {
+    const cplus_type* item = b->value;
+    set_kind(b, out, IS_ARRAY);
+    build_enter(b);
+    cplus_vec* buffer = NULL;
+    if (count > 0) buffer = cplus_vec_reserve(NULL, item->size, count, item->retain, item->release);
+    for (int64_t i = 0; i < count; i++) {
+        char* slot = (char*)(buffer + 1) + i * item->size;
+        start_value(item, slot);
+        buffer->size = i + 1;
+        build_value(b, elem, first + i * elem->size, slot);
+    }
+    *(cplus_vec**)(out + item->fields[VALUE_ITEMS].offset) = buffer;
+    b->depth--;
+}
+
+// An entry of the map of a json::Value, whose value is left for the caller, which then puts it in.
+static char* start_entry(builder* b, const char* key, int64_t key_size) {
+    const cplus_type* map = b->value->fields[VALUE_FIELDS].type;
+    char* entry = cplus_malloc((size_t)map->elem->size);
+    start_value(map->elem, entry);
+    cplus_str_append((cplus_string*)(entry + map->elem->fields[0].offset), key, key_size);
+    return entry;
+}
+
+static void finish_entry(builder* b, char* out, char* entry) {
+    const cplus_type* map = b->value->fields[VALUE_FIELDS].type;
+    map->put(out + b->value->fields[VALUE_FIELDS].offset, entry);
+    free(entry);
+}
+
+static void build_fields(builder* b, const cplus_type* t, const char* base, char* out) {
+    const cplus_type* map = b->value->fields[VALUE_FIELDS].type;
+    set_kind(b, out, IS_OBJECT);
+    build_enter(b);
+    for (int64_t i = 0; i < t->field_count; i++) {
+        const cplus_field* f = &t->fields[i];
+        if (!(f->flags & CPLUS_FIELD_PUBLIC) || f->type->kind == CPLUS_KIND_WEAK) continue;
+        char* entry = start_entry(b, f->name, (int64_t)strlen(f->name));
+        build_value(b, f->type, base + f->offset, entry + map->elem->fields[1].offset);
+        finish_entry(b, out, entry);
+    }
+    b->depth--;
+}
+
+static void build_map(builder* b, const cplus_type* t, const char* place, char* out) {
+    const cplus_type* map = b->value->fields[VALUE_FIELDS].type;
+    const cplus_vec* entries = *(cplus_vec* const*)place;
+    const cplus_vec* hashes = *(cplus_vec* const*)(place + t->length);
+    const cplus_field* key = &t->elem->fields[0];
+    const cplus_field* value = &t->elem->fields[1];
+    set_kind(b, out, IS_OBJECT);
+    build_enter(b);
+    for (int64_t i = 0; entries && i < entries->size; i++) {
+        if (((const int64_t*)(hashes + 1))[i] < 0) continue;
+        const char* from = (const char*)(entries + 1) + i * t->elem->size;
+        char* entry;
+        if (key->type->kind == CPLUS_KIND_STRING) {
+            // A key is text too, so what is not UTF-8 in it is treated as it is in a value.
+            const cplus_string* text = (const cplus_string*)(from + key->offset);
+            entry = start_entry(b, "", 0);
+            cplus_string* clean = (cplus_string*)(entry + map->elem->fields[0].offset);
+            for (int64_t at = 0; at < text->length;) {
+                int length = cplus_utf8_length((const unsigned char*)text->data + at, text->length - at);
+                if (length) cplus_str_append(clean, text->data + at, length);
+                else append_utf8(clean, 0xFFFD);
+                at += length ? length : 1;
+            }
+        } else {
+            char number[32];
+            int64_t n = key->type->kind == CPLUS_KIND_INT ? *(const int32_t*)(from + key->offset) : *(const int64_t*)(from + key->offset);
+            int size = snprintf(number, sizeof number, "%" PRId64, n);
+            entry = start_entry(b, number, size);
+        }
+        build_value(b, value->type, from + value->offset, entry + map->elem->fields[1].offset);
+        finish_entry(b, out, entry);
+    }
+    b->depth--;
+}
+
+static void build_object(builder* b, const char* place, char* out) {
+    char* object = *(char* const*)place;
+    if (!object) return;  // only a unique reference that was moved away, or an optional
+    const cplus_type* real = (*(const cplus_type* const* const*)(object + 8))[CPLUS_VTABLE_TYPE];
+    const char* start = cplus_object_start(object);
+    for (int i = 0; i < b->object_count; i++)
+        if (b->objects[i] == start)
+            cplus_stop("an object refers to itself, directly or through others, so it cannot be made into a json::Value",
+                       "JSON has no way to say that an object is the same one again. A weak reference is left out of JSON");
+    if (b->object_count == MAX_DEPTH) stop_too_deep();
+    b->objects[b->object_count++] = start;
+    build_fields(b, real, start, out);
+    b->object_count--;
+}
+
+// `out` is a json::Value that holds nothing.
+static void build_value(builder* b, const cplus_type* t, const char* place, char* out) {
+    const cplus_field* f = b->value->fields;
+    switch (t->kind) {
+        case CPLUS_KIND_BOOL:
+            set_kind(b, out, IS_BOOL);
+            out[f[VALUE_FLAG].offset] = *place != 0;
+            return;
+        case CPLUS_KIND_INT:
+        case CPLUS_KIND_LONG: {
+            int64_t n = t->kind == CPLUS_KIND_INT ? *(const int32_t*)place : *(const int64_t*)place;
+            set_kind(b, out, IS_NUMBER);
+            *(double*)(out + f[VALUE_NUMBER].offset) = (double)n;
+            out[f[VALUE_IS_WHOLE].offset] = 1;
+            *(int64_t*)(out + f[VALUE_WHOLE].offset) = n;
+            return;
+        }
+        case CPLUS_KIND_FLOAT: {
+            float x = *(const float*)place;
+            cplus_string written = {NULL, 0, NULL};
+            if (isfinite(x)) cplus_print_f32(&written, x);
+            build_fraction(b, out, &written, isfinite(x));
+            return;
+        }
+        case CPLUS_KIND_DOUBLE: {
+            double x = *(const double*)place;
+            cplus_string written = {NULL, 0, NULL};
+            if (isfinite(x)) cplus_print_f64(&written, x);
+            build_fraction(b, out, &written, isfinite(x));
+            return;
+        }
+        case CPLUS_KIND_CHAR:  // what it counts as, from 0 to 255, which is one character
+            set_kind(b, out, IS_STRING);
+            append_utf8((cplus_string*)(out + f[VALUE_TEXT].offset), (unsigned char)*place);
+            return;
+        case CPLUS_KIND_STRING: {
+            const cplus_string* s = (const cplus_string*)place;
+            build_text(b, out, s->data, s->length);
+            return;
+        }
+        case CPLUS_KIND_VECTOR: {
+            const cplus_vec* v = *(cplus_vec* const*)place;
+            build_list(b, t->elem, v ? (const char*)(v + 1) : NULL, v ? v->size : 0, out);
+            return;
+        }
+        case CPLUS_KIND_ARRAY: build_list(b, t->elem, place, t->length, out); return;
+        case CPLUS_KIND_OPTIONAL:
+            if (t->length < 0) build_value(b, t->elem, place, out);
+            else if (*place) build_value(b, t->elem, place + t->length, out);
+            return;
+        case CPLUS_KIND_STRUCT: build_fields(b, t, place, out); return;
+        case CPLUS_KIND_CLASS:
+        case CPLUS_KIND_UNIQUE:
+        case CPLUS_KIND_LOCAL: build_object(b, place, out); return;
+        case CPLUS_KIND_MAP: build_map(b, t, place, out); return;
+        case CPLUS_KIND_JSON_VALUE:  // it is a value already, and copies of one share what they can
+            memcpy(out, place, (size_t)t->size);
+            if (t->retain) t->retain(out);
+            return;
+        case CPLUS_KIND_WEAK: return;
+        default:
+            cplus_stop("a pointer cannot be made into a json::Value, since it only means something to this program",
+                       "make it a private field, which is left out of JSON");
+    }
+}
+
+void cplus_json_build(const void* value, const cplus_type* type, const cplus_type* json_value, void* out) {
+    builder b;
+    b.value = json_value;
+    b.object_count = 0;
+    b.depth = 0;
+    build_value(&b, type, value, out);
+}
+
 bool cplus_json_read(const cplus_string* text, const cplus_type* type, void* out, cplus_string* problem, int32_t* line, int32_t* column) {
     reader r = {.start = text->data, .at = text->data, .end = text->data + text->length, .problem = problem, .line = line, .column = column};
     start_value(type, out);

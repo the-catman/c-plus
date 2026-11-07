@@ -11,12 +11,17 @@
 //   __zero(T)       a T that is all zero bytes, for what must be filled in before anything can see it
 //   __type_of(T)    the descriptor of T, as a void*: see runtime/reflect.h
 //   __JsonWritable, __JsonReadable  what can be turned into JSON, and made from it
+//   __role(x);      as a member: what this type is to the compiler, as a type's name does not say. `hashmap` and
+//                   `json_value` are those two. `opaque` prints as `Name {...}`: what it holds is the runtime's, or
+//                   may still be being written, and its fields would show addresses or secrets
 //
-// A module the program imports has names such as `json::parse`. The parser makes each of them one identifier.
+// A module the program imports has names such as `json::parse`. The parser makes each of them one identifier, and a
+// program cannot declare one (Parser::expectNewName), so what a module has is what is written here.
 
 namespace cplus {
 
-// Codegen knows that `entries_` and `hashes_` are the first two fields of a hashmap. It finds the entry for
+// Codegen finds `entries_` and `hashes_` by name, and stops if `entries_` is not first, or `first` and `second` are
+// not the first two of an entry, as json.c relies on that. It finds the entry for
 // `m[key]` by calling `__place`, `__place_to_assign` or `__existing`, and it passes zero bytes for
 // `nothing`, with nothing able to run before they are replaced. Printing and == are in Codegen too.
 inline constexpr const char* kHashmapSource = R"cplus(
@@ -26,6 +31,7 @@ template<typename K, typename V> struct hashmap_entry {
 };
 
 template<__Hashable K, typename V> struct hashmap {
+    __role(hashmap);
 private:
     vector<hashmap_entry<K, V>> entries_;  // in the order they were added, erased ones left empty
     vector<long> hashes_;                  // the hash of each entry, or -1 once it is erased
@@ -191,7 +197,7 @@ inline constexpr const char* kJsonSource = R"cplus(
 extern "C" {
     bool cplus_json_read(void* text, void* type, void* out, void* problem, int* line, int* column);
     void cplus_json_write(void* value, void* type, int indent, void* out);
-    void cplus_stop(string message, string help);
+    void cplus_json_build(void* value, void* type, void* jsonValue, void* out);
 }
 
 class json::Error : public Error {
@@ -201,8 +207,9 @@ public:
     json::Error(string m, int l, int c) : Error(m), line(l), column(c) {}
 };
 
-// A value of any shape. runtime/json.c knows these fields, by their positions, and what the numbers in kind_ mean.
+// A value of any shape. runtime/json.c knows these fields, by the names in kJsonValueFields in Codegen.cpp, and what the numbers in kind_ mean.
 struct json::Value {
+    __role(json_value);
 private:
     int kind_ = 0;  // 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object
     bool flag_ = false;
@@ -284,14 +291,8 @@ json::Value json::array() {
 }
 
 template<__JsonWritable T> json::Value json::of(T value) {
-    string text;
-    cplus_json_write((void*)&value, __type_of(T), 0, (void*)&text);
     json::Value out;
-    string problem;
-    int line = 0;
-    int column = 0;
-    // What was just written is valid JSON, and writing stops at the depth that reading does.
-    if (!cplus_json_read((void*)&text, __type_of(json::Value), (void*)&out, (void*)&problem, &line, &column)) cplus_stop("json::of could not read what it wrote, which is a bug in C+", problem);
+    cplus_json_build((void*)&value, __type_of(T), __type_of(json::Value), (void*)&out);
     return out;
 }
 
@@ -334,6 +335,7 @@ extern "C" {
 struct __Void {};
 
 template<typename T> class Task {
+    __role(opaque);
     void* state_;
     T value_ = __zero(T);
 
@@ -354,6 +356,7 @@ public:
 };
 
 template<typename T> class __TaskThrows {
+    __role(opaque);
     void* state_;
     T value_ = __zero(T);
     Error? error_;
@@ -398,6 +401,7 @@ extern "C" {
 }
 
 class Mutex {
+    __role(opaque);
     void* mutex_;
 
 public:
@@ -411,6 +415,7 @@ public:
 
 inline constexpr const char* kLockGuardSource = R"cplus(
 class LockGuard {
+    __role(opaque);
     Mutex mutex_;
 
 public:
@@ -608,6 +613,7 @@ string http::encode(string text) {
 }
 
 class http::WebSocket {
+    __role(opaque);
     void* socket_;
     string url_;
 
@@ -659,7 +665,7 @@ http::WebSocket http::connectWith(http::Request request) throws {
     void* socket = cplus_ws_connect((void*)&request.url, (void*)&lines, request.timeout, request.maxBytes, (void*)&request.caFile,
                                     (void*)&kind, (void*)&problem);
     if (socket == null) throw http::Error(problem, kind, request.url);
-    return http::WebSocket(socket, http::__urlForError(request.url));  // it can be printed, which shows every field
+    return http::WebSocket(socket, request.url);
 }
 
 http::WebSocket http::connect(string url) throws {
@@ -692,6 +698,7 @@ struct reflect::Field {
 };
 
 struct reflect::Type {
+    __role(opaque);
 private:
     void* type_;
 

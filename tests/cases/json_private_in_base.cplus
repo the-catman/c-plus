@@ -1,0 +1,35 @@
+// A private field that a base class's constructor sets does not stop a class that derives from it from being read.
+import json;
+
+class Inner { public: string name = "from a constructor"; };
+
+class PrivateInBase {
+    Inner i;
+public:
+    PrivateInBase() : i(Inner()) {}
+    string name() const { return i.name; }
+};
+class Derived : public PrivateInBase {
+public:
+    int v = 0;
+};
+
+class PublicInBase {
+public:
+    Inner shown;
+    PublicInBase() : shown(Inner()) {}
+};
+class DerivedShown : public PublicInBase {
+public:
+    int v = 0;
+};
+
+int main() throws {
+    Derived b = try json::parse<Derived>(R"({"v": 3})");
+    println("{} {}", b.name(), b.v);
+    // expect: from a constructor 3
+    DerivedShown c = try json::parse<DerivedShown>("{}");
+    println("{}", c.shown.name);
+    // expect: from a constructor
+    return 0;
+}

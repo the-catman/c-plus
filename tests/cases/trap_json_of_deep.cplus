@@ -1,0 +1,21 @@
+// A chain longer than any JSON text can be has no value to make, as it would be too deep to write.
+import json;
+
+class Node {
+public:
+    Node? next;
+};
+
+int main() {
+    Node head = Node();
+    for (int i = 0; i < 2000; i++) {
+        Node link = Node();
+        link.next = head;
+        head = link;
+    }
+    json::Value v = json::of(head);
+    println("{}", v.size());
+    // Not reached, so the chain's own release does not matter here.
+    return 0;
+}
+// trap: a value is nested too deeply to write as JSON

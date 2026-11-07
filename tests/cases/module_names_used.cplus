@@ -1,0 +1,34 @@
+// Everywhere that what a module has is used, as opposed to added to, which err_module_add rejects.
+import json;
+import reflect;
+
+class Mine : public json::Error {
+public:
+    int extra = 1;
+    Mine() : json::Error("mine", 2, 3) {}
+};
+
+template<typename T> string written(T value) { return json::stringify(value); }
+
+void fails() throws { throw Mine(); }
+
+int main() throws {
+    json::Value? none = null;
+    vector<json::Value> values = {json::of(1)};
+    println("{} {}", none == null, values.size());
+    // expect: true 1
+    try {
+        try fails();
+    } catch (json::Error e) {
+        println("{} {} {}", e.what(), e.line, e.column);
+    }
+    // expect: mine 2 3
+    Error plain = Mine();
+    println("{}", dynamic_cast<json::Error?>(plain) != null);
+    // expect: true
+    println("{}", reflect::type<json::Value>().name());
+    // expect: json::Value
+    println("{}", written(json::of(2)));
+    // expect: 2
+    return 0;
+}

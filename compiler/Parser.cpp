@@ -48,6 +48,16 @@ void Parser::notYet(Loc loc, const std::string& feature, const std::string& help
     fail(loc, "this compiler does not support " + feature + " yet", help, spec::Status);
 }
 
+// A name being declared. What a module has is only read, by the name that joinModuleNames makes.
+const Token& Parser::expectNewName(const std::string& context) {
+    if (check(Tok::Ident) && peek().loc.line && peek().text.find("::") != std::string::npos) {
+        const std::string module = peek().text.substr(0, peek().text.find("::"));
+        fail(peek().loc, "'" + peek().text + "' would add to the module '" + module + "', which a program cannot do",
+             "leave out the `" + module + "::`, and use the name by itself", spec::Modules);
+    }
+    return expect(Tok::Ident, context);
+}
+
 const Token& Parser::expect(Tok k, const std::string& context) {
     if (check(k)) return advance();
     std::string message = std::string("expected '") + tokSpelling(k) + "' " + context + ", found " +
@@ -410,7 +420,7 @@ void Parser::parseTemplateHeader(TemplateDecl& t) {
         if (check(Tok::Dot))
             fail(peek().loc, "C+ has no templates with any number of parameters",
                  "write the parameters one by one, or pass a vector", spec::Generics);
-        const Token& name = expect(Tok::Ident, "for the name of the template parameter");
+        const Token& name = expectNewName("for the name of the template parameter");
         if (check(Tok::Assign)) notYet(peek().loc, "default template arguments", "give the arguments wherever it is used");
         for (auto& other : t.params)
             if (other.name == name.text)
@@ -873,7 +883,7 @@ FuncDecl* Parser::instantiateFunction(TemplateDecl& t, const std::vector<Templat
 // `concept Addable = requires(T a, T b) { a + b; };`
 void Parser::parseConcept(ConceptBody& out) {
     advance();  // `concept`
-    const Token& name = expect(Tok::Ident, "for the name of the constraint");
+    const Token& name = expectNewName("for the name of the constraint");
     expect(Tok::Assign, "after the name of the constraint");
     if (!check(Tok::Ident) || peek().text != "requires")
         notYet(peek().loc, "constraints that are not a `requires` expression", "write `concept " + name.text + " = requires(T a) { ... };`");
@@ -1142,7 +1152,7 @@ void Parser::parseOpaqueStruct() {
              spec::CTypes);
     if (kw.kind == Tok::KwClass)
         fail(kw.loc, "C has no classes", "declare a C type with `struct`, e.g. `struct sqlite3;`", spec::CTypes);
-    const Token& name = expect(Tok::Ident, "for the name of the C struct");
+    const Token& name = expectNewName("for the name of the C struct");
     if (check(Tok::LBrace)) {  // an ordinary struct, except that its fields must all be C types
         pos_ -= 2;
         parseRecord();
@@ -1177,7 +1187,7 @@ std::unique_ptr<FuncDecl> Parser::parseExternFunction() {
     auto fn = std::make_unique<FuncDecl>();
     fn->isExtern = true;
     fn->retType = parseCType(fn->retTypeLoc, true);
-    const Token& name = expect(Tok::Ident, "for the name of the C function");
+    const Token& name = expectNewName("for the name of the C function");
     fn->name = name.text;
     fn->nameLoc = name.loc;
     if (!check(Tok::LParen))
@@ -1801,7 +1811,7 @@ void Parser::parseParams(FuncDecl& fn) {
                        "pass the value itself: structs are copied, class objects are shared, and a vector is only "
                        "copied if one of the copies changes. To let the function change the caller's variable, "
                        "pass a pointer: `int* count`, called as `f(&n)`");
-            const Token& pname = expect(Tok::Ident, "for the parameter name");
+            const Token& pname = expectNewName("for the parameter name");
             rejectTemplateParamName(pname);
             if (check(Tok::LBracket) && fn.name == "main" && fn.role == FuncDecl::Role::Free) {
                 // Reported, and read as what it means, so that this is still the program's main.
@@ -1827,7 +1837,7 @@ std::unique_ptr<FuncDecl> Parser::parseFunction(const Type* retType, Loc retLoc)
     auto fn = std::make_unique<FuncDecl>();
     fn->retType = retType;
     fn->retTypeLoc = retLoc;
-    const Token& name = expect(Tok::Ident, "for the function name after the return type");
+    const Token& name = expectNewName("for the function name after the return type");
     fn->name = name.text;
     fn->nameLoc = name.loc;
     parseParams(*fn);
@@ -1859,7 +1869,7 @@ void Parser::parseRecord(StructDecl* into) {
     bool isClass = keyword != Tok::KwStruct;
     bool isInterface = keyword == Tok::KwInterface;
     const char* kw = isInterface ? "interface" : isClass ? "class" : "struct";
-    const Token& name = expect(Tok::Ident, std::string("for the ") + kw + " name");
+    const Token& name = expectNewName(std::string("for the ") + kw + " name");
     if (check(Tok::Semi))
         fail(peek().loc, "C+ has no forward declarations",
              std::string("remove this line; a ") + kw + " can be used before or after its definition. A C type used "
@@ -1970,6 +1980,15 @@ void Parser::parseMemberInits(FuncDecl& ctor) {
 }
 
 void Parser::parseMember(StructDecl& sd, Access& access) {
+    if (peek().loc.line == 0 && check(Tok::Ident) && peek().text == "__role") {  // only in what comes with the language
+        advance();
+        expect(Tok::LParen, "after __role");
+        const std::string role = advance().text;
+        expect(Tok::RParen, "after the role");
+        expect(Tok::Semi, "after __role(...)");
+        sd.role = role == "hashmap" ? StructDecl::Role::Hashmap : role == "json_value" ? StructDecl::Role::JsonValue : StructDecl::Role::Opaque;
+        return;
+    }
     rejectOtherLanguages();
     if (atAttribute()) {  // `[[allow(new_delete)]]` before a method, constructor or destructor
         Loc attr = parseAttribute();
@@ -2117,7 +2136,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         auto method = std::make_unique<FuncDecl>();
         method->retType = ty;
         method->retTypeLoc = typeLoc;
-        const Token& name = advance();
+        const Token& name = expectNewName("for the method name");
         method->name = name.text;
         method->nameLoc = name.loc;
         method->role = FuncDecl::Role::Method;
@@ -2181,7 +2200,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
     do {
         if (!firstName.empty()) parseLaterStars(ty, firstName, "field");
         if (check(Tok::Amp)) notYet(peek().loc, "reference types", "a field holds a value, or a pointer: `int* p;`");
-        const Token& name = expect(Tok::Ident, "for the field name");
+        const Token& name = expectNewName("for the field name");
         if (firstName.empty()) firstName = name.text;
         FieldDecl field{name.text, name.loc, ty, typeLoc, nullptr, access};
         if (match(Tok::Assign)) field.defaultValue = parseAssign();
@@ -2234,7 +2253,7 @@ StmtPtr Parser::parseTry() {
                      "so nothing is copied",
                      spec::Errors);
             if (check(Tok::Ident)) {
-                const Token& name = advance();
+                const Token& name = expectNewName("for the name of the error");
                 rejectTemplateParamName(name);
                 clause.var = std::make_unique<VarDecl>(name.loc, name.text, clause.type, clause.typeLoc);
                 clause.var->isConst = isConst;
@@ -2328,7 +2347,7 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
             notYet(peek().loc, "references",
                    "a variable holds its own value. To refer to another variable, use a pointer: `int* p = &x;`");
         const Token& name =
-            expect(Tok::Ident, decls.empty() ? "for the variable name" : "for the next variable name after ','");
+            expectNewName(decls.empty() ? "for the variable name" : "for the next variable name after ','");
         rejectTemplateParamName(name);
         auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
         var->isConst = isConst;
@@ -2462,7 +2481,7 @@ CondDecl Parser::parseCondDecl(const char* stmt) {
     bool isConst = false;
     Loc typeLoc;
     const Type* ty = parseType(typeLoc, &isConst);
-    const Token& name = expect(Tok::Ident, std::string("for the name of the variable declared in the ") + stmt +
+    const Token& name = expectNewName(std::string("for the name of the variable declared in the ") + stmt +
                                                " condition");
     if (!check(Tok::Assign))
         fail(peek().loc, std::string("a variable declared in the ") + stmt + " condition needs a value",
@@ -2499,7 +2518,7 @@ StmtPtr Parser::parseFor() {
             if (ty->is(Type::Kind::Void))
                 fail(typeLoc, "a loop variable cannot have type void", "write `auto` or the element type",
                      spec::RangeFor);
-            const Token& name = advance();
+            const Token& name = expectNewName("for the name of the loop variable");
             auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
             var->isConst = isConst;
             advance();  // ':'
