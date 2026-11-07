@@ -1780,6 +1780,7 @@ println("{{literal braces}}");
   A class object prints its type name first: `User {name: "Ada", born: 1815}`. All fields
   print, private ones included. An object met again while it is being printed prints as
   `User {...}`, so an object that refers back to itself does not print forever.
+- A method named `toString` is an ordinary method for now, which printing does not call.
 - What holds something of the runtime's prints as its name: `Task<int> {...}`, `Mutex {...}`, `LockGuard {...}`,
   `http::WebSocket {...}`, `reflect::Type {...}`. Its fields would only show addresses that change, or a secret in a URL.
 - There is no `printf`, `cout` or `std::`.
@@ -2081,7 +2082,8 @@ What a debug build adds:
   inside until one of its fields is read.
 - **Running out of stack, or any other crash,** prints a trace too.
 - **Leak reports.** Leaks are [reported at exit](#memory-model) without setting
-  `CPLUS_CHECK_LEAKS=1`. `CPLUS_CHECK_LEAKS=0` turns the report off.
+  `CPLUS_CHECK_LEAKS=1`, and the report says what each object is and where it was made, for
+  the first ten. `CPLUS_CHECK_LEAKS=0` turns the report off.
 
 Everything else that is undefined in C and C++, such as integer overflow and shifting too
 far, already stops the program in every build, so a debug build has nothing to add.
@@ -2267,6 +2269,7 @@ what it changes does not show anywhere else. The method of a struct runs on a co
   gives the same. A value that holds a `unique` reference is taken out by the first one, and using it after a second **stops the program**.
 - `t.done()` says whether the thread has finished, without waiting.
 - A `Task` is a class reference, so copies are the same task. It [prints](#printing) as `Task<int> {...}`.
+- If several threads stop the program at once, as with a failed check, one reports it. A report does not wait long for a thread that is stuck writing to the output.
 
 **Letting go of a task does not stop its thread or wait for it**, so `spawn save(data);` is fine by itself, unlike C++'s `std::async`. What it
 would have returned is dropped. An error that nothing can ever see any more is not: as with one that gets out of `main`, it is printed, and the

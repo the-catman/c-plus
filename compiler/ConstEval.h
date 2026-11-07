@@ -35,6 +35,7 @@ struct ConstHooks {
     std::function<const VarDecl*(const std::string&)> constant;   // a variable by name, as seen from where this is asked, or null
     std::function<const VarDecl*(const std::string&)> globalConstant;  // the same outside any function, which is all a function sees
     std::function<const FuncDecl*(const std::string&)> function;  // a function by name, or null
+    std::function<bool(const std::string&)> generic;              // whether a generic function has this name, if the caller cannot call one
     std::function<bool(const ConstraintExpr&)> constraint;        // `Number<T>`; may throw a ConstError
     std::function<int64_t(const Type*, Loc)> sizeOf;              // may throw a ConstError
     std::function<void(const FuncDecl&)> prepare;                 // before a function runs, if there is anything to do

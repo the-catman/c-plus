@@ -39,6 +39,7 @@ python3 tests/run_tests.py build/cplus
 
 - `python3 tests/run_tests.py build/cplus <name>` runs only the tests whose file name
   contains `<name>`.
+- `tests/errors_reached.py` lists the errors and the advice that no test reaches, and says how to measure that.
 - For memory bugs in the compiler itself, configure a second build with
   `-DCMAKE_CXX_FLAGS="-fsanitize=address,undefined"` into `build-asan/`, then run the same tests.
 

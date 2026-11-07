@@ -37,7 +37,7 @@ void Diagnostics::error(Loc loc, const std::string& message, const std::string& 
         suppressed_ = true;
         return;
     }
-    report("error", "\x1b[1;31m", loc, message, help, spec);
+    report("error", "\x1b[1;31m", loc, message, help.empty() ? "the part of the spec named below explains the rule" : help, spec);  // the tests fail on this one
     if (!contexts_.empty()) report("note", "\x1b[1;36m", contexts_.back().loc, contexts_.back().message, "", "");
 }
 

@@ -1,0 +1,305 @@
+// The forms the cheat sheet shows that need something around them, written as it writes them, and what it says they print.
+// check_cheat_sheet in tests/run_tests.py looks for each one here or in the other cheatsheet_forms files.
+[[allow(new_delete)]];
+import json;
+import reflect;
+
+struct P { int x; int y = 0; };
+struct Point { int x = 0; int y = 0; };
+template<typename T, int N, typename K, typename V> struct Shapes {
+    vector<T> items;
+    array<T, N> fixed;
+    T? maybe;
+    T* place = null;
+    hashmap<K, V> map;
+    V? found;
+};
+class U {
+private:
+    int hidden = 0;
+protected:
+    int shared = 0;
+public:
+    string name;
+    U(string n) : name(n) {}
+    ~U() {}
+};
+class Pet {
+public:
+    int tag = 0;
+};
+class Animal {
+public:
+    string name;
+    Animal(string n) : name(n) {}
+    virtual string sound() const { return "generic"; }
+};
+class Dog : public Animal, public Pet {
+public:
+    Dog(string n) : Animal(n) {}
+    string sound() const override { return Animal::sound() + "!"; }
+};
+class Base { public: int x = 1; int id = 2; };
+class Left : public Base {};
+class Right : public Base {};
+class Diamond : public Left, public Right {};
+class Node {
+public:
+    string name;
+    Node? next;
+    Node(string n) : name(n) {}
+    void go() {}
+};
+class NotFound : public Error {
+public:
+    NotFound() : Error("not found") {}
+};
+class Measured {
+public:
+    int x = 1;
+    int doubled() const { return this.x * 2; }
+};
+
+const bool bad = false;
+int f() throws { if (bad) throw Error("why"); return 1; }
+const string OTHER = "b";
+const string NAME = "a" + OTHER;
+constexpr int square(int n) { return n * n; }
+constexpr int MAX = square(4);
+template<typename T> T largest(T a, T b) { return a > b ? a : b; }
+template<typename T> class Stack {
+public:
+    T top;
+    Stack(T first) : top(first) {}
+};
+template<typename T, int N> struct Buffer { array<T, N> items; };
+template<typename T> concept Addable = requires(T a, T b) { a + b; };
+template<Addable T> T twice(T a) { return a + a; }
+
+void structForms() {
+    P p = {1, 2};
+    P q = {.y = 2};
+    P r = P{1, 2};
+    println("{} {} {} {}", p, q, r, P(p));
+    // expect: {x: 1, y: 2} {x: 0, y: 2} {x: 1, y: 2} {x: 1, y: 2}
+    U u = U("a");
+    U v = u;
+    println("{} {}", u, v.name);
+    // expect: U {hidden: 0, shared: 0, name: "a"} a
+    println("{}", vector<int>{1, 2});
+    // expect: [1, 2]
+    println("{}", array<int, 3>{1, 2, 3});
+    // expect: [1, 2, 3]
+    hashmap<string, int> shown = {{"a", 1}};
+    println("{}", shown);
+    // expect: {"a": 1}
+    struct_shape();
+}
+
+void struct_shape() {
+    Shapes<int, 2, string, int> shapes;
+    println("{}", shapes.items.size());
+    // expect: 0
+}
+
+void classForms() {
+    Dog dog = Dog("rex");
+    println("{}", dog.sound());
+    // expect: generic!
+    Diamond d = Diamond();
+    println("{} {}", d.Left::x, d.Left::id);
+    // expect: 1 2
+    println("{}", Measured().doubled());
+    // expect: 2
+}
+
+void weakForms() {
+    Node node = Node("n");
+    weak<Node> parent;
+    parent = node;
+    if (auto p = parent.lock()) println("{}", p.name);
+    // expect: n
+    println("{} {}", parent.lock()?.name ?? "none", parent.expired());
+    // expect: n false
+    parent.reset();
+    println("{}", parent.expired());
+    // expect: true
+}
+
+void errorForms() throws {
+    try {
+        try {
+            throw NotFound();
+        } catch (NotFound e) {
+            throw;
+        }
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // expect: not found
+    try { } catch (Error e) { }
+    try f();
+}
+
+void uniqueForms() {
+    unique<Node> a = unique<Node>("x");
+    unique<Node> b = move(a);
+    println("{}", b.name);
+    // expect: x
+    string x = "made";
+    unique<Node> c = unique<Node>(x);
+    println("{}", c.name);
+    // expect: made
+}
+
+void localForms() {
+    local<Node> a = local<Node>("x");
+    local<Node> b = a;
+    println("{}", b.name);
+    // expect: x
+}
+
+void containerForms() {
+    int n = 2;
+    int value = 7;
+    int x = 3;
+    vector<int> v = {1, 2, 3};
+    v.push_back(x);
+    int i = 0;
+    v[i] = 4;
+    println("{} {} {}", v.front(), v.back(), vector<int>(n, value));
+    // expect: 4 3 [7, 7]
+    v.pop_back();
+    auto size = v.size();
+    println("{}", size);
+    // expect: 3
+    hashmap<string, vector<int>> m;
+    string k = "k";
+    m[k].push_back(x);
+    for (auto e : m) println("{} {}", e.first, e.second);
+    // expect: k [3]
+    array<int, 3> a = array<int, 3>{1, 2};
+    a.fill(x);
+    println("{}", a);
+    // expect: [3, 3, 3]
+}
+
+void jsonForms() throws {
+    string text = R"({"a":[{"b":1}]})";
+    json::Value doc = try json::parse<json::Value>(text);
+    println("{}", doc.get("a")?.at(0)?.text() ?? "none");
+    // expect: none
+    println("{} {}", doc.isNull(), doc.size());
+    // expect: false 1
+    println("{}", doc.keys());
+    // expect: ["a"]
+    json::Value v = json::object();
+    string k = "k";
+    int x = 1;
+    v.set(k, json::of(x));
+    println("{}", json::stringify(v));
+    // expect: {"k":1}
+    {
+        json::Value v = json::array();
+        v.push(json::of(x));
+        println("{}", v.items().size());
+    }
+    // expect: 1
+    json::Value number = json::of(1.5);
+    json::Value flag = json::of(true);
+    println("{} {} {}", number.number() ?? 0, number.whole() ?? 0, flag.boolean() ?? false);
+    // expect: 1.5 0 true
+    println("{}", try json::parse<User>("{}"));
+    // expect: User {name: "", age: 0}
+    try userForm();
+}
+
+class User {
+public:
+    string name = "";
+    int age = 0;
+};
+
+void userForm() throws {
+    string text = "{}";
+    User u = try json::parse<User>(text);
+    println("{}", u.age);
+    // expect: 0
+}
+
+void reflectForms() {
+    auto t = reflect::type<Point>();
+    println("{} {}", t.name(), t.kind());
+    // expect: Point struct
+    for (auto f : t.fields()) print("{} ", f.name);
+    println();
+    // expect: x y 
+    {
+        auto t = reflect::type<vector<int>>();
+        println("{}", t.elem()?.name() ?? "none");
+    }
+    // expect: int
+}
+
+void numberForms() {
+    println("{:.2f} {:e} {:g} {:.3}", 1.5, 1.5, 1.5, 1.5);
+    // expect: 1.50 1.500000e+00 1.5 1.5
+    print("no line, ");
+    print("{}\n", "one line");
+    // expect: no line, one line
+}
+
+void optionalForms() {
+    int? number = 1;
+    int x = 2;
+    println("{} {} {}", number.has_value(), number.value(), number.value_or(x));
+    // expect: true 1 1
+    bool? flag = null;
+    println("{}", flag != null);
+    // expect: false
+}
+
+void pointerForms() {
+    int x = 1;
+    int* p = &x;
+    int* const fixed = &x;
+    println("{}", *p + *fixed);
+    // expect: 2
+    Point point;
+    {
+        Point* p = &point;
+        println("{}", p->x);
+    }
+    // expect: 0
+}
+
+[[allow(new_delete)]]
+void memoryForms() {
+    int n = 2;
+    int* a = new int[n];
+    delete[] a;
+    Point* point = new Point{1, 2};
+    delete point;
+}
+
+int main() throws {
+    structForms();
+    classForms();
+    weakForms();
+    try errorForms();
+    uniqueForms();
+    localForms();
+    containerForms();
+    try jsonForms();
+    reflectForms();
+    numberForms();
+    optionalForms();
+    pointerForms();
+    memoryForms();
+    println("{} {} {} {}", NAME, MAX, largest(1, 2), Stack<int>(1).top);
+    // expect: ab 16 2 1
+    Buffer<int, 2> buffer;
+    println("{} {}", buffer.items.size(), twice(2));
+    // expect: 2 4
+    return 0;
+}

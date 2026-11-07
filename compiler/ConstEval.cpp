@@ -385,6 +385,8 @@ ConstValue ConstEval::evalCall(const CallExpr& c) {
             bool pickSecond = isTrue(arith(BinOp::Lt, c.callee == "min" ? y : x, c.callee == "min" ? x : y, c.loc), c.loc);
             return pickSecond ? y : x;
         }
+        if (hooks_.generic && hooks_.generic(c.callee))
+            throw ConstError{c.loc, "this compiler does not support a generic function here yet"};
         throw ConstError{c.loc, "'" + c.callee + "' cannot run while compiling. Only functions marked `constexpr` can"};
     }
     if (!f->isConstexpr)

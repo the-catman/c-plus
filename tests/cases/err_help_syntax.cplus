@@ -1,0 +1,21 @@
+// The advice of each error is something to do, not only a reason.
+extern "C" int errno;
+// error: write a small function in C that returns it, and declare that function
+extern "C" void takesSmall(int8_t x);
+// error: write a small wrapper in C that takes an `int`, and declare that
+struct WithDestructor {
+    int x = 0;
+    ~WithDestructor() {}
+    // error: make it a class, which can have a destructor, or remove it
+};
+struct TwoConstructors {
+    int x = 0;
+    TwoConstructors() {}
+    TwoConstructors(int a) : x(a) {}
+    // error: For now, keep one, and give fields default values for what it does not set
+};
+struct AutoField {
+    auto x = 1;
+    // error: write the type, e.g. `int x = 0;`
+};
+int main() { return 0; }

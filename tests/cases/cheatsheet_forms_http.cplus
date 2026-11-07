@@ -1,0 +1,33 @@
+// The cheat sheet's forms of HTTP and WebSockets. See cheatsheet_forms.
+import http;
+import json;
+
+extern "C" string? getenv(string name);
+
+template<typename T> T fromAnswer(http::Response r) throws {
+    return try json::parse<T>(r.body);
+}
+
+int main() throws {
+    string base = getenv("CPLUS_TEST_HTTP") ?? "missing";
+    string ws_base = getenv("CPLUS_TEST_WS") ?? "missing";
+    http::Response r = try http::get(base + "/hello");
+    string x = "content-type";
+    println("{} {}", r.status, r.header(x) ?? "none");
+    // expect: 200 text/plain
+    http::Request unused = {.url = base, .caFile = "its-certificate.pem"};
+    println("{}", unused.caFile);
+    // expect: its-certificate.pem
+
+    http::Request request;
+    request.url = ws_base + "/ws/echo";
+    http::WebSocket ws = try http::connectWith(request);
+    string bytes = "bytes";
+    try ws.sendBinary(bytes);
+    if (auto m = try ws.receive()) println("{} {}", m.data, m.isBinary);
+    // expect: bytes true
+    ws.close();
+    println("{}", ws.closeCode() ?? 0);
+    // expect: 1000
+    return 0;
+}

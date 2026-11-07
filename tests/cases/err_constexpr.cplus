@@ -103,7 +103,7 @@ int main() {
 // error: the size of an array is a whole number, zero or more
 // error: a template argument must be known at compile time, but 'n' is a variable
 // error: a template argument must be known at compile time, but division by zero
-// error: the size of an array must be known at compile time, but 'generic' cannot run while compiling
+// error: the size of an array must be known at compile time, but this compiler does not support a generic function here yet
 // error: the condition of `if constexpr` must be known at compile time, but 'n' is a variable
 // error: the condition of `if constexpr` cannot declare a variable
 // error: the size of an array must be known at compile time, but 'SHADOWED' is a variable

@@ -40,7 +40,7 @@ int main() {
 // error: a C struct with such a field can still be used through pointers, by declaring it by name: `extern "C" struct name;`
 // error: this compiler does not support 16-bit integer types such as 'uint16_t' yet
 // error: this compiler does not support 16-bit integer types such as 'unsigned' yet
-// error: unknown type 'uint8_t'
+// error: this compiler does not support 8-bit integer types such as 'uint8_t' yet
 // error: write `char`, which is one byte
 // error: C+ has no 'unsigned int' type
 // error: write `int`, which has the same size; C+ has no unsigned types yet

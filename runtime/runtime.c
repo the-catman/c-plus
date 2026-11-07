@@ -369,6 +369,92 @@ _Noreturn static void bad_count(void) {
     stop_program();
 }
 
+_Noreturn static void out_of_memory(void);
+
+// A debug build keeps a list of the objects that are alive, so that its report can say what each one that was never freed
+// is, and where it was made, which AddressSanitizer remembers.
+#if defined(CPLUS_DEBUG_RUNTIME) && !defined(CPLUS_RACE_RUNTIME)
+size_t __asan_get_alloc_stack(void* address, void** trace, size_t size, int* thread_id);
+void __sanitizer_symbolize_pc(void* pc, const char* format, char* out, size_t size);
+
+#define NO_LONGER ((void*)1)  // a place in the list that something was in, which a search goes past
+static void** alive;
+static size_t alive_size, alive_used;  // how many places, and how many are not empty
+static char alive_lock;
+
+static size_t alive_place(void* object) { return ((uintptr_t)object >> 4) * 0x9E3779B97F4A7C15u % alive_size; }
+
+static void remember_object(void* object) {
+    while (__atomic_test_and_set(&alive_lock, __ATOMIC_ACQUIRE)) {}
+    if ((alive_used + 1) * 2 > alive_size) {
+        void** old = alive;
+        size_t old_size = alive_size;
+        alive_size = old_size ? old_size * 2 : 1024;
+        alive = calloc(alive_size, sizeof *alive);
+        alive_used = 0;
+        if (!alive) out_of_memory();
+        for (size_t i = 0; i < old_size; i++) {
+            if (!old[i] || old[i] == NO_LONGER) continue;
+            size_t place = alive_place(old[i]);
+            while (alive[place]) place = (place + 1) % alive_size;
+            alive[place] = old[i];
+            alive_used++;
+        }
+        free(old);
+    }
+    size_t place = alive_place(object);
+    while (alive[place]) place = (place + 1) % alive_size;
+    alive[place] = object;
+    alive_used++;
+    __atomic_clear(&alive_lock, __ATOMIC_RELEASE);
+}
+
+static void forget_object(void* object) {
+    while (__atomic_test_and_set(&alive_lock, __ATOMIC_ACQUIRE)) {}
+    size_t place = alive_place(object);
+    while (alive[place] != object) place = (place + 1) % alive_size;
+    alive[place] = NO_LONGER;
+    __atomic_clear(&alive_lock, __ATOMIC_RELEASE);
+}
+
+// The first function of the program on the way to where it was made, as the runtime's come before it.
+static void say_where_made(void* object) {
+    void* trace[32];
+    int thread;
+    size_t frames = __asan_get_alloc_stack(object, trace, 32, &thread);
+    for (size_t i = 0; i < frames; i++) {
+        char function[256], place[512];
+        __sanitizer_symbolize_pc(trace[i], "%f", function, sizeof function);
+        if (strncmp(function, "cplus.", 6) != 0) continue;
+        __sanitizer_symbolize_pc(trace[i], "%L", place, sizeof place);
+        fprintf(stderr, ", made at %s, in %s", place, function + 6);
+        return;
+    }
+}
+
+static void report_each_leak(void) {
+    enum { MOST_SHOWN = 10 };
+    int shown = 0;
+    for (size_t i = 0; i < alive_size && shown < MOST_SHOWN; i++) {
+        void* object = alive[i];
+        if (!object || object == NO_LONGER) continue;
+        const cplus_type* const* vtable = *(const cplus_type* const* const*)((char*)object + 8);
+        const cplus_type* type = vtable ? vtable[CPLUS_VTABLE_TYPE] : NULL;  // what `spawn` keeps for a thread has none
+        fprintf(stderr, "  %s", type ? type->name : "what a thread was given");
+        say_where_made(object);
+        fputc('\n', stderr);
+        shown++;
+    }
+    int64_t count = __atomic_load_n(&live_objects, __ATOMIC_RELAXED);
+    if (count > shown) fprintf(stderr, "  and %" PRId64 " more\n", count - shown);
+    fputs("  = help: objects that refer to each other in a circle keep each other alive. Make one of the references a weak<T>\n", stderr);
+}
+#else
+#define remember_object(object) ((void)0)
+#define forget_object(object) ((void)0)
+#define report_each_leak() ((void)0)
+#endif
+
 void* cplus_alloc(int64_t size) {
     int64_t* object = calloc(1, (size_t)size);
     if (!object) {
@@ -378,6 +464,7 @@ void* cplus_alloc(int64_t size) {
     }
     *object = 1;
     __atomic_add_fetch(&live_objects, 1, __ATOMIC_RELAXED);
+    remember_object(object);
     return object;
 }
 
@@ -385,6 +472,7 @@ static void free_memory(void* object);
 
 void cplus_free(void* object) {
     __atomic_sub_fetch(&live_objects, 1, __ATOMIC_RELAXED);
+    forget_object(object);
     free_memory(object);
 }
 
@@ -497,6 +585,7 @@ int64_t cplus_references(void* object) { return __atomic_load_n((int64_t*)object
 // The object is finished. Its memory goes now, or with the last weak reference.
 void cplus_free_class(void* object) {
     __atomic_sub_fetch(&live_objects, 1, __ATOMIC_RELAXED);
+    forget_object(object);
     int64_t before = __atomic_fetch_and((int64_t*)object, weak_mask, __ATOMIC_ACQ_REL);
     if (!(before & weak_mask)) free_memory(object);
 }
@@ -1191,6 +1280,7 @@ __attribute__((destructor)) static void report_leaks(void) {
     if (count != 0) {
         fflush(stdout);
         fprintf(stderr, "cplus: %" PRId64 " object%s never freed\n", count, count == 1 ? " was" : "s were");
+        report_each_leak();
     }
     int64_t blocks = __atomic_load_n(&live_new_blocks, __ATOMIC_RELAXED);
     if (blocks != 0) {

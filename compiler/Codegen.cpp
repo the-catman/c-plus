@@ -27,6 +27,7 @@
 #include <llvm/Transforms/Instrumentation/ThreadSanitizer.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <set>
@@ -195,7 +196,8 @@ struct Codegen::Impl {
     bool setupTarget(std::string& error) {
         llvm::InitializeNativeTarget();
         llvm::InitializeNativeTargetAsmPrinter();
-        std::string triple = llvm::sys::getDefaultTargetTriple();
+        const char* tripleForTests = std::getenv("CPLUS_TARGET_FOR_TESTS");  // so the tests can reach what a machine with no target reports
+        std::string triple = tripleForTests ? tripleForTests : llvm::sys::getDefaultTargetTriple();
         const llvm::Target* target = llvm::TargetRegistry::lookupTarget(triple, error);
         if (!target) return false;
         llvm::TargetOptions options;
@@ -2794,8 +2796,8 @@ struct Codegen::Impl {
         std::vector<llvm::Value*> values;
         for (size_t i = 0; i < args.size(); ++i) values.push_back(holdOwned(*args[i], target.params[i]->type));
 
-        // A place for each of them, after the count that memory from cplus_alloc starts with, and the task.
-        std::vector<llvm::Type*> slots{b.getInt64Ty(), b.getPtrTy()};
+        // A place for each of them, after what memory from cplus_alloc starts with, which is a count and an empty vtable, and the task.
+        std::vector<llvm::Type*> slots{b.getInt64Ty(), b.getPtrTy(), b.getPtrTy()};
         if (selfType) slots.push_back(llvmType(selfType));
         for (auto& p : target.params) slots.push_back(llvmType(p->type));
         auto* closureTy = llvm::StructType::get(ctx, slots);
@@ -2806,8 +2808,8 @@ struct Codegen::Impl {
             startHelper(run);
             startLineTable(s.loc);  // what is inlined here would otherwise lose its lines
             llvm::Value* closure = run->getArg(0);
-            unsigned next = 2;
-            llvm::Value* task = b.CreateLoad(b.getPtrTy(), b.CreateStructGEP(closureTy, closure, 1), "task");
+            unsigned next = 3;
+            llvm::Value* task = b.CreateLoad(b.getPtrTy(), b.CreateStructGEP(closureTy, closure, 2), "task");
             std::vector<llvm::Value*> callArgs;
             llvm::Value* selfSlot = nullptr;
             if (selfType) {
@@ -2855,8 +2857,8 @@ struct Codegen::Impl {
         llvm::Value* task = construct(*s.task, {});
         retainValue(task, taskType);  // one for the thread, and one for this expression
         llvm::Value* closure = b.CreateCall(rtAlloc, {b.getInt64(mod->getDataLayout().getTypeAllocSize(closureTy))}, "closure");
-        b.CreateStore(task, b.CreateStructGEP(closureTy, closure, 1));
-        unsigned next = 2;
+        b.CreateStore(task, b.CreateStructGEP(closureTy, closure, 2));
+        unsigned next = 3;
         auto put = [&](llvm::Value* v, const Type* t) {
             llvm::Value* slot = b.CreateStructGEP(closureTy, closure, next++);
             if (inMemory(t)) b.CreateMemCpy(slot, llvm::MaybeAlign(), v, llvm::MaybeAlign(), mod->getDataLayout().getTypeAllocSize(llvmType(t)));
@@ -4348,7 +4350,7 @@ struct Codegen::Impl {
         mod = std::make_unique<llvm::Module>(file.path, ctx);
         if (!setupTarget(error)) return false;
         if (opts.debug || opts.race) setupLineTable();
-        usesDescriptors = program.usesDescriptors();
+        usesDescriptors = program.usesDescriptors() || opts.debug;  // a leak report says what an object is
         buildsFromDescriptors = program.buildsFromDescriptors();
         usesThreads = program.usesThreads;
         stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy()}, "cplus.string");

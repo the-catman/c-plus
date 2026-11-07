@@ -116,8 +116,8 @@ The default path:
 - Plain values and class references are never null. Optionals, written `T?`, express a
   missing value. Raw pointers `T*` may be null.
 - Integer overflow traps always, with an error naming file and line. Explicit wrapping
-  operators exist for hashing and crypto code. A compiler flag disables checks for a hot
-  loop if profiling ever justifies it.
+  operators for hashing and crypto code are planned. A compiler flag could disable checks for a
+  hot loop, if profiling ever justifies it.
 
 Always available, no `unsafe` block:
 - Raw pointers `T*`, address-of, pointer arithmetic, casts, `new`/`delete`, `malloc`/`free`.
@@ -147,7 +147,7 @@ Reference cycles:
   references the destructors run and the fields go. The object's memory stays until the weak references
   go too, as with `std::make_shared`. A side table, as in Swift, would free it sooner, at the cost
   of a slot in every object or a table lookup in every release.
-- Debug builds print a leak report at exit: each leaked object, its type, and where it
+- Debug builds print a leak report at exit: how many objects leaked, and for the first ten its type and where it
   was allocated.
 
 ### 2.8 Ownership forms and threads — DECIDED
@@ -204,6 +204,8 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
 - Every thread has 8 MiB of stack and its own crash report. Threads are not pooled: each `spawn` is one.
 - `Mutex` and `LockGuard` are in, beyond what was first planned, since a class reference could otherwise be shared but never safely changed. Atomic values, condition variables and channels can wait.
 - ThreadSanitizer is `--race`, as it cannot go with AddressSanitizer in `--debug`. It has a runtime of its own, as it must see the runtime's atomic steps and locks. The tests build every program with `spawn` this way too.
+- ThreadSanitizer's own stack holds 64K calls and is not checked, and going past it writes over what the loader uses, so a crash report can no longer be trusted. So `--race` stops a program at 60000 calls, with a message, by putting a count in the way of what it calls for each function (`runtime/race_stack.c`). A smaller thread stack would have done it too, but only for threads, and at a cost to a program with large frames that never gets near the limit.
+- A fatal error is reported by one thread. Any other that stops as well waits for the first to end the program, so there is one message. The report does not wait long for a thread stuck in the output.
 
 ### 2.10 Generics — DECIDED
 "Templates" in the plain sense, not C++ template metaprogramming.
@@ -231,7 +233,7 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
   once to report syntax errors. As in C++, the rest is checked when used, and a generic class's
   methods only when they are used. Checking a body before it is used, as Rust does, would need
   every constraint to say everything the body does.
-- A constraint names a built-in (`Comparable`, `Number`, `Integer`, `Floating`), an interface or class the
+- A constraint names a built-in (`Comparable`, `Number`, `Integer`, `Floating`, `Hashable`), an interface or class the
   type must derive from, or a C++20 `concept X = requires(T a) { ... };`, which is tried on the type. Decided
   2026-11-06.
 - A generic type's arguments are always written for now: `Stack<int>(1)`. Working them out, as C++17 does,
@@ -242,8 +244,9 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
 - Multiple inheritance with C++ default semantics: a diamond holds two copies of the
   shared base, and ambiguous members must be qualified, `d.B::speak()`.
 - No virtual inheritance until a real case demands it.
-- Printing any object works out of the box via reflection; an optional `toString` overrides it.
-  Printing shows every field, private ones included.
+- Printing any object works out of the box. An optional `toString` that overrides it is planned; for now a method of that
+  name is an ordinary method. Printing shows every field, private ones included, except that what holds something of the
+  runtime's, such as a `Mutex` or a `WebSocket`, prints as its name: its fields would show addresses, or a secret in a URL.
 - A class reference is never empty. `User u;` declares a variable that must be assigned
   before it is read, not a default-constructed object. Empty references are `User?`.
 - `const` on a class variable is shallow: the variable cannot refer to another object, but
@@ -287,7 +290,7 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
   With no unsigned types, `string::npos` is `-1`, a `long`; a `substr` count of
   `string::npos` takes the rest as in C++, and other negative counts stop the program.
 - `format(...)`, C++20's `std::format`, returns what `print` would print. `to_string(n)`
-  takes an `int` or `long`; `to_string(true)`, which is `"1"` in C++, is an error that
+  takes a number; `to_string(true)`, which is `"1"` in C++, is an error that
   points to `format`.
 - `s[i]` is a checked `char`, for reading and writing, and `s[s.size()]` stops the
   program. Writing copies the buffer first unless nothing else holds it. `for (char c :
@@ -302,11 +305,13 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
   hand. It summarizes a library's public API and lets a library ship compiled without its
   source. Built together with multi-file modules.
 - A single `cplus build` command compiles a directory. No package manager in v1.
+- None of this is built yet, except that a file can import the modules that come with the language (§2.15). A program cannot
+  add names to one of those: `struct json::Mine` is an error.
 
 ### 2.14 Reflection — DECIDED
 Compile-time generated type descriptors: field names, offsets, types. Emitted only for
-types that are printed, serialized, or explicitly reflected, so dead stripping keeps the
-"only what you import" promise. Printing and JSON are built on it.
+programs that import `json` or `reflect`, and for debug builds, whose leak report says what an object is, so the
+"only what you import" promise holds. JSON is built on it, and printing could be (§6).
 
 ### 2.15 Standard library, v1 — DECIDED
 - `vector`, `array`, `hashmap`, `string`, optionals.
@@ -332,7 +337,7 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
   the error to the caller. Implemented as error values, not exceptions.
 - Optionals: `T?`, empty value `null`, unwrap with `if (auto x = opt)`, chain with `?.`,
   default with `??`.
-- Namespaces and module members use `::`, e.g. `http::get`. Built-ins such as `vector`,
+- Module members use `::`, e.g. `http::get`. There are no namespaces. Built-ins such as `vector`,
   `string`, and `println` need no prefix.
 - Numbers convert implicitly to `bool`, as in C++: zero is false, anything else is true.
   This covers conditions and `bool b = 1;`. `bool` does not convert to a number.
@@ -403,9 +408,9 @@ Decided 2026-11-05.
   same meaning, between the number types and `bool`, and between pointer types (§2.21). A
   value that does not fit the new type, including NaN and the infinities converted to an
   integer, stops the program, as integer overflow does. `reinterpret_cast` is the one cast
-  between a pointer and a number (§2.21). `const_cast` does not exist; `dynamic_cast` would
-  come with inheritance. A cast never
-  makes or reads a string, except `string(p)` from a `char*`.
+  between a pointer and a number (§2.21). `const_cast` does not exist; `dynamic_cast` is in
+  §2.11. A cast never makes or reads a string, except `string(p)` from a `char*` and
+  `string(a)` from an `array<char, N>`.
 - `{}` prints the shortest digits that read back exactly, as C++'s `std::format` does,
   except that NaN always prints as `nan`, so output does not change with optimization.
   `{:.2f}`, `{:e}`, `{:g}` and `{:.3}` follow `std::format`. `to_string(x)` matches `{}`,
@@ -491,8 +496,8 @@ Decided 2026-11-05.
   to what holds the array cannot free it under the loop.
 - `string(a)` on `array<char, N>` stops at a zero byte or the end, so it cannot over-read.
 - A value can take at most 2 GiB. The stack is not limited at compile time: as in C++, a
-  local array can be too large, but stack probes make that a crash and never let the
-  program step over the guard page into other memory. A clear message for it is open (§6).
+  local array can be too large, but stack probes make that a crash that says the program ran out of stack, and never let the
+  program step over the guard page into other memory.
 - Codegen handles an array, and whatever holds one by value, through its address, with
   memory copies. LLVM needed 95 seconds at -O0 to compile one load and store of
   `[65536 x i32]` as a single value, while memory copies take no time.
@@ -526,7 +531,7 @@ Decided 2026-11-05.
   is for the person writing the program.
 - A class reference is written as what the object really is, as when printing, and read as the class that is asked for.
 - `json::Value` is for what has no known shape, and each step of looking through it gives an optional, so there is no way to stop
-  the program with text from outside.
+  the program with text from outside. `json::of(x)` makes one directly, by the rules the writer has, so it costs no text in between.
 
 ### 2.26 HTTP — DECIDED
 `import http;`, with `http::get`, `post`, `put`, `patch`, `delete` and `send`, and WebSockets with `http::connect`, on libcurl, as in 2.15. Decided 2026-11-06.
@@ -541,7 +546,8 @@ Decided 2026-11-05.
 What §5 asks for, as built in Phase 4. Decided 2026-11-07.
 - `cplus explain` has the spec, the cheat sheet and the examples built into the compiler at build time, so it works wherever the compiler is, with no repository and no network. A topic is the name of a section, as an error's `spec:` line shows it, or a word someone already knows, such as `hashmap` or `spawn`.
 - The examples corpus is `examples/features/`, one small program for each section of the spec, named after its anchor. They carry the directives of the tests, so the test suite runs them all, in every build. An example cannot go out of date without a test failing, which is what "the test suite doubles as few-shot material" asks for. The tests themselves stay as they are, since they are written to find mistakes and not to teach.
-- Errors are held to the standard by the tools rather than by reading: the arguments are required by the compiler's own types, the test runner fails on any error it sees without a `help` and a `spec`, and a measurement with coverage shows which errors no test reaches.
+- Errors are held to the standard by tools as well as by reading: the arguments are required by the compiler's own types, the test runner fails on any error it sees without a `help` and a `spec`, and a measurement with coverage, `tests/errors_reached.py`, shows which errors and which pieces of advice no test reaches. Whether a help is good advice only reading can tell, which was done for all of them once, on 2026-11-07, and comes with each new one after that.
+- The documents are held to the compiler by the test runner: everything called planned must be rejected with "does not support ... yet" (`check_planned_features`), every form the cheat sheet tells a reader to write must compile, alone or in a `cheatsheet_forms` test, and every C++ habit it warns of must be rejected (`check_cheat_sheet`).
 
 ## 3. Compiler architecture
 
@@ -567,27 +573,8 @@ Open implementation questions are listed in §6.
 
 ## 4. Phases
 
-Status: Phase 0 has a first draft (`docs/SPEC.md`, `docs/CHEATSHEET.md`). Phase 1 is in
-progress. The compiler builds programs with integers, bools, strings (joining, ordering,
-`substr`, `find`, `format`, `to_string`, checked `s[i]`), `char` with the `<cctype>`
-functions, `double` and `float` with casts and the
-`<cmath>` functions, structs, reference-counted classes with methods, constructors and
-destructors, vectors, and optionals (`T?`, `null`, `?.`, `??`), using
-functions, control flow including range-based `for`, definite assignment (down to struct
-fields), overflow and bounds traps, and `println`, all through LLVM. Destructors and a
-leak check (`CPLUS_CHECK_LEAKS=1`) arrived with classes, ahead of Phase 2. C functions
-can be called through `extern "C"` declarations with number, `char`, `bool`, `string`
-and pointer values. Raw pointers work, with pointer arithmetic, `sizeof`, null traps and
-C types known by name such as `FILE*`, `new` and `delete` with their warning, and C structs,
-through pointers and by value, including array fields, and `array<T, N>`. Constants work
-outside functions, and `main` can take `argc` and `argv`. `--debug` makes
-a debug build with ASan, stack traces and a leak report. Every item of Phase 1 is in, and
-`examples/books.cplus`, a reading list stored in SQLite through its C API, meets the exit
-criterion. Phase 2 is in progress: inheritance works, with virtual methods, abstract classes,
-`dynamic_cast`, multiple inheritance and interfaces, `weak<T>` references, generics with
-constraints, errors, `constexpr` with `if constexpr`, and `unique<T>` with `move`, which is every item of Phase 2.
-The leak report came with Phase 1. Every item of Phase 3 is in too: `hashmap`, the descriptors of types, `json`, `reflect`, `http` with WebSockets, `spawn` with `Task`, and `local`.
-Every item of Phase 4 is in as well: each error has a help, a section of the spec and a test, `cplus explain` answers from inside the compiler, and `examples/features` has a program for each section. Phase 5 is next.
+Status: Phases 0 to 4 are done, and Phase 5 is next. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
 model, module system. Written as the document models will read. Includes the one-page
@@ -641,7 +628,7 @@ will confidently write C++ wherever the two differ.
 
 ## 6. Open items
 
-- Remaining syntax: `local<T>` construction, `async` functions, lambdas, enums, `switch`. Settled as each
+- Remaining syntax: `async` functions, lambdas, enums, `switch`. Settled as each
   feature is reached.
 - Function overloading is planned, as in C++, after the v1 core.
 - A struct method changing a vector element stops the program if its body also writes to that

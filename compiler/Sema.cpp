@@ -182,7 +182,7 @@ static std::string textHelp(const Type* t, const char* op = "+") {
                " to_string(n)`, or build the whole text with `format(\"{}{}\", s, n)`. Unlike C++, a number is "
                "never added as a character code";
     if (t->is(K::Bool)) return "`format(\"{}\", b)` turns a bool into \"true\" or \"false\"";
-    if (t->is(K::Void) || t->isError()) return "";
+    if (t->is(K::Void) || t->isError()) return "this call gives nothing to add. Call it on a line of its own, or have the function return a string";
     if (t->isOptional()) return "it may be null: `opt ?? \"none\"` is its value, or \"none\" when it is null";
     return "`format(\"{}\", value)` turns any value that can be printed into a string";
 }
@@ -275,7 +275,7 @@ static std::vector<const FieldDecl*> allFields(const StructDecl& sd) {
 }
 static std::string listFields(const StructDecl& sd) {
     std::vector<const FieldDecl*> fields = allFields(sd);
-    if (fields.empty()) return q(sd.name) + " has no fields";
+    if (fields.empty()) return q(sd.name) + " has no fields yet. Add this one to it: `int x = 0;`";
     std::string out = "its fields are ";
     for (size_t i = 0; i < fields.size(); ++i)
         out += (i ? ", " : "") + std::string(fields[i]->type->name) + " " + fields[i]->name;
@@ -525,10 +525,13 @@ void Sema::reportUnknownName(const NameExpr& n) {
     else if (n.name == "JSON") help = "`import json;`, then `json::parse<T>(text)` and `json::stringify(x)`";
     else if (n.name == "Math") help = "write `sqrt(x)`, `floor(x)` and the rest with no prefix";
     else if (n.name == "nullptr" || n.name == "NULL") help = "write `null`; only an optional, such as `User?`, can be null";
-    else if (n.name == "M_PI" || n.name == "M_E" || n.name == "INFINITY" || n.name == "NAN")
-        help = n.name == "INFINITY" || n.name == "NAN"
-                   ? "write `1.0 / 0` for infinity, or `0.0 / 0` for NaN; constants for them are planned"
-                   : "math constants are planned. Until then, `acos(-1)` is pi and `exp(1)` is e";
+    else if (n.name == "M_PI" || n.name == "M_E" || n.name == "INFINITY" || n.name == "NAN") {
+        diags_.error(n.loc, "this compiler does not support math constants such as " + q(n.name) + " yet",
+                     n.name == "INFINITY" || n.name == "NAN" ? "write `1.0 / 0` for infinity, or `0.0 / 0` for NaN"
+                                                             : "until it does, `acos(-1)` is pi and `exp(1)` is e",
+                     spec::Math);
+        return;
+    }
     else if (defaultsOf_ && defaultsOf_->fieldOwner(n.name))
         help = "a field's default cannot read other fields; set this field in a constructor instead";
     else if (std::string guess = suggestName(n.name); !guess.empty()) help = "did you mean " + q(guess) + "?";
@@ -888,7 +891,7 @@ void Sema::checkBases(size_t first) {
             StructDecl* base = sd.bases[i];
             if (open.count(base)) {
                 diags_.error(sd.nameLoc, "class " + q(sd.name) + " would be its own base class, through " + q(base->name),
-                             "a class can only derive from a class that does not derive from it", spec::Inheritance);
+                             "remove one of the two `: public ...`, since a class can only derive from one that does not derive from it", spec::Inheritance);
                 sd.bases.erase(sd.bases.begin() + i);
                 continue;
             }
@@ -1038,8 +1041,7 @@ BasePath Sema::findQualifier(const std::string& name, const StructDecl& sd, Loc 
     }
     if (!found || !sd.derivesFrom(found)) {
         diags_.error(loc, q(name) + " is not " + q(sd.name) + " or a base class of it",
-                     "`Base::name` reaches a member of a base class of the object. Members that belong to no object, such "
-                     "as static ones, are planned",
+                     "write the name of one of its base classes, or leave this out. Members that belong to no object, such as static ones, are planned",
                      spec::Inheritance);
         return {};
     }
@@ -1506,7 +1508,7 @@ void Sema::checkFunction(FuncDecl& fn) {
                                  spec::Inheritance);
                 else if (structs_.count(init.field) && sd.isClass)
                     diags_.error(init.loc, q(init.field) + " is not the base class of " + q(sd.name),
-                                 sd.bases.empty() ? q(sd.name) + " has no base class" : "its base class is " + q(sd.bases[0]->name),
+                                 sd.bases.empty() ? "remove it, since " + q(sd.name) + " has no base class" : "its base class is " + q(sd.bases[0]->name) + ": write `" + sd.bases[0]->name + "(...)`",
                                  spec::Inheritance);
                 else
                     diags_.error(init.loc, q(sd.name) + " has no field named " + q(init.field),
@@ -2136,7 +2138,7 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         help = "a double does not convert to a float by itself, since that loses precision. Write `float(x)`, or "
                "write numbers as floats, e.g. `0.5f`: as in C++, `f * 0.5` is a double";
     } else if (from->is(K::Void)) {
-        help = "this expression produces no value";
+        help = "this call gives nothing back. Call it on a line of its own, or have the function return a value";
     } else if (from->is(K::Bool) && to->isNumber()) {
         help = std::string("a bool does not convert to a number by itself; write `") + to->name + "(flag)` for 0 "
                "or 1";
@@ -2465,7 +2467,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     if (!m.qualifier.empty() && m.base->kind == Expr::Kind::This && !owner()) {
         diags_.error(e.loc, q(m.qualifier + "::" + m.field) + " can only be used inside a method of a class that derives from " +
                                 q(m.qualifier),
-                     "members that belong to no object, such as static ones, are planned", spec::Inheritance);
+                     "reach it through an object: `x.field`. Members that belong to no object, such as static ones, are planned", spec::Inheritance);
         var = nullptr;
         return e.type = Type::error();
     }
@@ -2713,7 +2715,7 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
         case Storage::Object: return true;
         case Storage::Temporary:
             diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action,
-                         "this value is a temporary copy, so changing it would have no effect", spec::Variables);
+                         "this value is a temporary copy, so changing it would have no effect. Store it in a variable first, and change that", spec::Variables);
             return false;
         case Storage::Pointer: {
             const Expr& ptr = followedPointer(*root);
@@ -2898,7 +2900,7 @@ const Type* Sema::checkAddressOf(UnaryExpr& u, Flow& flow) {
     if (target.kind == Expr::Kind::This) {
         checkExpr(target, flow);
         diags_.error(u.loc, "the address of 'this' cannot be taken",
-                     "'this' is the object a method works on, not a variable", spec::Pointers);
+                     "write `this`, which already refers to the object a method works on", spec::Pointers);
         return Type::error();
     }
     if (target.kind == Expr::Kind::Name) {
@@ -3215,7 +3217,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 const Expr* side = opt == l ? b.rhs.get() : b.lhs.get();
                 diags_.error(side->loc, std::string("'") + sym + "' compares " + q(opt) + " with " + q(opt->elem) +
                                             " or null, but this is " + q(other),
-                             "both sides of '" + std::string(sym) + "' must hold the same type of value",
+                             "compare it with a value of type " + q(opt->elem) + ", or with null",
                              spec::Optionals);
                 result = Type::boolTy();
                 break;
@@ -3274,6 +3276,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 else if (comparison && (bad->hasFields() || bad->isVector() || bad->isArray())) help = q(bad) + " values can only be compared with == and !=";
                 else if (!bad->isArithmetic() && !bad->is(K::Bool)) help = std::string("'") + sym + "' works on numbers. Use a field or a method of this value that gives one";
                 else if (bad->is(K::Bool) && (b.op == BinOp::BitAnd || b.op == BinOp::BitOr)) help = std::string("use '") + (b.op == BinOp::BitAnd ? "&&" : "||") + "' for logic";
+                else help = "a bool is not a number. Write `int(b)` for 1 or 0";
                 diags_.error(side->loc, std::string("'") + sym + "' cannot be used with " + q(bad), help, spec::Operators);
                 if (comparison) result = Type::boolTy();
                 break;
@@ -3375,7 +3378,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             else if (const Type* opt = optionalOfBranches(x, y)) result = opt;
             else
                 diags_.error(t.loc, "the two branches of ?: have different types, " + q(x) + " and " + q(y),
-                             "make both branches the same type", spec::Operators);
+                             "make both branches the same type. Between numbers, a cast does it: `long(x)`", spec::Operators);
             break;
         }
         case Expr::Kind::IncDec: {
@@ -4098,7 +4101,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         diags_.error(call.loc, q(call.qualifier + "::" + call.name) + " can only be called inside a method of a class that "
                                "derives from " + q(call.qualifier),
-                     "methods that belong to no object, such as static ones, are planned", spec::Inheritance);
+                     "call it on an object: `x.method(...)`. Methods that belong to no object, such as static ones, are planned", spec::Inheritance);
         return Type::error();
     }
     bool isPlace = isPlaceKind(recv);
@@ -4192,6 +4195,18 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
                          "there are no iterators yet: `m.contains(key)` says whether it is there, and `m.get(key)` gives the value or null", spec::HashMaps);
             return Type::error();
         }
+        const char* planned = nullptr;
+        const char* until = nullptr;
+        if (sd.templateOf && sd.templateOf->nameLoc.line == 0 && sd.role == StructDecl::Role::Opaque && (call.name == "wait_for" || call.name == "wait_until"))
+            planned = "waiting with a time limit", until = "`t.done()` says whether it has finished, without waiting";
+        else if (sd.name == "reflect::Field" && (call.name == "get" || call.name == "set"))
+            planned = "reading a field through its reflect::Field", until = "`f.name`, `f.offset` and `f.type` say what it is. Use the field by its name";
+        else if (sd.name == "reflect::Type" && call.name == "methods")
+            planned = "the methods of a type in reflect", until = "`t.fields()` gives its fields";
+        if (planned) {
+            diags_.error(call.loc, std::string("this compiler does not support ") + planned + " yet", until, sd.name.rfind("reflect::", 0) == 0 ? spec::Reflection : spec::Concurrency);
+            return Type::error();
+        }
         if (sd.fieldOwner(call.name)) help = q(call.name) + " is a field; read it without parentheses";
         else if (isHashmap(t) && (call.name == "emplace" || call.name == "try_emplace"))
             help = "write `m.insert({key, value})`, which also keeps the value that is there";
@@ -4203,14 +4218,15 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
             std::vector<std::string> names;
             std::function<void(const StructDecl&)> collect = [&](const StructDecl& d) {
                 for (auto& mm : d.methods)
-                    if (mm->role == FuncDecl::Role::Method) names.push_back(mm->name);
+                    if (mm->role == FuncDecl::Role::Method && mm->name.rfind("__", 0) != 0) names.push_back(mm->name);
                 for (const StructDecl* base : d.bases) collect(*base);
             };
             collect(sd);
             if (std::string guess = closest(call.name, names); !guess.empty()) {
                 help = "did you mean " + q(guess) + "?";
             } else if (names.empty()) {
-                help = q(sd.name) + " has no methods. Write the method inside the type: `void " + call.name + "() { ... }`";
+                help = sd.nameLoc.line ? q(sd.name) + " has no methods. Write the method inside the type: `void " + call.name + "() { ... }`"
+                                       : q(sd.name) + " has no methods. " + listFields(sd);
             } else {
                 help = "its methods are ";
                 for (size_t i = 0; i < names.size(); ++i) help += (i ? ", " : "") + names[i];
@@ -4287,7 +4303,7 @@ void Sema::checkChangingReceiver(const Expr& recv, const char* method, const cha
     }
     if (!isPlaceKind(recv)) {
         diags_.error(recv.loc, std::string(method) + "() changes the " + what + ", so it must be called on a variable or a field",
-                     std::string("this ") + what + " is a temporary copy, so changing it would have no effect", anchor);
+                     std::string("this ") + what + " is a temporary copy, so changing it would have no effect. Store it in a variable first, and change that", anchor);
         return;
     }
     const VarDecl* var = nullptr;
@@ -4546,7 +4562,7 @@ const Type* Sema::checkDelete(DeleteExpr& d, Flow& flow) {
         diags_.error(loc, "'" + op + "' frees memory from new through a pointer, but this is " + q(t),
                      t->isVector() || t->is(K::String) ? "a " + std::string(t->isVector() ? "vector" : "string") +
                                                              " frees its memory by itself"
-                                                       : "`delete` is only for what `new` gave",
+                                                       : "remove it: `delete` is only for what `new` gave",
                      spec::NewDelete);
     return Type::voidTy();
 }
@@ -4727,7 +4743,7 @@ const Type* Sema::checkDynamicCast(CastExpr& c, const Type* from, const Type* to
     for (auto& sd : program_->structs)
         if (sd->derivesFrom(toClass->decl) && sd->derivesFrom(fromClass->decl)) return to;
     diags_.error(c.loc, "a " + q(fromClass) + " can never be a " + q(toClass) + ", because no class derives from both",
-                 "check which class you meant", spec::Inheritance);
+                 "check which class you meant, or derive a class from both", spec::Inheritance);
     return to;
 }
 
@@ -5096,7 +5112,7 @@ const Type* Sema::checkCoalesce(CoalesceExpr& c, Flow& flow) {
     }
     if (r->isInteger() && inner->isInteger()) return commonInteger(r, inner);
     diags_.error(c.rhs->loc, "the fallback after '\?\?' must be " + q(inner) + ", but this is " + q(r),
-                 "both sides of '\?\?' hold the same type of value", spec::Optionals);
+                 "write a fallback of type " + q(inner) + ", which is what the optional holds", spec::Optionals);
     return inner;
 }
 

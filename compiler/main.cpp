@@ -125,7 +125,9 @@ static int build(const Options& opts, const std::string& exePath) {
     if (!frontEnd(file, diags, program, opts.warnNewDelete)) return 1;
     if (opts.command == "check") return 0;
 
-    const std::string runtimeLib = opts.race ? CPLUS_RUNTIME_LIB_RACE : opts.debug ? CPLUS_RUNTIME_LIB_DEBUG : CPLUS_RUNTIME_LIB;
+    // The tests can only reach these errors by pretending, on a machine that has what they are about.
+    const bool lacksSanitizers = std::getenv("CPLUS_NO_SANITIZERS_FOR_TESTS") != nullptr;
+    const std::string runtimeLib = (opts.race || opts.debug) && lacksSanitizers ? "" : opts.race ? CPLUS_RUNTIME_LIB_RACE : opts.debug ? CPLUS_RUNTIME_LIB_DEBUG : CPLUS_RUNTIME_LIB;
     if (runtimeLib.empty() && !opts.emitLLVM && opts.race) {
         toolError("--race needs ThreadSanitizer, which the C compiler did not have when this compiler was built",
                   "install the sanitizer libraries for your C compiler, such as `libclang-rt-18-dev` on Debian or Ubuntu, then run cmake and build again");
@@ -140,7 +142,7 @@ static int build(const Options& opts, const std::string& exePath) {
     Codegen codegen(file, CodegenOptions{opts.optimize, opts.debug, opts.race});
     std::string error;
     if (!codegen.generate(program, error)) {
-        toolError(error, "this is about the machine the program is being built for, and not the program: see the implementation status in the spec");
+        toolError(error, "this is about the machine the program is being built for, and not the program. Build it on Linux, on x86-64 or aarch64, which are what this compiler has been written for");
         return 1;
     }
     if (opts.emitLLVM) {
@@ -152,7 +154,8 @@ static int build(const Options& opts, const std::string& exePath) {
         toolError(error, "check that the folder of the output exists and can be written to, or choose another with -o");
         return 1;
     }
-    std::vector<std::string> link{CPLUS_LINKER, objPath, runtimeLib};
+    const char* linkerForTests = std::getenv("CPLUS_LINKER_FOR_TESTS");
+    std::vector<std::string> link{linkerForTests ? linkerForTests : CPLUS_LINKER, objPath, runtimeLib};
     if (opts.debug) link.push_back("-fsanitize=address");
     if (opts.race) {
         link.push_back("-fsanitize=thread");

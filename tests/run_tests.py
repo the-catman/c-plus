@@ -211,7 +211,7 @@ def errors_without_help(stderr):
         if not block.startswith("error: ") or block.startswith("error: could not compile"):
             continue
         first = block.splitlines()[0]
-        if "= help:" not in block:
+        if "= help:" not in block or "the part of the spec named below explains the rule" in block:
             problems.append("no help: " + first)
         if "= spec:" not in block:
             problems.append("no spec: " + first)
@@ -439,6 +439,283 @@ def check_crash_paths(cplus, workdir):
     return ok
 
 
+def check_leak_report(cplus, workdir):
+    """A debug build says what each object that was never freed is, and where it was made."""
+    source = workdir / "leaks.cplus"
+    source.write_text("""class Node {
+public:
+    Node? next;
+};
+class Other : public Node {
+public:
+    int x = 0;
+};
+void makes() {
+    Node a = Node();
+    a.next = a;
+}
+int main() {
+    makes();
+    Other o = Other();
+    o.next = o;
+    return 0;
+}
+""")
+    exe = workdir / "leaks"
+    build = subprocess.run([cplus, "build", str(source), "-o", str(exe), "--debug"], capture_output=True, text=True)
+    if build.returncode != 0:
+        if "needs AddressSanitizer" in build.stderr:
+            return True
+        print("FAIL a leak report did not compile:\n  " + build.stderr[:500])
+        return False
+    run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+    want = ["cplus: 2 objects were never freed", "Node, made at " + str(source) + ":10:", ", in makes", "Other, made at " + str(source) + ":15:", ", in main", "weak<T>"]
+    missing = [text for text in want if text not in run.stderr]
+    if missing:
+        print(f"FAIL a leak report does not say {missing}:\n  " + run.stderr[:800])
+        return False
+    return True
+
+
+M = "int main() {\n%s\nreturn 0;\n}\n"
+
+# What the spec's status table and the cheat sheet's table of planned things name, each as a program that asks for it.
+PLANNED_FEATURES = [
+    ("more than one file", 'import other;\n' + M % ""),
+    ("your own modules", 'import net.server;\n' + M % ""),
+    ("constexpr methods", 'struct P { int x = 0; constexpr int f() { return 1; } };\n' + M % ""),
+    ("constexpr structs", 'constexpr struct P { int x = 0; };\n' + M % ""),
+    ("constexpr of a struct", 'struct P { int x = 0; };\nconstexpr P ORIGIN = {1};\n' + M % ""),
+    ("a generic constexpr function in an array's size", 'template<typename T> constexpr int size(T x) { return 2; }\n' + M % "array<int, size<int>(1)> a;"),
+    ("variables outside functions", 'int count = 0;\n' + M % ""),
+    ("constants of other types", 'struct P { int x = 0; };\nconst P ORIGIN = {1};\n' + M % ""),
+    ("enums", 'enum Color { Red, Blue };\n' + M % ""),
+    ("enum classes", 'enum class Color { Red, Blue };\n' + M % ""),
+    ("switch", M % "int n = 1; switch (n) { case 1: break; }"),
+    ("lambdas", M % "auto f = [](int x) { return x; };"),
+    ("default arguments", 'int f(int a = 1) { return a; }\n' + M % ""),
+    ("auto parameters", 'int f(auto a) { return 1; }\n' + M % ""),
+    ("auto return types", 'auto f() { return 1; }\n' + M % ""),
+    ("const fields", 'struct P { const int x = 0; };\n' + M % ""),
+    ("nested types", 'struct P { struct Q { int y; }; int x; };\n' + M % ""),
+    ("types in a function", M % "struct P { int x; };"),
+    ("brace initializers", M % "int x{5};"),
+    ("constructor initializers", M % "int x(5);"),
+    ("brace initializers for fields", 'struct P { int x{5}; };\n' + M % ""),
+    ("short", M % "short n = 1;"),
+    ("8-bit integers", M % "int8_t n = 1;"),
+    ("16-bit integers", M % "int16_t n = 1;"),
+    ("arrays of arrays from new", M % "auto p = new int[2][3];"),
+    ("initial values for new[]", M % "auto p = new int[2]{1, 2};"),
+    ("numbered placeholders", M % 'println("{0}", 1);'),
+    ("width and alignment", M % 'println("{:>8}", 1);'),
+    ("hexadecimal format", M % 'println("{:x}", 1);'),
+    ("math constants", M % "double d = M_PI;"),
+    ("C functions with variable arguments", 'extern "C" int printf(string f, ...);\n' + M % ""),
+    ("vectors passed to C", 'extern "C" void f(vector<int> v);\n' + M % ""),
+    ("unsigned types", M % "unsigned x = 10;"),
+    ("unsigned literals", M % "int x = 10u;"),
+    ("overloading", 'int f(int a) { return a; }\nint f(long a) { return 1; }\n' + M % ""),
+    ("string append", M % 'string s; s.append("x");'),
+    ("string insert", M % 'string s; s.insert(0, "x");'),
+    ("string erase", M % 'string s; s.erase(0, 1);'),
+    ("string replace", M % 'string s; s.replace(0, 1, "x");'),
+    ("string rfind", M % 'string s; auto n = s.rfind("x");'),
+    ("string compare", M % 'string s; auto n = s.compare("x");'),
+    ("parsing numbers", M % 'int n = stoi("1");'),
+    ("vector insert", M % "vector<int> v; v.insert(v.begin(), 1);"),
+    ("vector erase", M % "vector<int> v; v.erase(0);"),
+    ("vector iterators", M % "vector<int> v; auto b = v.begin();"),
+    ("find on a hashmap", M % "hashmap<int, int> m; auto x = m.find(1);"),
+    ("sorted maps", M % "map<int, int> m;"),
+    ("sets", M % "set<int> s;"),
+    ("deque", M % "deque<int> d;"),
+    ("list", M % "list<int> d;"),
+    ("stack", M % "stack<int> d;"),
+    ("queue", M % "queue<int> d;"),
+    ("pair", M % "pair<int, int> d;"),
+    ("tuple", M % "tuple<int, int> d;"),
+    ("reference parameters", 'void f(int& n) {}\n' + M % ""),
+    ("references in loops", M % "vector<int> v; for (auto& x : v) {}"),
+    ("reference variables", M % "int a = 1; int& b = a;"),
+    ("bindings in loops", M % 'hashmap<string, int> m; for (auto [k, v] : m) {}'),
+    ("bindings", 'struct P { int x; int y; };\n' + M % "auto [a, b] = P{1, 2};"),
+    ("final classes", 'class A final { public: int x = 0; };\n' + M % ""),
+    ("final methods", 'class A { public: virtual void f() final {} };\n' + M % ""),
+    ("covariant return types", 'class A { public: virtual A f() { return A(); } };\nclass B : public A { public: B f() override { return B(); } };\n' + M % ""),
+    ("private base classes", 'class A { public: int x = 0; };\nclass B : private A {};\n' + M % ""),
+    ("protected base classes", 'class A { public: int x = 0; };\nclass B : protected A {};\n' + M % ""),
+    ("operator overloading", 'struct P { int x = 0; P operator+(P o) { return o; } };\n' + M % ""),
+    ("struct destructors", 'struct P { int x = 0; ~P() {} };\n' + M % ""),
+    ("static members", 'struct P { static int count; };\n' + M % ""),
+    ("constructors that can fail", 'class A { public: A() throws {} };\n' + M % ""),
+    ("default template arguments", 'template<typename T = int> T f(T x) { return x; }\n' + M % ""),
+    ("requires clauses", 'template<typename T> requires Number<T> T f(T x) { return x; }\n' + M % ""),
+    ("generic methods", 'struct S { template<typename T> T f(T x) { return x; } };\n' + M % ""),
+    ("working out a generic type's arguments", 'template<typename T> class Stack { public: T v; Stack(T a) : v(a) {} };\n' + M % "auto s = Stack(1);"),
+    ("pointers into vectors", M % "vector<int> v = {1}; int* p = &v[0];"),
+    ("pointers into strings", M % 'string s = "a"; char* p = &s[0];'),
+    ("C callbacks", 'extern "C" void qsort(void* base, long n, long size, int (*cmp)(void*, void*));\n' + M % ""),
+    ("C variables", 'extern "C" int errno;\n' + M % ""),
+    ("16-bit integers in C structs", 'extern "C" { struct S { short a; }; }\n' + M % ""),
+    ("unions in C structs", 'extern "C" { struct S { union { int a; long b; }; }; }\n' + M % ""),
+    ("unions", 'union U { int a; long b; };\n' + M % ""),
+    ("http::fetch", 'import http;\n' + M % 'auto r = http::fetch("x");'),
+    ("async", 'async int f() { return 1; }\n' + M % ""),
+    ("await", 'int f() { return 1; }\n' + M % "int x = await f();"),
+    ("atomic values", M % "atomic<int> n;"),
+    ("condition variables", M % "condition_variable c;"),
+    ("channels", M % "channel<int> c;"),
+    ("waiting with a time limit", 'void f() {}\n' + M % "auto t = spawn f(); t.wait_for(1);"),
+    ("reading a field through reflect", 'import reflect;\nstruct P { int x = 0; };\n' + M % "for (auto f : reflect::type<P>().fields()) f.get(P{});"),
+    ("the methods of a type in reflect", 'import reflect;\nstruct P { int x = 0; };\n' + M % "auto m = reflect::type<P>().methods();"),
+]
+
+
+def check_planned_features(cplus, workdir):
+    """What the documents call planned is rejected, with the words that say it is planned, rather than an error that misleads."""
+    source = workdir / "planned.cplus"
+    ok = True
+    for what, text in PLANNED_FEATURES:
+        source.write_text(text)
+        run = subprocess.run([cplus, "check", str(source)], capture_output=True, text=True, timeout=20)
+        errors = [line for line in run.stderr.splitlines() if line.startswith("error:")]
+        if run.returncode != 1 or not errors or "does not support" not in errors[0]:
+            print(f"FAIL {what} is planned, but: exit code {run.returncode}, {errors[:1]}")
+            ok = False
+    return ok
+
+
+SHEET_PRELUDE = """import json;
+import http;
+import reflect;
+struct Point { int x = 0; int y = 0; };
+struct P { int x = 0; int y = 0; };
+class U { public: string name = "a"; int age = 0; U(string n) : name(n) {} int area() const { return 1; } };
+class User { public: string name = "a"; int age = 0; User(string n) : name(n) {} };
+class Animal { public: string name = "x"; int id = 0; virtual string sound() const { return "x"; } };
+class Dog : public Animal { public: string sound() const override { return "w"; } };
+class Left : public Animal {};
+class Right : public Animal {};
+class Both : public Left, public Right {};
+class Pet { public: int id2 = 0; };
+class Node { public: string name = "x"; int x = 1; Node? next; void go() {} Node(string n) : name(n) {} };
+class Nest { public: string name = "x"; int w = 1; int h = 2; Nest() {} };
+interface Speaker { string speak() const; };
+template<typename T> class Stack { public: T v; Stack(T a) : v(a) {} };
+template<typename T, int N> struct Buffer { array<T, N> items; };
+template<typename T> T largest(T a, T b) { return a; }
+template<typename T> concept Addable = requires(T a, T b) { a + b; };
+class NotFound : public Error { public: NotFound() : Error("x") {} };
+long sum(vector<int> v) { return 1; }
+void save(vector<int> v) {}
+void take(unique<Node> n) {}
+void lend(Node n) {}
+int fails() throws { return 1; }
+const int MAX = 100;
+constexpr int N = 5;
+User? find(string n) { return null; }
+extern "C" struct FILE;
+extern "C" { struct tm { int a; }; struct ldiv_t2 { long quot; long rem; }; }
+"""
+SHEET_BODY = """    int n = 1; long someLong = 1; double someDouble = 1; double x = 2; char c = 'a'; string s = "s"; string t = "t"; vector<int> v = {1};
+    int i = 0; bool flag = true; bool ok = true; bool bad = false; float f2 = 1; int pos = 0; string name = "n"; string url = "u"; string token = "t"; string body = "b"; string k = "k"; int y = 3; string text = "1";
+    int? number = 1; hashmap<string, int> counts; char* charP = null; Point pp; json::Value obj; array<int, 3> arr;
+    %s
+"""
+SHEET_VARIANTS = [
+    'int* p = &n; int* q = &n; User u = User("a"); User? opt = null; hashmap<string, int> m; int a = 1; int b = 2;',
+    'Point p; Point* q = &p; User? u = null; User? user = null; int? opt = 1; unique<Node> a = unique<Node>("x"); unique<Node> b = unique<Node>("y"); weak<Node> w; Node node = Node("x");',
+    'char* p = null; Both d = Both(); local<Node> a = local<Node>("x"); local<Node> b = a; bool? opt = null; Mutex m = Mutex(); Task<long> r = spawn sum(v);',
+    'void* p = null; Animal a = Dog(); hashmap<string, vector<int>> m; array<int, 3> b; Task<long, throws> r2 = spawn throwsLong(); Task<int> tt = spawn zero();',
+    'array<int, 3> a = {1, 2, 3}; array<char, 8> b; http::Response r; http::WebSocket ws = try http::connect("ws://x"); http::Request request; hashmap<string, int> m; int e = 1; string v2 = "s";',
+    'unique<Node> u = unique<Node>("x"); json::Value a = json::object(); auto e = json::Error("m", 1, 2); auto g = reflect::type<Point>(); int w = 1; Task<long> t2 = spawn sum(v);',
+    'string a = "a"; string b = "b"; http::Error e = http::Error("m", "kind", "u"); auto f = reflect::type<Point>().fields()[0];',
+]
+
+# What the cheat sheet writes that is not code to compile: what is left out, what is typed at a shell, what a program prints.
+SHEET_NOT_CODE = {"<cmath>", "<cctype>", "std::", "std::weak_ptr", "std::string", "0x...", "--debug", "-Wno-new-delete", "-lname", "import x;", "long double", "/0",
+                  "http::fetch", "cplus check", "cplus run app.cplus --race", "cplus run app.cplus -- arg1 arg2", "cplus run app.cplus --debug"}
+# Habits that the left side of the table only names a part of, which is fine on its own. The rest of its row says what is wrong.
+SHEET_HABITS_THAT_COMPILE = {"int count = 0;", "x", "*p", "u", "if (flag)", "Node? next", "u1 == u2", "v[i]", "m[k]", "n", "s[s.size()]", "'\\0'", "s.substr(pos)"}
+
+
+def check_cheat_sheet(cplus, workdir):
+    """Every form the cheat sheet tells a reader to write compiles, and every C++ habit it warns of is rejected."""
+    text = (ROOT / "docs" / "CHEATSHEET.md").read_text()
+    works = text.split("## Works today")[1].split("## Different from C++")[0]
+    different = text.split("## Different from C++")[1].split("## Planned")[0]
+    forms = "\n".join(path.read_text() for path in sorted((ROOT / "tests" / "cases").glob("cheatsheet_forms*.cplus")))
+    def rows(part):
+        return re.findall(r"^\| (.+?) \| (.+) \|$", part, re.M)
+    def is_word(span):
+        return re.fullmatch(r"[\W_]+|\w+", span) is not None
+    def in_forms(span):
+        for piece in span.split("; "):
+            piece = piece.strip().rstrip(";")
+            pattern = re.escape(piece).replace(r"\{\ \.\.\.\ \}", r"\{.*?\}").replace(r"\{\.\.\.\}", r"\{.*?\}").replace(r"\.\.\.", ".*?")
+            if piece and not re.search(pattern, forms, re.S):
+                return False
+        return True
+    def sources(span):
+        filled = span.replace("{ ... }", "{ }").replace("{...}", "{ }")
+        end = "" if filled.rstrip().endswith((";", "}")) else ";"
+        statement = (SHEET_PRELUDE + "long throwsLong() throws { return 1; }\nint zero() { return 0; }\nint f() throws { return 0; }\n"
+                     "int main() throws {\n" + SHEET_BODY + "\n" + filled + end + "\nreturn 0;\n}\n")
+        for variant in SHEET_VARIANTS:
+            yield statement.replace("%s", variant)
+        yield SHEET_PRELUDE + filled + end + "\nint main() { return 0; }\n"
+        yield SHEET_PRELUDE + 'class Wrap : public Animal { public: int w = 1; int h = 2; Wrap(string n) {} ' + filled + end + " };\nint main() { return 0; }\n"
+        yield SHEET_PRELUDE + "class Wrap2 { public: int w = 1; int h = 2; void m() { " + filled + end + " } };\nint main() { return 0; }\n"
+        if filled.startswith("template<") and "(" not in filled and "{" not in filled:
+            yield SHEET_PRELUDE + filled + " T pass__(T a) { return a; }\nint main() { return 0; }\n"
+        if "catch" in filled and "try" not in filled:
+            yield SHEET_PRELUDE + "int f() throws { return 0; }\nvoid w() throws { try { try f(); } " + filled.replace(";", "") + " { } }\nint main() { return 0; }\n"
+        yield SHEET_PRELUDE + "template<typename T> void w() { T a = T(); " + filled + end + " }\nint main() { w<int>(); return 0; }\n"
+        yield SHEET_PRELUDE + "template<typename T, typename Base> void w() { if constexpr (" + filled + ") { } }\nint main() { w<int, Animal>(); return 0; }\n"
+        yield SHEET_PRELUDE + "int main() {\n" + filled + " dummy__;\nreturn 0;\n}\n"
+    def compiles(span, index, candidates):
+        path = workdir / f"sheet{index}.cplus"
+        for source in candidates:
+            path.write_text(source)
+            run = subprocess.run([cplus, "check", str(path)], capture_output=True, text=True, timeout=60)
+            if run.returncode == 0:
+                return True
+            if run.returncode != 1:
+                print(f"FAIL the cheat sheet's `{span}` stops the compiler: exit code {run.returncode}")
+                return True
+        return False
+    write = []
+    for _, column in rows(works) + rows(different):
+        for span in re.findall(r"`([^`]+)`", column):
+            span = span.replace("\\|", "|")
+            if span not in write and span not in SHEET_NOT_CODE and not is_word(span) and not in_forms(span):
+                write.append(span)
+    habits = []
+    for column, _ in rows(different):
+        for span in re.findall(r"`([^`]+)`", column):
+            span = span.replace("\\|", "|")
+            if span not in habits and span not in SHEET_HABITS_THAT_COMPILE and not span.startswith(("-g", "-f", "#", "std::setprecision", "curl -k", "verify=")):
+                habits.append(span)
+    def habit_sources(span):
+        end = "" if span.rstrip().endswith((";", "}")) else ";"
+        yield (SHEET_PRELUDE + "long throwsLong() throws { return 1; }\nint zero() { return 0; }\nint f() throws { return 0; }\n"
+               "int main() throws {\n" + SHEET_BODY + "\n" + span + end + "\nreturn 0;\n}\n").replace("%s", SHEET_VARIANTS[0])
+    ok = True
+    with concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 4) as pool:
+        wrote = list(pool.map(lambda pair: compiles(pair[1], pair[0], sources(pair[1])), enumerate(write)))
+        rejected = list(pool.map(lambda pair: compiles(pair[1], "h%d" % pair[0], habit_sources(pair[1])), enumerate(habits)))
+    for span, good in zip(write, wrote):
+        if not good:
+            print(f"FAIL the cheat sheet writes `{span}`, which does not compile")
+            ok = False
+    for span, compiled in zip(habits, rejected):
+        if compiled:
+            print(f"FAIL the cheat sheet warns of `{span}`, which compiles")
+            ok = False
+    return ok
+
+
 def check_print_lines(cplus, workdir):
     """What one println prints stays together, whichever thread gets there when. The lines can come in any order."""
     source = workdir / "print_lines.cplus"
@@ -494,6 +771,21 @@ def check_command_line(cplus, workdir):
         lacking = errors_without_help(run.stderr)
         if run.returncode != code or message not in run.stderr or lacking:
             print(f"FAIL cplus {' '.join(args)}: exit code {run.returncode}, expected {code}, and '{message}'. {lacking}\n  " + run.stderr[:300])
+            ok = False
+    # What a machine without these would report, by pretending.
+    c_struct = workdir / "c_struct.cplus"
+    c_struct.write_text('extern "C" { struct ldiv_t { long quot; long rem; }; ldiv_t ldiv(long a, long b); }\nint main() { return 0; }\n')
+    pretending = [
+        (["build", str(c_struct), "-o", str(workdir / "out")], "CPLUS_TARGET_FOR_TESTS", "i686-unknown-linux-gnu", "this compiler does not support passing structs by value to C functions such as 'ldiv'"),
+        (["build", g, "--race"], "CPLUS_NO_SANITIZERS_FOR_TESTS", "1", "--race needs ThreadSanitizer"),
+        (["build", g, "--debug"], "CPLUS_NO_SANITIZERS_FOR_TESTS", "1", "--debug needs AddressSanitizer"),
+        (["build", g, "-o", str(workdir / "out")], "CPLUS_LINKER_FOR_TESTS", str(workdir / "no-such-compiler"), "could not run"),
+        (["build", g, "-o", str(workdir / "out")], "CPLUS_TARGET_FOR_TESTS", "no-such-machine", "this is about the machine"),
+    ]
+    for args, name, value, message in pretending:
+        run = subprocess.run([cplus, *args], capture_output=True, text=True, env=dict(os.environ, **{name: value}))
+        if run.returncode == 0 or message not in run.stderr or errors_without_help(run.stderr):
+            print(f"FAIL cplus {' '.join(args)} with {name}: exit code {run.returncode}, and not '{message}'\n  " + run.stderr[:300])
             ok = False
     run = subprocess.run([cplus, "run", g], capture_output=True, text=True, env=dict(os.environ, TMPDIR=str(missing_dir)))
     if run.returncode != 1 or "cannot find a folder for temporary files" not in run.stderr or errors_without_help(run.stderr):
@@ -751,6 +1043,9 @@ def main():
             ok = check_unique_copies(cplus, pathlib.Path(tmp)) and ok
             ok = check_crash_in_output(cplus, pathlib.Path(tmp)) and ok
             ok = check_crash_paths(cplus, pathlib.Path(tmp)) and ok
+            ok = check_leak_report(cplus, pathlib.Path(tmp)) and ok
+            ok = check_planned_features(cplus, pathlib.Path(tmp)) and ok
+            ok = check_cheat_sheet(cplus, pathlib.Path(tmp)) and ok
             ok = check_print_lines(cplus, pathlib.Path(tmp)) and ok
             ok = check_what_is_linked(cplus, pathlib.Path(tmp)) and ok
             ok = check_source_rules() and ok

@@ -1,0 +1,73 @@
+// The advice of each error is something to do, not only a reason, and no error goes without any.
+class Loop1 : public Loop2 {};
+class Loop2 : public Loop1 {};
+// error: remove one of the two `: public ...`
+class Base {
+public:
+    bool open = true;
+    void go() {}
+};
+class Other {
+public:
+    int x = 0;
+};
+class NoBase {
+public:
+    int x = 0;
+    NoBase() : Base(1) {}
+    // error: remove it, since 'NoBase' has no base class
+};
+class HasBase : public Base {
+public:
+    HasBase() : Other(1) {}
+    // error: its base class is 'Base': write `Base(...)`
+};
+struct Point {
+    int x = 0;
+    Point* self() { return &this; }
+    // error: write `this`, which already refers to the object a method works on
+};
+void nothing() {}
+vector<int> makeVector() { return {1}; }
+Point makePoint() { return {1}; }
+
+void outside(Other other) {
+    println("{}", other.Base::open);
+    // error: write the name of one of its base classes, or leave this out
+    println("{}", Base::open);
+    // error: reach it through an object: `x.field`
+    Base::go();
+    // error: call it on an object: `x.method(...)`
+    makePoint().x = 1;
+    // error: Store it in a variable first, and change that
+    makeVector().push_back(1);
+    int? maybe = 1;
+    println("{}", maybe == "text");
+    // error: compare it with a value of type 'int', or with null
+    println("{}", maybe ?? "text");
+    // error: write a fallback of type 'int', which is what the optional holds
+    println("{}", other.x == 0 ? 1 : "text");
+    // error: Between numbers, a cast does it: `long(x)`
+    println("{}", dynamic_cast<Base?>(other) == null);
+    // error: check which class you meant, or derive a class from both
+    int n = nothing();
+    // error: this call gives nothing back. Call it on a line of its own, or have the function return a value
+}
+
+[[allow(new_delete)]]
+void deleting() {
+    int number = 1;
+    delete number;
+    // error: remove it: `delete` is only for what `new` gave
+}
+
+void noHelpBefore() {
+    println("{}", true + 1);
+    // error: a bool is not a number. Write `int(b)` for 1 or 0
+    string s = "a";
+    println("{}", s + nothing());
+    // error: this call gives nothing to add. Call it on a line of its own, or have the function return a string
+    s += nothing();
+}
+
+int main() { return 0; }

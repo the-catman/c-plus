@@ -1,0 +1,10 @@
+// The cheat sheet's forms of an interface. See cheatsheet_forms.
+interface Speaker { string speak() const; };
+class Dog : public Speaker { string speak() const override { return "woof"; } };
+
+int main() {
+    Speaker s = Dog();
+    println("{}", s.speak());
+    // expect: woof
+    return 0;
+}

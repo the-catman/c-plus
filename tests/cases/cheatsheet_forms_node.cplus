@@ -1,0 +1,54 @@
+// The cheat sheet's forms of a class with nothing but a field. See cheatsheet_forms.
+class Node { Node? next; };
+class U { public: string name = "a"; };
+class Named {
+public:
+    int x;
+    Named(int n) : x(n) {}
+};
+
+void f(int* n) { *n = 2; }
+
+int main() {
+    Node n = Node();
+    println("{}", U());
+    // expect: U {name: "a"}
+    {
+        vector<int> v = {1};
+        auto n = v.size();
+        println("{}", n);
+    }
+    // expect: 1
+    int x = 1;
+    f(&x);
+    println("{}", x);
+    // expect: 2
+    unique<Named> u = unique<Named>(x);
+    println("{}", u.x);
+    // expect: 2
+    vector<int> v = {1};
+    auto size = v.size();
+    long pos = string("abc").find("c");
+    auto found = pos;
+    println("{} {} {}", size, pos, found);
+    // expect: 1 2 2
+    string s = "abc";
+    string t = "c";
+    {
+        long pos = s.find(t);
+        println("{}", pos);
+    }
+    // expect: 2
+    {
+        auto pos = s.find(t);
+        println("{}", pos);
+    }
+    // expect: 2
+    {
+        int n = 2;
+        auto a = vector<int>(n);
+        println("{}", a);
+    }
+    // expect: [0, 0]
+    return 0;
+}

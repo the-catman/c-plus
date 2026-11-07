@@ -46,7 +46,7 @@ long square(long n) { return n * n; }
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
 | Hash maps | `hashmap<string, int> m = {{"a", 1}};` is a **value**, copied like a vector, that keeps the order entries were added in. `m["b"] = 2`, `m["b"]++`, `m[k].push_back(x)`. `m[k]` adds a missing key with a default value, as in C++, or **stops the program** if `V` has none. `m.at(k)` (**stops the program** if missing), `m.get(k)` (a `V?`), `m.contains(k)`, `m.count(k)`, `m.insert({k, v})` (keeps what is there), `m.erase(k)`, `m.size()`, `m.empty()`, `m.clear()`, `m.keys()`, `m.values()`. `for (auto e : m)` with `e.first`, `e.second`. Prints as `{"a": 1}`. A key is a number, `char`, `bool`, string, pointer or class reference, or an optional, vector, array or struct of those |
 | JSON | `import json;`. `json::stringify(x)`, `json::pretty(x)`, `User u = try json::parse<User>(text);`, for structs, classes, vectors, arrays, optionals, hashmaps and what they hold. Public fields only. A missing key keeps the field's default, and a key that is not a field is left out. `catch (json::Error e)` has `e.line`, `e.column` and `e.what()` |
-| Any JSON | `json::Value doc = try json::parse<json::Value>(text);`, then `doc.get("a")?.at(0)?.text() ?? "none"`. `isNull()`, `number()`, `whole()`, `boolean()`, `keys()`, `items()`, `size()`. `json::object()`, `json::array()`, `json::of(x)`, `v.set(k, x)`, `v.push(x)` |
+| Any JSON | `json::Value doc = try json::parse<json::Value>(text);`, then `doc.get("a")?.at(0)?.text() ?? "none"`. `isNull()`, `number()`, `whole()`, `boolean()`, `keys()`, `items()`, `size()`. `json::object()`, `json::array()`, `v.set(k, json::of(x))`, `v.push(json::of(x))` |
 | HTTP | `import http;`. `http::Response r = try http::get(url);`, then `r.status`, `r.ok`, `r.body`, `r.header("content-type")`. `try http::post(url, body, "application/json")`, `put`, `patch`, `delete`. `try http::send({.method = "HEAD", .url = url, .headers = {{"Authorization", token}}, .timeout = 5});`. A 404 is an answer, not an error. Other failures: `catch (http::Error e)`, with `e.kind` (`"timeout"`, `"connect"`, `"tls"`, ...) and `e.what()`. `http::encode(text)` for a part of a URL |
 | WebSockets | `http::WebSocket ws = try http::connect("wss://...");`, `try ws.send(text);`, `try ws.sendBinary(bytes);`, `while (auto m = try ws.receive())` with `m.data` and `m.isBinary`, null once closed. `ws.close()`, `ws.closeCode()`, `ws.timeout = 5;`. `http::connectWith(request)` for headers |
 | Reflection | `import reflect;`. `auto t = reflect::type<User>();` or `reflect::of(x)`, then `t.name()`, `t.kind()`, `t.size()`, `t.elem()`, and `for (auto f : t.fields())` with `f.name`, `f.offset`, `f.type`, `f.isPublic` |
@@ -204,7 +204,7 @@ long square(long n) { return n * n; }
 | `s.at(i)`, `s.append(t)` | `s[i]` (always checked), `s += t` |
 | overloaded functions | planned; one function per name for now: rename one |
 
-## Planned. The compiler rejects these today with "does not support ... yet"
+## Planned. Where there is something to write for them, the compiler rejects it with "does not support ... yet"
 
 | Feature | C+ form |
 |---------|---------|

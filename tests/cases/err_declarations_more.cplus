@@ -1,0 +1,27 @@
+// Declarations that are rejected in ways no other test reaches.
+template<typename T> const T generic_const(T x) { return x; }
+// error: a function cannot return a const value
+template<typename T> auto generic_auto(T x) { return x; }
+// error: this compiler does not support 'auto' return types yet
+constexpr auto constexpr_auto() { return 1; }
+// error: this compiler does not support 'auto' return types yet
+extern "C" int with_default(int n = 1);
+// error: this compiler does not support default argument values yet
+extern "C" auto c_auto();
+// error: a C function needs written types, not 'auto'
+extern "C" void c_reference(int& n);
+// error: C has no references
+struct WithOperator {
+    int x = 0;
+    int operator[](int i) { return i; }
+    // error: this compiler does not support operator overloading yet
+};
+struct WithLongerOperator {
+    int x = 0;
+    int* operator[](int i) { return null; }
+};
+struct WithReference {
+    int x = 0, & y;
+    // error: this compiler does not support reference types yet
+};
+int main() { return 0; }

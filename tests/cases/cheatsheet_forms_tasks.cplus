@@ -1,0 +1,51 @@
+// The cheat sheet's forms with a task. See cheatsheet_forms.
+extern "C" int usleep(int microseconds);
+
+class Worker {
+public:
+    int method(int x) { return x + 1; }
+};
+
+int f(int x) { return x; }
+long sum(vector<int> v) { return v.size(); }
+long fails(long x) throws { if (x < 0) throw Error("negative"); return x; }
+
+int main() throws {
+    int x = 1;
+    vector<int> v = {1, 2};
+    Worker obj = Worker();
+    Task<long> first = spawn sum(v);
+    println("{}", first.wait());
+    // expect: 2
+    {
+        Task<long> t = spawn sum(v);
+        println("{}", t.wait());
+    }
+    // expect: 2
+    {
+        auto t = spawn obj.method(x);
+        println("{}", t.wait());
+        println("{}", t.done());
+    }
+    // expect: 2
+    // expect: true
+    {
+        auto t = spawn f(x);
+        println("{}", t.wait());
+    }
+    // expect: 1
+    println("{}", (spawn f(x)).wait());
+    // expect: 1
+    {
+        Task<long, throws> t = spawn fails(x);
+        println("{}", try t.wait());
+    }
+    // expect: 1
+    {
+        long y = 2;
+        auto t = spawn fails(y);
+        println("{}", try t.wait());
+    }
+    // expect: 2
+    return 0;
+}

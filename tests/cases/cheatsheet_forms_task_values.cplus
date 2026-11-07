@@ -1,0 +1,12 @@
+// The cheat sheet's forms with a task of a function that takes nothing. See cheatsheet_forms.
+int f() { return 3; }
+
+int main() {
+    Task<int> r = spawn f();
+    println("{}", r.wait());
+    // expect: 3
+    auto t = spawn f();
+    println("{}", t.wait());
+    // expect: 3
+    return 0;
+}
