@@ -113,6 +113,9 @@ SAME = [  # (declared, wrong, printed, expected)
     ("S a = {};\nS b = {};\nbool f = true;", "(f ? a : b).x += N;", "a.x", "6"),
     ("S a = {};\nS b = {};\nbool f = true;", "(f ? a : b).x++;", "a.x", "2"),
     ("vector<S> ws = {S{}};", "ws.back().x -= N;", "ws[0].x", "-4"),
+    ("vector<S> ws = {S{}};", "++ws.back().x;", "ws[0].x", "2"),
+    ("S a = {};\nbool f = true;", "(f ? a : makeS(2)).set();", "a.x", "7"),
+    ("S b = {};\nbool f = false;", "(f ? makeS(2) : b).set();", "b.x", "7"),
     ("vector<S> ws = {S{}, S{}};\nbool f = false;", "(f ? ws.back() : ws.front()).x = N;", "ws[0].x", "5"),
     ('hashmap<string, S> m = {{"a", S{}}, {"b", S{}}};\nbool f = true;', '(f ? m["a"] : m["b"]).set();', 'm["a"].x', "7"),
     ("vector<unique<C>?> w;\nw.push_back(unique<C>());", "w[w.size() - 1].go();", "w[0]?.n", "2"),
@@ -132,6 +135,7 @@ TEMPORARY = [
     ("", "givesS()?.set();"),
     ("", "givesS().set();"),
     ("", "givesS()?.items.push_back(N);"),
+    ("", "maybeS(true)?.bump();"),
 ]
 
 # Methods that only read: there is nothing to store back, so the help must not say how to change it.
@@ -233,6 +237,8 @@ VALID = [  # (definitions, main, expected)
     ("", "S d = {};\nS u = maybeS(false).value_or(d).with(7);\nprintln(\"{} {}\", u.x, d.x);", "7 1"),
     ("", "S d = {};\nS u = (maybeS(false) ?? d).with(7);\nprintln(\"{} {}\", u.x, d.x);", "7 1"),
     ("", "hashmap<string, S> m = {{\"a\", S{}}};\nS u = m.values()[0].with(4);\nprintln(\"{} {}\", u.x, m[\"a\"].x);", "4 1"),
+    ("", "S a = {};\nS d = {};\nS? o = S{};\nbool f = true;\nS u = (f ? a : o.value_or(d)).with(9);\nprintln(\"{} {}\", u.x, a.x);", "9 1"),
+    ("", "S? o = S{};\nS? p = S{};\nS? u = (o ?? p)?.with(7);\nprintln(\"{} {}\", u?.x, o?.x);", "7 1"),
     ("", "S u = listS().back().with(5);\nprintln(\"{}\", u.x);", "5"),
     ("", "S u = tableS().at(\"a\").with(5);\nprintln(\"{}\", u.x);", "5"),
     ("", "S a = {};\nbool f = true;\nS u = (f ? a : makeS(2)).with(9);\nprintln(\"{} {}\", u.x, a.x);", "9 1"),
@@ -328,7 +334,7 @@ def run_case(cplus, workdir, index, declared, wrong, kind, printed=None, expecte
     if kind == "temporary" and not claims_temporary:
         return f"{shown}: does not say this only exists as a copy: {text}"
     # The last piece of code that is a statement, or an assignment with a place to change
-    codes = [c for c in CODE.findall(text) if is_statement(c) or "= ..." in c or re.search(r"\.\w+\((\.\.\.)?\)$", c)]
+    codes = [c for c in CODE.findall(text) if is_statement(c) or "= ..." in c or c.startswith(("++", "--")) or re.search(r"\.\w+\((\.\.\.)?\)$", c)]
     if not codes:
         if kind == "simple":
             return f"{shown}: no code to follow in: {text}"
@@ -370,7 +376,7 @@ def run_elsewhere(cplus, workdir, index, definitions, wrong, body, expected):
     text = helps[0]
     if "only exists as a copy" in text:
         return f"{shown}: says this only exists as a copy: {text}"
-    codes = [c for c in CODE.findall(text) if is_statement(c) or "= ..." in c or re.search(r"\.\w+\((\.\.\.)?\)$", c)]
+    codes = [c for c in CODE.findall(text) if is_statement(c) or "= ..." in c or c.startswith(("++", "--")) or re.search(r"\.\w+\((\.\.\.)?\)$", c)]
     if not codes:
         return f"{shown}: no code to follow in: {text}"
     value = re.search(r"\(([^()]*)\);$", wrong)

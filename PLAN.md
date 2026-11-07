@@ -516,8 +516,9 @@ Decided 2026-11-05.
 - Any type with `==` can be a key, if that `==` looks at what can be hashed, with no hash to write. A hash function of
   your own waits for function overloading.
 - `m.at(k)` and `m.get(k)` give copies too, so changing what they give is an error for the same reason, and `m[k]` is the place.
-  So are `?:` when both of what it chooses from are variables, fields or elements (then C++ would change the one it chose), and `=`.
-  `??`, `value_or()`, `values()` and `items()` give copies in C++ too, so they are errors only when nothing receives the result.
+  So are `?:` when both of what it chooses from are what C++ would refer to (then C++ would change the one it chose), and `=`.
+  `??`, `value_or()`, `values()`, `items()`, and `?:` with only one such, give copies in C++ too, so they are errors only when nothing
+  receives the result. The same goes for `?.`: on a place it is an error, and on what a function gave only when the result is unused.
   What a function gave changes nothing the program has, so `(f ? make(1) : make(2)).with(5)` and `list().back().with(5)` are
   allowed, and so is a method under `spawn`, which runs on a copy. Through a pointer or a class
   object the change is real, so `ps.back()[0].set()` and `ps.back()->set()` stay allowed. Decided 2026-11-07.

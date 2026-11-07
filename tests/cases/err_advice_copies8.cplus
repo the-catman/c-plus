@@ -1,0 +1,66 @@
+// The last edges of the advice about copies: `++` before, results kept through `?.`, and what a statement throws away.
+struct S {
+    int x = 0;
+    void set() { x = 1; }
+    int bump() { x = x + 1; return x; }
+    int* where() { return &x; }
+};
+class C { public: int n = 0; };
+struct WithUnique {
+    unique<C> c = unique<C>();
+    int bump() { return 1; }
+};
+class K {
+public:
+    S? o;
+};
+template <typename T>
+S? mk() { return S{}; }
+S? gt(int n) throws { return S{}; }
+
+void before() {
+    vector<S> v = {S{}};
+    int r = --v.back().x;
+    // error: `back()` gives a copy. Change it in place: `--v[v.size() - 1].x`
+}
+void keepingResults() {
+    const S? c = S{};
+    int? r = c?.bump();
+    // error: 'c' is const, so what is in it cannot change
+    WithUnique? w;
+    int? q = w?.bump();
+    // error: to keep what it gives, move it out, call it, and move it back: `int? result = null; if (w) { auto v = move(w).value(); result = v.bump(); w = move(v); }`
+    S? o = S{};
+    int*? never = null;
+    // error: a pointer cannot be optional
+    int* p = o?.where();
+    // error: `int* result = null; if (auto v = o) { result = v.where(); o = v; }`
+    vector<S?> list;
+    for (auto e : list) {
+        int? b = e?.bump();
+        // error: 'e' is a copy of the element, so to change the element, loop with an index
+    }
+    S? h = S{};
+    int s = h.value().bump();
+    // error: `value()` gives a copy. Take the copy first, `auto v = h.value();`, use `v.bump()` in place of this, and store it back after: `h = v;`
+    vector<S?> wv = {S{}};
+    println("{}", wv.back()?.bump());
+    // error: to keep what it gives, unwrap it and call it on the copy: `int? result = null; if (auto v = wv[wv.size() - 1]) { result = v.bump(); wv[wv.size() - 1] = v; }`
+    hashmap<string, S> m = {{"a", S{}}};
+    int? got = m.get("a")?.bump();
+    // error: to keep what it gives, call it where the value is: `int? result = null; if (m.contains("a")) result = m["a"].bump();`
+}
+void thrownAway(K? k, S d, S? o) {
+    k?.o.value_or(d).bump();
+    // error: 'bump' may change the struct, but 'value_or()' gives a copy of it
+    for (int i = 0; i < 1; o.value_or(d).bump()) { }
+    // error: 'bump' may change the struct, but 'value_or()' gives a copy of it
+}
+void whatIsCalled() throws {
+    mk<S>()?.set();
+    // error: `auto opt = mk<S>();`
+    try gt(1)?.set();
+    // error: `auto opt = try gt(1);`
+}
+
+int main() { return 0; }

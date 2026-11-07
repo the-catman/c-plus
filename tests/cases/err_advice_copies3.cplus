@@ -35,7 +35,7 @@ H makeH() { return H{}; }
 void itMayOnlyRead() {
     S? o = S{};
     int a = o.value().area();
-    // error: `value()` gives a copy. Unwrap it, change that and store it back: `if (auto v = o) { v.area(); o = v; }`, or mark 'area' `const` if it does not change any field
+    // error: `value()` gives a copy. Take the copy first, `auto v = o.value();`, use `v.area()` in place of this, and store it back after: `o = v;`, or mark 'area' `const` if it does not change any field
     const vector<S> w = {S{}};
     w.back().area();
     // error: 'w' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change that, or mark 'area' `const` if it does not change any field

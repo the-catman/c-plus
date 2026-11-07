@@ -198,10 +198,10 @@ private:
     // Resolves a variable or field access. When the expression is rooted at a variable,
     // `var` and `path` name the place; otherwise var is null (e.g. `makePoint().x`).
     const Type* resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::string& path);
-    bool checkAssignable(Expr& target, Flow& flow, const char* action, const VarDecl*& var, std::string& path, const std::string& change = " = ...");
+    bool checkAssignable(Expr& target, Flow& flow, const char* action, const VarDecl*& var, std::string& path, const std::string& change = " = ...", const std::string& before = "");
     // Reports an error when the resolved place `target` cannot be changed: it is const,
     // a field of `this` in a const method, or part of a temporary value.
-    bool checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path, const std::string& change = " = ...");
+    bool checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path, const std::string& change = " = ...", const std::string& before = "");
     const VarDecl* rootVariable(const Expr& root);
     void reportUnknownName(const NameExpr& n);
 

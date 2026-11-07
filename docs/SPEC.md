@@ -728,9 +728,9 @@ Building a vector:
 - `front()` and `back()` return a copy. To change the last element, write
   `v[v.size() - 1] = x`. Changing what they give, `v.back().x = 1` or a method that changes a struct, `v.back().set()` or `v.back().p.set()`, is an
   error, as in C++ it would change the element, and here it would do nothing. So is changing what `?:` gives when both
-  of what it chooses from are variables, fields or elements, as `(f ? a : b).set()` would change `a` in C++, and what `=`
-  gives. What `??`, `value_or()`, `values()` and `items()` give is a copy in C++ too, so changing it is an error only when
-  nothing receives the result. What a function gave changes nothing the program has, so `(f ? make(1) : make(2)).with(5)`
+  of what it chooses from are what C++ would refer to, such as variables, fields, elements or what `back()` gives, as
+  `(f ? a : b).set()` would change `a` in C++, and what `=` gives. What `??`, `value_or()`, `values()` and `items()` give,
+  and `?:` with only one such, is a copy in C++ too, so changing it is an error only when nothing receives the result. What a function gave changes nothing the program has, so `(f ? make(1) : make(2)).with(5)`
   and `list().back().with(5)` are allowed, and so is any method under `spawn`, which runs on a copy.
 - `==` and `!=` compare the sizes and then each pair of elements, in order. Ordering with
   `<` is planned.
