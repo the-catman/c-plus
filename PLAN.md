@@ -329,7 +329,7 @@ programs that import `json` or `reflect`, and for debug builds, whose leak repor
 - `print` for any value.
 - `json` parse and serialize via reflection.
 - `http` client and WebSockets, wrapping libcurl. This also proves the C FFI early. Decided 2026-11-07: linked as a shared
-  library for now, and programs that stand alone come in Phase 7. The `libcurl.a` of a distribution still needs a dozen other
+  library for now, and programs that stand alone come in Phase 8. The `libcurl.a` of a distribution still needs a dozen other
   shared libraries, some with no static form, so linking it would not let a program run on any more machines. That takes a
   libcurl built for it, with few features and its TLS library linked in too. One setting, `CPLUS_CURL_LIBRARY`, chooses which is used.
 - Threads and `spawn`.
@@ -587,7 +587,7 @@ What §5 asks for, as built in Phase 4. Decided 2026-11-07.
 - Completion comes later, when it is wanted: it needs the parser to make sense of a line that is half written.
 - Each version of a file is checked in a child process. The compiler keeps types in tables for as long as it runs, keyed by
   where things are in memory, which is right for one compile and wrong for a server that runs for hours, and a crash on half
-  written code then costs one check and not the server. The child comes from `fork`, which Windows does not have: Phase 7 starts
+  written code then costs one check and not the server. The child comes from `fork`, which Windows does not have: Phase 8 starts
   `cplus` itself there instead.
 - The protocol is read and written with LLVM's JSON, which the compiler links already.
 
@@ -633,7 +633,8 @@ Open implementation questions are listed in §6.
 
 ## 4. Phases
 
-Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, platforms, is next. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, the core
+language, is next, and then platforms. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
@@ -661,7 +662,31 @@ async standard library surface, `http::fetch`.
 
 **Phase 6 — Tooling.** Formatter, LSP, C header import via libclang.
 
-**Phase 7 — Platforms.** macOS CI. wasm32-wasi. Windows platform layer. Browser wasm. Programs that use `http` and stand alone.
+**Phase 7 — Core language.** Added 2026-11-11, before platforms. Phases 1 to 6 built what sets C+ apart, but a
+program still lacks much of what C and C++ code uses every day, and the safety of §2.7 is partly owed to features not built
+yet: nothing can dangle without references, and nothing can capture a variable that is gone without lambdas. In order of
+what holds real programs back most:
+1. A first slice of the library, small and with little to design: reading a whole file, reading a line of input, and
+   parsing a number from a string. Today all three go through C.
+2. A program's own modules, `import net.server;`, as §2.13 decides, so that a program can be more than one file. `.hplus`
+   files wait for libraries that ship compiled.
+3. Enums and `switch`.
+4. References (§6): whether C+ has them, and in what form. This comes before lambdas and overloading, which depend on the
+   answer: what a lambda captures, what `operator[]` gives, and what a parameter can be. It decides `T&` parameters and
+   `for (auto& x : v)`, may replace the rules of §2.17 and §2.24 on when a result is a copy, and is where the safety of
+   §2.7 is tested hardest. `return &x;` of a local, which compiles today, is caught first.
+5. Lambdas, and a type for a function, then `sort` and the other functions that take one, and C callbacks.
+6. Function overloading, more than one constructor and default arguments, then operator overloading. Overloading also
+   ends the pairs that stand in for it, such as `http::fetch` and `http::fetchWith`, before more of them are made.
+7. The rest of what everyday programs need: writing files and the rest of `fs` (§2.15), `split`, `trim`, `join` and
+   `replace` on strings, `insert` and `erase` on vectors, width, alignment and hex in `format`, unsigned integers,
+   variables outside functions, and `int main(vector<string> args)`.
+
+Each is designed when it is reached, as before. Exit criterion: two or three programs of a few hundred lines each, one of
+them in several files, written by a model given only the cheat sheet, with nothing in them that works around a missing
+feature.
+
+**Phase 8 — Platforms.** CI on Linux, which §2.1 already asks for. macOS CI. wasm32-wasi. Windows platform layer. Browser wasm. Programs that use `http` and stand alone.
 
 ---
 
@@ -688,9 +713,9 @@ will confidently write C++ wherever the two differ.
 
 ## 6. Open items
 
-- Remaining syntax: lambdas, enums, `switch`. Settled as each
+- Remaining syntax: lambdas, enums, `switch`, in Phase 7. Settled as each
   feature is reached.
-- Function overloading is planned, as in C++, after the v1 core.
+- Function overloading, as in C++, in Phase 7.
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, keeps a copy of it or frees it, since the update to the element would be lost (decided
   2026-11-06). The alternative is to pin a buffer separately from its reference count, so that writes
@@ -701,12 +726,16 @@ will confidently write C++ wherever the two differ.
 - Printing still goes by a function the compiler writes for each type, while 2.14 says it is built on descriptors. It works, and
   it costs a program nothing it does not print. Moving it would give one way of walking a value, at the cost of a slower `println`.
 - What a module has is one token with `::` in it, not a scope, which is what `joinModuleNames` makes. A program cannot tell, since it cannot declare such a name (`err_module_add`). Real scopes come with a program's own modules, which need them.
-- `main` takes its arguments as in C++, through raw pointers. A checked form, such as
-  `int main(vector<string> args)`, could come later.
-- References (`T&`): whether C+ gets them, and in what form. They decide how
+- `main` takes its arguments as in C++, through raw pointers. A checked form,
+  `int main(vector<string> args)`, comes in Phase 7.
+- References (`T&`): whether C+ gets them, and in what form, settled in Phase 7. They decide how
   `for (auto& x : v)` and `const T&` parameters work; today both are errors that point to a
   copy, which is cheap for vectors.
 - A scheduler that shares async work between threads, which the rules in 2.9 allow
   (decided 2026-11-10), when real workloads need more than one loop per thread.
+- A runtime error stops the whole program, as in Swift. A server may want to end only the request that failed, which
+  needs somewhere a thread or a request can be stopped. To be settled before C+ is used for servers.
+- Speed is not measured against C++ yet. In one benchmark on 2026-11-11, walking a vector of two million objects ran about
+  twice as slow as C++ with `shared_ptr`, while a sieve ran as fast. Where the time goes is not known.
 - Package manager, after v1.
 - Virtual inheritance, if ever.
