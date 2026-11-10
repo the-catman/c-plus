@@ -329,7 +329,7 @@ programs that import `json` or `reflect`, and for debug builds, whose leak repor
 - `print` for any value.
 - `json` parse and serialize via reflection.
 - `http` client and WebSockets, wrapping libcurl. This also proves the C FFI early. Decided 2026-11-07: linked as a shared
-  library for now, and programs that stand alone come in Phase 8. The `libcurl.a` of a distribution still needs a dozen other
+  library for now, and programs that stand alone come in Phase 9. The `libcurl.a` of a distribution still needs a dozen other
   shared libraries, some with no static form, so linking it would not let a program run on any more machines. That takes a
   libcurl built for it, with few features and its TLS library linked in too. One setting, `CPLUS_CURL_LIBRARY`, chooses which is used.
 - Threads and `spawn`.
@@ -587,7 +587,7 @@ What §5 asks for, as built in Phase 4. Decided 2026-11-07.
 - Completion comes later, when it is wanted: it needs the parser to make sense of a line that is half written.
 - Each version of a file is checked in a child process. The compiler keeps types in tables for as long as it runs, keyed by
   where things are in memory, which is right for one compile and wrong for a server that runs for hours, and a crash on half
-  written code then costs one check and not the server. The child comes from `fork`, which Windows does not have: Phase 8 starts
+  written code then costs one check and not the server. The child comes from `fork`, which Windows does not have: Phase 9 starts
   `cplus` itself there instead.
 - The protocol is read and written with LLVM's JSON, which the compiler links already.
 
@@ -634,7 +634,7 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, the core
-language, is next, and then platforms. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+language, is next, then servers, then platforms. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
@@ -686,7 +686,13 @@ Each is designed when it is reached, as before. Exit criterion: two or three pro
 them in several files, written by a model given only the cheat sheet, with nothing in them that works around a missing
 feature.
 
-**Phase 8 — Platforms.** CI on Linux, which §2.1 already asks for. macOS CI. wasm32-wasi. Windows platform layer. Browser wasm. Programs that use `http` and stand alone.
+**Phase 8 — Servers.** Added 2026-11-11. HTTP and WebSocket servers, on libuv as `net` in §2.15, with handlers
+written as the lambdas of Phase 7. Before them, what reads data another machine sends is fuzz tested: WebSocket frames,
+HTTP headers and redirects, and `json::parse`, then the servers' own parsing as it is written. A server takes that data
+from anyone, and the WebSocket code is C+'s own (§2.26). How a runtime error ends one request and not the whole
+program (§6) is settled first too.
+
+**Phase 9 — Platforms.** CI on Linux, which §2.1 already asks for. macOS CI. wasm32-wasi. Windows platform layer. Browser wasm. Programs that use `http` and stand alone.
 
 ---
 
@@ -734,7 +740,7 @@ will confidently write C++ wherever the two differ.
 - A scheduler that shares async work between threads, which the rules in 2.9 allow
   (decided 2026-11-10), when real workloads need more than one loop per thread.
 - A runtime error stops the whole program, as in Swift. A server may want to end only the request that failed, which
-  needs somewhere a thread or a request can be stopped. To be settled before C+ is used for servers.
+  needs somewhere a thread or a request can be stopped. Settled in Phase 8.
 - Speed is not measured against C++ yet. In one benchmark on 2026-11-11, walking a vector of two million objects ran about
   twice as slow as C++ with `shared_ptr`, while a sieve ran as fast. Where the time goes is not known.
 - Package manager, after v1.

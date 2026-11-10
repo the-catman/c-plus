@@ -2,7 +2,7 @@
 
 C+ is a compiled language shaped like C++, with safer defaults and more built in. The
 compiler is written in C++20 and generates code through LLVM 18. Phases 1 to 6 of `PLAN.md` are in,
-the last being tooling: `cplus fmt`, `cplus lsp` and `import <header.h>;`. Phase 7, the core language, is next, and then platforms.
+the last being tooling: `cplus fmt`, `cplus lsp` and `import <header.h>;`. Phase 7, the core language, is next, then servers, then platforms.
 
 ## Where things are
 
