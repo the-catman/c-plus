@@ -1,0 +1,36 @@
+// A plain function waits for a task with `wait()`, which runs the thread's async work until the task is done. When `main`
+// returns, what is still running goes on until it is done.
+async int slow(int x) {
+    await delay(5);
+    return x + 1;
+}
+
+async void later(string what) {
+    await delay(20);
+    println("{}", what);
+}
+
+int twice(int x) {
+    auto t = slow(x);
+    return t.wait() * 2;
+}
+
+int main() {
+    long ms = 5;
+    auto t = slow(1);
+    println("waiting");
+    // expect: waiting
+    println("{}", t.wait());
+    // expect: 2
+    println("{}", t.wait());          // again, the same
+    // expect: 2
+    println("{}", twice(3));
+    // expect: 8
+    delay(ms).wait();
+    auto l = later("after main returned");
+    println("main returns");
+    // expect: main returns
+    // expect: after main returned
+    return 3;
+}
+// exit: 3

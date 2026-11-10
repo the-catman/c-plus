@@ -1,0 +1,24 @@
+// C+ waits with `delay`, which counts milliseconds.
+void plain() {
+    sleep(1);
+    // error: C+ waits with `delay`, which counts milliseconds, and has no `sleep`
+    // error: to wait, write `delay(1000).wait();`. C's can be declared instead: `extern "C" int sleep(int seconds);`
+    Sleep(1000);
+    // error: and has no `Sleep`
+    setTimeout(1);
+    // error: C+ has no `setTimeout`, as an async function can wait, then do the work
+    // error: write an async function that waits first, with `await delay(ms);`, then does the work. Calling it starts it: `auto t = later();`
+}
+
+async void waits() {
+    usleep(1000);
+    // error: to wait, write `await delay(1000);`, which lets other async work go on meanwhile. C's can be declared instead: `extern "C" int usleep(int microseconds);`
+    nanosleep(1);
+    // error: and has no `nanosleep`
+}
+
+int main() {
+    std::this_thread::sleep_for(1);
+    // error: to wait, write `delay(1000).wait();`, or `await delay(1000);` in an async function: `delay` counts milliseconds
+    return 0;
+}

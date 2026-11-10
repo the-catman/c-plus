@@ -1,0 +1,50 @@
+// A call runs the function until it waits for something that is not done yet, then gives the task. Each goes on when what
+// it waits for is done, in that order, and functions that wait for the same task go on in the order they waited.
+async int f(int x) {
+    println("f({}) starts", x);
+    await delay(x * 20);
+    println("f({}) goes on", x);
+    return x * 10;
+}
+
+async int ready() { return 5; }
+
+async void watch(Task<int> t, string name) {
+    println("{} waits", name);
+    int n = await t;
+    println("{} sees {}", name, n);
+}
+
+async int main() {
+    auto a = f(1);
+    auto b = f(2);
+    println("both started");
+    // expect: f(1) starts
+    // expect: f(2) starts
+    // expect: both started
+    println("{}", await a);
+    // expect: f(1) goes on
+    // expect: 10
+    println("{}", await b);
+    // expect: f(2) goes on
+    // expect: 20
+    await f(1);
+    // expect: f(1) starts
+    // expect: f(1) goes on
+    println("{}", await ready());
+    // expect: 5
+    auto t = f(3);
+    auto first = watch(t, "first");
+    auto second = watch(t, "second");
+    await first;
+    await second;
+    // expect: f(3) starts
+    // expect: first waits
+    // expect: second waits
+    // expect: f(3) goes on
+    // expect: first sees 30
+    // expect: second sees 30
+    println("{}", await a);
+    // expect: 10
+    return 0;
+}

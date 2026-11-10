@@ -186,6 +186,8 @@ void Parser::joinThrowingTasks() {
 void Parser::addBuiltins() {
     bool usesError = false, definesError = false, usesMap = false, definesMap = false;
     bool usesSpawn = false, usesTask = false, definesTask = false;
+    bool usesAsync = false, usesDelay = false, definesDelay = false;
+    Loc asyncLoc;
     bool usesMutex = false, definesMutex = false, usesGuard = false, definesGuard = false;
     Loc spawnLoc, guardLoc;
     // A function or variable of the program with one of these names, as in `int Mutex(int x)`: a type comes before it.
@@ -218,6 +220,11 @@ void Parser::addBuiltins() {
             spawnLoc = toks_[i].loc;
         }
         usesTask = usesTask || (k == Tok::Ident && toks_[i].text == "Task");
+        if ((k == Tok::KwAsync || k == Tok::KwAwait) && !usesAsync) {
+            usesAsync = true;
+            asyncLoc = toks_[i].loc;
+        }
+        usesDelay = usesDelay || (k == Tok::Ident && toks_[i].text == "delay" && (i == 0 || toks_[i - 1].kind != Tok::ColonColon));
         usesMutex = usesMutex || (k == Tok::Ident && toks_[i].text == "Mutex");
         if (k == Tok::Ident && toks_[i].text == "LockGuard" && !usesGuard) {
             usesGuard = true;
@@ -228,6 +235,7 @@ void Parser::addBuiltins() {
             definesTask = definesTask || toks_[i].text == "Task";
             definesMutex = definesMutex || toks_[i].text == "Mutex";
             definesGuard = definesGuard || toks_[i].text == "LockGuard";
+            definesDelay = definesDelay || toks_[i].text == "delay";
         }
         if ((k == Tok::KwClass || k == Tok::KwStruct || k == Tok::KwInterface) && i + 1 < toks_.size() && toks_[i + 1].kind == Tok::Ident) {
             definesError = definesError || toks_[i + 1].text == "Error";
@@ -255,7 +263,13 @@ void Parser::addBuiltins() {
     if (usesSpawn && definesTask)
         diags_.error(spawnLoc, "`spawn` gives a built-in class 'Task', but this program has its own",
                      "rename your class, e.g. to `MyTask`: `spawn` needs the name `Task` for the built-in one", spec::Concurrency);
-    bool builtinTask = (usesSpawn || usesTask) && !definesTask;
+    if (usesAsync && definesTask && !usesSpawn)
+        diags_.error(asyncLoc, "an async function gives a built-in class 'Task', but this program has its own",
+                     "rename your class, e.g. to `MyTask`: async needs the name `Task` for the built-in one", spec::Async);
+    const bool builtinDelay = usesDelay && !definesDelay && !definesTask;
+    usesAsync = usesAsync || builtinDelay;
+    prog_->usesAsync = usesAsync;
+    bool builtinTask = (usesSpawn || usesTask || usesAsync) && !definesTask;
     usesError = usesError || builtinTask;  // what a task that fails holds
     usesMutex = usesMutex || usesGuard;
     prog_->linksThreads = usesSpawn || builtinTask || (usesMutex && !definesMutex);
@@ -281,6 +295,10 @@ void Parser::addBuiltins() {
         static const SourceFile builtin("<built-in>", kTaskSource);
         addBuiltinSource(builtin);
         joinThrowingTasks();
+    }
+    if (builtinDelay) {
+        static const SourceFile builtin("<built-in>", kDelaySource);
+        addBuiltinSource(builtin);
     }
     if (usesMutex && !definesMutex) {
         static const SourceFile builtin("<built-in>", kMutexSource);
@@ -769,13 +787,18 @@ void Parser::readTemplate(TemplateDecl& t) {
             ConceptBody body;
             parseConcept(body);
         } else {
-            match(Tok::KwConstexpr);
+            if (match(Tok::KwConstexpr) && check(Tok::KwAsync))
+                fail(peek().loc, "an async function cannot be constexpr", "remove `constexpr`: an async function waits for what happens while the program runs", spec::Async);
+            Loc asyncLoc;
+            const bool isAsync = parseAsyncMark(asyncLoc);
             Loc retLoc;
             bool isConst = false;
             const Type* ret = parseType(retLoc, &isConst);
             if (isConst) fail(retLoc, "a function cannot return a const value", "remove `const`", spec::Functions);
             if (ret->is(Type::Kind::Auto)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `T`");
             t.pattern = parseFunction(ret, retLoc);
+            t.pattern->isAsync = isAsync;
+            t.pattern->asyncLoc = asyncLoc;
         }
     } catch (ParseError&) {
         t.failed = true;  // what stopped it has been reported
@@ -968,11 +991,15 @@ FuncDecl* Parser::instantiateFunction(TemplateDecl& t, const std::vector<Templat
     } leave{*this};
     try {
         bool isConstexpr = match(Tok::KwConstexpr);
+        Loc asyncLoc;
+        const bool isAsync = parseAsyncMark(asyncLoc);
         Loc retLoc;
         bool isConst = false;
         const Type* ret = parseType(retLoc, &isConst);
         auto fn = parseFunction(ret, retLoc);
         fn->isConstexpr = isConstexpr;
+        fn->isAsync = isAsync;
+        fn->asyncLoc = asyncLoc;
         fn->name = name;
         fn->allowNewDelete = t.allowNewDelete;
         fn->usedAt = usedAt;
@@ -1056,7 +1083,8 @@ Loc Parser::parseAttribute() {
 
 void Parser::rejectOtherLanguages() {
     const Token& t = peek();
-    if (t.kind == Tok::KwAsync) notYet(t.loc, "async and await", "to run something without waiting for it, write a plain function: `auto t = spawn f();`, then `t.wait()`");
+    if (t.kind == Tok::KwAsync && !localScopes_.empty())
+        fail(t.loc, "C+ has no functions inside functions", "write the async function at the top level of the file, or as a method, and pass it what it needs", spec::Async);
     if (t.kind != Tok::Ident || isTypeName(t) || boundType(t) || classTemplate(t.text)) return;
     // Only when a name or a type comes next, which an expression cannot have: `let` can still be the name of a variable.
     Tok next = peek(1).kind;
@@ -1314,8 +1342,13 @@ void Parser::parseTopLevel(Program& prog) {
             return;
         }
         case Tok::KwEnum: notYet(t.loc, "enums", "use constants for now: `const int RED = 0;`");
+        case Tok::KwAsync:
+            asyncPending_ = parseAsyncMark(asyncAt_);
+            break;  // a function follows, read as any other
         case Tok::KwConstexpr: {
             advance();
+            if (check(Tok::KwAsync))
+                fail(peek().loc, "an async function cannot be constexpr", "remove `constexpr`: an async function waits for what happens while the program runs", spec::Async);
             if (check(Tok::KwStruct) || check(Tok::KwClass))
                 notYet(prev().loc, "constexpr structs", "leave out `constexpr`, and use `constexpr` functions and constants of numbers, `char`, `bool` or `string`");
             Loc typeLoc;
@@ -1376,6 +1409,10 @@ void Parser::parseTopLevel(Program& prog) {
              "move this definition into the body of '" + peek().text + "'; C+ has no headers, so there is no "
              "separate declaration to match",
              spec::Classes);
+    const bool isAsync = asyncPending_;
+    asyncPending_ = false;
+    if (isAsync && !(check(Tok::Ident) && peek(1).kind == Tok::LParen))
+        fail(asyncAt_, "only a function can be async", "remove `async`, or write a function: `async int f() { ... }`", spec::Async);
     if (isConst && check(Tok::Ident) && peek(1).kind != Tok::LParen) return parseConstants(prog, ret, retLoc, false);
     if (ret->is(Type::Kind::Auto) && (!check(Tok::Ident) || peek(1).kind == Tok::LParen)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `int`");
     if (check(Tok::Ident) && peek(1).kind != Tok::LParen)
@@ -1395,6 +1432,10 @@ void Parser::parseTopLevel(Program& prog) {
                        : "pass the value to the functions that use it, or keep it in a class object. A function that returns it "
                          "also works, if it never changes");
     prog.funcs.push_back(parseFunction(ret, retLoc));
+    if (isAsync) {
+        prog.funcs.back()->isAsync = true;
+        prog.funcs.back()->asyncLoc = asyncAt_;
+    }
 }
 
 // `const int LIMIT = 10, TWICE = LIMIT * 2;`, after the type.
@@ -1683,6 +1724,8 @@ void Parser::failStd(Loc loc, const Token& name) {
         fail(loc, "C+ has no std:: namespace", "built-ins need no prefix: write `move(x)`", spec::Unique);
     if (n == "unordered_map" || n == "map")
         fail(loc, "C+ has no std:: namespace", "write `hashmap<K, V>`, used like std::unordered_map", spec::HashMaps);
+    if (n == "this_thread" || n == "chrono")
+        fail(loc, "C+ has no std:: namespace", "to wait, write `delay(1000).wait();`, or `await delay(1000);` in an async function: `delay` counts milliseconds", spec::Async);
     if (n == "thread" || n == "jthread" || n == "async" || n == "future")
         fail(loc, "C+ has no std:: namespace", "write `auto t = spawn f(x);`, then `t.wait()`, which gives what `f` returned", spec::Concurrency);
     if (n == "mutex" || n == "lock_guard" || n == "scoped_lock" || n == "unique_lock")
@@ -2448,6 +2491,27 @@ void Parser::parseThrowsMark(FuncDecl& fn) {
         fail(peek().loc, "`const` comes before `throws`", "write `const` before `throws`, on a method: `int f() const throws { ... }`. A function outside a type cannot be const", spec::Errors);
 }
 
+// `async` before a function's return type. What else it could be in front of is reported.
+bool Parser::parseAsyncMark(Loc& at) {
+    if (!check(Tok::KwAsync)) return false;
+    at = advance().loc;
+    const Token& t = peek();
+    if (t.kind == Tok::KwAsync) fail(t.loc, "`async` is written once", "remove one of them", spec::Async);
+    if (t.kind == Tok::Ident && (t.text == "function" || t.text == "fn" || t.text == "func" || t.text == "def"))
+        fail(t.loc, "C+ writes a function with its return type",
+             "write `async void " + (peek(1).kind == Tok::Ident ? peek(1).text : std::string("f")) + "() { ... }`, with the type it returns in place of `void`", spec::Async);
+    if (t.kind == Tok::KwTemplate) fail(at, "`async` comes after the template header", "write `template<typename T> async T f(T x) { ... }`", spec::Async);
+    if (t.kind == Tok::KwConstexpr)
+        fail(t.loc, "an async function cannot be constexpr", "remove `constexpr`: an async function waits for what happens while the program runs", spec::Async);
+    if (t.kind == Tok::KwExtern) fail(at, "a C function cannot be async", "remove `async`, and write an async function in C+ that calls it", spec::Async);
+    if (t.kind == Tok::KwVirtual) fail(at, "`virtual` comes before `async`", "write `virtual async`, in that order, as in `virtual async int f() { ... }`", spec::Async);
+    if (t.kind == Tok::Tilde) fail(at, "a destructor cannot be async", "remove `async`: a destructor runs as soon as the object is let go of", spec::Async);
+    if (t.kind == Tok::KwStruct || t.kind == Tok::KwClass || t.kind == Tok::KwInterface)
+        fail(at, "only a function can be async", "remove `async`. A method in it can be async: `async int f() { ... }`", spec::Async);
+    if (!isTypeStart()) fail(at, "`async` is written before the return type of a function", "write `async int f() { ... }`", spec::Async);
+    return true;
+}
+
 // ---- Structs and classes --------------------------------------------------
 
 void Parser::parseRecord(StructDecl* into) {
@@ -2608,6 +2672,11 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         if (peek().kind == Tok::Ident && peek().text == ownName && peek(1).kind == Tok::LParen)
             fail(loc, "a constructor cannot be virtual", "remove `virtual`", spec::Inheritance);
     }
+    Loc asyncLoc;
+    if (check(Tok::KwAsync) && peek(1).kind == Tok::Ident && peek(1).text == ownName && peek(2).kind == Tok::LParen)
+        fail(peek().loc, "a constructor cannot be async",
+             "remove `async`, and write an async function that makes the object: `async " + ownName + " make() { ...; return " + ownName + "(...); }`", spec::Async);
+    const bool isAsync = parseAsyncMark(asyncLoc);
     const Token& t = peek();
     if (sd.isInterface && (t.kind == Tok::Tilde || (t.kind == Tok::Ident && t.text == ownName && peek(1).kind == Tok::LParen)))
         fail(t.loc, std::string("an interface cannot have a ") + (t.kind == Tok::Tilde ? "destructor" : "constructor"),
@@ -2737,6 +2806,8 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
     if (ty->is(Type::Kind::Auto))
         fail(typeLoc, "fields and methods need a written type", "write the type, e.g. `int x = 0;`. `auto` is only for local variables", spec::Structs);
     if (check(Tok::KwOperator)) notYet(peek().loc, "operator overloading", operatorHelp());
+    if (isAsync && !(check(Tok::Ident) && peek(1).kind == Tok::LParen))
+        fail(asyncLoc, "only a function or a method can be async", "remove `async`", spec::Async);
 
     // Method: type name(params) [const] { ... }
     if (check(Tok::Ident) && peek(1).kind == Tok::LParen) {
@@ -2750,6 +2821,8 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         method->owner = &sd;
         method->access = access;
         method->isVirtual = isVirtual;
+        method->isAsync = isAsync;
+        method->asyncLoc = asyncLoc;
         parseParams(*method);
         method->isConst = match(Tok::KwConst);
         parseThrowsMark(*method);
@@ -3367,7 +3440,15 @@ ExprPtr Parser::parseUnary() {
                 fail(peek().loc, "`sizeof` of a type takes parentheses", peek(1).kind == Tok::Less || peek(1).kind == Tok::Star || check(Tok::KwConst) ? std::string("put the whole type in parentheses, as in `sizeof(vector<int>)`") : "write `sizeof(" + peek().text + ")`", spec::Sizeof);
             return std::make_unique<SizeofExpr>(t.loc, nullptr, parseUnary());  // `sizeof x` or `sizeof(x)`
         }
-        case Tok::KwAwait: notYet(t.loc, "async and await", "remove `await`: a call waits for its result. To run something without waiting for it: `auto t = spawn f();`, then `t.wait()`");
+        case Tok::KwAwait: {
+            advance();
+            if (check(Tok::KwTry)) {
+                const Token& what = peek(1);
+                const std::string operand = what.kind != Tok::Ident ? "t" : peek(2).kind == Tok::LParen ? what.text + "(...)" : what.text;
+                fail(peek().loc, "`try` comes before `await`", "write `try await " + operand + "`: it is the waiting that can fail", spec::Async);
+            }
+            return std::make_unique<AwaitExpr>(t.loc, parseUnary());
+        }
         case Tok::KwSpawn: {
             advance();
             Loc loc = t.loc;

@@ -1,0 +1,19 @@
+// An async function that waits for its own task never goes on, so `main`, which waits for it, cannot either.
+class Box {
+public:
+    Task<int>? other;
+};
+
+async int waitsFor(Box b) {
+    await delay(1);
+    if (auto t = b.other) return await t;
+    return 0;
+}
+
+async int main() {
+    Box b = Box();
+    auto t = waitsFor(b);
+    b.other = t;
+    return await t;
+}
+// trap: `main` waits for a task that nothing can finish any more

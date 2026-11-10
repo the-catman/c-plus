@@ -95,7 +95,7 @@ void stdUnknown() {
 }
 void withAwait() {
     await withAwait();
-    // error: remove `await`: a call waits for its result
+    // error: remove `await`: a call of 'withAwait' is done when it returns. To have it give a task, make it async: `async void withAwait(...)`
 }
 void callACall() {
     int g = 1;

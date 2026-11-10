@@ -33,6 +33,12 @@ typedef struct {
 // finished: otherwise the program could end, and libcurl with it, while the thread is still using it.
 void cplus_http_thread_end(void) __attribute__((weak));
 
+// What loop.c does, in a program with async: what is pending on this thread's event loop is done before the thread
+// counts as finished, a task's waiters are woken, and `wait()` runs the loop for a task that is finished on it.
+void cplus_loop_finish(void) __attribute__((weak));
+void cplus_loop_wake(cplus_waiter* waiters) __attribute__((weak));
+bool cplus_loop_run_until(task_state* task) __attribute__((weak));
+
 static void* thread_main(void* given) {
     thread_start start = *(thread_start*)given;
     free(given);
@@ -42,6 +48,7 @@ static void* thread_main(void* given) {
     sigaltstack(&crash, NULL);
 #endif
     start.entry(start.closure);
+    if (cplus_loop_finish) cplus_loop_finish();
     if (cplus_http_thread_end) cplus_http_thread_end();
 #ifdef CPLUS_OWN_CRASH_HANDLER
     stack_t none = {.ss_flags = SS_DISABLE};
@@ -82,23 +89,24 @@ void cplus_threads_finish(void) {
 
 // ---- Tasks -----------------------------------------------------------------
 
-typedef struct {
-    pthread_mutex_t lock;
-    pthread_cond_t changed;
-    bool done;
-    bool waited;
-} task_state;
-
+// The type is in internal.h, which loop.c shares.
 task_state* cplus_task_new(void) {
     task_state* task = cplus_malloc(sizeof *task);
     pthread_mutex_init(&task->lock, NULL);
     pthread_cond_init(&task->changed, NULL);
     task->done = false;
     task->waited = false;
+    task->count = 1;
+    task->loop = NULL;
+    task->waiters = NULL;
     return task;
 }
 
+void cplus_task_hold(task_state* task) { __atomic_add_fetch(&task->count, 1, __ATOMIC_RELAXED); }
+
+// Let go of by the Task, or by what was to finish it.
 void cplus_task_free(task_state* task) {
+    if (__atomic_sub_fetch(&task->count, 1, __ATOMIC_ACQ_REL) != 0) return;
     pthread_cond_destroy(&task->changed);
     pthread_mutex_destroy(&task->lock);
     free(task);
@@ -108,13 +116,21 @@ void cplus_task_free(task_state* task) {
 void cplus_task_finish(task_state* task) {
     pthread_mutex_lock(&task->lock);
     task->done = true;
+    cplus_waiter* waiters = task->waiters;
+    task->waiters = NULL;
     pthread_cond_broadcast(&task->changed);
     pthread_mutex_unlock(&task->lock);
+    if (waiters) cplus_loop_wake(waiters);  // there are only waiters in a program with async, which has loop.c
 }
 
 void cplus_task_wait(task_state* task) {
     pthread_mutex_lock(&task->lock);
     task->waited = true;
+    bool done = task->done;
+    pthread_mutex_unlock(&task->lock);
+    // A task that this thread's loop finishes is waited for by running the loop until it is done.
+    if (!done && task->loop && cplus_loop_run_until) cplus_loop_run_until(task);
+    pthread_mutex_lock(&task->lock);
     while (!task->done) pthread_cond_wait(&task->changed, &task->lock);
     pthread_mutex_unlock(&task->lock);
 }

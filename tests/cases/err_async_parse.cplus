@@ -1,0 +1,46 @@
+// Where `async` goes, and what can be async.
+async async int f() { return 1; }
+// error: `async` is written once
+// error: remove one of them
+async function g() { }
+// error: C+ writes a function with its return type
+// error: write `async void g() { ... }`, with the type it returns in place of `void`
+async template<typename T> T h(T x) { return x; }
+// error: `async` comes after the template header
+// error: write `template<typename T> async T f(T x) { ... }`
+async constexpr int k() { return 1; }
+// error: an async function cannot be constexpr
+// error: remove `constexpr`: an async function waits for what happens while the program runs
+async extern "C" int puts(string s);
+// error: a C function cannot be async
+// error: remove `async`, and write an async function in C+ that calls it
+class A {
+public:
+    async virtual int f() { return 1; }
+    // error: `virtual` comes before `async`
+    // error: write `virtual async`, in that order, as in `virtual async int f() { ... }`
+    async ~A() {}
+    // error: a destructor cannot be async
+    // error: remove `async`: a destructor runs as soon as the object is let go of
+    async A() {}
+    // error: a constructor cannot be async
+    // error: remove `async`, and write an async function that makes the object: `async A make() { ...; return A(...); }`
+    async int x = 1;
+    // error: only a function or a method can be async
+};
+async struct S { int x; };
+// error: remove `async`. A method in it can be async: `async int f() { ... }`
+async const int N = 1;
+// error: remove `async`, or write a function: `async int f() { ... }`
+async { }
+// error: `async` is written before the return type of a function
+constexpr async int m() { return 1; }
+template<typename T> constexpr async T n(T x) { return x; }
+int main() {
+    async int z = 1;
+    // error: write the async function at the top level of the file, or as a method, and pass it what it needs
+    int y = await try f();
+    // error: `try` comes before `await`
+    // error: write `try await f(...)`: it is the waiting that can fail
+    return 0;
+}

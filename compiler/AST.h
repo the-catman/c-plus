@@ -183,7 +183,7 @@ struct TemplatePattern {
 struct Expr {
     enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
                       Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof, New,
-                      Delete, Try, Constraint, Borrow, Spawn };
+                      Delete, Try, Constraint, Borrow, Spawn, Await };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -284,6 +284,15 @@ struct SpawnExpr : Expr {
     const FuncDecl* finish = nullptr;    // set by Sema: the method of the task that takes the result
     const FuncDecl* fail = nullptr;      // set by Sema: the method that takes the error, for a target that can fail
     SpawnExpr(Loc l, ExprPtr c) : Expr(Kind::Spawn, l), call(std::move(c)) {}
+};
+
+// `await t`, in an async function: the function waits there until the task is done, and goes on with what it gives.
+struct AwaitExpr : Expr {
+    ExprPtr task;
+    const StructDecl* taskDecl = nullptr;  // set by Sema: its `Task`
+    const FuncDecl* wait = nullptr;        // set by Sema: the method that gives the result, once the task is done
+    const FuncDecl* then = nullptr;        // set by Sema: the method that says what to go on with when it is
+    AwaitExpr(Loc l, ExprPtr t) : Expr(Kind::Await, l), task(std::move(t)) {}
 };
 
 // `try f()`: what can fail inside it passes its error on, to a catch or the caller.
@@ -694,6 +703,15 @@ struct FuncDecl {
     bool isPure = false;          // `virtual int f() = 0;`, which has no body
     bool isThrows = false;        // `int f() throws`
     bool isConstexpr = false;     // `constexpr int f()`, which can run while compiling
+    bool isAsync = false;         // `async int f()`: a call gives a `Task<int>`, and the body returns an int
+    // For an async function, set by Sema: the type that is written, which the body returns, as `retType` is then its Task,
+    // and the methods of the Task that its call needs.
+    const Type* declaredRet = nullptr;
+    Loc asyncLoc;
+    const FuncDecl* taskFinish = nullptr;
+    const FuncDecl* taskFail = nullptr;
+    const FuncDecl* taskBind = nullptr;
+    const FuncDecl* taskWait = nullptr;
     bool checked = false;         // set by Sema once its body has been checked
     bool requested = false;       // it will be checked and generated; a generic class's methods wait for their first use
     Loc usedAt;                   // for a function made from a generic: where it was first needed
@@ -708,6 +726,11 @@ struct FuncDecl {
     };
     std::vector<BaseInit> baseInits;
     std::unique_ptr<VarDecl> thisDecl;  // stands for `this` in definite assignment; set by Sema
+
+    // What the body returns, which for an async function is not what a call gives.
+    const Type* bodyRet() const { return isAsync && declaredRet ? declaredRet : retType; }
+    // Whether the call itself can fail. An async function's error goes in its task, and comes out of waiting for it.
+    bool callFails() const { return isThrows && !isAsync; }
 };
 
 
@@ -966,6 +989,7 @@ struct Program {
     std::set<std::string> unreadFunctions;  // what could not be read because of an error that has been reported
     bool usesThreads = false;     // it has a `spawn`: printing then has to keep lines together, and main to wait
     bool linksThreads = false;    // it uses the part of the runtime that is written on the system's threads
+    bool usesAsync = false;       // it has `async` or `await`: the runtime's event loop is linked, on libuv
 
     // Whether this program can ask about types while it runs, which only json and reflect do.
     bool usesDescriptors() const { return imported("json") || imported("reflect"); }

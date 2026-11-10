@@ -1,0 +1,5 @@
+struct Task { string title; };
+async int f() { return 1; }
+// error: an async function gives a built-in class 'Task', but this program has its own
+// error: rename your class, e.g. to `MyTask`: async needs the name `Task` for the built-in one
+int main() { return 0; }

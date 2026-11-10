@@ -42,6 +42,7 @@ long square(long n) { return n * n; }
 | Local references | `local<Node> a = local<Node>("x");` counts without atomic steps, so only one thread can use it. `local<Node> b = a;` shares it. `a.name`, `a.go()`, `a.get()` lends it as a `Node`. `local<Node>?` can be empty. Cannot go into `spawn` |
 | Threads | `Task<long> t = spawn sum(v);` or `auto t = spawn obj.method(x);`, then `t.wait()`, `t.done()`. `Task<void>` for no result. The function `throws`: `Task<long, throws>`, and `try t.wait()`. Arguments are copied, class references are shared. The program waits for its threads when `main` returns. An error that no `wait()` can see fails the program |
 | Locks | `Mutex m = Mutex();`, `m.lock()`, `m.unlock()`, `m.try_lock()`. `LockGuard g = LockGuard(m);` unlocks at the end of the block. Locking twice on one thread **stops the program**. `cplus run app.cplus --race` finds what is not protected |
+| Async | `async string load(string name) { await delay(10); return name; }`. A call starts it, and gives a `Task<string>`: `auto t = load("a");`, then `await t` in an async function, or `t.wait()` in a plain one. `async int main()`. A function that `throws` gives a `Task<string, throws>`, and is waited for with `try await t`. `await` works on `spawn`'s tasks too. `delay(ms)` waits. A task must be kept or waited for, and the program waits for async work when `main` returns. No `LockGuard` or `local` across an `await` |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
 | Hash maps | `hashmap<string, int> m = {{"a", 1}};` is a **value**, copied like a vector, that keeps the order entries were added in. `m["b"] = 2`, `m["b"]++`, `m[k].push_back(x)`. `m[k]` adds a missing key with a default value, as in C++, or **stops the program** if `V` has none. `m.at(k)` (**stops the program** if missing), `m.get(k)` (a `V?`), `m.contains(k)`, `m.count(k)`, `m.insert({k, v})` (keeps what is there), `m.erase(k)`, `m.size()`, `m.empty()`, `m.clear()`, `m.keys()`, `m.values()`. `for (auto e : m)` with `e.first`, `e.second`. Prints as `{"a": 1}`. A key is a number, `char`, `bool`, string, pointer or class reference, or an optional, vector, array or struct of those |
@@ -118,6 +119,10 @@ long square(long n) { return n * n; }
 | `std::mutex m;`, `std::lock_guard<std::mutex> g(m);` | `Mutex m = Mutex();`, `LockGuard g = LockGuard(m);` |
 | `std::atomic<int>` | planned. Use a class field and a `Mutex` |
 | `-fsanitize=thread` | `cplus run app.cplus --race` |
+| `async function load() { }`, `await load("a")` in a plain function | `async string load(string name) { ... }`. `await` is only for an async function, where `wait()` is an error. A plain function waits with `t.wait()` |
+| `load("a");`, which throws away the task of an async call | error, since nothing waits for it: `await load("a");`, or `auto t = load("a");` to let it run on |
+| `await try load("a")` | `try await t`: `try` comes first |
+| `sleep(1)`, `std::this_thread::sleep_for(1s)`, `setTimeout(f, 100)` | `delay(1000).wait();`, or `await delay(1000);` in an async function: `delay` counts milliseconds. For later, an async function that waits first |
 | `Node n = a;` from a `local<Node>` | `a.get()` lends it. A `local<Node>` only converts to another |
 | `std::weak_ptr<Node>` | `weak<Node>`, with `lock()`, which gives a `Node?`, `expired()` and `reset()` |
 | `w == null`, `if (w)` on a `weak<Node>` | `w.expired()`, `if (auto n = w.lock())`. A weak reference is not a condition |
@@ -228,7 +233,7 @@ long square(long n) { return n * n; }
 | Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
 | More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare`; parsing numbers from strings |
 | More C | variable arguments, vectors, C variables like `errno`, callbacks |
-| Concurrency | `async`/`await`, waiting with a time limit, atomic values, condition variables, channels |
+| Concurrency | waiting with a time limit, stopping a task, atomic values, condition variables, channels |
 
 ## Tools
 

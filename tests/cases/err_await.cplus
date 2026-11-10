@@ -1,6 +1,10 @@
+// `await` waits for a task, which a plain function's call does not give.
 int f() { return 1; }
-int main() {
+async int main() {
     int x = await f();
-    return x;
+    // error: `await` waits for a task, and this is 'int'
+    // error: remove `await`: a call of 'f' is done when it returns. To have it give a task, make it async: `async int f(...)`
+    int y = await 5;
+    // error: remove `await`: only a task can be waited for, which an async call or `spawn` gives
+    return x + y;
 }
-// error: this compiler does not support async and await yet

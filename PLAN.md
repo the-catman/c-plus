@@ -207,6 +207,16 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
 - ThreadSanitizer's own stack holds 64K calls and is not checked, and going past it writes over what the loader uses, so a crash report can no longer be trusted. So `--race` stops a program at 60000 calls, with a message, by putting a count in the way of what it calls for each function (`runtime/race_stack.c`). A smaller thread stack would have done it too, but only for threads, and at a cost to a program with large frames that never gets near the limit.
 - A fatal error is reported by one thread. Any other that stops as well waits for the first to end the program, so there is one message. The report does not wait long for a thread stuck in the output.
 
+`async` decided 2026-11-10:
+- An async function is written `async int f() throws`, with `async` in front as in JavaScript. Calling it gives a `Task<int, throws>`, the same type `spawn` gives, so `await t` and `t.wait()` work on any task, whatever runs it. A second, promise-like type would mean nearly the same thing.
+- A call runs the function until it waits for something that is not done yet, and then gives the task, as in JavaScript. What it throws goes in the task, as with `spawn`, so the call takes no `try`, while waiting for a task that can fail does: `try await t`.
+- `await` is only allowed in an async function, and `main` can be one. A plain function waits with `t.wait()`, which runs the thread's event loop until the task is done. `wait()` inside an async function is an error, since it would hold up everything else on the loop. It is written `await t` there.
+- Throwing away the task of an async call is an error, since a missing `await` is the most common mistake with async in JavaScript. To let it run on, keep the task in a variable. A `spawn` can still be let go of, as the word itself says that much.
+- After an `await`, a function may go on on another thread. The first version keeps it on the thread it started on, with one libuv loop per thread, but programs must not count on that, so that a scheduler that shares the work between threads can come later without breaking any. So a class object that two async functions change needs a `Mutex`, as with threads, and neither a `local` reference nor a `LockGuard` can be kept across an `await`. Keeping a function on one thread can be added later, as something a program asks for. The other way round, a scheduler that shares work would have broken programs that counted on staying on one thread.
+- The program does not end while anything is pending: when `main` returns, the main thread runs its loop until it has nothing left, and a thread does the same when its function returns, before it counts as finished. This is what Node does, and what `spawn` already does.
+- `delay(ms)` is the timer. It is async, so a plain function waits with `delay(ms).wait()`. It is not named `sleep`, since C's `sleep` counts seconds.
+- Not in Phase 5: stopping a task, waiting with a time limit, async lambdas.
+
 ### 2.10 Generics — DECIDED
 "Templates" in the plain sense, not C++ template metaprogramming.
 - Generic functions and classes with type parameters and value parameters, e.g.
@@ -638,7 +648,7 @@ will confidently write C++ wherever the two differ.
 
 ## 6. Open items
 
-- Remaining syntax: `async` functions, lambdas, enums, `switch`. Settled as each
+- Remaining syntax: lambdas, enums, `switch`. Settled as each
   feature is reached.
 - Function overloading is planned, as in C++, after the v1 core.
 - A struct method changing a vector element stops the program if its body also writes to that
@@ -656,7 +666,7 @@ will confidently write C++ wherever the two differ.
 - References (`T&`): whether C+ gets them, and in what form. They decide how
   `for (auto& x : v)` and `const T&` parameters work; today both are errors that point to a
   copy, which is cheap for vectors.
-- Event loop and threads: one loop per thread versus a work-stealing scheduler. Decided
-  in Phase 5 with real workloads.
+- A scheduler that shares async work between threads, which the rules in 2.9 allow
+  (decided 2026-11-10), when real workloads need more than one loop per thread.
 - Package manager, after v1.
 - Virtual inheritance, if ever.

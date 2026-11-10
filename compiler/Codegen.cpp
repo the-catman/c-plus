@@ -8,6 +8,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Intrinsics.h>
+#include <optional>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/MDBuilder.h>
@@ -121,6 +122,25 @@ struct Codegen::Impl {
     bool usesDescriptors = false;  // a program that imports json or reflect: a class then says what it really is
     bool buildsFromDescriptors = false;  // one that imports json, which makes values from them too
     bool usesThreads = false;      // a program with a `spawn`
+    bool usesAsync = false;        // a program with `async` or `await`, which has an event loop
+
+    // An async function is two: the one that is called, which makes the Task and gives it, and a coroutine that runs the
+    // body, which LLVM's coroutine passes cut into pieces at each `await`. What the body keeps across one goes in the
+    // coroutine's frame. See defineAsync.
+    struct AsyncState {
+        llvm::Value* task;               // its Task, which the coroutine holds a reference to
+        llvm::Value* id;                 // what llvm.coro.id gave
+        llvm::Value* handle;             // the frame, from llvm.coro.begin
+        llvm::BasicBlock* failed;        // for a function that can fail: the error is in errorOut
+        llvm::BasicBlock* done;          // the task is finished: what the coroutine holds is let go of
+        llvm::BasicBlock* freeFrame;     // and its frame
+        llvm::BasicBlock* leave;         // back to whoever started or resumed it
+    };
+    std::optional<AsyncState> async;  // while the body of an async function is generated
+    std::unordered_map<const FuncDecl*, llvm::Function*> asyncBodies;
+    llvm::Function* resumeFn = nullptr;  // void(ptr frame): goes on with a coroutine, for the event loop
+    llvm::FunctionCallee rtLoopFinish;
+    llvm::FunctionCallee rtLoopWaitsForStart;
 
     // A vector is a pointer to a buffer laid out as the runtime's cplus_vec: a header of
     // count, size and capacity, then the elements. Null is an empty vector.
@@ -275,6 +295,8 @@ struct Codegen::Impl {
         }
         rtThreadStart = decl("cplus_thread_start", voidTy, {ptrTy, ptrTy});
         rtThreadsFinish = decl("cplus_threads_finish", voidTy, {});
+        rtLoopFinish = decl("cplus_loop_finish", voidTy, {});
+        rtLoopWaitsForStart = decl("cplus_loop_waits_for_start", voidTy, {b.getInt32Ty()});
         rtPrintLock = decl("cplus_print_lock", voidTy, {});
         rtPrintUnlock = decl("cplus_print_unlock", voidTy, {});
         rtAlloc = decl("cplus_alloc", ptrTy, {i64});
@@ -884,13 +906,16 @@ struct Codegen::Impl {
         llvm::Function* fn;
         llvm::DebugLoc line;
         llvm::DISubprogram* diFunction;
+        std::optional<AsyncState> async;
         explicit SavedPoint(Impl& impl)
             : g(impl), ip(impl.b.saveIP()), fn(impl.fn), line(impl.b.getCurrentDebugLocation()),
-              diFunction(impl.diFunction) {
+              diFunction(impl.diFunction), async(impl.async) {
             g.endLineTable();
+            g.async.reset();
         }
         ~SavedPoint() {
             g.b.restoreIP(ip);
+            g.async = async;
             g.fn = fn;
             g.b.SetCurrentDebugLocation(line);
             g.diFunction = diFunction;
@@ -1680,7 +1705,7 @@ struct Codegen::Impl {
             case Expr::Kind::FloatLit: case Expr::Kind::CharLit: case Expr::Kind::Name: case Expr::Kind::This:
             case Expr::Kind::OptValue: case Expr::Kind::Sizeof: case Expr::Kind::Constraint:
                 return false;
-            case Expr::Kind::Spawn: return true;
+            case Expr::Kind::Spawn: case Expr::Kind::Await: return true;
             case Expr::Kind::Cast: {
                 auto& c = static_cast<const CastExpr&>(e);
                 return c.operand && mayRunCode(*c.operand);
@@ -2160,6 +2185,7 @@ struct Codegen::Impl {
                 return i.prefix ? updated : old;
             }
             case Expr::Kind::Spawn: owned = true; return genSpawn(static_cast<const SpawnExpr&>(e));
+            case Expr::Kind::Await: owned = true; return genAwait(static_cast<const AwaitExpr&>(e));
             case Expr::Kind::Call: owned = true; return genCall(static_cast<const CallExpr&>(e));
             case Expr::Kind::MethodCall: {
                 auto& call = static_cast<const MethodCallExpr&>(e);
@@ -2830,7 +2856,13 @@ struct Codegen::Impl {
                 errorSlot = entryAlloca(b.getPtrTy(), "error");
                 b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), errorSlot);
             }
-            llvm::Value* result = emitCall(target, std::move(callArgs), selfType && dispatch, errorSlot);
+            llvm::Value* result = emitCall(target, std::move(callArgs), selfType && dispatch, target.isAsync ? nullptr : errorSlot);
+            if (target.isAsync) {  // the thread waits for its task, running its own event loop
+                llvm::Value* inner = result;
+                b.CreateCall(rtLoopWaitsForStart, {b.getInt32(1)});
+                result = emitCall(*target.taskWait, {inner}, false, target.isThrows ? errorSlot : nullptr);
+                releaseValue(inner, target.retType);
+            }
             if (selfType) releaseValue(selfType->isClass() ? b.CreateLoad(b.getPtrTy(), selfSlot, "self") : peekValue(selfType, selfSlot), selfType);
             b.CreateCall(rtFree, {closure});
             auto finish = [&] {
@@ -2879,8 +2911,8 @@ struct Codegen::Impl {
     // writes it to memory the caller gives it, as a hidden first argument.
     // With `dispatch`, a virtual method is found through the vtable of `this`, the first of `args`.
     llvm::Value* callFunction(const FuncDecl& f, std::vector<llvm::Value*> args, bool dispatch = false) {
-        llvm::Value* result = emitCall(f, std::move(args), dispatch, f.isThrows ? errorPlace() : nullptr);
-        if (f.isThrows) leaveOnError();
+        llvm::Value* result = emitCall(f, std::move(args), dispatch, f.callFails() ? errorPlace() : nullptr);
+        if (f.callFails()) leaveOnError();
         return result;
     }
 
@@ -2890,7 +2922,7 @@ struct Codegen::Impl {
         if (dispatch && f.vtableSlot >= 0)
             callee = llvm::FunctionCallee(funcs.at(&f)->getFunctionType(),
                                           vtableSlot(loadVtable(args[0]), kVtableMethods + f.vtableSlot, f.name.c_str()));
-        if (f.isThrows) args.push_back(errorPlace);
+        if (f.callFails()) args.push_back(errorPlace);
         if (inMemory(f.retType)) {
             llvm::AllocaInst* result = entryAlloca(llvmType(f.retType), "result");
             args.insert(args.begin(), result);
@@ -3127,6 +3159,11 @@ struct Codegen::Impl {
     }
 
     void returnAfterError() {
+        if (async) {  // the task gets the error
+            if (async->failed) b.CreateBr(async->failed);
+            else b.CreateUnreachable();  // Sema proved that nothing can fail here
+            return;
+        }
         if (fn->getReturnType()->isVoidTy()) b.CreateRetVoid();
         else b.CreateRet(llvm::PoisonValue::get(fn->getReturnType()));
     }
@@ -3350,6 +3387,14 @@ struct Codegen::Impl {
             case Stmt::Kind::ForEach: genForEach(static_cast<const ForEachStmt&>(s)); return;
             case Stmt::Kind::Return: {
                 auto& st = static_cast<const ReturnStmt&>(s);
+                if (async) {  // the task gets what it returns
+                    llvm::Value* v = st.value ? genOwned(*st.value, fnDecl->bodyRet()) : nullptr;
+                    flushTemps();
+                    releaseScopes(0);
+                    finishAsync(v);
+                    startDeadBlock();
+                    return;
+                }
                 const Type* rt = fnDecl->retType;
                 if (st.value && inMemory(rt)) {  // written to the memory the caller gave, the hidden first argument
                     llvm::Value* v;
@@ -3460,7 +3505,7 @@ struct Codegen::Impl {
         if (result) params.push_back(b.getPtrTy());  // where the result goes; see callFunction
         if (f.owner) params.push_back(b.getPtrTy());  // `this`
         for (auto& p : f.params) params.push_back(valueType(p->type));
-        if (f.isThrows) params.push_back(b.getPtrTy());  // where an error goes; see errorPlace
+        if (f.callFails()) params.push_back(b.getPtrTy());  // where an error goes; see errorPlace
         auto* type = llvm::FunctionType::get(result ? b.getVoidTy() : llvmType(f.retType), params, false);
         // User functions get a prefixed, internal symbol so they never collide with C
         // library names; `main` is wrapped by a C-ABI entry point below. Generated
@@ -3477,8 +3522,18 @@ struct Codegen::Impl {
         if (result) func->getArg(0)->setName("result");
         if (f.owner) func->getArg(first - 1)->setName("this");
         for (size_t i = 0; i < f.params.size(); ++i) func->getArg(first + i)->setName(f.params[i]->name);
-        if (f.isThrows) func->getArg(func->arg_size() - 1)->setName("error");
+        if (f.callFails()) func->getArg(func->arg_size() - 1)->setName("error");
         funcs[&f] = func;
+        if (f.isAsync && !f.isPure) {  // the coroutine, which takes the task, then what the function takes
+            std::vector<llvm::Type*> bodyParams{b.getPtrTy()};
+            bodyParams.insert(bodyParams.end(), params.begin(), params.end());
+            auto* body = llvm::Function::Create(llvm::FunctionType::get(b.getVoidTy(), bodyParams, false), llvm::Function::InternalLinkage,
+                                                name + "#body", mod.get());
+            body->setPresplitCoroutine();
+            body->getArg(0)->setName("task");
+            for (unsigned i = 0; i < func->arg_size(); ++i) body->getArg(i + 1)->setName(func->getArg(i)->getName());
+            asyncBodies[&f] = body;
+        }
     }
 
     // Whether C's `char` is signed on the target: it is on x86 and on Apple and Windows
@@ -3751,6 +3806,7 @@ struct Codegen::Impl {
 
     void defineFunction(const FuncDecl& f) {
         if (f.isExtern) return;  // defined in C
+        if (f.isAsync && !f.isPure) return defineAsync(f);
         fn = funcs.at(&f);
         fnDecl = &f;
         locals.clear();
@@ -3798,6 +3854,137 @@ struct Codegen::Impl {
         endLineTable();
     }
 
+    llvm::Function* intrinsic(llvm::Intrinsic::ID id, llvm::ArrayRef<llvm::Type*> types = {}) {
+        return llvm::Intrinsic::getDeclaration(mod.get(), id, types);
+    }
+
+    void defineAsync(const FuncDecl& f) {
+        const Type* taskType = f.retType;
+        llvm::Function* body = asyncBodies.at(&f);
+        // The call makes the task, bound to this thread's event loop, with one reference for the caller and one for the
+        // coroutine, which runs until it first has to wait.
+        fn = funcs.at(&f);
+        fnDecl = &f;
+        locals.clear();
+        errorOut = nullptr;
+        localError = nullptr;
+        thisPtr = nullptr;
+        b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
+        startLineTable(f.nameLoc);
+        llvm::Value* task = construct(*taskType->decl, {});
+        retainValue(task, taskType);
+        callFunction(*f.taskBind, {task});
+        std::vector<llvm::Value*> args{task};
+        for (llvm::Argument& a : fn->args()) args.push_back(&a);
+        b.CreateCall(body, args);
+        b.CreateRet(task);
+        endLineTable();
+
+        fn = body;
+        b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
+        startLineTable(f.nameLoc);
+        llvm::Value* null = llvm::ConstantPointerNull::get(b.getPtrTy());
+        // C++'s promise, which C+ keeps nothing in. LLVM 18 reads it whenever the line table is C++'s, as ours says it is.
+        llvm::Value* promise = entryAlloca(b.getInt8Ty(), "promise");
+        llvm::Value* id = b.CreateCall(intrinsic(llvm::Intrinsic::coro_id), {b.getInt32(16), promise, null, null}, "id");
+        llvm::Value* size = b.CreateCall(intrinsic(llvm::Intrinsic::coro_size, {b.getInt64Ty()}), {}, "size");
+        llvm::Value* memory = b.CreateCall(rtAlloc, {size}, "memory");
+        llvm::Value* handle = b.CreateCall(intrinsic(llvm::Intrinsic::coro_begin), {id, memory}, "frame");
+        AsyncState state{fn->getArg(0), id, handle,
+                         f.isThrows ? llvm::BasicBlock::Create(ctx, "failed", fn) : nullptr,
+                         llvm::BasicBlock::Create(ctx, "done", fn), llvm::BasicBlock::Create(ctx, "free", fn),
+                         llvm::BasicBlock::Create(ctx, "leave", fn)};
+        async = state;
+        // What it is a method of is kept until it ends: a class object by a reference, and a struct as a copy, as with `spawn`.
+        unsigned first = 1 + (f.owner ? 1 : 0);
+        const Type* ownerType = f.owner ? &f.owner->type : nullptr;
+        if (ownerType && ownerType->isClass()) {
+            thisPtr = fn->getArg(1);
+            retainValue(thisPtr, ownerType);
+        } else if (ownerType) {
+            llvm::AllocaInst* copy = entryAlloca(types.at(f.owner).layout, "self");
+            llvm::Value* v = loadValue(ownerType, fn->getArg(1), "self");
+            retainValue(v, ownerType);
+            storeValue(v, ownerType, copy);
+            thisPtr = copy;
+        }
+        // The arguments are the coroutine's own. One given by its address is moved into the frame, since the caller's
+        // place for it goes away once the coroutine first waits.
+        scopes.emplace_back();
+        for (size_t i = 0; i < f.params.size(); ++i) {
+            const Type* t = f.params[i]->type;
+            llvm::Value* arg = fn->getArg(first + i);
+            llvm::AllocaInst* slot = allocaFor(*f.params[i]);
+            if (inMemory(t)) b.CreateMemCpy(slot, alignOf(t), arg, alignOf(t), sizeOf(t));
+            else b.CreateStore(arg, slot);
+            if (isManaged(t)) scopes.back().push_back(f.params[i].get());
+        }
+        if (f.isThrows) {
+            errorOut = entryAlloca(b.getPtrTy(), "error");
+            b.CreateStore(null, errorOut);
+        }
+        genStmt(*f.body);
+        if (!b.GetInsertBlock()->getTerminator()) {
+            releaseScopes(0);
+            if (f.bodyRet()->is(K::Void)) finishAsync(nullptr);
+            else if (f.name == "main" && f.role == FuncDecl::Role::Free) finishAsync(b.getInt32(0));  // as in C++
+            else b.CreateUnreachable();  // Sema proved this is never reached
+        }
+        if (state.failed) {
+            b.SetInsertPoint(state.failed);
+            llvm::Value* error = b.CreateLoad(b.getPtrTy(), errorOut, "error");
+            callFunction(*f.taskFail, {state.task, error});
+            b.CreateBr(state.done);
+        }
+        b.SetInsertPoint(state.done);
+        if (ownerType) releaseValue(ownerType->isClass() ? thisPtr : peekValue(ownerType, thisPtr), ownerType);
+        releaseValue(state.task, taskType);
+        b.CreateBr(state.freeFrame);
+        b.SetInsertPoint(state.freeFrame);
+        llvm::Value* used = b.CreateCall(intrinsic(llvm::Intrinsic::coro_free), {id, handle}, "used");
+        auto* freeBB = llvm::BasicBlock::Create(ctx, "free.memory", fn);
+        b.CreateCondBr(b.CreateIsNotNull(used), freeBB, state.leave);
+        b.SetInsertPoint(freeBB);
+        b.CreateCall(rtFree, {used});
+        b.CreateBr(state.leave);
+        b.SetInsertPoint(state.leave);
+        b.CreateCall(intrinsic(llvm::Intrinsic::coro_end), {handle, b.getFalse(), llvm::ConstantTokenNone::get(ctx)});
+        b.CreateRetVoid();
+        scopes.clear();
+        async.reset();
+        endLineTable();
+    }
+
+    // The body of an async function is done, with what it returns, which is owned: the task gets it.
+    void finishAsync(llvm::Value* v) {
+        const FuncDecl& finish = *fnDecl->taskFinish;
+        if (!v) v = llvm::Constant::getNullValue(llvmType(finish.params[0]->type));  // the empty struct of `Task<void>`
+        callFunction(finish, {async->task, v});
+        b.CreateBr(async->done);
+    }
+
+    // `await t`: if the task is not done, the coroutine stops here, and the event loop goes on with it once it is. Then
+    // what the task gives is taken as `t.wait()` would give it, which can no longer have to wait.
+    llvm::Value* genAwait(const AwaitExpr& a) {
+        const Type* taskType = &a.taskDecl->type;
+        llvm::Value* task = genOwned(*a.task, taskType);
+        pending.push_back({task, taskType, false});
+        llvm::Value* mustWait = callFunction(*a.then, {task, resumeFn, async->handle});
+        auto* waitBB = llvm::BasicBlock::Create(ctx, "await.wait", fn);
+        auto* readyBB = llvm::BasicBlock::Create(ctx, "await.ready", fn);
+        b.CreateCondBr(condValue(mustWait, a.then->retType), waitBB, readyBB);
+        b.SetInsertPoint(waitBB);
+        llvm::Value* step = b.CreateCall(intrinsic(llvm::Intrinsic::coro_suspend), {llvm::ConstantTokenNone::get(ctx), b.getFalse()}, "step");
+        llvm::SwitchInst* next = b.CreateSwitch(step, async->leave, 2);
+        next->addCase(b.getInt8(0), readyBB);
+        next->addCase(b.getInt8(1), async->freeFrame);  // destroyed while waiting, which nothing does
+        b.SetInsertPoint(readyBB);
+        llvm::Value* result = callFunction(*a.wait, {task});
+        pending.pop_back();
+        releaseValue(task, taskType);
+        return result;
+    }
+
     void defineEntryPoint(const FuncDecl& userMain) {
         auto* type = llvm::FunctionType::get(b.getInt32Ty(), {b.getInt32Ty(), b.getPtrTy()}, false);
         fn = llvm::Function::Create(type, llvm::Function::ExternalLinkage, "main", mod.get());
@@ -3808,21 +3995,33 @@ struct Codegen::Impl {
         b.CreateCall(rtStart, {});
         std::vector<llvm::Value*> args;
         if (!userMain.params.empty()) args = {fn->getArg(0), fn->getArg(1)};  // argc and argv
-        // The program does not end while a thread is running.
+        // The program does not end while anything is pending on the event loop, or a thread is running.
         auto finish = [&](llvm::Value* code) {
+            if (usesAsync) b.CreateCall(rtLoopFinish, {});
             if (usesThreads) b.CreateCall(rtThreadsFinish, {});
             b.CreateRet(code);
         };
-        if (!userMain.isThrows) {
-            finish(b.CreateCall(funcs.at(&userMain), args));
+        llvm::AllocaInst* place = nullptr;
+        if (userMain.isThrows) {
+            place = entryAlloca(b.getPtrTy(), "error");
+            b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), place);
+        }
+        llvm::Value* code;
+        if (userMain.isAsync) {  // `async int main()`: its task is waited for, which runs the loop until it is done
+            llvm::Value* task = b.CreateCall(funcs.at(&userMain), args);
+            b.CreateCall(rtLoopWaitsForStart, {b.getInt32(0)});
+            code = emitCall(*userMain.taskWait, {task}, false, place);
+            releaseValue(task, userMain.retType);
+        } else {
+            if (place) args.push_back(place);
+            code = b.CreateCall(funcs.at(&userMain), args);
+        }
+        if (!place) {
+            finish(code);
             endLineTable();
             return;
         }
         // `int main() throws`: an error that gets this far is reported, and the program fails.
-        llvm::AllocaInst* place = entryAlloca(b.getPtrTy(), "error");
-        b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), place);
-        args.push_back(place);
-        llvm::Value* code = b.CreateCall(funcs.at(&userMain), args);
         llvm::Value* error = b.CreateLoad(b.getPtrTy(), place, "error");
         auto* failedBB = llvm::BasicBlock::Create(ctx, "uncaught", fn);
         auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
@@ -4357,6 +4556,7 @@ struct Codegen::Impl {
         usesDescriptors = program.usesDescriptors() || opts.debug;  // a leak report says what an object is
         buildsFromDescriptors = program.buildsFromDescriptors();
         usesThreads = program.usesThreads;
+        usesAsync = program.usesAsync;
         stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy()}, "cplus.string");
         // Named types are created first and given bodies after, so they can refer to
         // each other in any order.
@@ -4436,6 +4636,13 @@ struct Codegen::Impl {
             b.CreateRet(v);
             endLineTable();
         }
+        if (usesAsync) {
+            resumeFn = llvm::Function::Create(llvm::FunctionType::get(b.getVoidTy(), {b.getPtrTy()}, false), llvm::Function::InternalLinkage,
+                                              "cplus.resume", mod.get());
+            llvm::IRBuilder<> rb(llvm::BasicBlock::Create(ctx, "entry", resumeFn));
+            rb.CreateCall(intrinsic(llvm::Intrinsic::coro_resume), {resumeFn->getArg(0)});
+            rb.CreateRetVoid();
+        }
         for (auto& f : program.funcs) defineFunction(*f);
         for (const StructDecl* sd : structs)
             for (auto& m : sd->methods)
@@ -4472,7 +4679,7 @@ struct Codegen::Impl {
             error = "internal compiler error: generated invalid LLVM IR (" + first + ")";
             return false;
         }
-        if (opts.optimize || opts.debug || opts.race) runPasses();
+        if (opts.optimize || opts.debug || opts.race || usesAsync) runPasses();  // coroutines are only cut up by the passes
         return true;
     }
 

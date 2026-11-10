@@ -1,0 +1,42 @@
+// `await` is for an async function, and `wait()` is for a plain one.
+async int f() { return 1; }
+async int g() throws { return 1; }
+
+int plain() {
+    return await f();
+    // error: `await` can only be used in an async function
+    // error: mark 'plain' async: `async int plain(...)`, or wait here with `f().wait()`
+}
+
+class Reader {
+public:
+    int read() { return await f(); }
+    // error: mark 'read' async: `async int read(...)`, or wait here with `f().wait()`
+};
+
+async int waits() throws {
+    auto t = f();
+    int a = t.wait();
+    // error: in an async function, a task is waited for with `await`
+    // error: write `await t`: `wait()` would hold up everything else that runs on this thread meanwhile
+    int b = try g().wait();
+    // error: write `try await g()`: `wait()`
+    int c = (spawn plain()).wait();
+    // error: write `await` in front of the task, instead of `.wait()`: `wait()` would hold up
+    int d = await g();
+    // error: waiting for 'g()' can fail, since what it runs can, so it must say what happens then
+    // error: write `try await g()`, which passes the error on, or put it in `try { ... } catch (Error e) { ... }`
+    return a + b + c + d;
+}
+
+async int noThrows() {
+    int n = try await g();
+    // error: an error from waiting for 'g()' has nowhere to go, since 'noThrows' is not marked `throws`
+    return n;
+}
+
+int main() {
+    int n = await f();
+    // error: make main async: `async int main() { ... }`, or wait here with `f().wait()`
+    return n;
+}

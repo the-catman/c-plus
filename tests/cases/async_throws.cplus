@@ -1,0 +1,64 @@
+// What an async function throws goes in its task, as what it really is, before its first wait or after it.
+class NotFound : public Error {
+public:
+    string what2;
+    NotFound(string w) : Error("not found: " + w), what2(w) {}
+};
+
+async int f() throws {
+    await delay(1);
+    throw NotFound("f");
+}
+
+async int before(bool fail) throws {
+    if (fail) throw Error("before the first wait");
+    await delay(1);
+    return 1;
+}
+
+async int passOn() throws {
+    int n = try await f();          // passes the error on
+    return n;
+}
+
+async void save(string text) throws {
+    if (text.empty()) throw Error("nothing to save");
+    await delay(1);
+}
+
+async int main() throws {
+    try {
+        await f();
+    } catch (NotFound e) {
+        println("caught {}", e.what2);
+        // expect: caught f
+    }
+    auto t = before(true);           // the call itself does not throw
+    println("called");
+    // expect: called
+    try {
+        println("{}", try await t);
+    } catch (Error e) {
+        println("{}", e.what());
+        // expect: before the first wait
+    }
+    println("{}", try await before(false));
+    // expect: 1
+    try {
+        try await passOn();
+    } catch (Error e) {
+        println("{}", e.what());
+        // expect: not found: f
+    }
+    try {
+        try await save("");
+    } catch (Error e) {
+        println("{}", e.what());
+        // expect: nothing to save
+    }
+    try await save("x");
+    int n = try await f();           // gets out of main
+    return n;
+}
+// stderr: uncaught error: NotFound
+// exit: 1

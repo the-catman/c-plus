@@ -1,0 +1,43 @@
+// `await` works on spawn's tasks, without holding up the thread's other async work, and spawn can run an async function,
+// which then has a loop of its own on the new thread.
+// no-race: the threads here only share tasks
+extern "C" int usleep(int microseconds);
+
+long work(long n) {
+    usleep(30000);                    // the thread is busy for a while
+    long total = 0;
+    for (long i = 0; i < n; i++) total += i;
+    return total;
+}
+
+async int ticks(int count) {
+    for (int i = 0; i < count; i++) {
+        await delay(1);
+    }
+    println("ticked {} times", count);
+    return count;
+}
+
+async long sumLater(long n) {
+    await delay(5);
+    long total = await spawn work(n);
+    return total;
+}
+
+long viaThread(long n) { return (spawn sumLater(n)).wait(); }
+
+async int main() {
+    auto busy = spawn work(100);
+    auto tick = ticks(3);
+    println("{}", await busy);         // the ticks go on meanwhile
+    // expect: ticked 3 times
+    // expect: 4950
+    println("{}", await tick);
+    // expect: 3
+    Task<long> other = spawn sumLater(10);   // the task of what it returns
+    println("{}", await other);
+    // expect: 45
+    println("{}", viaThread(4));       // a plain function that waits for a thread holds up this one meanwhile
+    // expect: 6
+    return 0;
+}

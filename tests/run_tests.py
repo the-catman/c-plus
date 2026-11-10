@@ -29,6 +29,9 @@ A program with `spawn` is also built with --race, without and with -O, which mus
 nothing wrong, as a wrong answer from a race can take a very long time to show up. This
 is left out, with a note, if the C compiler has no ThreadSanitizer.
 
+A program that runs async code is left out, with a note, if the compiler was built without
+libuv.
+
 A test that has `import http;` gets a local server, tests/http_server.py, whose addresses
 come as environment variables, so no test needs the network. These tests are left out,
 with a note, if the compiler was built without libcurl.
@@ -573,12 +576,11 @@ PLANNED_FEATURES = [
     ("unions in C structs", 'extern "C" { struct S { union { int a; long b; }; }; }\n' + M % ""),
     ("unions", 'union U { int a; long b; };\n' + M % ""),
     ("http::fetch", 'import http;\n' + M % 'auto r = http::fetch("x");'),
-    ("async", 'async int f() { return 1; }\n' + M % ""),
-    ("await", 'int f() { return 1; }\n' + M % "int x = await f();"),
     ("atomic values", M % "atomic<int> n;"),
     ("condition variables", M % "condition_variable c;"),
     ("channels", M % "channel<int> c;"),
     ("waiting with a time limit", 'void f() {}\n' + M % "auto t = spawn f(); t.wait_for(1);"),
+    ("stopping a task", 'async void f() {}\n' + M % "auto t = f(); t.cancel();"),
     ("reading a field through reflect", 'import reflect;\nstruct P { int x = 0; };\n' + M % "for (auto f : reflect::type<P>().fields()) f.get(P{});"),
     ("the methods of a type in reflect", 'import reflect;\nstruct P { int x = 0; };\n' + M % "auto m = reflect::type<P>().methods();"),
 ]
@@ -625,6 +627,7 @@ void save(vector<int> v) {}
 void take(unique<Node> n) {}
 void lend(Node n) {}
 int fails() throws { return 1; }
+async string load(string name) { return name; }
 const int MAX = 100;
 constexpr int N = 5;
 User? find(string n) { return null; }
@@ -1003,6 +1006,8 @@ def check_threads_linked(cplus, workdir):
     threads = {"a Mutex": "int main() { Mutex m = Mutex(); m.lock(); m.unlock(); return 0; }\n",
                "a LockGuard": "int main() { Mutex m = Mutex(); LockGuard g = LockGuard(m); return 0; }\n",
                "spawn": "void f() {}\nint main() { spawn f(); return 0; }\n"}
+    if compiler_has_async(cplus, workdir):
+        threads["an async function"] = "async void f() {}\nint main() { f().wait(); return 0; }\n"
     for what, text in threads.items():
         if links(text):
             print(f"FAIL a program with {what} is written on threads, but does not link them")
@@ -1124,6 +1129,19 @@ def compiler_has_http(cplus, workdir):
     source.write_text("import http;\nint main() { return 0; }\n")
     run = subprocess.run([cplus, "check", str(source)], capture_output=True, text=True)
     return "built without libcurl" not in run.stderr
+
+
+def runs_async(path):
+    """A program that runs async code, which needs libuv. A test of errors only needs the compiler."""
+    text = path.read_text()
+    return re.search(r"\basync\b|\bawait\b|\bdelay\(", text) is not None and not re.search(r"//[ \t]*error:", text)
+
+
+def compiler_has_async(cplus, workdir):
+    source = workdir / "has_async.cplus"
+    source.write_text("async int f() { return 0; }\nint main() { return f().wait(); }\n")
+    run = subprocess.run([cplus, "check", str(source)], capture_output=True, text=True)
+    return "built without libuv" not in run.stderr
 
 
 def compiler_has_race(cplus, workdir):
@@ -1260,6 +1278,9 @@ def main():
         HAS_RACE[0] = compiler_has_race(cplus, pathlib.Path(tmp))
         if not HAS_RACE[0]:
             print("note: leaving out --race, since the C compiler has no ThreadSanitizer")
+        if not compiler_has_async(cplus, pathlib.Path(tmp)):
+            print("note: leaving out the programs with async, since this compiler was built without libuv")
+            paths = [p for p in paths if not runs_async(p)]
         if any(imports_http(p) for p in paths):
             if compiler_has_http(cplus, pathlib.Path(tmp)):
                 server = start_http_server()

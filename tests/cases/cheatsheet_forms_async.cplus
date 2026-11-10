@@ -1,0 +1,42 @@
+// The cheat sheet's forms of async functions. See cheatsheet_forms.
+async string load(string name) { await delay(10); return name; }
+
+async string check(string name) throws {
+    if (name.empty()) throw Error("no name");
+    return name;
+}
+
+long sum(vector<int> v) { return v.size(); }
+
+string plain() {
+    auto t = load("a");
+    return t.wait();
+}
+
+async int main() {
+    long ms = 1;
+    vector<int> v = {1, 2, 3};
+    auto t = load("a");
+    println("{}", await t);
+    // expect: a
+    await load("a");
+    println("{}", await spawn plain());  // a plain function waits with wait(), on a thread of its own here
+    // expect: a
+    if (ms > 5) await delay(1000);
+    await delay(ms);
+    Task<string> u = load("b");
+    println("{}", await u);
+    // expect: b
+    {
+        Task<string, throws> t = check("");
+        try {
+            println("{}", try await t);
+        } catch (Error e) {
+            println("{}", e.what());
+            // expect: no name
+        }
+    }
+    println("{}", await spawn sum(v));
+    // expect: 3
+    return 0;
+}

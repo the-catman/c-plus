@@ -177,6 +177,9 @@ static int build(const Options& opts, const std::string& exePath) {
     for (auto& import : program.imports)
         if (import.path == "http") link.insert(link.end(), {CPLUS_CURL_LINK, "-lpthread"});
 #endif
+#ifdef CPLUS_UV_LINK
+    if (program.usesAsync) link.insert(link.end(), {CPLUS_UV_LINK, "-lpthread"});
+#endif
     link.push_back("-lm");  // the math functions, part of the C standard library
     if (program.linksThreads) link.push_back("-lpthread");
     link.insert(link.end(), {"-o", exePath});

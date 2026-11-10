@@ -1,0 +1,87 @@
+// Async methods: of a class, which work on the object itself, virtual ones, an interface's, and the const ones of a struct.
+interface Source {
+    async string read() const;
+};
+
+class Fixed : public Source {
+public:
+    string text;
+    Fixed(string t) : text(t) {}
+    async string read() const override {
+        await delay(1);
+        return text;
+    }
+};
+
+class Animal {
+public:
+    string name = "animal";
+    virtual async string read() const { return name; }
+    virtual async string sound() const {
+        await delay(1);
+        return "...";
+    }
+};
+
+class Dog : public Animal {
+public:
+    async string sound() const override {
+        string base = await Animal::sound();
+        return "woof " + base;
+    }
+};
+
+class Counter {
+public:
+    int n = 0;
+    async int bump(int by) {
+        await delay(1);
+        n += by;                     // the object itself, after the wait
+        return n;
+    }
+    ~Counter() { println("counter freed at {}", n); }
+};
+
+struct Point {
+    int x = 0;
+    int y = 0;
+    async int sum() const {
+        await delay(1);
+        return x + y;
+    }
+};
+
+async string readAll(vector<Source> sources) {
+    string out;
+    for (auto s : sources) out += await s.read();
+    return out;
+}
+
+async int main() {
+    vector<Source> sources = {Fixed("a"), Fixed("b")};
+    println("{}", await readAll(sources));
+    // expect: ab
+    Animal a = Dog();
+    println("{}", await a.sound());
+    // expect: woof ...
+    {
+        Counter c = Counter();
+        auto first = c.bump(2);
+        auto second = c.bump(3);
+        println("{} {}", await first, await second);
+        // expect: 2 5
+    }
+    // expect: counter freed at 5
+    {
+        auto t = Counter().bump(1);  // the call holds the object until it is done
+        println("{}", await t);
+    }
+    // expect: counter freed at 1
+    // expect: 1
+    Point p = {1, 2};
+    auto s = p.sum();
+    p.x = 10;                         // the method has a copy
+    println("{} {}", await s, await p.sum());
+    // expect: 3 12
+    return 0;
+}

@@ -135,6 +135,9 @@ private:
     std::string changeForm(const Expr& base, const std::string& change, const std::string& opening, const std::string& how, const std::string& before = "");
     std::string storeItBack(const Expr& recv, const std::string& method, bool hasArguments, const std::string& before = "", const std::string& keepAs = "");
     const Type* checkSpawn(SpawnExpr& s, Flow& flow);
+    const Type* checkAwait(AwaitExpr& a, Flow& flow);
+    void prepareAsync(FuncDecl& fn);  // an async function's call gives its Task: see FuncDecl::declaredRet
+    void checkTaskKept(const FuncDecl& f, const Expr& call, Loc loc);  // `f();`, which throws away the task of an async call
     const Expr* spawned_ = nullptr;  // the call `spawn` is on, whose error goes in the task
     std::vector<const Expr*> discarded_;  // what the statement being checked throws away, whose values go nowhere
     const Type* checkExpr(Expr& e, Flow& flow);

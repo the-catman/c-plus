@@ -1,0 +1,25 @@
+// A lock cannot be held across an `await`: other async work of the thread could try to take it meanwhile, and the function
+// may go on on another thread, which would then unlock what it never locked.
+class Account {
+public:
+    long balance = 0;
+    Mutex lock = Mutex();
+
+    async void add(long n) {
+        LockGuard guard = LockGuard(lock);
+        await delay(1);
+        // error: this `await` comes while 'guard' holds a lock, which would stay locked while other work goes on, and would then be unlocked on what may be another thread
+        // error: end the block of 'guard' before the `await`: `{ LockGuard guard = LockGuard(m); ... }`
+        // error: 'guard' is declared here
+        balance += n;
+    }
+
+    async void addLater(long n) {
+        await delay(1);
+        LockGuard guard = LockGuard(lock);
+        balance += n;
+    }
+};
+// not-error: err_async_lock.cplus:18:
+
+int main() { return 0; }

@@ -67,6 +67,8 @@ private:
     Loc afterPrev() const;
     [[noreturn]] void fail(Loc loc, const std::string& message, const std::string& help, const std::string& spec);
     [[noreturn]] void notYet(Loc loc, const std::string& feature, const std::string& help);
+    bool asyncPending_ = false;  // `async` has been read before a function at the top level
+    Loc asyncAt_;
     void rejectOtherLanguages();  // at the start of something: a word of another language, which is not a name here
     [[noreturn]] void failStd(Loc loc, const Token& name);
     const Type* parseBaseType(Loc& loc);
@@ -76,6 +78,7 @@ private:
     void joinModuleNames(const std::set<std::string>& modules);
     void addBuiltinSource(const SourceFile& source);
     void parseThrowsMark(FuncDecl& fn);
+    bool parseAsyncMark(Loc& at);  // `async` before a function's return type, if it is there
     StmtPtr parseTry();
     ExprPtr parseMemberAccess(ExprPtr e, const char* after, std::string qualifier = "");
     CondDecl parseCondDecl(const char* stmt);

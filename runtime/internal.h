@@ -58,6 +58,36 @@ static inline int cplus_utf8_length(const unsigned char* s, int64_t left) {
     return 0;
 }
 
+// ---- Tasks, which thread.c and loop.c share -----------------------------------
+
+#include <pthread.h>
+#include <stdbool.h>
+
+typedef struct cplus_loop cplus_loop;
+
+// An async function waiting for a task, which the loop it waits on goes on with once the task is done: see loop.c.
+typedef struct cplus_waiter {
+    void (*resume)(void* handle);
+    void* handle;
+    cplus_loop* loop;
+    bool remote;  // something other than that loop finishes the task, so the loop has to wait for it
+    struct cplus_waiter* next;
+} cplus_waiter;
+
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t changed;
+    bool done;
+    bool waited;
+    int64_t count;          // the Task holds one reference, and the runtime one while something of it will finish the task
+    cplus_loop* loop;       // what finishes a task of an async function: the loop of the thread it started on. Null for `spawn`
+    cplus_waiter* waiters;  // in the order they began to wait
+} task_state;
+
+void cplus_task_finish(task_state* task);
+void cplus_task_free(task_state* task);
+void cplus_task_hold(task_state* task);
+
 // Where the descriptor of a class is, in the vtable of each of its parts.
 #define CPLUS_VTABLE_TYPE 4
 

@@ -1,0 +1,38 @@
+// Generic async functions and the async methods of a generic class, made for each set of types.
+template<typename T> async T f(T x) {
+    await delay(1);
+    return x;
+}
+
+template<typename T> class Box {
+public:
+    T value;
+    Box(T v) : value(v) {}
+    async T get() const {
+        await delay(1);
+        return value;
+    }
+};
+
+template<typename T> async vector<T> both(T a, T b) {
+    vector<T> out;
+    out.push_back(await f(a));
+    out.push_back(await f<T>(b));
+    return out;
+}
+
+async int main() {
+    println("{}", await f(3));
+    // expect: 3
+    println("{}", await f<string>("text"));
+    // expect: text
+    Task<double> t = f(2.5);
+    println("{}", await t);
+    // expect: 2.5
+    Box<string> box = Box<string>("boxed");
+    println("{}", await box.get());
+    // expect: boxed
+    println("{}", await both(1, 2));
+    // expect: [1, 2]
+    return 0;
+}

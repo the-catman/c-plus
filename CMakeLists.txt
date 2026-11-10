@@ -35,6 +35,17 @@ else()
   message(STATUS "No libcurl: programs built with this compiler cannot `import http`")
 endif()
 
+# What async needs, its event loop. -DCPLUS_UV_LIBRARY=... picks another libuv.
+find_path(CPLUS_UV_INCLUDE uv.h)
+find_library(CPLUS_UV_LIBRARY uv)
+set(CPLUS_UV_DEFINITION "")
+if(CPLUS_UV_INCLUDE AND CPLUS_UV_LIBRARY)
+  list(APPEND CPLUS_RUNTIME_SOURCES runtime/loop.c)
+  set(CPLUS_UV_DEFINITION CPLUS_UV_LINK="${CPLUS_UV_LIBRARY}")
+else()
+  message(STATUS "No libuv: programs built with this compiler cannot use async")
+endif()
+
 # Runtime linked into every C+ program.
 add_library(cplusrt STATIC ${CPLUS_RUNTIME_SOURCES})
 set_target_properties(cplusrt PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
@@ -43,6 +54,9 @@ set(CPLUS_RUNTIME_PATHS -ffile-prefix-map=${CMAKE_SOURCE_DIR}=/cplus)
 target_compile_options(cplusrt PRIVATE -Wall -Wextra -O2 ${CPLUS_RUNTIME_PATHS})
 if(CPLUS_CURL_DEFINITION)
   target_include_directories(cplusrt SYSTEM PRIVATE ${CPLUS_CURL_INCLUDE})
+endif()
+if(CPLUS_UV_DEFINITION)
+  target_include_directories(cplusrt SYSTEM PRIVATE ${CPLUS_UV_INCLUDE})
 endif()
 
 # The runtime for programs built with --debug, if the C compiler has AddressSanitizer.
@@ -61,6 +75,9 @@ if(CPLUS_HAVE_ASAN)
   target_compile_definitions(cplusrt_debug PRIVATE CPLUS_DEBUG_RUNTIME)
   if(CPLUS_CURL_DEFINITION)
     target_include_directories(cplusrt_debug SYSTEM PRIVATE ${CPLUS_CURL_INCLUDE})
+  endif()
+  if(CPLUS_UV_DEFINITION)
+    target_include_directories(cplusrt_debug SYSTEM PRIVATE ${CPLUS_UV_INCLUDE})
   endif()
   # Turns the addresses in a stack trace into files and lines.
   find_program(CPLUS_SYMBOLIZER llvm-symbolizer HINTS ${LLVM_TOOLS_BINARY_DIR})
@@ -94,6 +111,9 @@ if(CPLUS_HAVE_TSAN)
   target_compile_definitions(cplusrt_race PRIVATE CPLUS_DEBUG_RUNTIME CPLUS_RACE_RUNTIME)
   if(CPLUS_CURL_DEFINITION)
     target_include_directories(cplusrt_race SYSTEM PRIVATE ${CPLUS_CURL_INCLUDE})
+  endif()
+  if(CPLUS_UV_DEFINITION)
+    target_include_directories(cplusrt_race SYSTEM PRIVATE ${CPLUS_UV_INCLUDE})
   endif()
   find_program(CPLUS_RACE_SYMBOLIZER llvm-symbolizer HINTS ${LLVM_TOOLS_BINARY_DIR})
   if(CPLUS_RACE_SYMBOLIZER)
@@ -132,7 +152,8 @@ target_compile_definitions(cplus PRIVATE ${LLVM_DEFINITIONS_LIST}
   CPLUS_RUNTIME_LIB_DEBUG="${CPLUS_RUNTIME_LIB_DEBUG}"
   CPLUS_RUNTIME_LIB_RACE="${CPLUS_RUNTIME_LIB_RACE}"
   CPLUS_LINKER="${CMAKE_C_COMPILER}"
-  ${CPLUS_CURL_DEFINITION})
+  ${CPLUS_CURL_DEFINITION}
+  ${CPLUS_UV_DEFINITION})
 target_compile_options(cplus PRIVATE -Wall -Wextra)
 target_link_libraries(cplus PRIVATE LLVM)
 add_dependencies(cplus cplusrt)

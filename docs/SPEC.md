@@ -1065,7 +1065,7 @@ Connecting fails with the same kinds as a request, and with `"handshake"` when t
 
 `import http;` needs a compiler built with libcurl, which comes from the development files of libcurl, such as `libcurl4-openssl-dev` on Debian or Ubuntu. Only a program that imports it links it, and that program then needs the libcurl of the machine it runs on.
 
-Not yet: `http::fetch`, which needs [async](#concurrency), a body that is sent or received in pieces instead of all at once, keeping cookies, and learning which subprotocol the server chose.
+Not yet: `http::fetch`, which would work with [async](#async-functions), a body that is sent or received in pieces instead of all at once, keeping cookies, and learning which subprotocol the server chose.
 
 ### Reflection
 
@@ -2236,8 +2236,8 @@ with the same name.
 
 ## Concurrency
 
-`spawn` runs a call on a new thread, and gives a `Task` to get its result from. Later comes
-JavaScript-style `async`/`await`, with a built-in event loop.
+`spawn` runs a call on a new thread, and gives a `Task` to get its result from. An [async function](#async-functions) gives one
+too, for work that mostly waits, which many of them can share a thread for.
 
 ```cpp
 long sum(vector<long> numbers) {
@@ -2291,6 +2291,64 @@ stack. Running out of it is reported as on the main thread.
 
 **A destructor runs on whichever thread lets go of the object last.** An object's count is atomic, so it is safe to share the references themselves.
 
+### Async functions
+
+An async function can wait for something without holding up its thread, as in JavaScript. Calling it starts it, and gives a
+[`Task`](#concurrency), the same type that `spawn` gives. `await` waits for a task, and meanwhile the thread goes on with other async work.
+
+```cpp
+async string greet(string name, long ms) {
+    await delay(ms);                    // waits without holding up the thread
+    return format("hello, {}", name);
+}
+
+async int main() {
+    auto slow = greet("slow", 40);      // both are waiting at once
+    auto quick = greet("quick", 10);
+    println("{}", await quick);         // hello, quick
+    println("{}", await slow);          // hello, slow
+    return 0;
+}
+```
+
+**`async` is written in front**, before the return type: `async int f(int x)`, `async void save(string text) throws`. In a class it can be a method, and it
+can be virtual: `virtual async string read() const { ... }`, which an override must match. A method of a struct must be `const`, since it runs on a copy of
+the struct. A generic one is `template<typename T> async T f(T x)`. A constructor or a destructor cannot be async.
+
+**Calling it gives a task**, and `try` does not belong on the call, since what it throws goes in the task:
+
+| The function | A call gives | `await t` |
+|--------------|--------------|-----------|
+| `async int f()` | `Task<int>` | gives an `int` |
+| `async void f()` | `Task<void>` | gives nothing to use |
+| `async int f() throws` | `Task<int, throws>` | gives an `int`, and is written `try await t` |
+
+A call runs the function at once, until it waits for something that is not done yet, and then gives the task, as in JavaScript. So after
+`auto a = f(1);` and `auto b = f(2);`, both are running, and `await a` then waits for the first. Throwing the task away, as in `f(1);`, is an
+error, since nothing would wait for it: write `await f(1);`, or keep the task to let it run on.
+
+**`await t` can only be written in an async function**, and `main` can be one: `async int main()`. It works on any task, `spawn`'s included,
+so `await spawn sum(v)` waits for a thread without holding up the others. A plain function waits with `t.wait()`, which runs the thread's
+async work until the task is done. In an async function, `wait()` is an error, as it would hold up everything else on the thread there.
+`delay(ms)` is an async function that waits that many milliseconds, so a plain function waits with `delay(ms).wait()`.
+
+**The program does not end while an async function is running.** When `main` returns, the main thread goes on with its async work until it
+has none left, as Node does, and a thread does the same when its function returns. An error that nothing can see any more fails the program
+with exit code 1, as with `spawn`.
+
+**After an `await`, a function may go on on another thread.** This compiler keeps it on the thread it started on, but a program must not count
+on that, so that a later one can share the work between threads. So a class object that two async functions change needs a [`Mutex`](#mutex),
+as with threads, and a [`local`](#local-references) reference can be neither kept across an `await`, nor taken or returned by an async function.
+A `LockGuard` cannot be kept across an `await` either, since other async work of the thread could try to lock the mutex meanwhile: lock it in a
+block that ends before the `await`.
+
+**What can never be done stops the program**, with a message: waiting for a task whose function waits, directly or through others, for
+its own task, and async functions still waiting at the end of the program for tasks that nothing can finish any more. So does `wait()` in a
+plain function that async code calls, once that code has waited for something, since the thread's other async work then waits for that
+function to return.
+
+Not yet: stopping a task, waiting with a time limit, and [`http::fetch`](#http).
+
 ### Mutex
 
 Two threads must not use the same memory at the same time if either of them is changing it, which in C+ can only be a class's field or what a
@@ -2335,7 +2393,7 @@ fatal error: two threads used the same memory at the same time, and at least one
 - Code that mostly uses memory can be about 15 times slower with it, and take about 8 times the memory, while code that mostly computes is hardly slowed. It cannot go with `--debug`, as each watches memory in its own way. It needs the same libraries as `--debug`, such as `libclang-rt-18-dev` on Debian or Ubuntu.
 - It can only follow 60000 calls at once, since ThreadSanitizer has room for no more. A program that goes deeper stops with an error that says so, even if it would run without `--race`.
 
-Not yet: `async` and `await`, waiting with a time limit, atomic values, condition variables and channels, and starting a C function directly.
+Not yet: waiting for a thread with a time limit, atomic values, condition variables and channels, and starting a C function directly.
 
 ## The cplus command
 
@@ -2529,7 +2587,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Modules `http`, `json` and `reflect`, and raw strings | implemented |
 | `http::fetch`, modules of your own | planned |
 | Threads: `spawn`, `Task`, `Mutex`, `LockGuard`, `--race` | implemented |
-| `async`, `await`, atomic values, condition variables, channels | planned |
+| `async` functions, `await`, `delay` | implemented |
+| Atomic values, condition variables, channels | planned |
 
 Anything marked planned is reported by the compiler as "this compiler does not support ...
 yet", with a link here.

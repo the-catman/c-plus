@@ -1,0 +1,32 @@
+// Many async functions waiting at once, on one thread, and async calls that go deep.
+async long fib(long n) {
+    if (n < 2) return n;
+    auto a = fib(n - 1);
+    auto b = fib(n - 2);
+    return await a + await b;
+}
+
+async long later(long i) {
+    await delay(i % 7);
+    return i;
+}
+
+async long countDown(long n) {
+    if (n == 0) return 0;
+    await delay(0);
+    return 1 + await countDown(n - 1);
+}
+
+async int main() {
+    println("{}", await fib(20));
+    // expect: 6765
+    vector<Task<long>> tasks;
+    for (long i = 0; i < 2000; i++) tasks.push_back(later(i));
+    long total = 0;
+    for (auto t : tasks) total += await t;
+    println("{}", total);
+    // expect: 1999000
+    println("{}", await countDown(200));
+    // expect: 200
+    return 0;
+}

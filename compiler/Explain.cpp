@@ -24,7 +24,7 @@ struct Alias {
     const char* anchor;
 };
 constexpr Alias kAliases[] = {
-    {"await", "concurrency"},        {"async", "concurrency"},       {"auto", "variables"},
+    {"await", "async-functions"},    {"async", "async-functions"},   {"auto", "variables"},
     {"break", "control-flow"},       {"c", "c-functions"},           {"cast", "casts"},
     {"catch", "errors"},             {"chars", "char"},              {"class", "classes"},
     {"concept", "constraints"},      {"const", "variables"},         {"continue", "control-flow"},
@@ -47,7 +47,7 @@ constexpr Alias kAliases[] = {
     {"try", "errors"},               {"unique", "unique-references"}, {"vector", "vectors"},
     {"virtual", "inheritance"},      {"wait", "concurrency"},        {"weak", "weak-references"},
     {"websocket", "http"},           {"websockets", "http"},         {"while", "control-flow"},
-    {"array", "arrays"},
+    {"array", "arrays"},             {"delay", "async-functions"},   {"sleep", "async-functions"},
 };
 
 std::string slug(std::string_view heading) {

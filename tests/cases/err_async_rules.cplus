@@ -1,0 +1,47 @@
+// What an async function cannot be: a struct's method that changes it, or one that holds a local reference.
+class Node {
+public:
+    string name = "n";
+};
+
+struct Counter {
+    int n = 0;
+    async int bump() {
+        // error: an async method of a struct must be const, since it runs on a copy of the struct
+        // error: mark it `const`: `async int bump(...) const`, or make 'Counter' a class, whose methods work on the object itself
+        n++;
+        return n;
+    }
+};
+
+async local<Node> make() {
+    // error: an async function cannot return a local reference, since its task can be waited for on another thread
+    return local<Node>();
+}
+
+async void take(local<Node> n) {}
+// error: an async function cannot take a local reference, since it may go on on another thread after it waits
+
+async int across() {
+    local<Node> n = local<Node>();
+    await delay(1);
+    // error: this `await` comes while 'n' holds a local reference, which cannot be kept across it, since the function may go on on another thread
+    // error: use a class reference for 'n', whose count works across threads, or end its block before the `await`
+    // error: 'n' is declared here
+    return 1;
+}
+
+async int ended() {
+    {
+        local<Node> inner = local<Node>();
+    }
+    await delay(1);
+    return 1;
+}
+// not-error: comes while 'inner'
+
+async string main() {
+    // error: main must return int
+    // error: write `async int main()`; the returned number becomes the exit code
+    return "x";
+}

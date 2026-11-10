@@ -330,6 +330,8 @@ extern "C" {
     bool cplus_task_is_done(void* task);
     bool cplus_task_was_waited_for(void* task);
     void cplus_task_lost_error(void* text);
+    void cplus_task_bind(void* task);
+    bool cplus_task_await(void* task, void* resume, void* handle);
 }
 
 struct __Void {};
@@ -344,6 +346,10 @@ template<typename T> class Task {
         value_ = move(value);
         cplus_task_finish(state_);
     }
+    // For an async function, whose task is finished by what runs on this thread's event loop: see runtime/loop.c.
+    void __bind() { cplus_task_bind(state_); }
+    // For `await`: whether the function has to wait, as the task is not done yet. It then goes on with `resume(handle)`.
+    bool __await(void* resume, void* handle) { return cplus_task_await(state_, resume, handle); }
 
 public:
     ~Task() { cplus_task_free(state_); }
@@ -366,6 +372,8 @@ template<typename T> class __TaskThrows {
         value_ = move(value);
         cplus_task_finish(state_);
     }
+    void __bind() { cplus_task_bind(state_); }
+    bool __await(void* resume, void* handle) { return cplus_task_await(state_, resume, handle); }
     void __fail(Error error) {
         error_ = error;
         cplus_task_finish(state_);
@@ -389,6 +397,19 @@ public:
     }
     bool done() const { return cplus_task_is_done(state_); }
 };
+)cplus";
+
+// The timer of async, for a program that uses `delay`. The task is finished by the event loop: see runtime/loop.c.
+inline constexpr const char* kDelaySource = R"cplus(
+extern "C" {
+    void cplus_timer_start(long milliseconds, void* task);
+}
+
+async void delay(long milliseconds) {
+    Task<void> timer = Task<void>();
+    cplus_timer_start(milliseconds, timer.state_);
+    await timer;
+}
 )cplus";
 
 inline constexpr const char* kMutexSource = R"cplus(

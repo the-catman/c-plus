@@ -381,14 +381,14 @@ static bool hasFailingCall(const Expr& e) {
     switch (e.kind) {
         case Expr::Kind::Call: {
             auto& c = static_cast<const CallExpr&>(e);
-            if (c.target && c.target->isThrows) return true;
+            if (c.target && c.target->callFails()) return true;
             for (auto& a : c.args)
                 if (hasFailingCall(*a)) return true;
             return false;
         }
         case Expr::Kind::MethodCall: {
             auto& c = static_cast<const MethodCallExpr&>(e);
-            if (c.method && c.method->isThrows) return true;
+            if (c.method && c.method->callFails()) return true;
             if (c.receiver && hasFailingCall(*c.receiver)) return true;
             if (c.lowered && hasFailingCall(*c.lowered)) return true;
             for (auto& a : c.args)
@@ -1266,6 +1266,15 @@ void Sema::check(Program& program) {
 #endif
     }
 
+#ifndef CPLUS_UV_LINK
+    if (program.usesAsync)
+        for (auto& fn : program.funcs)
+            if (fn->isAsync && fn->nameLoc.line != 0) {
+                diags_.error(fn->asyncLoc, "this compiler was built without libuv, which async is written on",
+                             "install the development files of libuv, such as `libuv1-dev` on Debian or Ubuntu, then run cmake and build again", spec::Async);
+                break;
+            }
+#endif
     adoptTypes();
 
     for (auto& fn : program.funcs) {
@@ -1297,15 +1306,17 @@ void Sema::check(Program& program) {
         }
     }
 
+    for (auto& fn : program.funcs) prepareAsync(*fn);
+
     auto mainIt = funcs_.find("main");
     if (mainIt == funcs_.end()) {
         if (!diags_.hasErrors()) diags_.error(Loc{}, "this program has no main function",
                      "every program starts at `int main() { ... return 0; }`", spec::MainFunction);
     } else {
         FuncDecl* m = mainIt->second;
-        if (!m->retType->is(K::Int))
-            diags_.error(m->retTypeLoc, "main must return int, not " + q(m->retType),
-                         "write `int main()`; the returned number becomes the exit code", spec::MainFunction);
+        if (!m->bodyRet()->is(K::Int))
+            diags_.error(m->retTypeLoc, "main must return int, not " + q(m->bodyRet()),
+                         std::string("write `") + (m->isAsync ? "async " : "") + "int main()`; the returned number becomes the exit code", spec::MainFunction);
         auto isArgv = [](const Type* t) { return t->isPointer() && t->elem->isPointer() && t->elem->elem->is(K::Char); };
         if (!m->params.empty() &&
             !(m->params.size() == 2 && m->params[0]->declType->is(K::Int) && isArgv(m->params[1]->declType)))
@@ -1362,6 +1373,11 @@ void Sema::checkNewStructs() {
         if (StructDecl& sd = *program_->structs[i]; sd.defined && sd.templateOf)
             sd.constraintFailed = !checkConstraints(const_cast<TemplateDecl&>(*sd.templateOf), sd.templateArgs, sd.usedAt);
     checkStructs(first);
+    for (size_t i = first; i < end; ++i) {
+        StructDecl& sd = *program_->structs[i];
+        if (!sd.defined || sd.constraintFailed) continue;
+        for (auto& m : sd.methods) prepareAsync(*m);
+    }
     for (size_t i = first; i < end; ++i) {
         StructDecl& sd = *program_->structs[i];
         if (!sd.defined || sd.constraintFailed) continue;
@@ -1697,6 +1713,17 @@ void Sema::checkOverrides(StructDecl& sd) {
                 fits = false;
                 break;
             }
+            if (m->isAsync != method->isAsync) {
+                diags_.error(m->isAsync ? m->asyncLoc : m->nameLoc,
+                             m->isAsync ? q(m->name) + " cannot be async, as the method it replaces is not"
+                                        : q(m->name) + " must be async, as the method it replaces is",
+                             m->isAsync ? "remove `async`, or make the method in " + q(other->name) + " async too"
+                                        : "write `async` before its return type: `async " + std::string(m->retType->name) + " " + m->name + "(...)`",
+                             spec::Async);
+                diags_.note(method->nameLoc, "the method in the base class is here");
+                fits = false;
+                break;
+            }
             bool same = m->retType == method->retType && m->params.size() == method->params.size() &&
                         m->isConst == method->isConst && m->isThrows == method->isThrows;
             for (size_t i = 0; same && i < m->params.size(); ++i)
@@ -1711,7 +1738,7 @@ void Sema::checkOverrides(StructDecl& sd) {
             if (!same) {
                 diags_.error(m->nameLoc, q(m->name) + " must have the same parameters, return type, `const` and `throws` as the "
                                              "method it replaces",
-                             "the method in " + q(other->name) + " is `" + method->retType->name + " " +
+                             "the method in " + q(other->name) + " is `" + (method->isAsync ? "async " : "") + method->bodyRet()->name + " " +
                                  signature(*method).substr(other->name.size() + 1) + (method->isConst ? " const" : "") +
                                  (method->isThrows ? " throws" : "") + "`",
                              spec::Inheritance);
@@ -2160,6 +2187,7 @@ ConstHooks Sema::constHooks() {
 }
 
 void Sema::checkFunction(FuncDecl& fn) {
+    prepareAsync(fn);
     if (fn.checked) return;
     fn.checked = true;
     if (fn.isExtern) return checkExternFunction(fn);
@@ -2184,7 +2212,7 @@ void Sema::checkFunction(FuncDecl& fn) {
     }
     // Parameters and the body's top level share one scope, as in C++.
     scopes_.emplace_back();
-    checkStorable(fn.retType, fn.retTypeLoc);
+    checkStorable(fn.bodyRet(), fn.retTypeLoc);
     for (auto& p : fn.params) {
         checkStorable(p->declType, p->typeLoc);
         if (p->declType->is(K::Void))
@@ -2269,9 +2297,9 @@ void Sema::checkFunction(FuncDecl& fn) {
     scopes_.pop_back();
 
     bool isMain = fn.role == FuncDecl::Role::Free && fn.name == "main";  // falling off main returns 0
-    if (flow.reachable && !fn.retType->is(K::Void) && !isMain) {
+    if (flow.reachable && !fn.bodyRet()->is(K::Void) && !isMain) {
         diags_.error(fn.body->endLoc, "function " + q(fn.name) + " can reach its end without returning a value",
-                     "add `return <" + std::string(fn.retType->name) + " value>;` before this closing brace",
+                     "add `return <" + std::string(fn.bodyRet()->name) + " value>;` before this closing brace",
                      spec::Functions);
     }
     fn_ = nullptr;
@@ -2297,7 +2325,7 @@ std::string Sema::whereAnErrorCanGo() const {
 }
 
 void Sema::checkCanFail(const FuncDecl& callee, Loc loc, const Expr* receiver) {
-    if (!callee.isThrows) return;
+    if (!callee.callFails()) return;
     ++failPoints_;
     if (tryBlocks_ == 0 && tryPrefixes_ == 0) {
         diags_.error(loc, q(callee.name) + " can fail, so its call must say what happens then",
@@ -2376,7 +2404,7 @@ const Type* Sema::checkSpawn(SpawnExpr& s, Flow& flow) {
     refused = refuseLocal(target->retType, call.loc, "what this call returns") || refused;
     if (refused) return Type::error();
     if (diags_.hasErrors() && !program_->findTemplate("Task")) return Type::error();  // it has a Task of its own, as was reported
-    const Type* task = parser_.taskType(target->retType, target->isThrows, call.loc);
+    const Type* task = parser_.taskType(target->bodyRet(), target->isThrows, call.loc);
     adoptTypes();
     s.target = target;
     s.task = task->decl;
@@ -2388,6 +2416,128 @@ const Type* Sema::checkSpawn(SpawnExpr& s, Flow& flow) {
     s.finish = finish;
     s.fail = fail;
     return task;
+}
+
+// An async function's call gives a Task, made here, as soon as the function is known, so that every call sees it. Its
+// body still returns what is written: see FuncDecl::bodyRet.
+void Sema::prepareAsync(FuncDecl& fn) {
+    if (!fn.isAsync || fn.declaredRet) return;
+    fn.declaredRet = fn.retType;
+    if (fn.retType->isError()) return;
+    if (fn.name == "main" && fn.role == FuncDecl::Role::Free && !fn.retType->is(K::Int)) return;  // reported with main
+    if (fn.owner && !fn.owner->isClass && !fn.isConst) {
+        diags_.error(fn.asyncLoc, "an async method of a struct must be const, since it runs on a copy of the struct",
+                     "mark it `const`: `async " + std::string(fn.retType->name) + " " + fn.name + "(...) const`, or make " + q(fn.owner->name) +
+                         " a class, whose methods work on the object itself",
+                     spec::Async);
+        return;
+    }
+    // Under the rules of async, a function may go on on another thread after it waits, so it holds nothing that cannot cross.
+    if (holdsLocal(fn.retType)) {
+        diags_.error(fn.retTypeLoc, "an async function cannot return a local reference, since its task can be waited for on another thread",
+                     "return a class reference, whose count works across threads", spec::Async);
+        return;
+    }
+    for (auto& p : fn.params)
+        if (holdsLocal(p->declType)) {
+            diags_.error(p->typeLoc, "an async function cannot take a local reference, since it may go on on another thread after it waits",
+                         "take a class reference, whose count works across threads", spec::Async);
+            return;
+        }
+    if (diags_.hasErrors() && !program_->findTemplate("Task")) return;  // it has a Task of its own, as was reported
+    const Type* task = parser_.taskType(fn.retType, fn.isThrows, fn.asyncLoc);
+    adoptTypes();
+    fn.retType = task;
+    auto* decl = const_cast<StructDecl*>(task->decl);
+    auto use = [&](const char* name) {
+        FuncDecl* m = decl->ownMethod(name);
+        if (m) requestMethod(m);
+        return m;
+    };
+    fn.taskFinish = use("__finish");
+    fn.taskFail = fn.isThrows ? use("__fail") : nullptr;
+    fn.taskBind = use("__bind");
+    fn.taskWait = use("wait");
+}
+
+// What `spawn` and async calls give: a `Task<T>`, or a `Task<T, throws>`.
+static bool isTaskClass(const StructDecl& sd) {
+    return sd.templateOf && sd.templateOf->nameLoc.line == 0 && (sd.templateName == "Task" || sd.templateName == "__TaskThrows");
+}
+
+void Sema::checkTaskKept(const FuncDecl& f, const Expr& call, Loc loc) {
+    if (!f.isAsync || call.loc.line == 0 || std::find(discarded_.begin(), discarded_.end(), &call) == discarded_.end()) return;
+    const std::string written = spelled(call, f.name + "(...)");
+    const std::string tryFirst = f.isThrows ? "try " : "";
+    diags_.error(loc, "the task of the async call " + q(f.name) + " is thrown away, so nothing waits for it",
+                 (fn_ && fn_->isAsync ? "to wait for it, write `" + tryFirst + "await " + written + ";`"
+                                      : "to wait for it here, write `" + tryFirst + asBase(written) + ".wait();`") +
+                     ". To let it run on without waiting, keep its task: `auto t = " + written + ";`",
+                 spec::Async);
+}
+
+const Type* Sema::checkAwait(AwaitExpr& a, Flow& flow) {
+    const Type* t = checkExpr(*a.task, flow);
+    if (t->isError()) return t;
+    const std::string what = spelled(*a.task, "t");
+    if (!t->isClass() || !isTaskClass(*t->decl)) {
+        const Expr* inner = a.task.get();
+        const FuncDecl* called = inner->kind == Expr::Kind::Call ? static_cast<const CallExpr*>(inner)->target
+                               : inner->kind == Expr::Kind::MethodCall ? static_cast<const MethodCallExpr*>(inner)->method : nullptr;
+        diags_.error(a.task->loc, "`await` waits for a task, and this is " + q(t),
+                     called && called->nameLoc.line != 0 && !called->isExtern
+                         ? "remove `await`: a call of " + q(called->name) + " is done when it returns. To have it give a task, make it async: `async " +
+                               std::string(called->bodyRet()->name) + " " + called->name + "(...)`"
+                         : std::string("remove `await`: only a task can be waited for, which an async call or `spawn` gives"),
+                     spec::Async);
+        return Type::error();
+    }
+    auto* decl = const_cast<StructDecl*>(t->decl);
+    a.taskDecl = decl;
+    a.wait = decl->ownMethod("wait");
+    a.then = decl->ownMethod("__await");
+    if (!a.wait || !a.then) return Type::error();
+    requestMethod(const_cast<FuncDecl*>(a.wait));
+    requestMethod(const_cast<FuncDecl*>(a.then));
+    if (!fn_ || !fn_->isAsync) {
+        const bool isMain = fn_ && fn_->role == FuncDecl::Role::Free && fn_->name == "main";
+        const bool canBeAsync = fn_ && (fn_->role == FuncDecl::Role::Free || fn_->role == FuncDecl::Role::Method);
+        const std::string wait = "`" + std::string(a.wait->isThrows ? "try " : "") + asBase(what) + ".wait()`";
+        diags_.error(a.loc, "`await` can only be used in an async function",
+                     isMain ? "make main async: `async int main() { ... }`, or wait here with " + wait
+                     : canBeAsync ? "mark " + q(fn_->name) + " async: `async " + std::string(fn_->retType->name) + " " + fn_->name + "(...)`, or wait here with " + wait
+                                  : "wait here with " + wait,
+                     spec::Async);
+        return Type::error();
+    }
+    // The function may go on on another thread, where a local reference cannot be used, nor a lock unlocked. Another async
+    // function of this thread could also try to lock it meanwhile.
+    for (auto& scope : scopes_)
+        for (auto& [name, var] : scope)
+            if (var && var->type && var->type->isClass() && var->type->decl->name == "LockGuard" && var->type->decl->nameLoc.line == 0) {
+                diags_.error(a.loc, "this `await` comes while " + q(name) + " holds a lock, which would stay locked while other work goes on, and would then be unlocked on what may be another thread",
+                             "end the block of " + q(name) + " before the `await`: `{ LockGuard " + name + " = LockGuard(m); ... }`", spec::Async);
+                diags_.note(var->loc, q(name) + " is declared here");
+                return Type::error();
+            }
+    for (auto& scope : scopes_)
+        for (auto& [name, var] : scope)
+            if (var && var->type && !var->type->isError() && holdsLocal(var->type)) {
+                diags_.error(a.loc, "this `await` comes while " + q(name) + " holds a local reference, which cannot be kept across it, since the function may go on on another thread",
+                             "use a class reference for " + q(name) + ", whose count works across threads, or end its block before the `await`", spec::Async);
+                diags_.note(var->loc, q(name) + " is declared here");
+                return Type::error();
+            }
+    if (a.wait->isThrows) {
+        ++failPoints_;
+        if (tryBlocks_ == 0 && tryPrefixes_ == 0)
+            diags_.error(a.loc, "waiting for " + q(what) + " can fail, since what it runs can, so it must say what happens then",
+                         "write `try await " + what + "`, which passes the error on, or put it in `try { ... } catch (Error e) { ... }`", spec::Errors);
+        else if (tryBlocks_ == 0 && !fn_->isThrows)
+            diags_.error(a.loc, "an error from waiting for " + q(what) + " has nowhere to go, since " + q(fn_->name) + " is not marked `throws`",
+                         whereAnErrorCanGo(), spec::Errors);
+    }
+    return a.wait->retType;
 }
 
 void Sema::checkThrow(ThrowStmt& st, Flow& flow) {
@@ -2704,7 +2854,7 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
         case Stmt::Kind::ForEach: checkForEach(static_cast<ForEachStmt&>(s), flow); return;
         case Stmt::Kind::Return: {
             auto& st = static_cast<ReturnStmt&>(s);
-            const Type* ret = fn_->retType;
+            const Type* ret = fn_->bodyRet();
             if (st.value) {
                 if (ret->is(K::Void)) {
                     const Type* t = checkExpr(*st.value, flow);
@@ -4399,6 +4549,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
         }
         case Expr::Kind::Call: result = checkCall(static_cast<CallExpr&>(e), flow); break;
         case Expr::Kind::Spawn: result = checkSpawn(static_cast<SpawnExpr&>(e), flow); break;
+        case Expr::Kind::Await: result = checkAwait(static_cast<AwaitExpr&>(e), flow); break;
         case Expr::Kind::New: result = checkNew(static_cast<NewExpr&>(e), flow); break;
         case Expr::Kind::Delete: result = checkDelete(static_cast<DeleteExpr&>(e), flow); break;
         case Expr::Kind::Sizeof: {
@@ -4644,6 +4795,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
                 diags_.error(nameLoc, "const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
                              "remove `const` from " + q(fn_->name) + ", or mark " + q(m->name) + " `const` if it does not change any field", spec::Methods);
             checkArgs(call.args, *m, flow, call.loc, q(m->name));
+            checkTaskKept(*m, call, nameLoc);
             return m->retType;
         }
     }
@@ -4689,8 +4841,20 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         const std::string& name = call.callee;
         std::string stem = name.size() > 3 ? name.substr(0, name.size() - 1) : "";
         if (name == "http::fetch") {
-            diags_.error(nameLoc, "this compiler does not support `http::fetch` yet, as it needs async",
+            diags_.error(nameLoc, "this compiler does not support `http::fetch` yet",
                          "`try http::get(url)` does the same, waiting for the answer", spec::Http);
+            return Type::error();
+        }
+        if (name == "sleep" || name == "usleep" || name == "nanosleep" || name == "Sleep" || name == "setTimeout") {
+            const bool inAsync = fn_ && fn_->isAsync;
+            diags_.error(nameLoc, name == "setTimeout" ? std::string("C+ has no `setTimeout`, as an async function can wait, then do the work")
+                                                       : "C+ waits with `delay`, which counts milliseconds, and has no `" + name + "`",
+                         name == "setTimeout"
+                             ? std::string("write an async function that waits first, with `await delay(ms);`, then does the work. Calling it starts it: `auto t = later();`")
+                             : "to wait, write `" + std::string(inAsync ? "await delay(1000);" : "delay(1000).wait();") +
+                                   "`" + (inAsync ? ", which lets other async work go on meanwhile" : "") +
+                                   (cDeclarationOf(name).empty() ? "" : ". C's can be declared instead: `extern \"C\" " + cDeclarationOf(name) + ";`"),
+                         spec::Async);
             return Type::error();
         }
         if (name.starts_with("sto") && !cNumberReader(name).empty()) {
@@ -4741,6 +4905,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     call.target = fn;
     if (&call != spawned_) checkCanFail(*fn, nameLoc);
     checkArgs(call.args, *fn, flow, call.loc, q(fn->name));
+    checkTaskKept(*fn, call, nameLoc);
     return fn->retType;
 }
 
@@ -4951,6 +5116,7 @@ const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow)
     adoptTypes();
     finishLists(fn);
     if (!fn) return Type::error();
+    prepareAsync(*fn);
     call.target = fn;
     if (&call != spawned_) checkCanFail(*fn, nameLoc);
     for (size_t i = 0; i < call.args.size(); ++i) {
@@ -4958,6 +5124,7 @@ const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow)
         if (a.kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(a).explicitType) continue;
         requireConvertible(a, fn->params[i]->declType, "for parameter " + q(fn->params[i]->name) + " of " + q(fn->name));
     }
+    checkTaskKept(*fn, call, nameLoc);
     return fn->retType;
 }
 
@@ -5269,6 +5436,8 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         const char* until = nullptr;
         if (sd.templateOf && sd.templateOf->nameLoc.line == 0 && sd.role == StructDecl::Role::Opaque && (call.name == "wait_for" || call.name == "wait_until"))
             planned = "waiting with a time limit", until = "`t.done()` says whether it has finished, without waiting";
+        else if (isTaskClass(sd) && (call.name == "cancel" || call.name == "abort" || call.name == "stop" || call.name == "kill"))
+            planned = "stopping a task", until = "have what it runs check a field of a class that says it should stop, and return";
         else if (sd.name == "reflect::Field" && (call.name == "get" || call.name == "set"))
             planned = "reading a field through its reflect::Field", until = "`f.name`, `f.offset` and `f.type` say what it is. Use the field by its name";
         else if (sd.name == "reflect::Type" && call.name == "methods")
@@ -5322,6 +5491,15 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     call.path = toStart;
     call.path.insert(call.path.end(), found.begin() + 1, found.end());
     requestMethod(m);
+    if (fn_ && fn_->isAsync && call.name == "wait" && isTaskClass(sd) && call.loc.line != 0) {
+        diags_.error(call.loc, "in an async function, a task is waited for with `await`",
+                     (call.receiver && spelled(*call.receiver, "").empty()
+                          ? "write `" + std::string(m->isThrows ? "try " : "") + "await` in front of the task, instead of `.wait()`"
+                          : "write `" + std::string(m->isThrows ? "try " : "") + "await " + asBase(call.receiver ? spelled(*call.receiver, "t") : "t") + "`") +
+                         ": `wait()` would hold up everything else that runs on this thread meanwhile",
+                     spec::Async);
+        return Type::error();
+    }
     if (&call != spawned_) checkCanFail(*m, call.loc, call.receiver.get());
     if (!canAccess(*m->owner, m->access, &sd)) reportAccess(*m->owner, m->name, true, m->access, call.loc);
     if (!call.qualifier.empty() && m->isPure)
@@ -5329,7 +5507,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
                      q(m->owner->name) + " only declares it, so there is nothing to call. Inside an override, write what the method does here. Elsewhere, `x." + m->name + "(...)` calls the version the object really has", spec::Inheritance);
     const bool givesValue = m->retType && !m->retType->is(K::Void);
     const bool resultUsed = givesValue && std::find(discarded_.begin(), discarded_.end(), &call) == discarded_.end();
-    const std::string tryFirst = m->isThrows ? "try " : "";
+    const std::string tryFirst = m->callFails() ? "try " : "";
     // `spawn` runs a method of a struct on a copy of it anyway, and what a function gave changes nothing the program has
     if (&call != spawned_ && !m->isConst && t->isStruct() && inOptionalCopy(recv) && (isReferenceInCpp(recv) || !resultUsed)) {
         const std::string keepType = std::string(m->retType->name) + (m->retType->isOptional() || m->retType->isPointer() ? "" : "?");
@@ -5383,6 +5561,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
                          "declare " + q(holder->name) + " without `const`, or " + markConst, spec::Methods);
     }
     checkArgs(call.args, *m, flow, call.loc, q(m->name));
+    checkTaskKept(*m, call, call.loc);
     return m->retType;
 }
 
@@ -6388,7 +6567,7 @@ const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Ty
             static const char* const changing[] = {"push_back", "pop_back", "clear", "insert", "erase", "fill", "resize", "append", "swap"};
             changes = std::find_if(std::begin(changing), std::end(changing), [&](const char* m) { return call.name == m; }) != std::end(changing);
         } else if (owner) {
-            if (const FuncDecl* method = owner->findMethod(call.name)) changes = !method->isConst, fails = method->isThrows;
+            if (const FuncDecl* method = owner->findMethod(call.name)) changes = !method->isConst, fails = method->callFails();
             else if (isHashmap(inner) && call.name == "at") changes = false;  // read where it is, by the compiler
         }
         const std::string tryFirst = fails ? "try " : "";

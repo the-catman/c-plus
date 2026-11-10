@@ -1,7 +1,0 @@
-async int f() { return 1; }
-int main() {
-
-    return 0;
-}
-// error: this compiler does not support async and await yet
-// error: `auto t = spawn f();`, then `t.wait()`

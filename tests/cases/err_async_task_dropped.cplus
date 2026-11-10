@@ -1,0 +1,29 @@
+// The task of an async call cannot be thrown away, since nothing would wait for it.
+async int f(int x) { return x; }
+async void g() throws {}
+
+class Saver {
+public:
+    async void save() {}
+};
+
+async void inAsync() throws {
+    f(1);
+    // error: the task of the async call 'f' is thrown away, so nothing waits for it
+    // error: to wait for it, write `await f(1);`. To let it run on without waiting, keep its task: `auto t = f(1);`
+    g();
+    // error: to wait for it, write `try await g();`
+    Saver s = Saver();
+    s.save();
+    // error: the task of the async call 'save' is thrown away
+    auto kept = f(2);
+    await f(3);
+}
+
+int main() throws {
+    f(1);
+    // error: to wait for it here, write `f(1).wait();`. To let it run on without waiting, keep its task: `auto t = f(1);`
+    auto t = inAsync();
+    try t.wait();
+    return 0;
+}

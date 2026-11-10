@@ -1,0 +1,27 @@
+// An override is async if the method it replaces is, and only then.
+class Animal {
+public:
+    virtual async string sound() const { return "..."; }
+    virtual string name() const { return "animal"; }
+};
+
+class Dog : public Animal {
+public:
+    string sound() const override { return "woof"; }
+    // error: 'sound' must be async, as the method it replaces is
+    // error: async string sound
+    async string name() const override { return "dog"; }
+    // error: 'name' cannot be async, as the method it replaces is not
+};
+
+interface Source {
+    async string read() const;
+};
+
+class Fixed : public Source {
+public:
+    string read() const override { return "x"; }
+    // error: 'read' must be async, as the method it replaces is
+};
+
+int main() { return 0; }

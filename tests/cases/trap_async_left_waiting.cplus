@@ -1,0 +1,21 @@
+// When `main` returns, what is still running goes on, and an async function that can never go on is reported.
+class Box {
+public:
+    Task<int>? other;
+};
+
+async int waitsFor(Box b) {
+    await delay(1);
+    if (auto t = b.other) return await t;
+    return 0;
+}
+
+int main() {
+    Box b = Box();
+    auto t = waitsFor(b);
+    b.other = t;
+    println("main returns");
+    // expect: main returns
+    return 0;
+}
+// trap: the program ended while 1 async function still waited for a task that nothing can finish any more

@@ -1,0 +1,15 @@
+// A plain function that async code calls cannot wait for a task of the same thread, as that task could only go on after it.
+int blocking(Task<int> t) { return t.wait(); }
+
+async int one() {
+    await delay(1);
+    return 1;
+}
+
+async int main() {
+    auto t = one();
+    await delay(5);                   // from here on, the thread's event loop runs main
+    auto u = one();
+    return blocking(u);
+}
+// trap: `wait()` was called on a task while this thread's event loop is running it, so it would wait forever

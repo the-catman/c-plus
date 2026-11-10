@@ -1,0 +1,27 @@
+// Calling an async function starts it, and gives a task. `await` waits for a task, and lets other work go on meanwhile.
+async string greet(string name, long ms) {
+    await delay(ms);                 // waits without holding up the thread
+    return format("hello, {}", name);
+}
+
+async int parse(string text) throws {
+    if (text.empty()) throw Error("there is nothing to read");
+    return int(text.size());
+}
+
+async int main() {
+    auto slow = greet("slow", 40);   // both run at once
+    auto quick = greet("quick", 10);
+    println("{}", await quick);
+    // expect: hello, quick
+    println("{}", await slow);
+    // expect: hello, slow
+    try {
+        int n = await parse("");
+        println("{}", n);
+    } catch (Error e) {
+        println("{}", e.what());
+        // expect: there is nothing to read
+    }
+    return 0;
+}

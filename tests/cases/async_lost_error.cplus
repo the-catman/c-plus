@@ -1,0 +1,14 @@
+// An error that nothing can see any more, since nothing waited for its task, fails the program, as with `spawn`.
+async int fails() throws {
+    await delay(1);
+    throw Error("lost");
+}
+
+int main() {
+    auto t = fails();
+    println("main returns");
+    // expect: main returns
+    return 0;
+}
+// stderr: uncaught error in a task that nothing waited for: Error {message: "lost"}
+// exit: 1

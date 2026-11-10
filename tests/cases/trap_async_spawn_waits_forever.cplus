@@ -1,0 +1,24 @@
+// The thread of a `spawn` runs its async function's work until its task is done, which here is never.
+class Box {
+public:
+    Task<int>? other;
+};
+
+async int waitsFor(Box b) {
+    await delay(1);
+    if (auto t = b.other) return await t;
+    return 0;
+}
+
+async int viaSpawn() {
+    Box b = Box();
+    auto t = waitsFor(b);
+    b.other = t;
+    return await t;
+}
+
+int main() {
+    auto t = spawn viaSpawn();
+    return t.wait();
+}
+// trap: the async function of a `spawn` waits for a task that nothing can finish any more

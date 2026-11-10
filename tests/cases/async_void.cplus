@@ -1,0 +1,26 @@
+// An async function that gives nothing: its task is a Task<void>, and `await` on it gives nothing to use.
+async void f() {
+    await delay(1);
+    println("f is done");
+}
+
+async void early(bool stop) {
+    if (stop) return;
+    await delay(1);
+    println("early went on");
+}
+
+async void main2() {
+    Task<void> t = f();
+    await t;
+    await t;                          // done already, so it goes on at once
+    await early(true);
+    await early(false);
+}
+
+int main() {
+    main2().wait();
+    // expect: f is done
+    // expect: early went on
+    return 0;
+}
