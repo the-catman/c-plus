@@ -195,6 +195,17 @@
           }
         },
         {
+          "match": "\\b(import)\\s*(<[^>\\n]*>)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.cplus"
+            },
+            "2": {
+              "name": "string.quoted.other.lt-gt.include.cplus"
+            }
+          }
+        },
+        {
           "match": "\\b(import)\\s+([A-Za-z_][\\w.]*)",
           "captures": {
             "1": {

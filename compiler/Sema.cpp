@@ -1231,6 +1231,11 @@ void Sema::reportUnknownName(const NameExpr& n) {
         diags_.error(n.loc, q(n.name) + " is a generic type, not a value", "to build one, write it with its arguments: `" + example + "(...)`" + note, spec::Generics);
         return;
     }
+    if (auto it = program_->notImported.find(n.name); it != program_->notImported.end()) {
+        diags_.error(n.loc, it->second.first, it->second.second, spec::CHeaders);
+        return;
+    }
+    if (program_->unreadFunctions.count(n.name)) return;  // a header that could not be read may declare it, which has been said
     if (false) {}
     else if (n.name == "cout" || n.name == "endl" || n.name == "cerr" || n.name == "console") help = "C+ prints with `println(\"{}\", value);`";
     else if (n.name == "cin") help = "there are no input functions yet. C's can be declared: `extern \"C\" int getchar();`";
@@ -1239,8 +1244,8 @@ void Sema::reportUnknownName(const NameExpr& n) {
     else if (n.name == "nullptr" || n.name == "NULL") help = "write `null`; only an optional, such as `User?`, or a pointer can be null";
     else if (n.name == "M_PI" || n.name == "M_E" || n.name == "INFINITY" || n.name == "NAN") {
         diags_.error(n.loc, "this compiler does not support math constants such as " + q(n.name) + " yet",
-                     n.name == "INFINITY" || n.name == "NAN" ? "write `1.0 / 0` for infinity, or `0.0 / 0` for NaN"
-                                                             : "until it does, `acos(-1)` is pi and `exp(1)` is e",
+                     n.name == "INFINITY" || n.name == "NAN" ? "write `1.0 / 0` for infinity, or `0.0 / 0` for NaN, or `import <math.h>;`, which declares C's"
+                                                             : "write `import <math.h>;`, which declares C's, as in C. Without it, `acos(-1)` is pi and `exp(1)` is e",
                      spec::Math);
         return;
     }
@@ -4833,6 +4838,10 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (it == funcs_.end() && findCharFn(call.callee)) return checkCharFn(call, flow);
     if (it == funcs_.end()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
+        if (auto why = program_->notImported.find(call.callee); why != program_->notImported.end()) {
+            diags_.error(nameLoc, why->second.first, why->second.second, spec::CHeaders);
+            return Type::error();
+        }
         std::string help;
         const std::string& name = call.callee;
         std::string stem = name.size() > 3 ? name.substr(0, name.size() - 1) : "";

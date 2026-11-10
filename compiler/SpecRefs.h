@@ -53,6 +53,7 @@ inline constexpr const char* PointerDeclarations = "pointer-declarations";
 inline constexpr const char* Sizeof = "sizeof";
 inline constexpr const char* CTypes = "c-types-known-by-name";
 inline constexpr const char* CStructs = "c-structs";
+inline constexpr const char* CHeaders = "c-headers";
 inline constexpr const char* NewDelete = "new-and-delete";
 inline constexpr const char* Modules = "modules";
 inline constexpr const char* Http = "http";

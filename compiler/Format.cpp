@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <set>
 #include <string>
 #include <vector>
@@ -152,6 +153,59 @@ private:
                     }
             }
         }
+        findTypesInUse();
+    }
+
+    // A type that is not defined in the file, such as one from a C header, which is seen to be one where it is used:
+    // `FILE* f = ...;`, `tm t;`, `vector<FILE*>`, `(FILE*)p`, and `void f(uv_loop_t* loop)` among declarations.
+    void findTypesInUse() {
+        std::vector<bool> braces;  // for each `{` that is open, whether declarations are what it holds
+        bool typeAhead = false;    // `struct`, `class` or `interface`, whose body has not begun
+        for (size_t i = 0; i + 1 < toks_.size(); ++i) {
+            const Tok k = kind(i);
+            const Tok before = i ? kind(i - 1) : Tok::Eof;
+            if (k == Tok::KwStruct || k == Tok::KwClass || k == Tok::KwInterface) typeAhead = true;
+            if (k == Tok::Semi) typeAhead = false;
+            if (k == Tok::LBrace) {
+                braces.push_back(typeAhead || (before == Tok::StringLit && i >= 2 && kind(i - 2) == Tok::KwExtern));
+                typeAhead = false;
+            }
+            if (k == Tok::RBrace && !braces.empty()) braces.pop_back();
+            if (k != Tok::Ident || types_.count(toks_[i].text) || before == Tok::Dot || before == Tok::Arrow || before == Tok::QuestionDot) continue;
+            size_t j = i + 1;
+            while (kind(j) == Tok::Star) ++j;
+            const bool stars = j > i + 1;
+            const Tok after = kind(j);
+            if (stars && (after == Tok::RParen || after == Tok::Greater || after == Tok::Shr || after == Tok::Comma)) {
+                types_.insert(toks_[i].text);  // nothing that multiplies ends there
+                continue;
+            }
+            const Tok end = kind(j + 1);
+            if (after != Tok::Ident || !(end == Tok::Assign || end == Tok::Semi || end == Tok::Comma || end == Tok::RParen || end == Tok::Colon ||
+                                         end == Tok::LBracket))
+                continue;
+            const bool startsStatement = i == 0 || before == Tok::Semi || before == Tok::LBrace || before == Tok::RBrace || before == Tok::Colon ||
+                                         (before == Tok::LParen && i >= 2 && kind(i - 2) == Tok::KwFor);
+            const bool amongDeclarations = braces.empty() || braces.back();
+            if (!stars || startsStatement || ((before == Tok::LParen || before == Tok::Comma) && amongDeclarations && inParameters(i)))
+                types_.insert(toks_[i].text);
+        }
+    }
+
+    // Whether the token is in the parameters of a function being declared: `void f(` or `Name(`, and not `x = f(`.
+    bool inParameters(size_t i) const {
+        int depth = 0;
+        size_t j = i;
+        while (j-- > 0) {
+            const Tok k = kind(j);
+            if (k == Tok::RParen) ++depth;
+            else if (k == Tok::LParen && depth-- == 0) break;
+            else if (k == Tok::Semi || k == Tok::LBrace || k == Tok::RBrace) return false;
+        }
+        if (j == kNone || j == 0 || kind(j - 1) != Tok::Ident) return false;
+        const Tok k = j >= 2 ? kind(j - 2) : Tok::Eof;
+        return isTypeKeyword(k) || k == Tok::Ident || k == Tok::Star || k == Tok::Greater || k == Tok::Question || k == Tok::Semi || k == Tok::LBrace ||
+               k == Tok::RBrace || k == Tok::Colon || k == Tok::Eof || j == 1;
     }
 
     bool opensTemplate(size_t i) const {
@@ -746,6 +800,8 @@ FormatResult formatSource(const SourceFile& file, Diagnostics& diags, std::strin
     if (diags.hasErrors()) return FormatResult::HasErrors;
     {
         Parser parser(toks, diags);
+        parser.findHeadersIn(HeaderSearch{std::filesystem::path(file.path).parent_path().string(), {}});
+        parser.quietHeaders();
         Program program;
         parser.parseProgram(program);
         if (diags.hasErrors() || parser.gaveUp()) return FormatResult::HasErrors;

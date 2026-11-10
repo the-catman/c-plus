@@ -1,0 +1,70 @@
+// What C+ takes from a C header: its functions, structs and constants, by their C names.
+// link-c: tests/c/header.c
+import "../c/header.h";
+
+int main() {
+    println("{} {} {}", HEADER_ANSWER, HEADER_NEGATIVE, HEADER_BIG);
+    // expect: 42 -84 5000000000
+    println("{} {} {}", HEADER_MASK, HEADER_ALL_BITS, HEADER_LETTER);
+    // expect: -1 -1 65
+    println("{} {} {}", HEADER_HALF, HEADER_THIRD, HEADER_TRUE);
+    // expect: 0.5 0.33333334 true
+    println("{} {}", HEADER_BYTES.size(), int(HEADER_BYTES[1]));
+    // expect: 2 255
+    println("{}", HEADER_NAME);
+    // expect: header "one"
+    // expect: 	tab
+    println("{} {} {}", HEADER_NONE == null, HEADER_SENTINEL == reinterpret_cast<void*>(-1), HEADER_INFINITE);
+    // expect: true true inf
+    println("{} {} {} {} {}", HEADER_RED, HEADER_GREEN, HEADER_BLUE, HEADER_SMALL, HEADER_LARGE);
+    // expect: 0 5 6 -1 1
+
+    println("{} {} {}", header_add(2, 3), header_length("four"), header_greeting());
+    // expect: 5 4 hello from C
+    char* copy = header_copy("copied");
+    println("{}", string(copy));
+    // expect: copied
+    header_free(copy);
+    println("{}", header_count());
+    // expect: 3
+
+    header_point_t p = header_move({1, 2}, 10, 20);
+    println("{}", p);
+    // expect: {x: 11, y: 22}
+    header_named n = {};
+    header_fill(&n, "name");
+    println("{} {} {} {} {}", string(n.name), string(n.label), n.weight, n.where, n.flag);
+    // expect: name filled 2.5 {x: 1, y: 2} true
+    header_list last = {2, null};
+    header_list first = {1, &last};
+    println("{}", header_sum(&first));
+    // expect: 3
+
+    header_opaque* h = header_open(7);
+    println("{}", header_value(h));
+    // expect: 7
+    header_close(h);
+    println("{}", header_count_items(null));  // a struct C+ cannot hold still goes by pointer
+    // expect: -1
+    println("{}", header_call_back(null, null));
+    // expect: 1
+    header_words w = {1, 2, 3};
+    println("{} {} {} {}", w.class_, w.new_, w.string_, header_words_sum(w));
+    // expect: 1 2 3 6
+    println("{}", header_keyword_params(1, 2, 3));
+    // expect: 123
+    array<int, 3> values = {1, 2, 3};
+    println("{}", header_sum_values(values.data(), 3));
+    // expect: 6
+    println("{}", header_strings(null, 0));
+    // expect: 0
+    char* bytes = header_bytes();  // `const unsigned char*`, which is bytes and not text
+    println("{} {}", int(bytes[1]), header_first_byte(bytes));
+    // expect: 2 1
+
+    // The program's names are its own: a local variable with a C name hides it, as in C.
+    int header_add = 1;
+    println("{}", header_add);
+    // expect: 1
+    return 0;
+}

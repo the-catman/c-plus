@@ -21,6 +21,7 @@ const char* tokSpelling(Tok kind) {
         case Tok::FloatLit: return "number";
         case Tok::StringLit: return "string";
         case Tok::CharLit: return "character";
+        case Tok::HeaderName: return "header name";
 #define X(name, text) \
     case Tok::Kw##name: return text;
             CPLUS_KEYWORDS(X)
@@ -41,6 +42,7 @@ std::string describeToken(const Token& t) {
         case Tok::FloatLit: return "number " + t.text;
         case Tok::StringLit: return "a string";
         case Tok::CharLit: return "the character " + t.text;
+        case Tok::HeaderName: return "the header <" + t.text + ">";
         default: break;
     }
     if (t.kind >= Tok::KwAsync && t.kind <= Tok::KwWhile) return std::string("keyword '") + tokSpelling(t.kind) + "'";
@@ -67,7 +69,7 @@ std::vector<Token> Lexer::lexAll() {
     while (true) {
         skipSpaceAndComments();
         const size_t begin = pos_;
-        out.push_back(next());
+        out.push_back(!out.empty() && out.back().kind == Tok::KwImport && peek() == '<' ? lexHeaderName() : next());
         out.back().begin = begin;
         out.back().end = pos_;
         if (out.back().kind == Tok::Eof) return out;
@@ -118,6 +120,23 @@ void Lexer::skipSpaceAndComments() {
             return;
         }
     }
+}
+
+// `<sqlite3.h>`, or `<sys/stat.h>`: a name of a file, and not the tokens it would be elsewhere.
+Token Lexer::lexHeaderName() {
+    Loc loc = locHere();
+    size_t end = pos_ + 1;
+    while (end < src_.size() && src_[end] != '>' && src_[end] != '\n' && src_[end] != ';') ++end;
+    if (end >= src_.size() || src_[end] != '>') {
+        loc.len = (uint32_t)(end - pos_);
+        diags_.error(loc, "this header's name has no '>' to end it", "write the name of a C header in angle brackets: `import <sqlite3.h>;`", spec::CHeaders);
+        while (pos_ < end) advance();
+        return Token{Tok::HeaderName, loc, "", 0};
+    }
+    std::string name = src_.substr(pos_ + 1, end - pos_ - 1);
+    loc.len = (uint32_t)(end + 1 - pos_);
+    while (pos_ <= end) advance();
+    return Token{Tok::HeaderName, loc, name, 0};
 }
 
 Token Lexer::next() {

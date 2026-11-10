@@ -143,7 +143,7 @@ private:
         for (auto& init : f.baseInits) {
             if (f.owner)
                 for (const StructDecl* base : f.owner->bases)
-                    if (base && base->type.name == init.name || base->name == init.name) add(init.loc, describe(*base), base->nameLoc);
+                    if (base && (base->type.name == init.name || base->name == init.name)) add(init.loc, describe(*base), base->nameLoc);
             for (auto& a : init.args) expr(a.get());
         }
         if (f.body) stmt(f.body.get());

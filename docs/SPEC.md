@@ -1427,7 +1427,8 @@ checked. To pass arguments through `cplus run`, write them after `--`:
 
 A function from a C library is declared with `extern "C"`, as in C++, and called like any
 other function. The declaration is written with C+ types, and the compiler converts the
-values to and from C at each call.
+values to and from C at each call. A program can instead import the library's
+[C header](#c-headers), which declares them all: `import <sqlite3.h>;`.
 
 ```cpp
 extern "C" int abs(int n);
@@ -1488,7 +1489,7 @@ int main() {
   output comes out in the order it was written.
 - A C function cannot be named `main`, or start with `cplus_`, which the C+ runtime uses.
 - Not supported yet: `long double`; functions with a variable number of arguments, such as
-  `printf`; callbacks; C variables such as `errno`; and reading declarations from C headers.
+  `printf`; callbacks; and C variables such as `errno`.
 
 #### C structs
 
@@ -1534,9 +1535,10 @@ int main() {
 - **Inside `extern "C"`**, every field is checked where the struct is defined. Otherwise
   it is an ordinary struct, as it is in C++, with field defaults and methods if wanted, and a
   struct written outside `extern "C"` works too when its fields are C types.
-- **Write the fields as the C header does**, with the types from the table above. C+ cannot
-  compare the struct with C's definition until it can read C headers, so a field that is left
-  out or has the wrong type makes C and C+ disagree about where the other fields are.
+- **Write the fields as the C header does**, with the types from the table above. C+ does not
+  compare a struct it is given with C's definition, so a field that is left out or has the wrong
+  type makes C and C+ disagree about where the other fields are. A struct from an
+  [imported header](#c-headers) has C's own fields.
 - **By value**, a struct travels as the platform's C compiler passes it. This is supported
   on Linux for x86-64 and aarch64; elsewhere it is an error, and a pointer still works. C gets
   its own copy, and changing it does not change the caller's struct.
@@ -1568,10 +1570,72 @@ extern "C" struct sqlite3;      // one type on its own
 - C's `typedef struct x x;` is not needed and is an error; neither is `class X;`. A C
   struct whose fields C+ reads is not supported yet.
 
+#### C headers
+
+`import <sqlite3.h>;` reads a C header, as `#include` does in C, and declares in C+ what the
+program uses from it: functions, structs and constants, by their C names. This is the
+`import` of C++20 for a header, and nothing else needs to be written.
+
+```cpp
+import <stdio.h>;
+import <string.h>;
+import <time.h>;
+
+int main() {
+    FILE* f = tmpfile();                            // FILE, tmpfile and fputs come from <stdio.h>
+    fputs("saved", f);
+    fclose(f);
+    println("{} {}", strlen("four"), EOF);          // 4 -1
+    long now = 86400;
+    tm t = {};
+    gmtime_r(&now, &t);                             // struct tm, from <time.h>, with its fields
+    println("{}", t.tm_mday);                       // 2
+    return 0;
+}
+```
+
+- **Where a header is found.** A name in angle brackets is looked for where the C compiler
+  looks, and in each folder given with `-I`: `cplus build app.cplus -I include`. A name in
+  quotes, `import "mine.h";`, is looked for in the program's folder first, as `#include`
+  does. Folders listed in the environment variable `CPATH` are searched too, as C compilers
+  do, which is how `cplus lsp` finds them, as an editor gives it no `-I`. Linking is as for
+  any C function: `-lsqlite3`.
+- **Types** are those of the table above: `size_t` is `long`, and `unsigned` is `int`. A
+  `const char*` parameter is a `string?`, which takes a `string` or `null`, and a
+  `const char*` result is a `string`, which stops the program if C returns NULL. A `char*`
+  stays a `char*`, and a `const unsigned char*`, which is bytes rather than text, is one too.
+  Other pointers stay as they are. A pointer to a function is a `void*`, as C+ has no
+  callbacks yet, so `null` can be passed for one. An enum is an `int`. C's names for types,
+  such as `size_t` and `uint32_t`, are not names in C+: using one is an error that says what
+  to write instead.
+- **Structs.** A struct whose fields are all C types that C+ has is declared with them, as in
+  [C structs](#c-structs), and C+ checks that its layout is the one the C compiler gives it.
+  Any other is declared [by name](#c-types-known-by-name), and works through pointers. A
+  struct is called by its typedef's name if it has one, as `FILE` is for
+  `typedef struct _IO_FILE FILE;`, and by its tag if not. A field named like a word of C+,
+  such as `class` or `new`, has a `_` after it: `class_`.
+- **Constants.** A macro whose value is a number, a string or a pointer is a constant:
+  `#define SQLITE_OK 0` is `const int SQLITE_OK = 0;`, and SQLite's `SQLITE_TRANSIENT`,
+  which is `-1` as a pointer, is a `void* const`. So is each constant of an enum. An
+  unsigned value above the largest `int` or `long` has the same bits, so it comes out
+  negative, as unsigned values from C do.
+- **Only what the program uses** is declared, with the types that needs, so a big header
+  costs little, and the rest of its names cannot clash with the program's.
+- **The program's own declarations come first.** A function, constant or type of the
+  program, or one it declares in `extern "C"`, is used instead of the header's by that name.
+  That is how to declare a `const char*` result that can be NULL as a `string?`.
+- **What C+ cannot take** is left out, and using it is an error that says why: functions
+  with a variable number of arguments, such as `printf`; functions whose code is in the
+  header, such as `static inline` ones; functions with a type C+ has none for, such as
+  `short` or `long double`; macros with arguments; and C variables, such as `errno` and
+  `stdout`.
+- A header is read with libclang. A compiler built without it reports an error for a header
+  import.
+
 ### Modules
 
 Partly planned: the modules that come with the language work, which are [`http`](#http), [`json`](#json) and [`reflect`](#reflection). There are no
-header files. One file is one module.
+header files of C+, but C's can be [imported](#c-headers). One file is one module.
 
 ```cpp
 import json;          // a standard module
@@ -1580,7 +1644,7 @@ import net.server;    // planned: the file net/server.cplus, relative to the pro
 
 Members of a module are used with `::`, as in `json::parse<User>(text)`. What a module has is its own: a program
 cannot declare a name such as `json::Mine`. There is no `std::` namespace and no `using`; built-ins need no prefix.
-The compiler only accepts single-file programs so far, and reports an error for any other `import`. Only what a
+The compiler only accepts single-file programs so far, and reports an error for any other `import` of a module. Only what a
 program imports is linked into it.
 
 Nobody writes header files. For a library, the compiler can generate a `.hplus` interface
@@ -1757,7 +1821,8 @@ long biggest = max(total, 0L);
 - The others never stop the program: `sqrt(-1)` is NaN and `log(0)` is `-inf`.
 - A function of the program, or an `extern "C"` function, with the same name takes the
   place of the built-in one.
-- Constants such as C++20's `std::numbers::pi` are planned. Until then, `acos(-1)` is π.
+- Constants such as C++20's `std::numbers::pi` are planned. Until then, `acos(-1)` is π, and
+  `import <math.h>;` declares C's `M_PI`, `M_E`, `INFINITY` and `NAN`.
 
 ### Nesting limits
 
@@ -2420,6 +2485,7 @@ cplus --version
 | `--debug` | `build`, `run` | a [debug build](#debug-builds), which finds memory errors and leaks |
 | `--race` | `build`, `run` | a build with [the race check](#the-race-check). It cannot go with `--debug` |
 | `-l<name>`, `-L<dir>` | `build`, `run`, `check` | the libraries of [C functions](#c-functions), as for a C compiler |
+| `-I<dir>` | `build`, `run`, `check` | where [C headers](#c-headers) are looked for, as for a C compiler |
 | `-Wno-new-delete` | `build`, `run`, `check` | no warning for [`new` and `delete`](#new-and-delete) |
 | `--emit-llvm` | `build` | prints the LLVM IR instead of building |
 | `--check` | `fmt` | changes nothing, and says which files are not [formatted](#formatting) |
@@ -2616,6 +2682,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Pointers: `T*`, `&x`, `*p`, `p->x`, `p[i]`, arithmetic, `const T*`, `void*`, null checks, `sizeof` | implemented |
 | Pointers in `extern "C"`, and C types known by name, such as `FILE*` | implemented |
 | C structs: fields, array fields, through pointers, and by value on Linux x86-64 and aarch64 | implemented |
+| C headers: `import <sqlite3.h>;`, `import "mine.h";` and `-I`, for functions, structs, macros and enums | implemented |
 | `array<T, N>`: checked `a[i]`, `size`, `empty`, `front`, `back`, `fill`, `data`, range-based `for`, `==`, pointers to elements, `string(a)` | implemented |
 | `new`, `new[]`, `delete`, `delete[]`, with a warning; `[[allow(new_delete)]]`, `-Wno-new-delete` | implemented |
 | Constants outside functions: numbers, `char`, `bool`, `string`, pointers | implemented |
@@ -2658,7 +2725,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Pointers into vectors and strings | planned |
 | `unique<T>` references and `move(x)` | implemented |
 | `local<T>` references | implemented |
-| C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; reading C headers | planned |
+| C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; C's macros with arguments and inline functions | planned |
 | Modules `http`, `json` and `reflect`, and raw strings | implemented |
 | `http::fetch` | implemented |
 | Modules of your own | planned |

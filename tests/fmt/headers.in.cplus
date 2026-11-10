@@ -1,0 +1,18 @@
+import   <stdio.h> ;
+import <time.h>;
+
+// A type from a header is seen to be one where it is used, so its `*` is a pointer's.
+void save(FILE *f, tm *t) { fputs("x", f); }
+
+int main() {
+    FILE *f = tmpfile();
+    tm t = {};
+    vector<FILE *> files;
+    for (FILE *g : files) fclose(g);
+    long n = sizeof(FILE *);
+    int a = 2, b = 3;
+    int c = a*b;
+    save(f, &t);
+    fclose(f);
+    return 0;
+}

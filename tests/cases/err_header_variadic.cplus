@@ -1,0 +1,13 @@
+// C+ cannot pass a variable number of arguments to C yet.
+import "../c/header.h";
+import <stdio.h>;
+
+int main() {
+    header_print("%d", 1);
+    printf("%d\n", 2);
+    return 0;
+}
+// error: this compiler does not support C functions that take a variable number of arguments, such as `header_print` from "../c/header.h", yet
+// error: call a C function with a fixed list of arguments instead
+// error: such as `printf` from <stdio.h>
+// error: `printf("%d\n", x)` becomes `println("{}", x)`

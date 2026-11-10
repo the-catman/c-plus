@@ -1,0 +1,6 @@
+// A header that is not there.
+import <cplus_no_such_header.h>;
+
+int main() { return 0; }
+// error: cannot find the C header <cplus_no_such_header.h>
+// error: and in a folder named with -I

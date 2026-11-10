@@ -40,7 +40,8 @@ static const char* kUsage =
     "  cplus --version\n"
     "\n"
     "build and run also take -l<library> and -L<directory>, as a C compiler does, for\n"
-    "the libraries of C functions declared with extern \"C\", e.g. -lsqlite3.\n"
+    "the libraries of C functions declared with extern \"C\", e.g. -lsqlite3, and\n"
+    "-I<directory> for C headers that `import <name.h>;` does not find by itself.\n"
     "-Wno-new-delete turns off the warning for new and delete in every file.\n"
     "--debug makes a debug build: slower, but memory errors stop the program with a stack\n"
     "trace, and leaks are reported at exit. Build and run take it, with or without -O.\n"
@@ -57,6 +58,7 @@ struct Options {
     bool emitLLVM = false;
     bool warnNewDelete = true;  // -Wno-new-delete turns the warning off
     std::vector<std::string> linkArgs;  // -l and -L, passed on to the linker
+    std::vector<std::string> includeDirs;  // -I, where `import <name.h>;` looks for headers
     std::vector<std::string> programArgs;
 };
 
@@ -91,12 +93,13 @@ static int runProcess(const std::vector<std::string>& argv, const std::string& h
 }
 
 // Parses and checks a file. Returns false if it has errors.
-static bool frontEnd(const SourceFile& file, Diagnostics& diags, Program& program, bool warnNewDelete) {
+static bool frontEnd(const SourceFile& file, Diagnostics& diags, Program& program, const Options& opts) {
     Lexer lexer(file, diags);
     Parser parser(lexer.lexAll(), diags);
+    parser.findHeadersIn(HeaderSearch{fs::path(file.path).parent_path().string(), opts.includeDirs});
     parser.parseProgram(program);
     if (!parser.gaveUp()) {  // otherwise what was read is too little to check
-        Sema sema(diags, parser, warnNewDelete);
+        Sema sema(diags, parser, opts.warnNewDelete);
         sema.check(program);
     }
     if (diags.hasErrors()) {
@@ -129,7 +132,7 @@ static int build(const Options& opts, const std::string& exePath) {
     SourceFile file(opts.input, std::move(text));
     Diagnostics diags(file);
     Program program;
-    if (!frontEnd(file, diags, program, opts.warnNewDelete)) return 1;
+    if (!frontEnd(file, diags, program, opts)) return 1;
     if (opts.command == "check") return 0;
 
     // The tests can only reach these errors by pretending, on a machine that has what they are about.
@@ -373,6 +376,13 @@ static int compilerMain(int argc, char** argv) {
                 value = argv[i];
             }
             opts.linkArgs.push_back(a.substr(0, 2) + value);
+        } else if (a.rfind("-I", 0) == 0) {  // -Iinclude or -I include
+            std::string value = a.substr(2);
+            if (value.empty()) {
+                if (++i == argc) return usageError("-I needs a directory");
+                value = argv[i];
+            }
+            opts.includeDirs.push_back(value);
         } else if (a == "--emit-llvm") {
             if (opts.command != "build") return usageError("--emit-llvm is only used with `cplus build`");
             opts.emitLLVM = true;

@@ -72,6 +72,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import tempfile
 import threading
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -655,7 +656,8 @@ SHEET_VARIANTS = [
 
 # What the cheat sheet writes that is not code to compile: what is left out, what is typed at a shell, what a program prints.
 SHEET_NOT_CODE = {"<cmath>", "<cctype>", "std::", "std::weak_ptr", "std::string", "0x...", "--debug", "-Wno-new-delete", "-lname", "import x;", "long double", "/0",
-                  "http::fetch", "cplus check", "cplus run app.cplus --race", "cplus run app.cplus -- arg1 arg2", "cplus run app.cplus --debug"}
+                  "http::fetch", "cplus check", "cplus run app.cplus --race", "cplus run app.cplus -- arg1 arg2", "cplus run app.cplus --debug",
+                  'import "mine.h";', "-I dir"}
 # Habits that the left side of the table only names a part of, which is fine on its own. The rest of its row says what is wrong.
 SHEET_HABITS_THAT_COMPILE = {"int count = 0;", "x", "*p", "u", "if (flag)", "Node? next", "u1 == u2", "v[i]", "m[k]", "n", "s[s.size()]", "'\\0'", "s.substr(pos)",
                              "int x;", "int* p = new int;", "User u;", "array<int, 10000000> a;"}
@@ -770,7 +772,8 @@ SPEC_NOT_CODE = {
     "CPLUS_CHECK_LEAKS=0", "-Wno-new-delete", "cplus check", "cplus run", "cplus run greet.cplus -- Ada", "cplus build app.cplus -lsqlite3", "-L <directory>", ".hplus",
     "break cplus_trap", "uncaught error:", "--race", "--debug", "cplus build", "cplus.", "-fsanitize=address", "llvm-symbolizer", "libclang-rt-18-dev", "exit()",
     "cplus run app.cplus --race", "-l<name>", "-L<dir>", "--emit-llvm", "cplus explain", "spec:", "cplus explain cheatsheet", "{ x }", "[ x ]", "value_or()", "new[]",
-    "cplus fmt", "--check", "cplus lsp", "editors/vscode",
+    "cplus fmt", "--check", "cplus lsp", "editors/vscode", 'import "mine.h";', "-I", "-I<dir>", "cplus build app.cplus -I include", "-lsqlite3",
+    "static inline", "const unsigned char*",
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
@@ -794,6 +797,7 @@ SPEC_REJECTED = {
     "new int[3]{1, 2, 3}": "auto p = new int[3]{1, 2, 3};", "new (buffer) T": "int buffer = 0; auto p = new (buffer) int;", "new auto(x)": "int x = 1; auto p = new auto(x);",
     "[[nodiscard]]": "^[[nodiscard]] int f2() { return 1; }", "int x{5}": "int x{5};", "int x(5)": "int x(5);", "int f(int x);": "^int f2(int x);", "int values[]": '^extern "C" void f2(int values[]);',
     "char name[64];": '^extern "C" { struct S2 { char name[64]; }; }', "typedef struct { ... } name;": "^typedef struct { int a; } name;", "struct FILE*": "struct FILE* f = null;",
+    "typedef struct _IO_FILE FILE;": "^typedef struct _IO_FILE FILE;", "#define SQLITE_OK 0": "^#define SQLITE_OK 0",
     "f[i]": "FILE* f = null; int i = 0; auto x = f[i];", "f + 1": "FILE* f = null; auto x = f + 1;", "sizeof(FILE)": "long x = sizeof(FILE);", "typedef struct x x;": "^typedef struct x x;",
     "class X;": "^class X;", "json::Mine": "^struct json::Mine {};", "for (auto& x : v)": "vector<int> v; for (auto& x : v) {}", "for (const auto& x : v)": "vector<int> v; for (const auto& x : v) {}",
     "Point operator+(Point other) const": "^struct P2 { int x = 0; P2 operator+(P2 other) const { return other; } };", "1 << 40": "long x = 1 << 40;", "sizeof(void)": "long x = sizeof(void);",
@@ -931,7 +935,7 @@ def check_command_line(cplus, workdir):
         (["check", g, str(other)], 2, "only one source file can be given"), (["check", g, "--nope"], 2, "unknown option '--nope'"),
         (["check", g, "-o", "x"], 2, "-o is only used with `cplus build`"), (["build", g, "-o"], 2, "-o needs an output path"),
         (["run", g, "--emit-llvm"], 2, "--emit-llvm is only used with `cplus build`"), (["build", g, "--", "a"], 2, "'--' is only used with `cplus run`"),
-        (["build", g, "-l"], 2, "-l needs a library name"), (["build", g, "-L"], 2, "-L needs a directory"),
+        (["build", g, "-l"], 2, "-l needs a library name"), (["build", g, "-L"], 2, "-L needs a directory"), (["build", g, "-I"], 2, "-I needs a directory"),
         (["run", g, "one", "two"], 2, "to pass arguments to the program, put them after `--`"), (["build", g, "-O2"], 2, "write -O"),
         (["build", g, "-g"], 2, "'-g' is not an option of cplus"), (["build", g, "-fsanitize=thread"], 2, "is not an option of cplus"),
         (["build", g, "--debug", "--race"], 2, "--debug and --race cannot be used together"), (["explain", "a", "b"], 2, "explain takes one topic"),
@@ -960,6 +964,8 @@ def check_command_line(cplus, workdir):
     # What a machine without these would report, by pretending.
     c_struct = workdir / "c_struct.cplus"
     c_struct.write_text('extern "C" { struct ldiv_t { long quot; long rem; }; ldiv_t ldiv(long a, long b); }\nint main() { return 0; }\n')
+    c_header = workdir / "c_header.cplus"
+    c_header.write_text("import <stdio.h>;\nint main() { return 0; }\n")
     pretending = [
         (["build", str(c_struct), "-o", str(workdir / "out")], "CPLUS_TARGET_FOR_TESTS", "i686-unknown-linux-gnu", "this compiler does not support passing structs by value to C functions such as 'ldiv'"),
         (["build", g, "--race"], "CPLUS_NO_SANITIZERS_FOR_TESTS", "1", "--race needs ThreadSanitizer"),
@@ -969,6 +975,8 @@ def check_command_line(cplus, workdir):
         (["build", g, "-o", str(workdir / "out")], "CPLUS_TARGET_FOR_TESTS", "no-such-machine", "this is about the machine"),
         (["build", g, "-o", str(workdir / "out")], "CPLUS_INVALID_IR_FOR_TESTS", "1", "this is a mistake in the compiler, and not in the program"),
         (["build", g, "-o", str(workdir / "out")], "CPLUS_NO_OBJECT_FILES_FOR_TESTS", "1", "this target cannot emit object files"),
+        (["check", str(c_header)], "CPLUS_NO_CLANG_FOR_TESTS", "1", "this compiler was built without libclang, which it reads C headers with, so it cannot import <stdio.h>"),
+        (["check", str(c_header)], "CPLUS_CLANG_FAILS_FOR_TESTS", "1", "libclang, which C+ reads C headers with, could not read <stdio.h>"),
     ]
     plain_folder = workdir / "src"  # a folder, whose name is checked as a file's would be
     plain_folder.mkdir(exist_ok=True)
@@ -1268,6 +1276,25 @@ int main() {
         expect("a place counted in bytes", found and found["diagnostics"][0]["range"]["start"] == {"line": 9, "character": 31}, found)
         code, _ = lsp.finish()
         expect("an input that ends without shutdown ends it with 1", code == 1, code)
+
+        # A header in quotes is found in the folder of the file, wherever the editor has it, and its functions have meanings.
+        with tempfile.TemporaryDirectory() as folder:
+            (pathlib.Path(folder) / "local.h").write_text("int local_twice(int x);\nint local_sum(int count, ...);\n")
+            header_uri = pathlib.Path(folder, "use.cplus").as_uri()
+            text = 'import "local.h";\nimport <stdio.h>;\nimport <header.h>;\nint main() {\n    puts("x");\n    local_sum(1, 2);\n    return local_twice(header_add(1, 2));\n}\n'
+            lsp = LspClient(cplus, env=dict(os.environ, CPATH=str(ROOT / "tests" / "c")))  # as an editor gives it no -I
+            lsp.request("initialize", {"capabilities": {}})
+            lsp.send("textDocument/didOpen", {"textDocument": {"uri": header_uri, "languageId": "cplus", "version": 1, "text": text}}, request=False)
+            found = lsp.diagnostics(header_uri)
+            errors = (found or {}).get("diagnostics", [])
+            expect("a header next to the file is read, and what C+ cannot take from it is an error where it is used", len(errors) == 1
+                   and "such as `local_sum` from \"local.h\"" in errors[0]["message"] and errors[0]["range"]["start"] == {"line": 5, "character": 4}, found)
+            answer = lsp.request("textDocument/hover", {"textDocument": {"uri": header_uri}, "position": {"line": 4, "character": 5}})
+            expect("hovering over a function from a header shows what C+ makes of it", hover(answer) == "```cplus\nextern \"C\" int puts(string? s)\n```", answer)
+            lsp.request("shutdown")
+            lsp.send("exit", request=False)
+            code, _ = lsp.finish()
+            expect("the server ends as it should", code == 0, code)
 
         # Every example, with a hover and a definition asked for at each word: no check crashes, and the names have meanings.
         lsp = LspClient(cplus)

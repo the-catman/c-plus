@@ -1,30 +1,8 @@
 // C functions for the tests of structs passed by value. A C compiler lays out each call
 // here, so calling them from C+ checks that C+ follows the platform's rules.
-#include <stdbool.h>
 #include <string.h>
 
-typedef struct { char c; } OneChar;
-typedef struct { int a; } OneInt;
-typedef struct { int a; int b; } TwoInts;
-typedef struct { int a; int b; int c; } ThreeInts;
-typedef struct { long a; long b; } TwoLongs;
-typedef struct { long a; long b; long c; } ThreeLongs;
-typedef struct { float x; } OneFloat;
-typedef struct { float x; float y; } TwoFloats;
-typedef struct { float x; float y; float z; } ThreeFloats;
-typedef struct { double x; } OneDouble;
-typedef struct { double x; double y; } TwoDoubles;
-typedef struct { double x; double y; double z; } ThreeDoubles;
-typedef struct { double x; double y; double z; double w; } FourDoubles;
-typedef struct { double a; double b; double c; double d; double e; } FiveDoubles;
-typedef struct { double x; long n; } DoubleLong;
-typedef struct { long n; double x; } LongDouble;
-typedef struct { int n; float x; } IntFloat;
-typedef struct { float x; int n; double d; } Mixed;
-typedef struct { TwoInts inner; long n; } Nested;
-typedef struct { TwoFloats a; TwoFloats b; } NestedFloats;
-typedef struct { bool flag; char c; int n; } Small;
-typedef struct { const char* text; long size; } Text;
+#include "structs.h"
 
 OneChar one_char(OneChar s) { s.c += 1; return s; }
 OneInt one_int(OneInt s) { s.a *= 2; return s; }
@@ -93,7 +71,6 @@ Text* shared_text(void) {
     t.size = 5;
     return &t;
 }
-struct Node { long value; const struct Node* next; };
 long sum_nodes(const struct Node* head) {
     long total = 0;
     for (; head; head = head->next) total += head->value;
@@ -101,19 +78,6 @@ long sum_nodes(const struct Node* head) {
 }
 
 // Arrays inside structs.
-struct Named { char name[8]; int id; };
-struct Vec3f { float v[3]; };
-struct Mat2 { double m[4]; };
-struct FloatsDouble { float f[2]; double d; };
-struct IntsDouble { int i[2]; double d; };
-struct Block { int data[100]; long tail; };
-struct Cell { int xy[2]; };
-struct Cells { struct Cell cells[2]; };
-struct Text16 { char text[16]; };
-struct Text17 { char text[17]; };
-struct FloatAndTwo { float a; float rest[2]; };
-struct FiveFloats { float v[5]; };
-
 long named_sum(struct Named n) {
     long sum = n.id;
     for (int i = 0; i < 8; i++) sum += n.name[i];

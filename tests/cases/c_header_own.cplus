@@ -1,0 +1,25 @@
+// What the program declares itself is used instead of what a header has by the same name.
+// link-c: tests/c/header.c
+// flags: -I tests/c
+import <header.h>;
+
+extern "C" {
+    string? header_greeting();  // the header's `const char*` result would be a `string`
+    struct header_list;         // a C type of the program's own, which the header's functions then use
+}
+const int HEADER_ANSWER = 7;
+int header_add(int a, int b) { return a * b; }
+
+class header_opaque {};  // not the C one: a pointer to it is passed to C as a `void*`
+
+int main() {
+    println("{} {} {}", header_greeting() ?? "none", HEADER_ANSWER, header_add(2, 3));
+    // expect: hello from C 7 6
+    auto h = header_open(5);
+    println("{}", header_value(h));
+    // expect: 5
+    header_close(h);
+    println("{}", header_sum(null));
+    // expect: 0
+    return 0;
+}

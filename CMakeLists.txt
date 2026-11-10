@@ -128,6 +128,14 @@ else()
   message(STATUS "No ThreadSanitizer in the C compiler: cplus --race will report that it is missing")
 endif()
 
+# What `import <sqlite3.h>;` reads C headers with. A compiler built without it says so when a program imports a header.
+# -DCPLUS_CLANG_LIBRARY=... picks another libclang, which must be of the same LLVM.
+find_path(CPLUS_CLANG_INCLUDE clang-c/Index.h HINTS ${LLVM_INCLUDE_DIRS} NO_DEFAULT_PATH)
+find_library(CPLUS_CLANG_LIBRARY NAMES clang-${LLVM_VERSION_MAJOR} clang HINTS ${LLVM_LIBRARY_DIRS} NO_DEFAULT_PATH)
+if(NOT (CPLUS_CLANG_INCLUDE AND CPLUS_CLANG_LIBRARY))
+  message(STATUS "No libclang for LLVM ${LLVM_PACKAGE_VERSION}: programs built with this compiler cannot import C headers")
+endif()
+
 # What `cplus explain` shows, built into the compiler.
 file(GLOB CPLUS_FEATURE_EXAMPLES CONFIGURE_DEPENDS examples/features/*.cplus)
 set(CPLUS_EMBEDDED_DOCS ${CMAKE_BINARY_DIR}/embedded_docs.cpp)
@@ -145,6 +153,7 @@ add_executable(cplus
   compiler/Format.cpp
   compiler/Index.cpp
   compiler/Lsp.cpp
+  compiler/CHeaders.cpp
   compiler/Parser.cpp
   compiler/Sema.cpp
   compiler/ConstEval.cpp
@@ -163,6 +172,11 @@ target_compile_definitions(cplus PRIVATE ${LLVM_DEFINITIONS_LIST}
   ${CPLUS_UV_DEFINITION})
 target_compile_options(cplus PRIVATE -Wall -Wextra)
 target_link_libraries(cplus PRIVATE LLVM)
+if(CPLUS_CLANG_INCLUDE AND CPLUS_CLANG_LIBRARY)
+  target_include_directories(cplus SYSTEM PRIVATE ${CPLUS_CLANG_INCLUDE})
+  target_compile_definitions(cplus PRIVATE CPLUS_HAVE_CLANG)
+  target_link_libraries(cplus PRIVATE ${CPLUS_CLANG_LIBRARY})
+endif()
 add_dependencies(cplus cplusrt)
 if(CPLUS_HAVE_ASAN)
   add_dependencies(cplus cplusrt_debug)

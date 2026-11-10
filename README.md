@@ -10,6 +10,7 @@ build/cplus run examples/bank.cplus
 ```
 
 `import http;` needs the development files of libcurl when the compiler is built, such as `libcurl4-openssl-dev` on Debian or Ubuntu.
+`import <sqlite3.h>;`, which reads a C header, needs those of libclang, such as `libclang-18-dev`.
 
 `cplus explain <topic>` prints what the language says on a topic, such as `hashmap` or `spawn`, with an example that runs.
 

@@ -1,0 +1,5 @@
+// A header name in angle brackets needs its `>`.
+import <stdio.h;
+
+int main() { return 0; }
+// error: this header's name has no '>' to end it

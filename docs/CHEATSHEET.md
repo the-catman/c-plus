@@ -62,6 +62,7 @@ long square(long n) { return n * n; }
 | Manual memory | `int* p = new int(5); delete p;`, `new Point{1, 2}`, `int* a = new int[n]; delete[] a;`. Values start as their default, and each `new`/`delete` **warns**. Turn it off with `[[allow(new_delete)]]` before a function, `[[allow(new_delete)]];` at the top of the file, or `-Wno-new-delete`. The wrong form of delete **stops the program** |
 | C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`, `void* malloc(long n);`, `double frexp(double x, int* e);`. Strings are converted at each call. Link other libraries with `-lname` |
 | C types by name | `extern "C" struct FILE;`, then `FILE* f = fopen(...)`. Only pointers to it can be used |
+| C headers | `import <sqlite3.h>;` or `import "mine.h";` (next to the program first), then its functions, structs, macro constants and enum constants by their C names. `-I dir` for another folder. A `const char*` parameter is `string?`, a `const char*` result `string`, `size_t` `long`, a function pointer `void*`. What C+ cannot take, such as `printf` or `short`, is an error that says why. The program's own declaration of a name wins |
 | C structs | `extern "C" { struct ldiv_t { long quot; long rem; }; ldiv_t ldiv(long a, long b); tm* gmtime_r(const long* t, tm* out); }`. Fields are numbers, `char`, `bool`, pointers, such structs and arrays of those, in C's order. By value or through a pointer. Before C fills one: `tm t = {};` |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)` over a vector or an array, `break`, `continue`, `?:` |
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
@@ -78,7 +79,7 @@ long square(long n) { return n * n; }
 
 | C++ habit | C+ |
 |-----------|----|
-| `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;`; C functions are declared with `extern "C"` |
+| `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;`; C headers use `import <stdio.h>;`, and C functions can be declared with `extern "C"` |
 | `let x = 1`, `var x = 1`, `function f() { }` | `auto x = 1;`, `void f() { }`: a type or `auto` always comes first |
 | `console.log(x)`, `Math.sqrt(x)` | `println("{}", x)`, `sqrt(x)` |
 | `typedef`, `using`, `inline`, `goto`, `register`, `volatile`, `mutable`, `explicit`, `friend`, `union` | left out, and each says what to write instead. `goto` is a loop or a function, and `volatile` is a `Mutex` |
@@ -133,13 +134,13 @@ long square(long n) { return n * n; }
 | `virtual ~Animal() {}` | optional: a destructor always runs for what the object really is |
 | `class D : public virtual B` | no virtual inheritance. A diamond holds two `B`s; use an interface, or write `d.Left::x` |
 | `(long)p`, `(int*)0x1000`, `int* p = 0;` | error. A pointer to nothing is `null`; only `reinterpret_cast` converts between a pointer and a number |
-| `#define SQLITE_TRANSIENT ((void*)-1)` | `void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);` |
+| `#define SQLITE_TRANSIENT ((void*)-1)` | `void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);`, or `import <sqlite3.h>;`, which has it |
 | `bool ok = p;` | error: write `p != null` or `bool(p)`. `if (p)` is fine |
 | `int* a, b;` | error, since `b` would be a plain `int`. Write `int* a, * b;` or two declarations |
 | `int*? p` | error: a pointer can already be null; write `int*` |
 | `println("{}", charPtr)` | error: write `string(p)` for the text or `(void*)p` for the address |
 | `&v[0]`, `s.data()` | pointers into vectors and strings are planned; `&a[0]` and `a.data()` work on an array |
-| `std::sqrt(x)`, `#include <cmath>`, `M_PI` | `sqrt(x)`, with nothing to include. `acos(-1)` is π for now |
+| `std::sqrt(x)`, `#include <cmath>`, `M_PI` | `sqrt(x)`, with nothing to include. `M_PI` after `import <math.h>;`, or `acos(-1)` |
 | `x % 2.5` on a double | error: write `fmod(x, 2.5)` |
 | `printf("%.2f", x)`, `std::setprecision(2)` | `println("{:.2f}", x)` |
 | `std::stod(s)`, `std::stoi(s)` | planned; for now declare C's `atof` or `atoi` with `extern "C"` |
@@ -245,6 +246,7 @@ cplus build file.cplus -o app [-O] [--emit-llvm]
 cplus fmt file.cplus        # rewrite it in the one style of C+; --check only says whether it is
 cplus lsp                   # the language server an editor starts; editors/vscode is the extension for VS Code
 cplus build app.cplus -lsqlite3 -L dir   # link C libraries, as with a C compiler; `import http;` needs no -l
+cplus build app.cplus -I include         # another folder for `import <name.h>;`
 cplus build app.cplus -Wno-new-delete    # no warning for new and delete
 cplus run app.cplus --debug              # slower, but catches memory errors, with a stack trace
 cplus run app.cplus --race               # slower, but stops at memory that threads use without a lock; not with --debug

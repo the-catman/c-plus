@@ -1,0 +1,19 @@
+// C macros that are not constants C+ can use.
+import "../c/header.h";
+
+int main() {
+    int a = HEADER_TWICE(2);
+    int b = HEADER_EMPTY;
+    int c = HEADER_COUNTER;
+    int d = HEADER_ALIAS;
+    int e = HEADER_BLOCK;
+    return 0;
+}
+// error: `HEADER_TWICE` from "../c/header.h" is a C macro with arguments, which C+ cannot use
+// error: write what it does in C+, from what the header defines it as
+// error: `HEADER_EMPTY` from "../c/header.h" is a C macro with no value, which C uses with `#ifdef`
+// error: C+ has no preprocessor: leave it out
+// error: `HEADER_COUNTER` from "../c/header.h" is a C macro whose value C+ cannot work out while compiling: not a number, a string or a pointer
+// error: write its value as a constant of the program's own: `const int HEADER_COUNTER = ...;`
+// error: call `header_add`, the C function it stands for
+// error: `HEADER_BLOCK` from "../c/header.h" is a C macro whose value

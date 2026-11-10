@@ -1,0 +1,9 @@
+// A header in quotes is looked for next to the program first.
+import "no_such_header.h";
+
+int main() {
+    return no_such_function();  // not said as well: the header could have declared it
+}
+// error: cannot find the C header "no_such_header.h"
+// error: It is looked for in the folder of the program, tests/cases, then
+// not-error: there is no function named

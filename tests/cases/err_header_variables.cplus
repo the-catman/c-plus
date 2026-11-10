@@ -1,0 +1,17 @@
+// C variables, which C+ cannot use yet.
+import "../c/header.h";
+import <stdio.h>;
+import <errno.h>;
+
+int main() {
+    int n = header_counter;
+    println("{}", stderr);
+    println("{}", errno);
+    return 0;
+}
+// error: this compiler does not support C variables, such as `header_counter` from "../c/header.h", yet
+// error: call a C function that gives what it holds, if the library has one
+// error: such as `stderr` from <stdio.h>
+// error: C+ prints with `println`, to the standard output
+// error: this compiler does not support C's `errno` yet
+// error: `perror("what failed")`, from <stdio.h>, prints why

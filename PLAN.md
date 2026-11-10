@@ -52,7 +52,8 @@ C++20, built with clang. Self-hosting in C+ is a later milestone, not a requirem
 
 ### 2.4 C interop — DECIDED
 - First (project Phase 1): manual `extern` declarations for C functions and structs.
-- Later (project Phase 6): import C headers directly via libclang, Zig translate-c style.
+- Later (project Phase 6): import C headers directly via libclang, Zig translate-c style. Done as
+  `import <sqlite3.h>;` and `import "mine.h";`, C++20's header units, with `-I` for other folders. See §2.30.
 - C+ is not a superset of C. No compatibility mode.
 - Declarations are written as in C++, `extern "C" int abs(int n);` or `extern "C" { ... }`,
   but with C+ types: `long strlen(string s);`, `string? getenv(string name);`. C spellings
@@ -590,6 +591,24 @@ What §5 asks for, as built in Phase 4. Decided 2026-11-07.
   `cplus` itself there instead.
 - The protocol is read and written with LLVM's JSON, which the compiler links already.
 
+### 2.30 C header import — DECIDED
+`import <sqlite3.h>;` reads a C header with libclang, and declares in C+ what the program uses from it. A name in quotes is
+looked for next to the program first, as `#include` does, and `-I` adds folders. Decided 2026-11-10.
+- The header is translated to C+ source, an `extern "C"` block and constants, which the parser reads after the program, as it
+  reads what comes with the language. Only the names the program uses are translated, with the types they need, so a big
+  header costs little and its other names cannot clash with the program's.
+- The program's own declaration of a name, in `extern "C"` or not, is used instead of the header's. That is how a program
+  says what a header cannot, such as that a `const char*` result can be NULL.
+- C types become the C+ types of the C-functions table. A `const char*` parameter is `string?`, and a `const char*` result
+  `string`, which stops the program on NULL, as following a null pointer does; `char*` stays a pointer, since text C hands out
+  may have to be freed. A function pointer is `void*` until there are callbacks.
+- A struct is declared with its fields only when they are all C+ types and C's layout is the one C+ would give them; otherwise
+  by name, for pointers. Object-like macros are evaluated by clang as the values of declarations, and become constants when
+  they are numbers, strings or pointers.
+- What cannot be taken, such as `printf`, `short` or a macro with arguments, is left out with the reason, which the error at
+  its use says.
+- libclang is optional when the compiler is built, as libcurl is: without it, a header import is an error.
+
 ## 3. Compiler architecture
 
 ```
@@ -614,7 +633,7 @@ Open implementation questions are listed in §6.
 
 ## 4. Phases
 
-Status: Phases 0 to 5 are done. Phase 6 is under way: the formatter and the language server are done, and C header import is next. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, platforms, is next. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error

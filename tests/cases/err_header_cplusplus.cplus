@@ -1,0 +1,10 @@
+// C+ reads C headers, and not those of C++.
+import <vector>;
+import <cstdio>;
+import <cmath>;
+
+int main() { return 0; }
+// error: cannot find the C header <vector>
+// error: remove the import: C+ reads C headers, not C++ ones, and what it has of <vector> is built in
+// error: write `import <stdio.h>;`, the C header it wraps
+// error: or nothing for `sqrt` and the rest of math

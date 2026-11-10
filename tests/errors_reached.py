@@ -19,7 +19,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-REPORTS = re.compile(r"(?<![\w.:])(diags_\.error|diags\.error|fail|notYet|toolError|usageError)\(")
+REPORTS = re.compile(r"(?<![\w.:])(diags_\.error|diags\.error|fail|notYet|toolError|usageError|notImported|out\.errors\.push_back)\(")
 ADVICE = re.compile(r"\bhelp\s*\+?=\s")
 
 
@@ -31,7 +31,7 @@ def main():
     def unreached(pattern):
         total = 0
         found = []
-        for name in ["Lexer", "Parser", "Sema", "ConstEval", "main", "Explain"]:
+        for name in ["Lexer", "Parser", "Sema", "ConstEval", "main", "Explain", "CHeaders"]:
             source = (ROOT / "compiler" / f"{name}.cpp").read_text()
             lines = source.split("\n")
             regions = segments.get(name, [])

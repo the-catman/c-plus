@@ -44,6 +44,7 @@ enum class Tok {
     FloatLit,
     StringLit,
     CharLit,
+    HeaderName,  // `sqlite3.h` in `import <sqlite3.h>;`, which is read as one, as C++ does
 #define X(name, text) Kw##name,
     CPLUS_KEYWORDS(X)
 #undef X
@@ -87,6 +88,7 @@ private:
     Token lexString();
     Token lexRawString(Loc loc);  // `R"(...)"` or `R"end(...)end"`, at the quote
     Token lexChar();
+    Token lexHeaderName();  // at the `<` after `import`
     bool lexEscape(std::string& value, const char* anchor);
     Token lexIdentOrKeyword();
     char peek(size_t ahead = 0) const;

@@ -336,6 +336,72 @@ void Parser::addBuiltins() {
     if (!modules.empty()) joinModuleNames(modules);
 }
 
+// `import <sqlite3.h>;`: the header's declarations that the program uses, written in C+, are read after the program, as what
+// comes with the language is. The program's own declaration of a name is used instead of the header's.
+void Parser::addHeaders() {
+    std::vector<HeaderImport> headers;
+    NamesInProgram names;
+    std::vector<bool> braces;  // for each `{` that is open, whether it is that of `extern "C" {`
+    int depth = 0;             // of the others
+    for (size_t i = 0; i + 1 < toks_.size() && toks_[i].loc.line != 0; ++i) {
+        const Token& t = toks_[i];
+        const Tok next = toks_[i + 1].kind;
+        if (t.kind == Tok::KwImport && (next == Tok::HeaderName || next == Tok::StringLit)) {
+            if (!toks_[i + 1].text.empty()) headers.push_back(HeaderImport{toks_[i + 1].text, next == Tok::HeaderName, toks_[i + 1].loc});
+            ++i;
+            continue;
+        }
+        const bool afterExtern = i >= 2 && toks_[i - 1].kind == Tok::StringLit && toks_[i - 2].kind == Tok::KwExtern;
+        if (t.kind == Tok::LBrace) {
+            braces.push_back(afterExtern);
+            if (!afterExtern) ++depth;
+            continue;
+        }
+        if (t.kind == Tok::RBrace) {
+            if (!braces.empty()) {
+                if (!braces.back()) --depth;
+                braces.pop_back();
+            }
+            continue;
+        }
+        if ((t.kind == Tok::KwStruct || t.kind == Tok::KwClass || t.kind == Tok::KwInterface || t.kind == Tok::KwTypename) && next == Tok::Ident) {
+            bool inC = afterExtern;
+            for (bool c : braces) inC = inC || c;
+            names.types[toks_[i + 1].text] = names.types[toks_[i + 1].text] || inC;
+            ++i;
+            continue;
+        }
+        if (t.kind != Tok::Ident) continue;
+        const Tok before = i ? toks_[i - 1].kind : Tok::Eof;
+        if (before == Tok::Dot || before == Tok::Arrow || before == Tok::QuestionDot || before == Tok::ColonColon || next == Tok::ColonColon)
+            continue;  // a member, or a name in a module
+        names.used.insert(t.text);
+        const bool typeBefore = before == Tok::KwInt || before == Tok::KwLong || before == Tok::KwBool || before == Tok::KwString || before == Tok::KwVoid ||
+                                before == Tok::KwAuto || before == Tok::KwDouble || before == Tok::KwFloat || before == Tok::KwChar || before == Tok::Ident ||
+                                before == Tok::Star || before == Tok::Amp || before == Tok::Greater || before == Tok::Shr || before == Tok::Question ||
+                                before == Tok::KwConst;
+        if (depth == 0 && ((typeBefore && (next == Tok::LParen || next == Tok::Assign)) || (before == Tok::Comma && next == Tok::Assign)))
+            names.declared.insert(t.text);  // a function or a constant of its own: `int f(`, `const int A = 1, B = 2;`
+    }
+    if (headers.empty()) return;
+    HeaderTranslation found = translateHeaders(headers, headerSearch_, names);
+    if (!quietHeaders_)
+        for (const HeaderError& e : found.errors) diags_.error(e.loc, e.message, e.help, spec::CHeaders);
+    if (!found.errors.empty()) {
+        headerFailed_ = true;
+        for (const std::string& n : names.used) prog_->unreadFunctions.insert(n);
+    }
+    for (auto& [name, why] : found.notImported) prog_->notImported[name] = {why.message, why.help};
+    if (!found.source.empty()) addBuiltinSource(SourceFile("<C headers>", found.source));
+}
+
+// A type the program names that a header declares, but C+ cannot take from it, or that a header which could not be read may
+// declare.
+void Parser::rejectNotImported(const Token& name) {
+    if (auto it = prog_->notImported.find(name.text); it != prog_->notImported.end()) fail(name.loc, it->second.first, it->second.second, spec::CHeaders);
+    if (headerFailed_ && prog_->unreadFunctions.count(name.text)) throw ParseError{};  // said already: the header has an error
+}
+
 // What comes with the language is read after the program, so a `{` the program leaves open would take it in. Each one is
 // closed where the program ends, with the error that would be reported there without it.
 void Parser::closeProgramBlocks() {
@@ -358,6 +424,7 @@ void Parser::closeProgramBlocks() {
 void Parser::parseProgram(Program& prog) {
     prog_ = &prog;
     addBuiltins();
+    addHeaders();
     closeProgramBlocks();
     try {
         scanDeclarations(prog);
@@ -1294,9 +1361,11 @@ void Parser::parseTopLevel(Program& prog) {
     switch (t.kind) {
         case Tok::KwImport: {
             Loc loc = advance().loc;
-            if (check(Tok::Less) || check(Tok::StringLit))
-                fail(peek().loc, "module names are written without quotes or angle brackets",
-                     "write the name alone: `import http;`", spec::Modules);
+            if (check(Tok::HeaderName) || check(Tok::StringLit)) {  // a C header, read before the program was
+                advance();
+                expect(Tok::Semi, "after the header's name");
+                return;
+            }
             std::string path = expect(Tok::Ident, "after 'import'").text;
             while (match(Tok::Dot)) path += "." + expect(Tok::Ident, "after '.' in the module name").text;
             expect(Tok::Semi, "after the import");
@@ -1836,6 +1905,7 @@ void Parser::checkUnknownPointerType() {
     Tok after = peek(i + 1).kind;
     if (after != Tok::Assign && after != Tok::Semi && after != Tok::Comma && after != Tok::RParen) return;
     const Token& t = peek();
+    rejectNotImported(t);
     if (t.text == "uint8_t" || t.text == "int8_t")
         fail(t.loc, "unknown type '" + t.text + "'", "write `char* " + peek(i).text + "`, as a char is one byte", spec::IntegerTypes);
     if (t.text == "short" || t.text == "int16_t" || t.text == "uint16_t")
@@ -2052,6 +2122,7 @@ void Parser::checkUnknownType() {
                     isOptionalDeclRest(3);
     if (!(check(Tok::Ident) && (peek(1).kind == Tok::Ident || optional))) return;
     const Token& t = peek();
+    if (!isTypeName(t)) rejectNotImported(t);
     if (t.text == "condition_variable" && !isTypeName(t))
         notYet(t.loc, "condition variables", "to wait for a thread, write `t.wait()`. To wait for something else, check for it under a `Mutex`, in a loop");
     std::string help;
@@ -2301,6 +2372,7 @@ const Type* Parser::parseBaseType(Loc& loc) {
                 return Type::arrayOf(elem, length.i);
             }
             if (t.text == "std" && check(Tok::ColonColon)) failStd(t.loc, peek(1));
+            rejectNotImported(t);
             if (isBuiltinModule(t.text) && check(Tok::ColonColon) && peek(1).kind == Tok::Ident)
                 fail(t.loc, "'" + t.text + "::" + peek(1).text + "' is in the module '" + t.text + "', which this program does not import",
                      "write `import " + t.text + ";` at the top of the file", spec::Modules);
@@ -3486,6 +3558,7 @@ ExprPtr Parser::parseNew() {
              spec::NewDelete);
     if (!isTypeAt(0) && !check(Tok::KwAuto)) {
         const Token& t = peek();
+        if (t.kind == Tok::Ident) rejectNotImported(t);
         fail(t.loc, t.kind == Tok::Ident ? "unknown type '" + t.text + "'" : "expected a type after 'new', found " + describeToken(t),
              "new is followed by the type of the value it makes, e.g. `new int(5)` or `new Point{1, 2}`",
              spec::NewDelete);

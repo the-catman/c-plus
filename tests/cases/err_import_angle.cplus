@@ -1,3 +1,4 @@
 import <iostream>;
 int main() { return 0; }
-// error: module names are written without quotes or angle brackets
+// error: cannot find the C header <iostream>
+// error: remove the import: C+ prints with `println`, which needs nothing imported

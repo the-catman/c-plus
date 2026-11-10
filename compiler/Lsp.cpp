@@ -116,6 +116,21 @@ std::string serialize(const json::Value& value) {
     return out;
 }
 
+// The folder of a file the editor has open, for headers in quotes: `file:///work/my%20app/x.cplus` is in /work/my app. Nothing for
+// a file that is not on disk.
+std::string folderOf(const std::string& uri) {
+    if (uri.rfind("file://", 0) != 0) return "";
+    std::string path;
+    for (size_t i = 7; i < uri.size(); ++i) {
+        if (uri[i] == '%' && i + 2 < uri.size() && std::isxdigit((unsigned char)uri[i + 1]) && std::isxdigit((unsigned char)uri[i + 2])) {
+            path += (char)std::stoi(uri.substr(i + 1, 2), nullptr, 16);
+            i += 2;
+        } else path += uri[i];
+    }
+    const size_t slash = path.rfind('/');
+    return slash == std::string::npos ? "" : path.substr(0, slash == 0 ? 1 : slash);
+}
+
 std::string checkText(const std::string& uri, const std::string& text, Units units) {
     if (std::getenv("CPLUS_LSP_CRASH_FOR_TESTS")) std::abort();  // so the tests reach what a crash in the compiler does
     SourceFile file(uri, text);
@@ -124,6 +139,7 @@ std::string checkText(const std::string& uri, const std::string& text, Units uni
     diags.collectInto(&messages);
     Lexer lexer(file, diags);
     Parser parser(lexer.lexAll(), diags);
+    parser.findHeadersIn(HeaderSearch{folderOf(uri), {}});
     Program program;
     parser.parseProgram(program);
     const bool checked = !parser.gaveUp();  // otherwise what was read is too little to check, as for `cplus check`

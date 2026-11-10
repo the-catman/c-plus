@@ -1,0 +1,6 @@
+// A header with a mistake in it.
+import "../c/broken.h";
+
+int main() { return fine(1); }
+// error: C+ cannot read the C header "../c/broken.h", which has an error: tests/cases/../c/broken.h:3:
+// error: check that the header is the one meant

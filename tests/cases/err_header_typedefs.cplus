@@ -1,0 +1,22 @@
+// C+ writes the types of a C header with its own names for them.
+import "../c/header.h";
+
+int main() {
+    header_size_t a = 1;
+    header_callback b = null;
+    header_port c = 1;
+    header_size d = HEADER_SMALL;
+    header_color e = HEADER_RED;
+    header_point* f = null;
+    return 0;
+}
+// error: `header_size_t` from "../c/header.h" is C's name for `unsigned long`, which C+ writes as `long`
+// error: write `long`
+// error: `header_callback` from "../c/header.h" is C's name for a pointer to a function, which C+ writes as `void*`, as it has no callbacks yet
+// error: write `void*`, and pass `null` where C allows it
+// error: C+ has no type for `header_port` from "../c/header.h", which is C's name for `unsigned short`, a 16-bit number
+// error: `header_size` from "../c/header.h" is C's name for an enum, which C+ writes as `int`
+// error: write `int`, and its constants by name
+// error: `header_color` from "../c/header.h" is a C enum, which C+ writes as `int`
+// error: C+ calls `header_point` from "../c/header.h" by the name its typedef gives it, `header_point_t`
+// error: write `header_point_t`

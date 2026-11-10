@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "AST.h"
+#include "CHeaders.h"
 #include "ConstEval.h"
 #include "Lexer.h"
 
@@ -16,6 +17,10 @@ class Parser {
 public:
     Parser(std::vector<Token> tokens, Diagnostics& diags);
     void parseProgram(Program& prog);
+    void findHeadersIn(HeaderSearch search) { headerSearch_ = std::move(search); }  // for `import <name.h>;`
+    // For `cplus fmt`, which formats a file whether or not its headers can be found: what one that cannot be would declare is
+    // taken to be there.
+    void quietHeaders() { quietHeaders_ = true; }
     bool gaveUp() const { return gaveUp_; }  // the program was too deeply nested to read to its end
 
     // Reads a generic again with its parameters standing for `args`, which makes an ordinary
@@ -77,6 +82,11 @@ private:
     void joinThrowingTasks();
     void joinModuleNames(const std::set<std::string>& modules);
     void addBuiltinSource(const SourceFile& source);
+    void addHeaders();  // what the program uses from the C headers it imports. See CHeaders.h
+    void rejectNotImported(const Token& name);  // a name a header has, which C+ cannot take
+    HeaderSearch headerSearch_;
+    bool quietHeaders_ = false;
+    bool headerFailed_ = false;  // a header could not be read, so what it declares is not reported missing
     void parseThrowsMark(FuncDecl& fn);
     bool parseAsyncMark(Loc& at);  // `async` before a function's return type, if it is there
     StmtPtr parseTry();

@@ -1,0 +1,6 @@
+// A function whose code is in the header is not in the library, to be called.
+import "../c/header.h";
+
+int main() { return header_inline(1); }
+// error: this compiler does not support C functions whose code is in the header, such as `header_inline` from "../c/header.h", yet
+// error: write what it does in C+, from its code in the header

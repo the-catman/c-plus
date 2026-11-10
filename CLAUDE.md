@@ -1,8 +1,8 @@
 # C+
 
 C+ is a compiled language shaped like C++, with safer defaults and more built in. The
-compiler is written in C++20 and generates code through LLVM 18. Phases 1 to 5 of `PLAN.md` are in.
-Phase 6, tooling, is under way: `cplus fmt` and `cplus lsp` are in, and C header import is next.
+compiler is written in C++20 and generates code through LLVM 18. Phases 1 to 6 of `PLAN.md` are in,
+the last being tooling: `cplus fmt`, `cplus lsp` and `import <header.h>;`. Phase 7, platforms, is next.
 
 ## Where things are
 
@@ -12,7 +12,8 @@ Phase 6, tooling, is under way: `cplus fmt` and `cplus lsp` are in, and C header
 - `docs/CHEATSHEET.md` is the one-page summary of how C+ differs from C++.
 - `compiler/` is the `cplus` compiler: Lexer, Parser, Sema (type checking and definite
   assignment), Codegen (LLVM IR), `Builtins.h` (what is written in C+ itself, such as `hashmap`),
-  Format (`cplus fmt`), Lsp (`cplus lsp`) and Index (what each name means, for it), and `main.cpp` (the driver).
+  Format (`cplus fmt`), Lsp (`cplus lsp`) and Index (what each name means, for it), CHeaders (`import <name.h>;`, through
+  libclang), and `main.cpp` (the driver).
 - `runtime/` is the small C runtime linked into every program.
 - `tests/cases/` holds the language tests. `tests/run_tests.py` documents their directives.
 - `tests/fmt/` holds the formatter's tests: what `cplus fmt` must make of each `.in.cplus` is its `.out.cplus`.

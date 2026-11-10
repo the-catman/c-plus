@@ -1,37 +1,15 @@
-// A reading list kept in SQLite, a C library, using its plain C API.
+// A reading list kept in SQLite, a C library, using its plain C API from its C header.
 //
 //     cplus run examples/books.cplus -lsqlite3
 //
 // Two classes own the C handles, so they are closed by destructors, in the right order: a
 // Statement holds a reference to its Database, and SQLite cannot close a database while a
 // statement of it is still open.
-extern "C" {
-    struct sqlite3;
-    struct sqlite3_stmt;
+import <sqlite3.h>;  // its functions, its types and its result codes, which are macros in C
 
-    int sqlite3_open(string path, sqlite3** db);
-    int sqlite3_close(sqlite3* db);
-    string sqlite3_errmsg(sqlite3* db);
-    int sqlite3_prepare_v2(sqlite3* db, string sql, int length, sqlite3_stmt** statement, const char** rest);
-    int sqlite3_bind_int(sqlite3_stmt* statement, int index, int value);
-    int sqlite3_bind_double(sqlite3_stmt* statement, int index, double value);
-    int sqlite3_bind_null(sqlite3_stmt* statement, int index);
-    int sqlite3_bind_text(sqlite3_stmt* statement, int index, string text, int length, void* destructor);
-    int sqlite3_step(sqlite3_stmt* statement);
-    int sqlite3_reset(sqlite3_stmt* statement);
-    int sqlite3_finalize(sqlite3_stmt* statement);
-    int sqlite3_column_int(sqlite3_stmt* statement, int column);
-    double sqlite3_column_double(sqlite3_stmt* statement, int column);
-    int sqlite3_column_type(sqlite3_stmt* statement, int column);
-    string? sqlite3_column_text(sqlite3_stmt* statement, int column);
-}
-
-// SQLite's result codes, which are macros in C.
-const int SQLITE_OK = 0, SQLITE_NULL = 5, SQLITE_ROW = 100, SQLITE_DONE = 101;
-
-// Not a real address, but a signal: it tells SQLite to copy the text, which it must, since C+
-// frees its copy for C when the call returns.
-void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);
+// The program's own declaration is used instead of the header's. SQLite's `const unsigned char*` result would be a pointer to
+// bytes; this one is text, which is null for a NULL in the database.
+extern "C" string? sqlite3_column_text(sqlite3_stmt* statement, int column);
 
 struct Book {
     string title;
@@ -89,6 +67,7 @@ public:
     }
 
     void bindText(int index, string value) {
+        // SQLITE_TRANSIENT tells SQLite to copy the text, which it must, since C+ frees its copy for C when the call returns.
         sqlite3_bind_text(handle, index, value, -1, SQLITE_TRANSIENT);
     }
 

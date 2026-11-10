@@ -1,0 +1,149 @@
+// The same calls as c_structs_abi and c_structs_arrays, with the structs and functions imported from a C header
+// instead of declared in C+: what C+ makes of each struct must have the layout the C compiler gave it.
+// link-c: tests/c/structs.c
+import "../c/structs.h";
+
+int main() {
+    println("{} {}", one_char({'a'}), one_int({21}));
+    // expect: {c: 'b'} {a: 42}
+    println("{} {}", two_ints({1, 2}), three_ints({1, 2, 3}));
+    // expect: {a: 2, b: 1} {a: 3, b: 2, c: 1}
+    println("{} {}", two_longs({1, 2}), three_longs({1, 2, 3}));
+    // expect: {a: 2, b: 1} {a: 3, b: 2, c: 1}
+    println("{} {} {}", one_float({1.5}), two_floats({1.5, 2.5}), three_floats({1.5, 2.5, 3.5}));
+    // expect: {x: 3} {x: 2.5, y: 1.5} {x: 3.5, y: 2.5, z: 1.5}
+    println("{} {}", one_double({1.5}), two_doubles({1.5, 2.5}));
+    // expect: {x: 3} {x: 2.5, y: 1.5}
+    println("{}", three_doubles({1.5, 2.5, 3.5}));
+    // expect: {x: 3.5, y: 2.5, z: 1.5}
+    println("{}", four_doubles({1.5, 2.5, 3.5, 4.5}));
+    // expect: {x: 4.5, y: 3.5, z: 2.5, w: 1.5}
+    println("{}", five_doubles({1.5, 2.5, 3.5, 4.5, 5.5}));
+    // expect: {a: 5.5, b: 4.5, c: 3.5, d: 2.5, e: 1.5}
+    println("{} {}", double_long({1.5, 2}), long_double({2, 1.5}));
+    // expect: {x: 3, n: 4} {n: 4, x: 3}
+    println("{} {}", int_float({2, 1.5}), mixed({1.5, 2, 2.5}));
+    // expect: {n: 4, x: 3} {x: 3, n: 4, d: 5}
+    println("{}", nested({{1, 2}, 3}));
+    // expect: {inner: {a: 2, b: 1}, n: 6}
+    println("{}", nested_floats({{1.5, 2.5}, {3.5, 4.5}}));
+    // expect: {a: {x: 3.5, y: 4.5}, b: {x: 1.5, y: 2.5}}
+    println("{}", small({true, 'x', 41}));
+    // expect: {flag: false, c: 'y', n: 42}
+
+    // A pointer inside a struct, read as text.
+    const char* letters = shared_text()->text;
+    Text moved = text_of(*shared_text());
+    println("{} {} {}", string(letters), string(moved.text), moved.size);
+    // expect: hello ello 4
+
+    // When few registers are left.
+    println("{}", ints_run_out(1, 2, 3, 4, 5, {6, 7}, 8));
+    // expect: 87654321
+    println("{}", floats_run_out(1, 2, 3, 4, 5, 6, 7, {8, 9}, 1));
+    // expect: 1987654321
+    println("{}", mixed_run_out(1, 2, 3, 4, 5, {6, 7}, 8));
+    // expect: 36
+    println("{}", structs_after_registers(0, 0, 0, 0, 0, 0, 0, 0, {1, 2}, {3, 4, 5}, 6, {7}));
+    // expect: 76543210
+    println("{}", result_takes_register(1, 2, 3, 4, 5, {6, 7}));
+    // expect: {a: 15, b: 6, c: 7}
+
+    // Several kinds of value in one call, in variables and fields.
+    ThreeLongs big = {1, 2, 3};
+    TwoDoubles pair = {4, 5};
+    Small tiny = {false, 'q', 6};
+    FourDoubles four = {7, 8, 9, 10};
+    println("{}", all_kinds(big, 11, pair, 12, tiny, "A", four));
+    // expect: 143
+    println("{}", all_kinds(big, 11, pair, 12, tiny, null, four));
+    // expect: 78
+
+    // C changes its own copy, not the caller's struct.
+    println("{} {}", changes_its_copy(big), big);
+    // expect: 105 {a: 1, b: 2, c: 3}
+
+    // Through a pointer, C changes the caller's struct.
+    scale(&pair, 2);
+    println("{}", pair);
+    // expect: {x: 8, y: 10}
+    Node last = {3};
+    Node first = {4, &last};
+    println("{} {}", sum_nodes(&first), sum_nodes(null));
+    // expect: 7 0
+    arrays();
+    return 0;
+}
+
+void arrays() {
+    Named n = named_make("abc", 7);
+    println("{} {} {}", string(n.name), n.id, n.name);
+    println("{}", named_sum(n));
+    n.name[0] = 'A';
+    println("{} {}", string(n.name), named_sum(n));
+
+    Vec3f v = {{1.5f, 2, 3}};
+    println("{}", vec3f_sum(v));
+    println("{}", vec3f_scale(v, 2));
+    Mat2 m = mat2_identity();
+    println("{} {}", m, mat2_det(m));
+    m.m[1] = 2;
+    m.m[2] = 3;
+    println("{}", mat2_det(m));
+
+    println("{}", floats_double_make(1, 2, 3.5));
+    println("{}", floats_double_sum({{1, 2}, 3.5}));
+    println("{}", ints_double_make(1, 2, 3.5));
+    println("{}", ints_double_sum({{1, 2}, 3.5}));
+
+    Block b = block_make(1);
+    println("{} {} {}", b.data[99], b.tail, block_sum(b));
+    block_set(&b, 3, 1000);
+    println("{}", b.data[3]);
+    println("{}", block_sum(b));
+    Block copy = b;
+    copy.data[0] = -1;
+    println("{} {}", b.data[0], copy == b);
+
+    Cells c = cells_make(1, 2, 3, 4);
+    println("{} {}", c, cells_sum(c));
+
+    Text16 t = text16_make("0123456789abcdef");
+    println("{} {} {}", string(t.text), t.text.size(), text16_len(t));
+    Text17 l = text17_make("0123456789abcdefg");
+    println("{} {}", string(l.text), text17_len(l));
+
+    FloatAndTwo three = float_and_two_make(1, 2, 3);
+    println("{} {}", three, float_and_two_sum(three));
+    FiveFloats five = five_floats_make(1.5f);
+    println("{} {}", five, five_floats_sum(five));
+
+    Named n1 = named_make("a", 1);
+    Named n2 = named_make("b", 2);
+    Named n3 = named_make("c", 3);
+    Named n4 = named_make("d", 4);
+    println("{}", many_named(n1, n2, n3, n4));
+    println("{}", many_vec3f(v, v, v, v, v));
+}
+// expect: abc 7 ['a', 'b', 'c', '\0', '\0', '\0', '\0', '\0']
+// expect: 301
+// expect: Abc 269
+// expect: 6.5
+// expect: {v: [3, 4, 6]}
+// expect: {m: [1, 0, 0, 1]} 1
+// expect: -5
+// expect: {f: [1, 2], d: 3.5}
+// expect: 6.5
+// expect: {i: [1, 2], d: 3.5}
+// expect: 6.5
+// expect: 100 1000 6050
+// expect: 1000
+// expect: 7046
+// expect: 1 false
+// expect: {cells: [{xy: [1, 2]}, {xy: [3, 4]}]} 10
+// expect: 0123456789abcdef 16 16
+// expect: 0123456789abcdefg 17
+// expect: {a: 1, rest: [2, 3]} 6
+// expect: {v: [1.5, 1.5, 1.5, 1.5, 1.5]} 7.5
+// expect: 4321
+// expect: 10

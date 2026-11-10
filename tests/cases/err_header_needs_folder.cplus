@@ -1,0 +1,10 @@
+// A header that includes one that is in a folder of its own.
+import "../c/needs_missing.h";
+
+int main() {
+    needs_type* p = null;  // not said as well: the header could have declared it
+    return 0;
+}
+// error: C+ cannot read the C header "../c/needs_missing.h", which has an error
+// error: `pkg-config --cflags <library>` lists the folders
+// not-error: unknown type

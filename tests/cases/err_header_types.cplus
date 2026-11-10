@@ -1,0 +1,31 @@
+// A C function with a type that C+ has none for, which C+ cannot call.
+import "../c/header.h";
+
+int main() {
+    header_port_of(1);
+    header_take_short(1);
+    header_take_bits({});
+    header_take_union({});
+    header_precise();
+    header_take_packed({});
+    header_take_has_union({});
+    header_take_flexible({});
+    header_take_unnamed_type({});
+    header_take_aligned({});
+    header_take_empty({});
+    header_wide();
+    return 0;
+}
+// error: C+ cannot call `header_port_of` from "../c/header.h", as its result is a `header_port`, a 16-bit number, which C+ has no type for yet
+// error: a declaration of the program's own, in `extern "C" { ... }`, is used instead of the header's
+// error: C+ cannot call `header_take_short` from "../c/header.h", as its parameter `s` is a `short`, a 16-bit number
+// error: as its parameter `b` is a `struct header_bits`, a struct that C+ cannot hold, as its field `flag` is a bit field, which C+ cannot hold yet
+// error: as its parameter `e` is a `union header_either`, a union, which C+ cannot hold yet, but a pointer to one works
+// error: as its result is a `long double`, which C+ has no type for yet
+// error: as its parameter `p` is a `struct header_packed`, a struct that C+ cannot hold, as the header packs or aligns its fields in a way of its own
+// error: as its parameter `u` is a `struct header_has_union`, a struct that C+ cannot hold, as it has a struct or union inside it with no name
+// error: as its parameter `f` is a `struct header_flexible`, a struct that C+ cannot hold, as its field `items` is an `int[]`, an array with no length, which C+ cannot hold
+// error: as its parameter `u` is a `struct header_unnamed_type`, a struct that C+ cannot hold, as its field `inner` is a `struct { ... }`, a struct with no name of its own, which C+ cannot hold
+// error: as its parameter `a` is a `struct header_aligned`, a struct that C+ cannot hold, as the header packs or aligns its fields in a way of its own
+// error: as its parameter `e` is a `struct header_empty`, a struct that C+ cannot hold, as it has no fields
+// error: C+ cannot call `header_wide` from "../c/header.h", as its result is a `__int128`, a 128-bit number, which C+ has no type for yet
