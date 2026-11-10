@@ -1,0 +1,68 @@
+// http::fetch waits on the event loop, so several requests run at once on one thread, and other async work goes on meanwhile.
+import http;
+
+extern "C" string? getenv(string name);
+
+string base() { return getenv("CPLUS_TEST_HTTP") ?? "missing"; }
+string https() { return getenv("CPLUS_TEST_HTTPS") ?? "missing"; }
+string ca() { return getenv("CPLUS_TEST_CA") ?? "missing"; }
+
+async void ticks(int count) {
+    for (int i = 0; i < count; i++) await delay(10);
+    println("ticked");
+}
+
+async int main() throws {
+    http::Response r = try await http::fetch(base() + "/hello");
+    println("{} {} {} {}", r.status, r.ok, r.body, r.header("x-mixed-case") ?? "none");
+    // expect: 200 true hello yes
+
+    // Three slow ones at once take as long as one.
+    auto a = http::fetch(base() + "/slow?seconds=0.3");
+    auto b = http::fetch(base() + "/slow?seconds=0.3");
+    auto c = http::fetch(base() + "/slow?seconds=0.3");
+    auto t = ticks(3);                // goes on while they wait
+    long start = clockMs();
+    println("{} {} {}", (try await a).body, (try await b).body, (try await c).body);
+    // expect: ticked
+    // expect: finally finally finally
+    long took = clockMs() - start;
+    println("{}", took < 800);
+    // expect: true
+    await t;
+
+    http::Response sent = try await http::fetchWith({.method = "put", .url = base() + "/echo", .body = "the body",
+                                                      .headers = {{"Content-Type", "text/plain"}}});
+    println("{} {}", sent.status, sent.body.find("\"method\": \"PUT\"") >= 0 && sent.body.find("\"body\": \"the body\"") >= 0);
+    // expect: 200 true
+
+    http::Response moved = try await http::fetch(base() + "/chain/3");
+    println("{} {}", moved.body, moved.url == base() + "/chain/0");
+    // expect: the end true
+
+    http::Response missing = try await http::fetch(base() + "/status/404");
+    println("{} {}", missing.status, missing.ok);
+    // expect: 404 false
+
+    // Over TLS, with the certificate checked.
+    http::Response secure = try await http::fetchWith({.url = https() + "/hello", .caFile = ca()});
+    println("{}", secure.body);
+    // expect: hello
+    try {
+        await http::fetch(https() + "/hello");
+    } catch (http::Error e) {
+        println("{}", e.kind);
+        // expect: tls
+    }
+    return 0;
+}
+
+long clockMs() {
+    timespec t = {};
+    clock_gettime(1, &t);
+    return t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+extern "C" {
+    struct timespec { long tv_sec; long tv_nsec; };
+    int clock_gettime(int clock, timespec* t);
+}

@@ -186,8 +186,8 @@ void Parser::joinThrowingTasks() {
 void Parser::addBuiltins() {
     bool usesError = false, definesError = false, usesMap = false, definesMap = false;
     bool usesSpawn = false, usesTask = false, definesTask = false;
-    bool usesAsync = false, usesDelay = false, definesDelay = false;
-    Loc asyncLoc;
+    bool usesAsync = false, usesDelay = false, definesDelay = false, usesFetch = false;
+    Loc asyncLoc, delayLoc, fetchLoc;
     bool usesMutex = false, definesMutex = false, usesGuard = false, definesGuard = false;
     Loc spawnLoc, guardLoc;
     // A function or variable of the program with one of these names, as in `int Mutex(int x)`: a type comes before it.
@@ -224,7 +224,15 @@ void Parser::addBuiltins() {
             usesAsync = true;
             asyncLoc = toks_[i].loc;
         }
-        usesDelay = usesDelay || (k == Tok::Ident && toks_[i].text == "delay" && (i == 0 || toks_[i - 1].kind != Tok::ColonColon));
+        if (k == Tok::Ident && toks_[i].text == "delay" && (i == 0 || toks_[i - 1].kind != Tok::ColonColon) && !usesDelay) {
+            usesDelay = true;
+            delayLoc = toks_[i].loc;
+        }
+        if (k == Tok::Ident && (toks_[i].text == "fetch" || toks_[i].text == "fetchWith") && i >= 2 && toks_[i - 1].kind == Tok::ColonColon &&
+            toks_[i - 2].kind == Tok::Ident && toks_[i - 2].text == "http" && !usesFetch) {
+            usesFetch = true;
+            fetchLoc = toks_[i - 2].loc;
+        }
         usesMutex = usesMutex || (k == Tok::Ident && toks_[i].text == "Mutex");
         if (k == Tok::Ident && toks_[i].text == "LockGuard" && !usesGuard) {
             usesGuard = true;
@@ -267,7 +275,12 @@ void Parser::addBuiltins() {
         diags_.error(asyncLoc, "an async function gives a built-in class 'Task', but this program has its own",
                      "rename your class, e.g. to `MyTask`: async needs the name `Task` for the built-in one", spec::Async);
     const bool builtinDelay = usesDelay && !definesDelay && !definesTask;
-    usesAsync = usesAsync || builtinDelay;
+    const bool builtinFetch = usesFetch && modules.count("http") && !definesError;
+    if (builtinFetch && definesTask && !usesSpawn && !usesAsync)
+        diags_.error(fetchLoc, "`http::fetch` gives a built-in class 'Task', but this program has its own",
+                     "rename your class, e.g. to `MyTask`: `http::fetch` needs the name `Task` for the built-in one", spec::Async);
+    prog_->asyncLoc = usesAsync ? asyncLoc : builtinDelay ? delayLoc : fetchLoc;
+    usesAsync = usesAsync || builtinDelay || builtinFetch;
     prog_->usesAsync = usesAsync;
     bool builtinTask = (usesSpawn || usesTask || usesAsync) && !definesTask;
     usesError = usesError || builtinTask;  // what a task that fails holds
@@ -310,6 +323,10 @@ void Parser::addBuiltins() {
     }
     if (modules.count("http") && !definesError) {
         static const SourceFile builtin("<built-in>", kHttpSource);
+        addBuiltinSource(builtin);
+    }
+    if (builtinFetch && !definesTask) {
+        static const SourceFile builtin("<built-in>", kHttpFetchSource);
         addBuiltinSource(builtin);
     }
     if (modules.count("reflect")) {

@@ -989,7 +989,8 @@ struct Program {
     std::set<std::string> unreadFunctions;  // what could not be read because of an error that has been reported
     bool usesThreads = false;     // it has a `spawn`: printing then has to keep lines together, and main to wait
     bool linksThreads = false;    // it uses the part of the runtime that is written on the system's threads
-    bool usesAsync = false;       // it has `async` or `await`: the runtime's event loop is linked, on libuv
+    bool usesAsync = false;
+    Loc asyncLoc;  // the first thing that needs async: `async`, `await`, `delay` or `http::fetch`       // it has `async` or `await`: the runtime's event loop is linked, on libuv
 
     // Whether this program can ask about types while it runs, which only json and reflect do.
     bool usesDescriptors() const { return imported("json") || imported("reflect"); }

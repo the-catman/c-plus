@@ -16,6 +16,11 @@ int main() throws {
     println("{} {}", missing.status, missing.ok);
     // expect: 404 false
 
+    // http::fetch is the async one, for `await` in an async function. A plain function waits for it with wait().
+    http::Response fetched = try http::fetch(server + "/hello").wait();
+    println("{}", fetched.body);
+    // expect: hello
+
     try http::post(server + "/echo", "{\"a\": 1}", "application/json");
     try http::send({.method = "PUT", .url = server + "/echo", .headers = {{"Authorization", "Bearer token"}}, .timeout = 5});
 

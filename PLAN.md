@@ -561,6 +561,7 @@ Decided 2026-11-05.
 - Certificates are always checked, and there is no way to turn it off: `caFile` trusts a server of one's own.
 - Redirects are followed by the runtime, as `fetch` follows them, rather than by libcurl. libcurl would send a PUT again after a 303.
 - WebSockets speak the protocol themselves, on the connection libcurl makes. `curl_ws_*` is left out of many builds of libcurl, such as those of Debian and Ubuntu.
+- `http::fetch(url)` and `http::fetchWith(request)` are the async requests, decided 2026-11-10, as `connect` and `connectWith` are for WebSockets. A single `fetch(request)` would make the commonest request the longest to write, and an async twin of each function would double the module. They run on libcurl's multi interface, on the thread's loop, and fail as `send` does.
 
 ### 2.27 Documentation for models — DECIDED
 What §5 asks for, as built in Phase 4. Decided 2026-11-07.
@@ -593,7 +594,7 @@ Open implementation questions are listed in §6.
 
 ## 4. Phases
 
-Status: Phases 0 to 4 are done, and Phase 5 is next. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+Status: Phases 0 to 5 are done, and Phase 6 is next. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error

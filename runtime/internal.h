@@ -88,6 +88,12 @@ void cplus_task_finish(task_state* task);
 void cplus_task_free(task_state* task);
 void cplus_task_hold(task_state* task);
 
+// From loop.c, for what finishes tasks on the loop, as fetch.c does.
+void cplus_task_bind(task_state* task);  // the task is finished by this thread's loop
+void* cplus_loop_uv(void);               // this thread's uv_loop_t
+void cplus_loop_hold(void);              // the loop keeps going until as many releases come, for something not yet done
+void cplus_loop_release(void);
+
 // Where the descriptor of a class is, in the vtable of each of its parts.
 #define CPLUS_VTABLE_TYPE 4
 

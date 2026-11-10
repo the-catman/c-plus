@@ -1,8 +1,8 @@
 # C+
 
 C+ is a compiled language shaped like C++, with safer defaults and more built in. The
-compiler is written in C++20 and generates code through LLVM 18. Phases 1 to 4 of `PLAN.md` are in.
-Next is Phase 5, async.
+compiler is written in C++20 and generates code through LLVM 18. Phases 1 to 5 of `PLAN.md` are in.
+Next is Phase 6, tooling.
 
 ## Where things are
 

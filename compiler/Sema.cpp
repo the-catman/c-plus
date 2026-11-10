@@ -1268,12 +1268,8 @@ void Sema::check(Program& program) {
 
 #ifndef CPLUS_UV_LINK
     if (program.usesAsync)
-        for (auto& fn : program.funcs)
-            if (fn->isAsync && fn->nameLoc.line != 0) {
-                diags_.error(fn->asyncLoc, "this compiler was built without libuv, which async is written on",
-                             "install the development files of libuv, such as `libuv1-dev` on Debian or Ubuntu, then run cmake and build again", spec::Async);
-                break;
-            }
+        diags_.error(program.asyncLoc, "this compiler was built without libuv, which async is written on",
+                     "install the development files of libuv, such as `libuv1-dev` on Debian or Ubuntu, then run cmake and build again", spec::Async);
 #endif
     adoptTypes();
 
@@ -4840,11 +4836,6 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         std::string help;
         const std::string& name = call.callee;
         std::string stem = name.size() > 3 ? name.substr(0, name.size() - 1) : "";
-        if (name == "http::fetch") {
-            diags_.error(nameLoc, "this compiler does not support `http::fetch` yet",
-                         "`try http::get(url)` does the same, waiting for the answer", spec::Http);
-            return Type::error();
-        }
         if (name == "sleep" || name == "usleep" || name == "nanosleep" || name == "Sleep" || name == "setTimeout") {
             const bool inAsync = fn_ && fn_->isAsync;
             diags_.error(nameLoc, name == "setTimeout" ? std::string("C+ has no `setTimeout`, as an async function can wait, then do the work")

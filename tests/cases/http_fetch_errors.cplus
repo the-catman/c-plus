@@ -1,0 +1,65 @@
+// http::fetch fails as http::send does, with the same kinds, whether the request cannot even start or fails on the way.
+import http;
+
+extern "C" string? getenv(string name);
+
+string base() { return getenv("CPLUS_TEST_HTTP") ?? "missing"; }
+
+async string kindOf(http::Request request) {
+    try {
+        http::Response r = try await http::fetchWith(request);
+        return "got " + to_string(r.status);
+    } catch (http::Error e) {
+        return e.kind + ": " + e.what();
+    } catch (Error e) {
+        return "another error: " + e.what();
+    }
+}
+
+async int main() {
+    http::Request request;
+    request.url = "ftp://example.com/file";
+    println("{}", await kindOf(request));
+    // expect: bad-request: a URL for http must start with http:// or https://
+    request.url = "http://127.0.0.1:1/?secret=1";
+    println("{}", (await kindOf(request)).starts_with("connect: could not connect to the server"));
+    // expect: true
+    request.url = base() + "/hello";
+    request.method = "TWO WORDS";
+    println("{}", await kindOf(request));
+    // expect: bad-request: `TWO WORDS` cannot be a method: use a word like GET or POST
+    request.method = "GET";
+    request.headers["X-Bad"] = "line\nbreak";
+    println("{}", (await kindOf(request)).starts_with("bad-request:"));
+    // expect: true
+    request.headers = {};
+    request.url = base() + "/slow?seconds=2";
+    request.timeout = 0.2;
+    println("{}", await kindOf(request));
+    // expect: timeout: this took longer than its timeout of 0.2 seconds
+    request.timeout = 30;
+    request.url = base() + "/big?bytes=2000";
+    request.maxBytes = 10;
+    println("{}", (await kindOf(request)).starts_with("too-large: the response is larger than maxBytes, which is 10 bytes"));
+    // expect: true
+    request.maxBytes = 1000000;
+    request.url = base() + "/loop";
+    println("{}", await kindOf(request));
+    // expect: redirect: the server redirected this more than 20 times
+    request.url = base() + "/redirect/302?to=ftp://example.com/";
+    println("{}", (await kindOf(request)).starts_with("redirect: the server redirected this to something other than http or https"));
+    // expect: true
+
+    // Failing ones at once, among ones that do not fail.
+    vector<Task<string>> all;
+    for (int i = 0; i < 6; i++) {
+        http::Request r;
+        r.url = i % 2 == 0 ? base() + "/hello" : "http://127.0.0.1:1/";
+        all.push_back(kindOf(r));
+    }
+    string kinds;
+    for (auto t : all) kinds += (await t).substr(0, 7) + " ";
+    println("{}", kinds);
+    // expect: got 200 connect got 200 connect got 200 connect 
+    return 0;
+}

@@ -48,7 +48,7 @@ long square(long n) { return n * n; }
 | Hash maps | `hashmap<string, int> m = {{"a", 1}};` is a **value**, copied like a vector, that keeps the order entries were added in. `m["b"] = 2`, `m["b"]++`, `m[k].push_back(x)`. `m[k]` adds a missing key with a default value, as in C++, or **stops the program** if `V` has none. `m.at(k)` (**stops the program** if missing), `m.get(k)` (a `V?`), `m.contains(k)`, `m.count(k)`, `m.insert({k, v})` (keeps what is there), `m.erase(k)`, `m.size()`, `m.empty()`, `m.clear()`, `m.keys()`, `m.values()`. `for (auto e : m)` with `e.first`, `e.second`. Prints as `{"a": 1}`. A key is a number, `char`, `bool`, string, pointer or class reference, or an optional, vector, array or struct of those |
 | JSON | `import json;`. `json::stringify(x)`, `json::pretty(x)`, `User u = try json::parse<User>(text);`, for structs, classes, vectors, arrays, optionals, hashmaps and what they hold. Public fields only. A missing key keeps the field's default, and a key that is not a field is left out. `catch (json::Error e)` has `e.line`, `e.column` and `e.what()` |
 | Any JSON | `json::Value doc = try json::parse<json::Value>(text);`, then `doc.get("a")?.at(0)?.text() ?? "none"`. `isNull()`, `number()`, `whole()`, `boolean()`, `keys()`, `items()`, `size()`. `json::object()`, `json::array()`, `v.set(k, json::of(x))`, `v.push(json::of(x))` |
-| HTTP | `import http;`. `http::Response r = try http::get(url);`, then `r.status`, `r.ok`, `r.body`, `r.header("content-type")`. `try http::post(url, body, "application/json")`, `put`, `patch`, `delete`. `try http::send({.method = "HEAD", .url = url, .headers = {{"Authorization", token}}, .timeout = 5});`. A 404 is an answer, not an error. Other failures: `catch (http::Error e)`, with `e.kind` (`"timeout"`, `"connect"`, `"tls"`, ...) and `e.what()`. `http::encode(text)` for a part of a URL |
+| HTTP | `import http;`. `http::Response r = try http::get(url);`, then `r.status`, `r.ok`, `r.body`, `r.header("content-type")`. `try http::post(url, body, "application/json")`, `put`, `patch`, `delete`. `try http::send({.method = "HEAD", .url = url, .headers = {{"Authorization", token}}, .timeout = 5});`. A 404 is an answer, not an error. Other failures: `catch (http::Error e)`, with `e.kind` (`"timeout"`, `"connect"`, `"tls"`, ...) and `e.what()`. `http::encode(text)` for a part of a URL. Async: `try await http::fetch(url)`, `http::fetchWith(request)` |
 | WebSockets | `http::WebSocket ws = try http::connect("wss://...");`, `try ws.send(text);`, `try ws.sendBinary(bytes);`, `while (auto m = try ws.receive())` with `m.data` and `m.isBinary`, null once closed. `ws.close()`, `ws.closeCode()`, `ws.timeout = 5;`. `http::connectWith(request)` for headers |
 | Reflection | `import reflect;`. `auto t = reflect::type<User>();` or `reflect::of(x)`, then `t.name()`, `t.kind()`, `t.size()`, `t.elem()`, and `for (auto f : t.fields())` with `f.name`, `f.offset`, `f.type`, `f.isPublic` |
 | Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` a number or a constant. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
@@ -182,9 +182,9 @@ long square(long n) { return n * n; }
 | `nlohmann::json`, `JSON.parse(text)`, `JSON.stringify(x)` | `import json;`, then `try json::parse<User>(text)` or `try json::parse<json::Value>(text)`, and `json::stringify(x)` |
 | `NLOHMANN_DEFINE_TYPE_...`, `to_json`, `from_json` | not needed: the compiler knows the fields of every type |
 | `struct json::Mine { ... };`, `namespace json { ... }` | a module's names are its own, and a program cannot add to them: `struct Mine { ... };` |
-| `fetch(url)`, `await fetch(url)`, `curl_easy_perform` | `import http;`, then `try http::get(url)`, which waits for the answer. `http::fetch` is planned, with async |
+| `fetch(url)`, `await fetch(url)`, `curl_easy_perform` | `import http;`, then `try await http::fetch(url)` in an async function, or `try http::get(url)`, which waits for the answer |
 | `res.text()`, `res.json()`, `res.headers.get(x)` | `r.body`, `try json::parse<T>(r.body)`, `r.header(x)` |
-| `http::get(url, options)`, `fetch(url, {method: "PUT"})` | one function per name for now: `try http::send({.method = "PUT", .url = url})` |
+| `http::get(url, options)`, `fetch(url, {method: "PUT"})` | one function per name for now: `try http::send({.method = "PUT", .url = url})`, or `try await http::fetchWith({.method = "PUT", .url = url})` |
 | `new WebSocket(url)`, `ws.onmessage = ...` | `try http::connect(url)`, then a loop over `try ws.receive()`, which waits |
 | `curl -k`, `verify=False` | certificates are always checked. Trust a server's own with `.caFile = "its-certificate.pem"` |
 | `obj["a"]["b"]` on JSON | `obj.get("a")?.get("b")`, since any step may not be there |
@@ -219,7 +219,7 @@ long square(long n) { return n * n; }
 | Operators | operator overloading with C++ syntax, after function overloading |
 | Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments |
 | Modules | your own, `import net.server;` |
-| HTTP | `http::fetch`, with async; a body in pieces instead of all at once; keeping cookies |
+| HTTP | a body in pieces instead of all at once; keeping cookies; async WebSockets |
 | JSON | other names for fields, marking a field to leave out |
 | Reflection | reading a field through its `reflect::Field`, methods |
 | Memory | pointers into vectors and strings |

@@ -20,6 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "http.h"
 #include "internal.h"
 
 // As many as JavaScript's fetch follows.
@@ -150,16 +151,9 @@ static bool curl_failure(CURLcode rc, const char* error_text, double timeout, cp
 
 // ---- HTTP ------------------------------------------------------------------
 
-typedef struct {
-    cplus_string* body;
-    cplus_string* headers;
-    int64_t max_bytes;
-    bool too_large;
-} exchange;
-
 // Counts what the program gets, so a small compressed answer cannot grow into all of memory.
 static size_t on_body(char* data, size_t size, size_t count, void* user) {
-    exchange* x = user;
+    http_exchange* x = user;
     size_t n = size * count;
     if ((int64_t)n > x->max_bytes - x->body->length) {
         x->too_large = true;
@@ -174,7 +168,7 @@ static bool is_blank(char c) { return c == ' ' || c == '\t'; }
 // Keeps the headers of the last response as `name:value` lines, for http::__parseHeaders. libcurl calls this for each line,
 // and for each response on the way: `HTTP/` starts another.
 static size_t on_header(char* data, size_t size, size_t count, void* user) {
-    exchange* x = user;
+    http_exchange* x = user;
     size_t total = size * count, n = total;
     if (n >= 5 && memcmp(data, "HTTP/", 5) == 0) {
         x->headers->length = 0;
@@ -286,111 +280,137 @@ static bool is_followed_status(long status) { return status == 301 || status == 
 
 // Redirects are followed here, rather than by libcurl, since libcurl keeps a method it was told by name, so a PUT
 // answered with a 303 would be sent again, to the place that was only meant to be read.
+bool http_request_begin(http_request* r, const cplus_string* method, const cplus_string* url, const cplus_string* headers, const cplus_string* body,
+                        double timeout, int64_t max_bytes, bool follow, const cplus_string* ca_file, int32_t* status, cplus_string* out_body,
+                        cplus_string* out_url, cplus_string* out_headers, cplus_string* kind, cplus_string* problem) {
+    pthread_once(&curl_once, start_curl);
+    memset(r, 0, sizeof *r);
+    r->headers = headers;
+    r->body = body;
+    r->timeout = timeout;
+    r->follow = follow;
+    r->x = (http_exchange){out_body, out_headers, max_bytes, false};
+    r->status = status;
+    r->out_url = out_url;
+    r->kind = kind;
+    r->problem = problem;
+    r->current = c_text(url);
+    if (!r->current) return fail_as("bad-request", kind, problem, "this URL has a null byte in it");
+    r->ca = c_text(ca_file);
+    if (!r->ca) return fail_as("bad-request", kind, problem, "caFile has a null byte in it");
+    r->verb = c_text(method);
+    if (!r->verb) return fail_as("bad-request", kind, problem, "the method has a null byte in it");
+    if (!is_http_url(r->current)) return fail_as("bad-request", kind, problem, "a URL for http must start with http:// or https://");
+    r->deadline = deadline_after(timeout);
+    return true;
+}
+
+void http_request_setup(http_request* r, CURL* handle) {
+    r->error_text[0] = 0;
+    r->x.body->length = 0;
+    r->x.headers->length = 0;
+    curl_easy_reset(handle);  // this keeps open connections
+    set_shared_options(handle, r->error_text, r->ca);
+    curl_easy_setopt(handle, CURLOPT_URL, r->current);
+    curl_easy_setopt(handle, CURLOPT_USERAGENT, "cplus");
+    curl_easy_setopt(handle, CURLOPT_ACCEPT_ENCODING, "");  // whatever libcurl can decode
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, on_body);
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, &r->x);
+    curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, on_header);
+    curl_easy_setopt(handle, CURLOPT_HEADERDATA, &r->x);
+    if (r->deadline != NO_LIMIT) {
+        int64_t left = r->deadline - now_ms();
+        curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, left < 1 ? 1L : (long)left);
+    }
+    const char* verb = r->verb;
+    bool sends_body = !r->body_gone && (r->body->length > 0 || strcmp(verb, "POST") == 0 || strcmp(verb, "PUT") == 0 || strcmp(verb, "PATCH") == 0);
+    if (strcmp(verb, "HEAD") == 0) {
+        curl_easy_setopt(handle, CURLOPT_NOBODY, 1L);
+    } else if (sends_body) {
+        curl_easy_setopt(handle, CURLOPT_POST, 1L);
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)r->body->length);
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, r->body->length > 0 ? r->body->data : "");  // without any, libcurl would read standard input
+        curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, verb);
+    } else {
+        curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L);
+        curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, verb);
+    }
+    curl_slist_free_all(r->list);
+    r->list = request_headers(r->headers, sends_body, r->left_origin, r->body_gone);
+    curl_easy_setopt(handle, CURLOPT_HTTPHEADER, r->list);
+}
+
+int http_request_after(http_request* r, CURL* handle, CURLcode rc) {
+    cplus_string* kind = r->kind;
+    cplus_string* problem = r->problem;
+    if (r->x.too_large) {
+        fail_as("too-large", kind, problem, "the response is larger than maxBytes, which is %lld bytes: raise maxBytes if you expected this", (long long)r->x.max_bytes);
+        return HTTP_FAILED;
+    }
+    if (rc == CURLE_URL_MALFORMAT && r->redirects > 0) {  // not the program's mistake, but the server's
+        fail_as("redirect", kind, problem, "the server redirected this to a URL that is not valid");
+        return HTTP_FAILED;
+    }
+    if (rc != CURLE_OK) {
+        curl_failure(rc, r->error_text, r->timeout, kind, problem);
+        return HTTP_FAILED;
+    }
+    long code = 0;
+    char* next = NULL;
+    curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &code);
+    curl_easy_getinfo(handle, CURLINFO_REDIRECT_URL, &next);
+    if (!r->follow || !next || !is_followed_status(code)) {
+        char* final_url = NULL;
+        curl_easy_getinfo(handle, CURLINFO_EFFECTIVE_URL, &final_url);
+        if (final_url) cplus_str_append(r->out_url, final_url, (int64_t)strlen(final_url));
+        *r->status = (int32_t)code;
+        return HTTP_ANSWERED;
+    }
+    if (r->redirects == MAX_REDIRECTS) {
+        fail_as("redirect", kind, problem, "the server redirected this more than %d times", MAX_REDIRECTS);
+        return HTTP_FAILED;
+    }
+    if (!is_http_url(next)) {
+        fail_as("redirect", kind, problem, "the server redirected this to something other than http or https");
+        return HTTP_FAILED;
+    }
+    r->redirects++;
+    r->left_origin = r->left_origin || !same_origin(r->current, next);
+    if (redirect_becomes_get(code, r->verb)) {
+        free(r->verb);
+        r->verb = cplus_malloc(4);
+        memcpy(r->verb, "GET", 4);
+        r->body_gone = true;
+    }
+    char* copy = cplus_malloc(strlen(next) + 1);  // `next` belongs to the handle, which the next round resets
+    strcpy(copy, next);
+    free(r->current);
+    r->current = copy;
+    return HTTP_REDIRECTED;
+}
+
+void http_request_end(http_request* r) {
+    curl_slist_free_all(r->list);
+    free(r->verb);
+    free(r->ca);
+    free(r->current);
+}
+
 bool cplus_http_send(const cplus_string* method, const cplus_string* url, const cplus_string* headers, const cplus_string* body,
                      double timeout, int64_t max_bytes, bool follow, const cplus_string* ca_file, int32_t* status,
                      cplus_string* out_body, cplus_string* out_url, cplus_string* out_headers, cplus_string* kind, cplus_string* problem) {
-    char* current = c_text(url);
-    if (!current) return fail_as("bad-request", kind, problem, "this URL has a null byte in it");
-    char* ca = c_text(ca_file);
-    if (!ca) {
-        free(current);
-        return fail_as("bad-request", kind, problem, "caFile has a null byte in it");
-    }
-    char* verb = c_text(method);
-    bool done = false;
-    if (!verb) {
-        fail_as("bad-request", kind, problem, "the method has a null byte in it");
-    } else if (!is_http_url(current)) {
-        fail_as("bad-request", kind, problem, "a URL for http must start with http:// or https://");
-    } else {
+    http_request r;
+    int state = HTTP_FAILED;
+    if (http_request_begin(&r, method, url, headers, body, timeout, max_bytes, follow, ca_file, status, out_body, out_url, out_headers, kind, problem)) {
         CURL* handle = thread_handle();
-        exchange x = {out_body, out_headers, max_bytes, false};
-        int64_t deadline = deadline_after(timeout);
-        bool left_origin = false, body_gone = false;
-        for (int redirects = 0;; redirects++) {
-            char error_text[CURL_ERROR_SIZE] = "";
-            out_body->length = 0;
-            out_headers->length = 0;
-            curl_easy_reset(handle);  // this keeps open connections
-            set_shared_options(handle, error_text, ca);
-            curl_easy_setopt(handle, CURLOPT_URL, current);
-            curl_easy_setopt(handle, CURLOPT_USERAGENT, "cplus");
-            curl_easy_setopt(handle, CURLOPT_ACCEPT_ENCODING, "");  // whatever libcurl can decode
-            curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, on_body);
-            curl_easy_setopt(handle, CURLOPT_WRITEDATA, &x);
-            curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, on_header);
-            curl_easy_setopt(handle, CURLOPT_HEADERDATA, &x);
-            if (deadline != NO_LIMIT) {
-                int64_t left = deadline - now_ms();
-                curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, left < 1 ? 1L : (long)left);
-            }
-            bool sends_body = !body_gone && (body->length > 0 || strcmp(verb, "POST") == 0 || strcmp(verb, "PUT") == 0 || strcmp(verb, "PATCH") == 0);
-            if (strcmp(verb, "HEAD") == 0) {
-                curl_easy_setopt(handle, CURLOPT_NOBODY, 1L);
-            } else if (sends_body) {
-                curl_easy_setopt(handle, CURLOPT_POST, 1L);
-                curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)body->length);
-                curl_easy_setopt(handle, CURLOPT_POSTFIELDS, body->length > 0 ? body->data : "");  // without any, libcurl would read standard input
-                curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, verb);
-            } else {
-                curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L);
-                curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, verb);
-            }
-            struct curl_slist* list = request_headers(headers, sends_body, left_origin, body_gone);
-            curl_easy_setopt(handle, CURLOPT_HTTPHEADER, list);
-            CURLcode rc = curl_easy_perform(handle);
-            curl_easy_setopt(handle, CURLOPT_HTTPHEADER, NULL);
-            curl_slist_free_all(list);
-            if (x.too_large) {
-                fail_as("too-large", kind, problem, "the response is larger than maxBytes, which is %lld bytes: raise maxBytes if you expected this", (long long)max_bytes);
-                break;
-            }
-            if (rc == CURLE_URL_MALFORMAT && redirects > 0) {  // not the program's mistake, but the server's
-                fail_as("redirect", kind, problem, "the server redirected this to a URL that is not valid");
-                break;
-            }
-            if (rc != CURLE_OK) {
-                curl_failure(rc, error_text, timeout, kind, problem);
-                break;
-            }
-            long code = 0;
-            char* next = NULL;
-            curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &code);
-            curl_easy_getinfo(handle, CURLINFO_REDIRECT_URL, &next);
-            if (!follow || !next || !is_followed_status(code)) {
-                char* final_url = NULL;
-                curl_easy_getinfo(handle, CURLINFO_EFFECTIVE_URL, &final_url);
-                if (final_url) cplus_str_append(out_url, final_url, (int64_t)strlen(final_url));
-                *status = (int32_t)code;
-                done = true;
-                break;
-            }
-            if (redirects == MAX_REDIRECTS) {
-                fail_as("redirect", kind, problem, "the server redirected this more than %d times", MAX_REDIRECTS);
-                break;
-            }
-            if (!is_http_url(next)) {
-                fail_as("redirect", kind, problem, "the server redirected this to something other than http or https");
-                break;
-            }
-            left_origin = left_origin || !same_origin(current, next);
-            if (redirect_becomes_get(code, verb)) {
-                free(verb);
-                verb = cplus_malloc(4);
-                memcpy(verb, "GET", 4);
-                body_gone = true;
-            }
-            char* copy = cplus_malloc(strlen(next) + 1);
-            strcpy(copy, next);
-            free(current);
-            current = copy;
-        }
+        do {
+            http_request_setup(&r, handle);
+            state = http_request_after(&r, handle, curl_easy_perform(handle));
+        } while (state == HTTP_REDIRECTED);
         curl_easy_reset(handle);  // it stays open after this, and must not go on pointing at what is on this stack
     }
-    free(verb);
-    free(ca);
-    free(current);
-    return done;
+    http_request_end(&r);
+    return state == HTTP_ANSWERED;
 }
 
 // ---- WebSockets: RFC 6455 --------------------------------------------------

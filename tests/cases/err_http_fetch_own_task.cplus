@@ -1,0 +1,8 @@
+import http;
+struct Task { string title; };
+int main() throws {
+    auto r = try http::fetch("http://localhost/").wait();
+    return 0;
+}
+// error: `http::fetch` gives a built-in class 'Task', but this program has its own
+// error: rename your class, e.g. to `MyTask`: `http::fetch` needs the name `Task` for the built-in one

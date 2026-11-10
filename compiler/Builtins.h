@@ -696,6 +696,44 @@ http::WebSocket http::connect(string url) throws {
 }
 )cplus";
 
+// http::fetch, with what kHttpSource has. The C side is runtime/fetch.c, on the thread's event loop.
+inline constexpr const char* kHttpFetchSource = R"cplus(
+extern "C" {
+    void cplus_http_fetch(void* method, void* url, void* headers, void* body, double timeout, long maxBytes, bool follow, void* caFile,
+                          int* status, void* outBody, void* outUrl, void* outHeaders, void* kind, void* problem, bool* ok, void* task);
+}
+
+// As http::send, but it waits on the event loop, so the thread goes on with other async work meanwhile. What it hands the
+// runtime is in this function's frame, which stays where it is until the request is over.
+async http::Response http::fetchWith(http::Request request) throws {
+    string method;
+    for (char c : request.method) method += toupper(c);
+    if (!http::__isToken(method))
+        throw http::Error(format("`{}` cannot be a method: use a word like GET or POST", request.method), "bad-request", request.url);
+    string lines = try http::__headerLines(request, false);
+    http::Response response;
+    string rawHeaders;
+    string kind;
+    string problem;
+    bool ok = false;
+    Task<void> done = Task<void>();
+    cplus_http_fetch((void*)&method, (void*)&request.url, (void*)&lines, (void*)&request.body, request.timeout, request.maxBytes,
+                     request.followRedirects, (void*)&request.caFile, &response.status, (void*)&response.body, (void*)&response.url,
+                     (void*)&rawHeaders, (void*)&kind, (void*)&problem, &ok, done.state_);
+    await done;
+    if (!ok) throw http::Error(problem, kind, request.url);
+    response.ok = response.status >= 200 && response.status <= 299;
+    response.headers = http::__parseHeaders(rawHeaders);
+    return response;
+}
+
+async http::Response http::fetch(string url) throws {
+    http::Request request;
+    request.url = url;
+    return try await http::fetchWith(request);
+}
+)cplus";
+
 inline constexpr const char* kReflectSource = R"cplus(
 extern "C" {
     string cplus_type_name(void* type);

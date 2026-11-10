@@ -45,6 +45,10 @@ if(CPLUS_UV_INCLUDE AND CPLUS_UV_LIBRARY)
 else()
   message(STATUS "No libuv: programs built with this compiler cannot use async")
 endif()
+# http::fetch needs both.
+if(CPLUS_CURL_DEFINITION AND CPLUS_UV_DEFINITION)
+  list(APPEND CPLUS_RUNTIME_SOURCES runtime/fetch.c)
+endif()
 
 # Runtime linked into every C+ program.
 add_library(cplusrt STATIC ${CPLUS_RUNTIME_SOURCES})

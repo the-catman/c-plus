@@ -22,11 +22,22 @@ struct cplus_loop {
     cplus_waiter* first;    // the functions that can go on, in the order their tasks were done
     cplus_waiter* last;
     int64_t waiting;        // the functions of this loop that are waiting for a task
-    int64_t waitingRemote;  // the ones of those whose task is finished elsewhere, which the loop has to wait for
+    int64_t keeping;        // what the loop has to wait for, which nothing on it shows: tasks finished elsewhere, and holds
     bool running;
 };
 
 static __thread cplus_loop* current;
+
+void cplus_fetch_loop_end(void) __attribute__((weak));  // fetch.c, in a program with http::fetch
+
+// The wake handle keeps the loop going while anything is kept.
+static void keep(cplus_loop* loop) {
+    if (loop->keeping++ == 0) uv_ref((uv_handle_t*)&loop->wake);
+}
+
+static void let_go(cplus_loop* loop) {
+    if (--loop->keeping == 0) uv_unref((uv_handle_t*)&loop->wake);
+}
 // What the next run to the end of a task waits for, when the program waits there by itself: 0 for an async `main`, 1 for the
 // async function of a `spawn`, and -1 for a `wait()` that the program has.
 static __thread int start = -1;
@@ -43,7 +54,7 @@ static void drain(cplus_loop* loop) {
         pthread_mutex_unlock(&loop->lock);
         if (!w) return;
         loop->waiting--;
-        if (w->remote && --loop->waitingRemote == 0) uv_unref((uv_handle_t*)&loop->wake);
+        if (w->remote) let_go(loop);
         void (*resume)(void*) = w->resume;
         void* handle = w->handle;
         free(w);
@@ -60,7 +71,7 @@ static cplus_loop* this_loop(void) {
     if (uv_loop_init(&loop->uv) != 0 || uv_async_init(&loop->uv, &loop->wake, on_wake) != 0)
         cplus_stop("the system could not start an event loop for async", "this thread may have too many files open; close some, or start fewer threads");
     loop->wake.data = loop;
-    uv_unref((uv_handle_t*)&loop->wake);  // only a function waiting for a task finished elsewhere keeps the loop going
+    uv_unref((uv_handle_t*)&loop->wake);  // only what is kept, as `keep` says, keeps the loop going by it
     pthread_mutex_init(&loop->lock, NULL);
     current = loop;
     return loop;
@@ -100,6 +111,12 @@ static void run(cplus_loop* loop, task_state* until) {
 // A task of an async function is finished by the loop of the thread it started on.
 void cplus_task_bind(task_state* task) { task->loop = this_loop(); }
 
+void* cplus_loop_uv(void) { return &this_loop()->uv; }
+
+void cplus_loop_hold(void) { keep(this_loop()); }
+
+void cplus_loop_release(void) { let_go(this_loop()); }
+
 // For `await`: false when the task is done already. Otherwise the function waits, and the loop goes on with
 // `resume(handle)` once the task is done.
 bool cplus_task_await(task_state* task, void (*resume)(void*), void* handle) {
@@ -121,7 +138,7 @@ bool cplus_task_await(task_state* task, void (*resume)(void*), void* handle) {
     *end = w;
     pthread_mutex_unlock(&task->lock);
     loop->waiting++;
-    if (w->remote && loop->waitingRemote++ == 0) uv_ref((uv_handle_t*)&loop->wake);
+    if (w->remote) keep(loop);
     return true;
 }
 
@@ -168,6 +185,7 @@ void cplus_loop_finish(void) {
                  (long long)loop->waiting, loop->waiting == 1 ? "" : "s");
         cplus_stop(message, "an async function that waits, directly or through others, for its own task never goes on. Check what each `await` waits for");
     }
+    if (cplus_fetch_loop_end) cplus_fetch_loop_end();
     uv_close((uv_handle_t*)&loop->wake, NULL);
     uv_run(&loop->uv, UV_RUN_DEFAULT);
     uv_loop_close(&loop->uv);

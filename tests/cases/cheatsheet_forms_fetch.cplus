@@ -1,0 +1,20 @@
+// The cheat sheet's forms of http::fetch. See cheatsheet_forms.
+import http;
+
+extern "C" string? getenv(string name);
+
+async int main() throws {
+    string url = (getenv("CPLUS_TEST_HTTP") ?? "missing") + "/echo";
+    http::Request request;
+    request.url = url;
+    http::Response r = try await http::fetch(url);
+    println("{}", r.status);
+    // expect: 200
+    auto t = http::fetchWith(request);
+    println("{}", (try await t).status);
+    // expect: 200
+    http::Response put = try await http::fetchWith({.method = "PUT", .url = url});
+    println("{}", put.body.find("PUT") >= 0);
+    // expect: true
+    return 0;
+}

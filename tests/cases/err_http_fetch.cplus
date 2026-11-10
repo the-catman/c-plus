@@ -1,7 +1,0 @@
-import http;
-int main() {
-    auto r = http::fetch("http://localhost/");
-    return 0;
-}
-// error: this compiler does not support `http::fetch` yet
-// error: `try http::get(url)` does the same, waiting for the answer

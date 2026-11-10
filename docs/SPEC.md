@@ -973,7 +973,8 @@ Not yet: other names for fields in JSON, leaving out fields with a marker, and r
 
 ### HTTP
 
-`import http;` is a client for HTTP and WebSockets, written on [libcurl](https://curl.se/libcurl/). Each call waits for its answer.
+`import http;` is a client for HTTP and WebSockets, written on [libcurl](https://curl.se/libcurl/). Each call waits for its answer, except
+`http::fetch`, which an [async function](#async-functions) waits for with `await`, while the thread goes on with other async work.
 
 ```cpp
 import http;
@@ -997,6 +998,7 @@ try http::send({.method = "PUT", .url = url, .headers = {{"Authorization", "Bear
 | `http::get(url)`, `http::delete(url)` | a request with no body |
 | `http::post(url, body, contentType)`, `http::put(...)`, `http::patch(...)` | a request with one. Saying what it is cannot be left out, since any guess would often be wrong |
 | `http::send(request)` | any request, with everything below |
+| `http::fetch(url)`, `http::fetchWith(request)` | as `get` and `send`, but async: `try await http::fetch(url)` |
 | `http::encode(text)` | text made safe to be one part of a URL, as `encodeURIComponent` in JavaScript: `url + "?q=" + http::encode(q)` |
 
 | Field of `http::Request` | Starts as | Is |
@@ -1063,9 +1065,14 @@ println("closed with {}", ws.closeCode() ?? 0);
 
 Connecting fails with the same kinds as a request, and with `"handshake"` when the server does not open a WebSocket. A server that breaks the protocol ends the connection with `"protocol"`, and one that goes away without a close with `"network"`. After that, or after closing, `receive()` gives null and `send` throws an error of the kind `"closed"`.
 
-`import http;` needs a compiler built with libcurl, which comes from the development files of libcurl, such as `libcurl4-openssl-dev` on Debian or Ubuntu. Only a program that imports it links it, and that program then needs the libcurl of the machine it runs on.
+`import http;` needs a compiler built with libcurl, which comes from the development files of libcurl, such as `libcurl4-openssl-dev` on Debian or Ubuntu. Only a program that imports it links it, and that program then needs the libcurl of the machine it runs on. `http::fetch` also needs libuv, as all async code does.
 
-Not yet: `http::fetch`, which would work with [async](#async-functions), a body that is sent or received in pieces instead of all at once, keeping cookies, and learning which subprotocol the server chose.
+**`http::fetch` runs requests at once.** It gives a `Task<http::Response, throws>`, so requests started one after another are all on the way at once,
+on the thread that started them, which shares connections between them, as it does for `http::send`. It fails as `http::send` does, with the
+same kinds. A plain function waits for one with `try http::fetch(url).wait()`. Async WebSockets come later: `receive()` waits as it does now.
+
+Not yet: a body that is sent or received in pieces instead of all at once, keeping cookies, learning which subprotocol the server chose, and
+async WebSockets.
 
 ### Reflection
 
@@ -2347,7 +2354,7 @@ its own task, and async functions still waiting at the end of the program for ta
 plain function that async code calls, once that code has waited for something, since the thread's other async work then waits for that
 function to return.
 
-Not yet: stopping a task, waiting with a time limit, and [`http::fetch`](#http).
+Not yet: stopping a task, and waiting with a time limit. [`http::fetch`](#http) is the async request.
 
 ### Mutex
 
@@ -2585,7 +2592,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | `local<T>` references | implemented |
 | C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; reading C headers | planned |
 | Modules `http`, `json` and `reflect`, and raw strings | implemented |
-| `http::fetch`, modules of your own | planned |
+| `http::fetch` | implemented |
+| Modules of your own | planned |
 | Threads: `spawn`, `Task`, `Mutex`, `LockGuard`, `--race` | implemented |
 | `async` functions, `await`, `delay` | implemented |
 | Atomic values, condition variables, channels | planned |

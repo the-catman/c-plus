@@ -1,0 +1,50 @@
+// http::fetch from a plain function, which waits with wait(), and on threads, each of which has an event loop of its own.
+import http;
+
+extern "C" string? getenv(string name);
+
+string base() { return getenv("CPLUS_TEST_HTTP") ?? "missing"; }
+
+async string bodyOf(string path) throws {
+    http::Response r = try await http::fetch(base() + path);
+    return r.body;
+}
+
+// On a thread of its own: several at once there too, on its loop.
+async string three() throws {
+    auto a = bodyOf("/hello");
+    auto b = bodyOf("/slow?seconds=0.1");
+    auto c = bodyOf("/chain/2");
+    return (try await a) + " " + (try await b) + " " + (try await c);
+}
+
+async void later() throws {
+    http::Response r = try await http::fetch(base() + "/hello");
+    println("after main: {}", r.body);
+}
+
+int main() throws {
+    http::Response r = try http::fetch(base() + "/hello").wait();
+    println("{}", r.body);
+    // expect: hello
+
+    // One loop's requests share connections.
+    string first = (try http::fetch(base() + "/connection").wait()).body;
+    string second = (try http::fetch(base() + "/connection").wait()).body;
+    println("{}", first == second);
+    // expect: true
+
+    vector<Task<string, throws>> threads;
+    for (int i = 0; i < 4; i++) threads.push_back(spawn three());
+    for (auto t : threads) println("{}", try t.wait());
+    // expect: hello finally the end
+    // expect: hello finally the end
+    // expect: hello finally the end
+    // expect: hello finally the end
+
+    auto kept = later();              // main returns, and the program waits for it
+    println("main returns");
+    // expect: main returns
+    // expect: after main: hello
+    return 0;
+}
