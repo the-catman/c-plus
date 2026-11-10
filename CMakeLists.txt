@@ -142,6 +142,7 @@ add_executable(cplus
   ${CPLUS_EMBEDDED_DOCS}
   compiler/Diagnostics.cpp
   compiler/Lexer.cpp
+  compiler/Format.cpp
   compiler/Parser.cpp
   compiler/Sema.cpp
   compiler/ConstEval.cpp

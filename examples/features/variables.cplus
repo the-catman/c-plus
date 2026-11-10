@@ -4,7 +4,7 @@ int main() {
     auto c = a + b;
     const string name = "Ada";
     {
-        int a = 10;          // hides the other in this block
+        int a = 10;  // hides the other in this block
         println("{}", a);
         // expect: 10
     }

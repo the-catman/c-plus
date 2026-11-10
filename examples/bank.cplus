@@ -32,14 +32,14 @@ void payRent(Account from) {
 
 int main() {
     Account alice = Account("Alice", 2000'00);
-    Account shared = alice;          // the same account, not a copy
+    Account shared = alice;  // the same account, not a copy
     shared.deposit(500'00);
     payRent(alice);
     println("{} has ${}", alice.owner, alice.dollars());
 
     Account bob = Account("Bob", 300'00);
     payRent(bob);
-    bob = Account("Bob's new account", 5000'00);   // the old account closes here
+    bob = Account("Bob's new account", 5000'00);  // the old account closes here
     println("end of main");
     return 0;
 }

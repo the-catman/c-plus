@@ -1,0 +1,30 @@
+// Comments stay where they are.
+
+
+/* a block comment
+   on two lines */
+int add(int a, int b) { return a + b; }
+int main() {  // the start
+
+
+    int x = 1; // one
+    int longer = 22;   // two
+                       // goes on under two
+    x = longer; /* after */ x = x;
+    /* before */ x = 2;
+
+    if (x > 0) // why
+    {
+        x = 3;
+    }
+    // before else
+    else {
+        x = 4;
+    }
+    int y = add(x, /* the second */ 2);  
+
+
+    return 0; // done
+    // the end
+}
+

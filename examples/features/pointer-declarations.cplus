@@ -2,7 +2,7 @@
 int main() {
     int a = 1;
     int b = 2;
-    int* p = &a, * q = &b;
+    int* p = &a, *q = &b;
     const int* readOnly = &a;
     int* const fixed = &b;
     *fixed = 3;

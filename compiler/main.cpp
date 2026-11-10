@@ -1,20 +1,23 @@
-// The `cplus` command: check, build, or run a C+ program.
+// The `cplus` command: check, build, run or format a C+ program.
 #include <pthread.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "Codegen.h"
 #include "Explain.h"
+#include "Format.h"
 #include "Lexer.h"
 #include "Parser.h"
 #include "Sema.h"
@@ -30,6 +33,7 @@ static const char* kUsage =
     "  cplus build <file.cplus> [-o <output>] [-O]   compile to a native executable\n"
     "  cplus build <file.cplus> --emit-llvm [-O]     print the LLVM IR instead\n"
     "  cplus run <file.cplus> [-O] [-- <args>...]    build to a temporary file and run it\n"
+    "  cplus fmt <file or folder>... [--check]       write files in the one style of C+, or say which are not\n"
     "  cplus explain [<topic>]                       what the language says on a topic, with an example\n"
     "  cplus --version\n"
     "\n"
@@ -199,6 +203,119 @@ static int build(const Options& opts, const std::string& exePath) {
     return 0;
 }
 
+// `cplus fmt`: each file in its style, written back only if that changes it. `-` reads standard input and writes to standard
+// output. With --check nothing is written, and each file that is not in the style is an error.
+// Writes `text` over the file at `path`, which keeps what it had unless all of `text` was written: it goes to a file
+// next to it first, which then takes its place.
+static bool writeInPlace(const std::string& path, const std::string& text) {
+    std::error_code ec;
+    const fs::path target = fs::is_symlink(path, ec) ? fs::canonical(path, ec) : fs::path(path);
+    if (ec) return false;
+    const fs::path temporary = target.string() + ".fmt-tmp";
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        out << text;
+        out.flush();
+        if (!out) {
+            const int saved = errno;
+            fs::remove(temporary, ec);
+            errno = saved;
+            return false;
+        }
+    }
+    fs::permissions(temporary, fs::status(target, ec).permissions(), ec);
+    if (std::rename(temporary.c_str(), target.c_str()) != 0) {
+        const int saved = errno;
+        fs::remove(temporary, ec);
+        errno = saved;
+        return false;
+    }
+    return true;
+}
+
+static int formatFiles(int argc, char** argv) {
+    bool check = false;
+    std::vector<std::string> paths;
+    for (int i = 2; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--check") check = true;
+        else if (a.size() > 1 && a[0] == '-') return usageError("unknown option '" + a + "' for `cplus fmt`, which only takes --check");
+        else paths.push_back(a);
+    }
+    if (paths.empty()) return usageError("fmt needs the files to format");
+    // A folder is every .cplus file in it, and in the folders in it, but those whose names start with a dot.
+    std::vector<std::string> files;
+    for (const std::string& path : paths) {
+        std::error_code ec;
+        if (path != "-" && fs::is_directory(path, ec)) {
+            std::vector<std::string> found;
+            for (auto it = fs::recursive_directory_iterator(path, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                const std::string name = it->path().filename().string();
+                if (it->is_directory(ec) && !name.empty() && name[0] == '.') it.disable_recursion_pending();
+                else if (it->is_regular_file(ec) && it->path().extension() == ".cplus") found.push_back(it->path().string());
+            }
+            if (ec) {
+                toolError("cannot read the folder " + path + ": " + ec.message(), "check that the folder can be read");
+                return 1;
+            }
+            std::sort(found.begin(), found.end());
+            files.insert(files.end(), found.begin(), found.end());
+        } else if (path != "-" && fs::path(path).extension() != ".cplus") {
+            toolError(path + " is not a C+ source file", "give the names of .cplus files, or of folders, whose .cplus files are formatted");
+            return 2;
+        } else {
+            files.push_back(path);
+        }
+    }
+    paths = files;
+    bool ok = true;
+    for (const std::string& path : paths) {
+        std::string text;
+        const bool fromInput = path == "-";
+        if (fromInput) {
+            std::ostringstream ss;
+            ss << std::cin.rdbuf();
+            text = ss.str();
+        } else if (!readFile(path, text)) {
+            toolError("cannot read " + path + ": " + std::strerror(errno), "check the name of the file, which is relative to the folder this runs in");
+            ok = false;
+            continue;
+        }
+        SourceFile file(fromInput ? "<stdin>" : path, text);
+        Diagnostics diags(file);
+        std::string formatted;
+        switch (formatSource(file, diags, formatted)) {
+        case FormatResult::HasErrors: {
+            const int n = diags.errorCount();
+            std::fprintf(stderr, "error: could not format %s because of %d error%s, so it is left as it is\n", file.path.c_str(), n, n == 1 ? "" : "s");
+            ok = false;
+            continue;
+        }
+        case FormatResult::WouldChange:
+            toolError("cplus fmt would have changed the tokens or comments of " + file.path + ", which is a bug in cplus fmt, and not in the program",
+                      "keep the file, which is left as it was, to report it. The program is fine to build as it is");
+            ok = false;
+            continue;
+        case FormatResult::Formatted:
+            break;
+        }
+        if (formatted == text) {
+            if (fromInput && !check) std::fwrite(formatted.data(), 1, formatted.size(), stdout);
+        } else if (check) {
+            const std::string again = fromInput ? "cplus fmt - < file" : "cplus fmt " + path;
+            std::fprintf(stderr, "error: %s is not formatted\n  = help: run `%s`, which rewrites it in the style of C+\n"
+                                 "  = spec: docs/SPEC.md#formatting, or run `cplus explain formatting`\n", file.path.c_str(), again.c_str());
+            ok = false;
+        } else if (fromInput) {
+            std::fwrite(formatted.data(), 1, formatted.size(), stdout);
+        } else if (!writeInPlace(path, formatted)) {
+            toolError("cannot write " + path + ": " + std::strerror(errno), "check that the file and its folder can be written to; the file is left as it was");
+            ok = false;
+        }
+    }
+    return ok ? 0 : 1;
+}
+
 static int compilerMain(int argc, char** argv) {
     if (argc < 2) return usageError("no command given");
     Options opts;
@@ -215,6 +332,7 @@ static int compilerMain(int argc, char** argv) {
         if (argc > 3) return usageError("explain takes one topic");
         return explainTopic(argc == 3 ? argv[2] : "");
     }
+    if (opts.command == "fmt") return formatFiles(argc, argv);
     if (opts.command != "build" && opts.command != "run" && opts.command != "check")
         return usageError("unknown command '" + opts.command + "'");
 

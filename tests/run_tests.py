@@ -55,11 +55,13 @@ every program in examples/ compiles without warnings, that very deeply nested co
 error instead of a crash, that no way of copying a unique reference compiles, that a
 crash whose report cannot flush the program's output still says what happened, that lines
 printed by threads stay together, that a program links what it uses and no more, that mistakes in
-the command line are reported as other errors are, and that the code in the spec compiles. The check of
+the command line are reported as other errors are, and that the code in the spec compiles, and that `cplus fmt` does what tests/fmt says, keeps every test the same program and finds
+examples/ in its style (`fmt` as the name filter runs this alone). The check of
 copies builds each case by itself, since one test file with many errors would pass with one
 of them missing.
 """
 import concurrent.futures
+import difflib
 import json
 import os
 import pathlib
@@ -77,7 +79,8 @@ FEATURES = ROOT / "examples" / "features"
 
 # Sections with nothing to run: a heading over others, or what is about the tools and not the language.
 NO_EXAMPLE = {"c-language-specification", "lexical-structure", "types", "declarations", "statements", "expressions", "source-files",
-              "no-preprocessor", "keywords", "nesting-limits", "debug-builds", "the-cplus-command", "grammar", "implementation-status"}
+              "no-preprocessor", "keywords", "nesting-limits", "debug-builds", "the-cplus-command", "formatting", "grammar",
+              "implementation-status"}
 
 
 def slugify(heading):
@@ -220,7 +223,7 @@ def errors_without_help(stderr):
     problems = []
     blocks = re.split(r"^(?=(?:error|warning|note): )", stderr, flags=re.M)
     for block in blocks:
-        if not block.startswith("error: ") or block.startswith("error: could not compile"):
+        if not block.startswith("error: ") or block.startswith(("error: could not compile", "error: could not format")):
             continue
         first = block.splitlines()[0]
         if "= help:" not in block or "the part of the spec named below explains the rule" in block:
@@ -766,6 +769,7 @@ SPEC_NOT_CODE = {
     "CPLUS_CHECK_LEAKS=0", "-Wno-new-delete", "cplus check", "cplus run", "cplus run greet.cplus -- Ada", "cplus build app.cplus -lsqlite3", "-L <directory>", ".hplus",
     "break cplus_trap", "uncaught error:", "--race", "--debug", "cplus build", "cplus.", "-fsanitize=address", "llvm-symbolizer", "libclang-rt-18-dev", "exit()",
     "cplus run app.cplus --race", "-l<name>", "-L<dir>", "--emit-llvm", "cplus explain", "spec:", "cplus explain cheatsheet", "{ x }", "[ x ]", "value_or()", "new[]",
+    "cplus fmt", "--check",
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
@@ -932,6 +936,8 @@ def check_command_line(cplus, workdir):
         (["build", g, "--debug", "--race"], 2, "--debug and --race cannot be used together"), (["explain", "a", "b"], 2, "explain takes one topic"),
         (["check", str(text)], 2, "is not a C+ source file"), (["check", str(workdir / "gone.cplus")], 1, "cannot read"),
         (["build", g, "-o", str(missing_dir / "out")], 1, "cannot write"), (["build", g, "-o", str(workdir / "out"), "-lno_such_library_here"], 1, "linking failed"),
+        (["fmt"], 2, "fmt needs the files to format"), (["fmt", g, "--nope"], 2, "unknown option '--nope' for `cplus fmt`"),
+        (["fmt", str(text)], 2, "is not a C+ source file"), (["fmt", str(workdir / "gone.cplus")], 1, "cannot read"),
     ]
     ok = True
     for args, code, message in cases:
@@ -988,6 +994,105 @@ def check_command_line(cplus, workdir):
     if run.returncode != 1 or "cannot find a folder for temporary files" not in run.stderr or errors_without_help(run.stderr):
         print(f"FAIL cplus run with no folder for temporary files: exit code {run.returncode}\n  " + run.stderr[:300])
         ok = False
+    return ok
+
+
+def check_format(cplus, workdir):
+    """`cplus fmt` makes each tests/fmt/*.in.cplus what its .out.cplus is, changes nothing in that, keeps every test the same
+    program, and finds examples/ in its style already. What it says when it cannot is said as any other error is, and the file is
+    left as it was."""
+    ok = True
+    def fmt(args, text=None, env=None, preexec_fn=None, cwd=workdir):
+        return subprocess.run([cplus, "fmt", *args], input=text, capture_output=True, timeout=120, cwd=cwd, env=env, preexec_fn=preexec_fn)
+    def fail(what, run):
+        nonlocal ok
+        print(f"FAIL cplus fmt {what}: exit code {run.returncode}\n  " + run.stderr.decode()[:600].replace("\n", "\n  "))
+        ok = False
+    for source in sorted((ROOT / "tests" / "fmt").glob("*.in.cplus")):
+        out_path = source.with_name(source.name.replace(".in.cplus", ".out.cplus"))
+        expected = out_path.read_bytes()
+        run = fmt(["-"], source.read_bytes())
+        if run.returncode != 0 or run.stdout != expected:
+            diff = "".join(difflib.unified_diff(expected.decode().splitlines(True), run.stdout.decode().splitlines(True), "expected", "formatted"))
+            print(f"FAIL cplus fmt of {source.relative_to(ROOT)}: exit code {run.returncode}\n  " + (diff or run.stderr.decode()).replace("\n", "\n  "))
+            ok = False
+        run = fmt(["--check", "-"], expected)
+        if run.returncode != 0:
+            fail(f"--check of {out_path.relative_to(ROOT)}, which it wrote itself", run)
+        run = subprocess.run([cplus, "check", "-Wno-new-delete", str(out_path.relative_to(ROOT))], cwd=ROOT, capture_output=True, timeout=60)
+        if run.returncode != 0:
+            fail(f"of {source.relative_to(ROOT)} gives what does not compile", run)
+    # The line ends of Windows, and tabs, become line feeds and spaces.
+    run = fmt(["-"], b"int main() {\r\n\tint x = 1;\t// one\r\n\treturn x;\r\n}\r\n")
+    if run.returncode != 0 or run.stdout != b"int main() {\n    int x = 1;  // one\n    return x;\n}\n":
+        fail(f"of CRLF and tabs gives {run.stdout!r}", run)
+    run = fmt(["--check", "examples"], cwd=ROOT)
+    if run.returncode != 0:
+        fail("--check examples: they are not in the style of C+; run `cplus fmt examples`", run)
+    # Every test is the same program after it, and a second time changes nothing.
+    copies = workdir / "fmt-cases"
+    copies.mkdir()
+    for path in CASES.glob("*.cplus"):
+        (copies / path.name).write_bytes(path.read_bytes())
+    run = fmt([str(copies)])
+    bugs = [line for line in run.stderr.decode().splitlines() if "bug in cplus fmt" in line]
+    if bugs:
+        print("FAIL cplus fmt changed what these programs are:\n  " + "\n  ".join(bugs))
+        ok = False
+    run = fmt(["--check", str(copies)])
+    unstable = [line for line in run.stderr.decode().splitlines() if "is not formatted" in line]
+    if unstable:
+        print("FAIL a second cplus fmt changes these again:\n  " + "\n  ".join(unstable))
+        ok = False
+
+    messy = b"int main(){return 0;}\n"
+    tidy = b"int main() { return 0; }\n"
+    def file(name, text):
+        path = workdir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(text)
+        return path
+    path = file("messy.cplus", messy)
+    run = fmt([str(path)])
+    if run.returncode != 0 or path.read_bytes() != tidy or run.stderr:
+        fail("of a file did not rewrite it", run)
+    for args, code, message, name, text, env, limit in [
+        (["--check"], 1, "is not formatted", "check.cplus", messy, None, False),
+        ([], 1, "could not format", "broken.cplus", b"int main() { int x = ; return 0; }\n", None, False),
+        ([], 1, "which is a bug in cplus fmt", "bug.cplus", messy, dict(os.environ, CPLUS_FMT_BUG_FOR_TESTS="1"), False),
+        ([], 1, "cannot write", "full.cplus", messy, None, True),
+    ]:
+        path = file(name, text)
+        def no_room():
+            resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        run = fmt([*args, str(path)], env=env, preexec_fn=no_room if limit else None)
+        lacking = errors_without_help(run.stderr.decode())
+        if run.returncode != code or message not in run.stderr.decode() or lacking or path.read_bytes() != text:
+            fail(f"{' '.join(args)} {name}, which should say '{message}' and leave it as it was. {lacking}", run)
+    leftovers = [p.name for p in workdir.glob("*.fmt-tmp")]
+    if leftovers:
+        print(f"FAIL cplus fmt left {leftovers} behind")
+        ok = False
+    # A folder: its files, and those of the folders in it, but those that start with a dot.
+    tree = [file("tree/a.cplus", messy), file("tree/sub/b.cplus", messy), file("tree/.hidden/c.cplus", messy), file("tree/notes.txt", messy)]
+    run = fmt([str(workdir / "tree")])
+    if run.returncode != 0 or [p.read_bytes() for p in tree] != [tidy, tidy, messy, messy]:
+        fail("of a folder", run)
+    if os.geteuid() != 0:  # nothing stops root from reading
+        locked = workdir / "tree" / "locked"
+        locked.mkdir()
+        locked.chmod(0)
+        run = fmt([str(workdir / "tree")])
+        locked.chmod(0o755)
+        if run.returncode != 1 or b"cannot read the folder" not in run.stderr or errors_without_help(run.stderr.decode()):
+            fail("of a folder with one in it that cannot be read", run)
+        shut = file("shut/a.cplus", messy)  # where no file can be made, so none can take its place
+        shut.parent.chmod(0o555)
+        run = fmt([str(shut)])
+        shut.parent.chmod(0o755)
+        if run.returncode != 1 or b"cannot write" not in run.stderr or shut.read_bytes() != messy or errors_without_help(run.stderr.decode()):
+            fail("of a file in a folder that cannot be written to", run)
     return ok
 
 
@@ -1309,6 +1414,8 @@ def main():
                 ok = False
             ok = check_command_line(cplus, pathlib.Path(tmp)) and ok
             ok = check_spec_code(cplus, pathlib.Path(tmp)) and ok
+        if not name_filter or name_filter == "fmt":
+            ok = check_format(cplus, pathlib.Path(tmp)) and ok
 
         def run_in_own_folder(path):
             workdir = pathlib.Path(tmp) / f"{path.parent.name}-{path.stem}"

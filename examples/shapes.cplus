@@ -15,7 +15,7 @@ int main() {
     Rect moved = movedBy(r, 10, 20);
     println("original corner {}, moved corner {}", r.corner, moved.corner);
 
-    Rect square;                // name and corner start from their defaults
+    Rect square;  // name and corner start from their defaults
     square.width = 3;
     square.height = square.width;
     println("{}", square);
@@ -23,12 +23,12 @@ int main() {
 }
 
 long area(Rect r) {
-    long w = r.width;           // int widens to long, so this multiply cannot overflow
+    long w = r.width;  // int widens to long, so this multiply cannot overflow
     return w * r.height;
 }
 
 Rect movedBy(Rect r, int dx, int dy) {
     r.corner.x += dx;
     r.corner.y += dy;
-    return r;                   // a changed copy; the caller's Rect is untouched
+    return r;  // a changed copy; the caller's Rect is untouched
 }

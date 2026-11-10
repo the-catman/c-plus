@@ -242,6 +242,7 @@ cplus explain hashmap       # what the spec says on a topic, with an example tha
 cplus check file.cplus      # errors only
 cplus run file.cplus        # build and run
 cplus build file.cplus -o app [-O] [--emit-llvm]
+cplus fmt file.cplus        # rewrite it in the one style of C+; --check only says whether it is
 cplus build app.cplus -lsqlite3 -L dir   # link C libraries, as with a C compiler; `import http;` needs no -l
 cplus build app.cplus -Wno-new-delete    # no warning for new and delete
 cplus run app.cplus --debug              # slower, but catches memory errors, with a stack trace

@@ -26,7 +26,7 @@ int main() {
         {"Linus", {70, 65}},
         {"Grace", {}},
     };
-    students[2].scores.push_back(88);   // change one element in place
+    students[2].scores.push_back(88);  // change one element in place
     students.push_back({"Ken", {50}});
 
     for (const auto s : students) println("{}: {}", s.name, s.average());

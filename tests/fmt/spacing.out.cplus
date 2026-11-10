@@ -1,0 +1,38 @@
+struct Counter { int count = 0; };
+int main() {
+    int x = -1, y = -x;
+    int* p = &x;
+    *p = 5;
+    int** pp = &p;
+    long big = (long)x * 2 + (long)y;
+    const void* raw = (const void*)p;
+    bool b = !(x == 1) || ~x > 0 && y <= 3;
+    x += 2;
+    x <<= 1;
+    x = x << 2 >> 1;
+    vector<vector<int>> v = {{1, 2}, {3}};
+    hashmap<string, vector<int>> m = {{"a", {1}}};
+    int? n = null;
+    int? again = n ?? 3;
+    string? s = null;
+    long len = s?.size() ?? 0;
+    println("{} {}", n ?? 3, v[0][1]);
+    println("{}", x > 0 ? .5 : 1.5);
+    println("{}", Counter{.count = 1}.count);
+    int* table = new int[3];
+    delete[] table;
+    int** rows = new int*[2];
+    delete[] rows;
+    int?* slot = new int?(4);
+    delete slot;
+    auto c = static_cast<int>(2.5);
+    for (auto r : v) {
+        for (int e : r) print("{} ", e);
+    }
+    x++;
+    --y;
+    p = p + 1 - 1;
+    x = y++ - 1;
+    int first = array<int, 2>{1, 2}[0] * 3;
+    return x - y * 2 / (1 + 1) % 3;
+}

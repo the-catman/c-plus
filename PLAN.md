@@ -570,6 +570,15 @@ What §5 asks for, as built in Phase 4. Decided 2026-11-07.
 - Errors are held to the standard by tools as well as by reading: the arguments are required by the compiler's own types, the test runner fails on any error it sees without a `help` and a `spec`, and a measurement with coverage, `tests/errors_reached.py`, shows which errors and which pieces of advice no test reaches. Whether a help is good advice only reading can tell, and following it. On 2026-11-07 readers who had not written them did that for all of them, compiling what each told them to write and running it, and then again for what had been rewritten, until what was left to find was small. What they found was fixed. Reading comes with each new one after that, and a program in `tests/cases/advice_followed*` shows that what the help says compiles and does what it says.
 - The documents are held to the compiler by the test runner: everything called planned must be rejected with "does not support ... yet" (`check_planned_features`), every form the cheat sheet tells a reader to write must compile, alone or in a `cheatsheet_forms` test, and every C++ habit it warns of must be rejected (`check_cheat_sheet`).
 
+### 2.28 Formatting — DECIDED
+`cplus fmt` writes C+ in one style, with no settings, as `gofmt` does for Go. Decided 2026-11-10.
+- The style is the commonest one of C and C++: an indent of four spaces, `{` at the end of the line, `} else {`, `int* p`. Settings
+  would let projects differ, and one style is so that they do not.
+- Where lines break is the writer's choice, except that each statement in a block goes on a line of its own. Long lines are not
+  wrapped: doing that well takes rules for each kind of code, and doing it badly is worse than a long line.
+- It works on the tokens and the comments, once the parser has accepted the file. What it writes is read again, and kept only if it
+  has the same tokens and comments, so it cannot change what a program does. A file with syntax errors is left as it is.
+
 ## 3. Compiler architecture
 
 ```
@@ -594,7 +603,7 @@ Open implementation questions are listed in §6.
 
 ## 4. Phases
 
-Status: Phases 0 to 5 are done, and Phase 6 is next. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+Status: Phases 0 to 5 are done. Phase 6 is under way: the formatter is done, and the LSP is next. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error

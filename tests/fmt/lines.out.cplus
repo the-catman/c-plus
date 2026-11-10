@@ -1,0 +1,29 @@
+int add(int a,
+        int b) {
+    return a + b;
+}
+int sum(int a, int b, int c) { return a + b + c; }
+int main() {
+    int total = add(1,
+                    2);
+    total = sum(
+        1, 2, 3);
+    if (total > 1 &&
+        total < 100) {
+        total = 1;
+    }
+    if (total > 1 &&
+        total < 100)
+        total = 2;
+    vector<int> v = {
+        1,
+        2,
+    };
+    string s = "a long line that " +
+        "goes on";
+    string r = R"(a raw string
+  that keeps   its spaces)";
+    println("{} {} {}", total,
+            v.size(), s + r);
+    return 0;
+}

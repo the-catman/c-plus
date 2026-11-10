@@ -2408,6 +2408,7 @@ Not yet: waiting for a thread with a time limit, atomic values, condition variab
 cplus check <file.cplus>                  report errors without building
 cplus build <file.cplus> [-o <output>]    compile to a native executable, named after the file if no -o
 cplus run <file.cplus> [-- <args>...]     build to a temporary file and run it
+cplus fmt <file or folder>... [--check]   rewrite files in the style of C+, as in the next section
 cplus explain [<topic>]                   the part of this document on a topic, with an example that runs
 cplus --version
 ```
@@ -2420,12 +2421,55 @@ cplus --version
 | `-l<name>`, `-L<dir>` | `build`, `run`, `check` | the libraries of [C functions](#c-functions), as for a C compiler |
 | `-Wno-new-delete` | `build`, `run`, `check` | no warning for [`new` and `delete`](#new-and-delete) |
 | `--emit-llvm` | `build` | prints the LLVM IR instead of building |
+| `--check` | `fmt` | changes nothing, and says which files are not [formatted](#formatting) |
 
 `cplus explain` with no topic lists them all. A topic is the name of a section, as in the `spec:` line of an error, or a word you know from C++ or JavaScript, such as
 `hashmap`, `spawn` or `try`. `cplus explain cheatsheet` is how C+ differs from C++, on one page. All of it is built into the compiler, so it works away from this repository.
 
 **Exit codes.** `check` and `build` exit with 0 if all is well, with 1 for errors in the program or a failure to build it, and with 2 for a wrong command line. `run` exits with what the program does.
 A program exits with what `main` returns, with 1 for an error that nothing catches, and with 134 when it is stopped by a runtime check or a crash.
+
+### Formatting
+
+```
+cplus fmt app.cplus lib.cplus    rewrites the files in the style of C+
+cplus fmt --check app.cplus      changes nothing, and says which files are not in it
+cplus fmt src                    rewrites every .cplus file in src and the folders in it
+cplus fmt -                      reads a program from stdin, and writes it to stdout
+```
+
+A folder's files are taken in the order of their names, and folders whose names start with a dot are left out.
+
+C+ has one style, with no settings, so code reads the same in every project. `cplus fmt` changes only the space between
+tokens: how far each line is indented, the spaces within a line, and the blank lines. The tokens, the comments, and
+where lines break stay as they are written, except where a rule below breaks a line.
+
+- An indent is four spaces. A block's `{` goes at the end of the line its statement starts on, and its `}` on a line of
+  its own, under the start of the statement. `} else {`, `} catch (Error e) {` and the `} while (...);` of a `do` go on one line.
+- Each statement in a block goes on a line of its own, so `if (ok) { n = 1; y = 2; }` becomes four lines. A
+  function, a type or an `extern "C"` block written on one line stays on one, such as `int area() const { return w * h; }`.
+  `{ }` becomes `{}`, and an empty block written over two lines stays on two.
+- The statement of an `if`, `else`, `for`, `while` or `do` with no braces is indented four more when it is on a line of
+  its own.
+- `public:`, `private:` and `protected:` go at the indent of their type.
+- There is at most one blank line in a row, and none just after a `{`, just before a `}`, or at the start or end of the
+  file.
+- A line that goes on from the one before is indented four more than its statement. Inside brackets, it lines up just
+  after the `(`, `[` or `{` it is in, if something follows that on the bracket's own line. Otherwise it is four more than
+  the bracket's line, or eight in the parentheses of an `if`, `for` or `while` if four would put it where the body goes.
+- Spaces go around binary operators and `=`, and after `,` and `;`: `a + b * c`, `min(a, b)`. None go just inside brackets,
+  after a unary operator or a cast, or around `.`, `->`, `?.` and `::`: `-x`, `!found`, `(int)x`, `p->x`, `vector<int>`.
+  A type's `*` or `?` goes with the type: `int* p`, `User? u`.
+- `//` comments at the ends of lines next to each other line up, two spaces after the longest code. What a comment
+  says is never changed.
+- Long lines are not wrapped. Lines end with a line feed, and the file ends with one.
+
+A file with syntax errors is left as it is, and the errors are reported. After formatting a file, `cplus fmt` reads
+what it wrote, and keeps it only if it has the same tokens and comments as the file. If it does not, that is a bug in
+`cplus fmt`, which it reports, and the file is left as it is.
+
+`cplus fmt` exits with 0 when all went well, with 1 when a file has errors, cannot be read or written, or, with `--check`, is
+not formatted, and with 2 for a wrong command line.
 
 ## Grammar
 
@@ -2555,6 +2599,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Constants outside functions: numbers, `char`, `bool`, `string`, pointers | implemented |
 | `main` with `argc` and `argv` | implemented |
 | `cplus check`, `build`, `run`, `explain`, `--emit-llvm`, `-O` | implemented |
+| `cplus fmt` | implemented |
 | Debug builds with `--debug`: AddressSanitizer, stack traces, misaligned pointer and invalid bool checks, leak report | implemented |
 | Programs of more than one file | planned |
 | `constexpr` values and functions, `if constexpr`, array sizes and template arguments worked out while compiling | implemented |

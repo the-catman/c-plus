@@ -3,12 +3,12 @@ long twice(long n) { return n * 2; }
 
 int main() {
     int n = 21;
-    println("{}", twice(n));         // int to long
+    println("{}", twice(n));  // int to long
     // expect: 42
-    double d = n;                    // int to double
+    double d = n;  // int to double
     println("{}", d / 2);
     // expect: 10.5
-    int rounded = int(d / 2);        // a cast: a fraction is dropped
+    int rounded = int(d / 2);  // a cast: a fraction is dropped
     println("{}", rounded);
     // expect: 10
     return 0;

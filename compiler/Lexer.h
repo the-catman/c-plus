@@ -60,6 +60,12 @@ struct Token {
     bool longSuffix = false;  // IntLit written with L or LL, e.g. 1L
     double floatValue = 0;    // for FloatLit
     bool floatSuffix = false; // FloatLit written with f, e.g. 1.5f
+    size_t begin = 0, end = 0;  // where its spelling is in the source, as byte offsets
+};
+
+// A comment as it is written, for `cplus fmt`, which keeps them. The compiler itself drops them.
+struct Comment {
+    size_t begin = 0, end = 0;  // byte offsets, `//` or `/*` included, and not the line break after a `//` one
 };
 
 const char* tokSpelling(Tok kind);         // "while", "(", or a description like "identifier"
@@ -69,6 +75,8 @@ class Lexer {
 public:
     Lexer(const SourceFile& file, Diagnostics& diags);
     std::vector<Token> lexAll();
+    // With this, the comments are kept here as they are passed over.
+    void keepComments(std::vector<Comment>* into) { comments_ = into; }
 
 private:
     Token next();
@@ -87,6 +95,7 @@ private:
 
     const std::string& src_;
     Diagnostics& diags_;
+    std::vector<Comment>* comments_ = nullptr;
     size_t pos_ = 0;
     uint32_t line_ = 1;
     uint32_t col_ = 1;

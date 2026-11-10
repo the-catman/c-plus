@@ -1,0 +1,43 @@
+import json;
+struct Point{int x;int y=0;};
+struct Size {
+  int width = 0;
+  int height = 0;
+  int area() const { return width * height; }
+};
+interface Speaker{string speak()const;};
+class Animal : public Speaker{
+  public:
+    string name;
+    Animal(string n):name(n){}
+    virtual string sound()const{return "...";}
+    string speak() const override {
+    return name + " says " + sound();
+    }
+  private:
+    int legs = 4;
+};
+class Dog:public Animal{
+public:
+Dog():Animal("dog"){}
+string sound()const override{return "woof";}
+};
+template<typename T>T largest(T a,T b){return a>b?a:b;}
+template <Comparable T>
+class Stack {
+    vector<T> items;
+public:
+    void push(T x) { items.push_back(x); }
+    T top() const { return items[items.size() - 1]; }
+};
+extern "C" { long strlen(string s); int abs(int n); }
+extern "C" int atoi(string s);
+extern "C" struct FILE;
+template<typename T> concept Addable = requires(T a, T b) { a + b; };
+int main() {
+    Dog d = Dog();
+    println("{}", d.speak());
+    Stack<int> s = Stack<int>();
+    s.push(largest(1, 2));
+    return 0;
+}

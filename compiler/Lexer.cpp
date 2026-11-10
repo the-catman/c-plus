@@ -65,7 +65,11 @@ char Lexer::advance() {
 std::vector<Token> Lexer::lexAll() {
     std::vector<Token> out;
     while (true) {
+        skipSpaceAndComments();
+        const size_t begin = pos_;
         out.push_back(next());
+        out.back().begin = begin;
+        out.back().end = pos_;
         if (out.back().kind == Tok::Eof) return out;
     }
 }
@@ -76,8 +80,11 @@ void Lexer::skipSpaceAndComments() {
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v') {
             advance();
         } else if (c == '/' && peek(1) == '/') {
+            const size_t begin = pos_;
             while (pos_ < src_.size() && peek() != '\n') advance();
+            if (comments_) comments_->push_back({begin, pos_});
         } else if (c == '/' && peek(1) == '*') {
+            const size_t begin = pos_;
             Loc start = locHere(2);
             advance();
             advance();
@@ -89,6 +96,7 @@ void Lexer::skipSpaceAndComments() {
             }
             advance();
             advance();
+            if (comments_) comments_->push_back({begin, pos_});
         } else if (c == '#') {
             Loc start = locHere();
             size_t end = src_.find('\n', pos_);
