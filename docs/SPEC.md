@@ -2409,6 +2409,7 @@ cplus check <file.cplus>                  report errors without building
 cplus build <file.cplus> [-o <output>]    compile to a native executable, named after the file if no -o
 cplus run <file.cplus> [-- <args>...]     build to a temporary file and run it
 cplus fmt <file or folder>... [--check]   rewrite files in the style of C+, as in the next section
+cplus lsp                                 a language server, which an editor starts, as in the section after that
 cplus explain [<topic>]                   the part of this document on a topic, with an example that runs
 cplus --version
 ```
@@ -2470,6 +2471,27 @@ what it wrote, and keeps it only if it has the same tokens and comments as the f
 
 `cplus fmt` exits with 0 when all went well, with 1 when a file has errors, cannot be read or written, or, with `--check`, is
 not formatted, and with 2 for a wrong command line.
+
+### The language server
+
+`cplus lsp` speaks the Language Server Protocol, which most editors know, on stdin and stdout. An editor starts it, and
+does not show it. For VS Code, `editors/vscode` in this repository is an extension that starts it and colors C+ code, and
+its README says how to install it. Other editors are told to run `cplus lsp` for files whose names end in `.cplus`.
+
+It gives an editor:
+
+- the errors and warnings of each open file as it changes, with their help and spec, as `cplus check` would report them
+- for the name under the mouse, its declaration as C+ writes it, with the `//` comment just above the declaration, and for
+  `auto`, the type it turned out to be
+- where a name is declared, for "go to definition"
+- the file in the style of `cplus fmt`, for "format document". A file with syntax errors is left as it is.
+
+A name in generic code only has a meaning once the generic is used, so a hover there shows what it means in the first use,
+and in a generic that nothing uses it shows nothing. What comes with the language, such as `println`, has no declaration to
+go to.
+
+Each version of a file is checked in a process of its own, so that a crash of the compiler on code that is half written is
+reported as an error in the file, and the server goes on.
 
 ## Grammar
 
@@ -2600,6 +2622,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | `main` with `argc` and `argv` | implemented |
 | `cplus check`, `build`, `run`, `explain`, `--emit-llvm`, `-O` | implemented |
 | `cplus fmt` | implemented |
+| `cplus lsp`: errors as you type, hover, go to definition, formatting; an extension for VS Code | implemented |
 | Debug builds with `--debug`: AddressSanitizer, stack traces, misaligned pointer and invalid bool checks, leak report | implemented |
 | Programs of more than one file | planned |
 | `constexpr` values and functions, `if constexpr`, array sizes and template arguments worked out while compiling | implemented |

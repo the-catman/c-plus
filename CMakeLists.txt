@@ -143,6 +143,8 @@ add_executable(cplus
   compiler/Diagnostics.cpp
   compiler/Lexer.cpp
   compiler/Format.cpp
+  compiler/Index.cpp
+  compiler/Lsp.cpp
   compiler/Parser.cpp
   compiler/Sema.cpp
   compiler/ConstEval.cpp

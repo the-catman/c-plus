@@ -1,0 +1,66 @@
+{
+  "name": "cplus",
+  "displayName": "C+",
+  "description": "The C+ language: colors, errors as you type, hover, go to definition and formatting, from cplus lsp",
+  "version": "0.0.1",
+  "publisher": "cplus-lang",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:cplus"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "cplus",
+        "aliases": [
+          "C+",
+          "cplus"
+        ],
+        "extensions": [
+          ".cplus"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cplus",
+        "scopeName": "source.cplus",
+        "path": "./syntaxes/cplus.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "cplus.restart",
+        "title": "C+: Restart the language server"
+      }
+    ],
+    "configuration": {
+      "title": "C+",
+      "properties": {
+        "cplus.path": {
+          "type": "string",
+          "default": "cplus",
+          "markdownDescription": "The `cplus` compiler, which is also the language server. Give its full path if it is not on the `PATH`, such as the `build/cplus` of a checkout of C+."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[cplus]": {
+        "editor.formatOnSave": true,
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

@@ -56,7 +56,8 @@ error instead of a crash, that no way of copying a unique reference compiles, th
 crash whose report cannot flush the program's output still says what happened, that lines
 printed by threads stay together, that a program links what it uses and no more, that mistakes in
 the command line are reported as other errors are, and that the code in the spec compiles, and that `cplus fmt` does what tests/fmt says, keeps every test the same program and finds
-examples/ in its style (`fmt` as the name filter runs this alone). The check of
+examples/ in its style (`fmt` as the name filter runs this alone), that `cplus lsp` answers an editor as it should (`lsp`
+runs that alone), and that the VS Code extension colors every keyword. The check of
 copies builds each case by itself, since one test file with many errors would pass with one
 of them missing.
 """
@@ -79,7 +80,7 @@ FEATURES = ROOT / "examples" / "features"
 
 # Sections with nothing to run: a heading over others, or what is about the tools and not the language.
 NO_EXAMPLE = {"c-language-specification", "lexical-structure", "types", "declarations", "statements", "expressions", "source-files",
-              "no-preprocessor", "keywords", "nesting-limits", "debug-builds", "the-cplus-command", "formatting", "grammar",
+              "no-preprocessor", "keywords", "nesting-limits", "debug-builds", "the-cplus-command", "formatting", "the-language-server", "grammar",
               "implementation-status"}
 
 
@@ -769,7 +770,7 @@ SPEC_NOT_CODE = {
     "CPLUS_CHECK_LEAKS=0", "-Wno-new-delete", "cplus check", "cplus run", "cplus run greet.cplus -- Ada", "cplus build app.cplus -lsqlite3", "-L <directory>", ".hplus",
     "break cplus_trap", "uncaught error:", "--race", "--debug", "cplus build", "cplus.", "-fsanitize=address", "llvm-symbolizer", "libclang-rt-18-dev", "exit()",
     "cplus run app.cplus --race", "-l<name>", "-L<dir>", "--emit-llvm", "cplus explain", "spec:", "cplus explain cheatsheet", "{ x }", "[ x ]", "value_or()", "new[]",
-    "cplus fmt", "--check",
+    "cplus fmt", "--check", "cplus lsp", "editors/vscode",
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
@@ -938,6 +939,7 @@ def check_command_line(cplus, workdir):
         (["build", g, "-o", str(missing_dir / "out")], 1, "cannot write"), (["build", g, "-o", str(workdir / "out"), "-lno_such_library_here"], 1, "linking failed"),
         (["fmt"], 2, "fmt needs the files to format"), (["fmt", g, "--nope"], 2, "unknown option '--nope' for `cplus fmt`"),
         (["fmt", str(text)], 2, "is not a C+ source file"), (["fmt", str(workdir / "gone.cplus")], 1, "cannot read"),
+        (["lsp", "--nope"], 2, "unknown option '--nope' for `cplus lsp`"),
     ]
     ok = True
     for args, code, message in cases:
@@ -1093,6 +1095,244 @@ def check_format(cplus, workdir):
         shut.parent.chmod(0o755)
         if run.returncode != 1 or b"cannot write" not in run.stderr or shut.read_bytes() != messy or errors_without_help(run.stderr.decode()):
             fail("of a file in a folder that cannot be written to", run)
+    return ok
+
+
+class LspClient:
+    """Talks to `cplus lsp` as an editor does, and gives up on an answer after a while, so a server that hangs fails the test."""
+
+    def __init__(self, cplus, env=None):
+        self.process = subprocess.Popen([cplus, "lsp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, env=env)
+        self.buffer = b""
+        self.next_id = 0
+
+    def send_raw(self, data):
+        self.process.stdin.write(data)
+        self.process.stdin.flush()
+
+    def send(self, method, params=None, request=True):
+        message = {"jsonrpc": "2.0", "method": method, "params": params or {}}
+        if request:
+            self.next_id += 1
+            message["id"] = self.next_id
+        body = json.dumps(message).encode()
+        self.send_raw(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        return message.get("id")
+
+    def read(self, timeout=30):
+        import select
+        while True:
+            end = self.buffer.find(b"\r\n\r\n")
+            if end >= 0:
+                length = int(re.search(rb"Content-Length: *(\d+)", self.buffer[:end], re.I).group(1))
+                if len(self.buffer) >= end + 4 + length:
+                    body = self.buffer[end + 4:end + 4 + length]
+                    self.buffer = self.buffer[end + 4 + length:]
+                    return json.loads(body)
+            ready, _, _ = select.select([self.process.stdout], [], [], timeout)
+            if not ready:
+                raise TimeoutError("cplus lsp did not answer")
+            chunk = os.read(self.process.stdout.fileno(), 65536)
+            if not chunk:
+                return None
+            self.buffer += chunk
+
+    def answer(self, request_id):
+        while True:
+            message = self.read()
+            if message is None or message.get("id") == request_id:
+                return message
+
+    def diagnostics(self, uri):
+        while True:
+            message = self.read()
+            if message is None or (message.get("method") == "textDocument/publishDiagnostics" and message["params"]["uri"] == uri):
+                return message and message["params"]
+
+    def request(self, method, params=None):
+        return self.answer(self.send(method, params))
+
+    def finish(self):
+        try:
+            self.process.stdin.close()
+        except OSError:
+            pass
+        try:
+            code = self.process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            code = "none: it did not end"
+        stderr = self.process.stderr.read().decode()
+        return code, stderr
+
+
+def check_lsp(cplus):
+    """`cplus lsp` gives an editor the errors of a file as it changes, the meaning of a name and where it is declared, and the
+    file in the style of `cplus fmt`, and keeps going when a check of a file crashes."""
+    ok = True
+    def expect(what, holds, got):
+        nonlocal ok
+        if not holds:
+            print(f"FAIL cplus lsp: {what}; got {json.dumps(got)[:700]}")
+            ok = False
+    uri = "file:///work/app.cplus"
+    program = """// A point on the grid.
+struct Point { int x = 0; int y = 0; };
+
+// Adds them up.
+int add(int a, int b) { return a + b; }
+
+int main() {
+    Point p = {.x = 1};
+    auto total = add(p.x, 2);
+    string s = "é"; int bad = "no";
+    println("{}", total);
+    return 0;
+}
+"""
+    at = lambda line, character: {"textDocument": {"uri": uri}, "position": {"line": line, "character": character}}
+    hover = lambda answer: (answer or {}).get("result") and answer["result"]["contents"]["value"]
+    try:
+        lsp = LspClient(cplus)
+        answer = lsp.request("textDocument/hover", at(0, 0))
+        expect("a request before initialize is refused", answer and answer.get("error", {}).get("code") == -32002, answer)
+        answer = lsp.request("initialize", {"capabilities": {}})
+        caps = (answer or {}).get("result", {}).get("capabilities", {})
+        expect("initialize says what it does", caps.get("positionEncoding") == "utf-16" and caps.get("hoverProvider") and caps.get("definitionProvider")
+               and caps.get("documentFormattingProvider") and caps.get("textDocumentSync", {}).get("change") == 1, answer)
+        lsp.send("initialized", request=False)
+        lsp.send_raw(b"Content-Length: 5\r\n\r\n{bad}")
+        answer = lsp.read()
+        expect("what is not JSON is answered with a parse error", answer and answer.get("id") is None and answer.get("error", {}).get("code") == -32700, answer)
+        lsp.send_raw(b"Content-Type: x\r\n\r\n")  # no length, so nothing can be read: it is left out
+        lsp.send("textDocument/didOpen", {"textDocument": {"uri": uri, "languageId": "cplus", "version": 1, "text": program}}, request=False)
+        found = lsp.diagnostics(uri)
+        errors = (found or {}).get("diagnostics", [])
+        expect("an error comes with its place, counted in UTF-16, its help and its spec", found and found.get("version") == 1 and len(errors) == 1
+               and errors[0]["range"] == {"start": {"line": 9, "character": 30}, "end": {"line": 9, "character": 34}} and errors[0]["severity"] == 1
+               and "expected 'int' to initialize 'bad'" in errors[0]["message"] and "\nhelp: " in errors[0]["message"]
+               and errors[0].get("code") == "implicit-conversions" and "cplus explain implicit-conversions" in errors[0]["message"], found)
+        for (line, character), shows in [((8, 18), "```cplus\nint add(int a, int b)\n```\n\nAdds them up."), ((8, 10), "```cplus\nint total\n```"),
+                                         ((8, 5), "```cplus\nint\n```"), ((8, 23), "```cplus\nint x\n```\n\nA field of `Point`."),
+                                         ((7, 5), "```cplus\nstruct Point\n```\n\nA point on the grid."), ((7, 16), "```cplus\nint x\n```\n\nA field of `Point`."),
+                                         ((10, 20), "```cplus\nint total\n```"), ((4, 19), "```cplus\nint b\n```")]:
+            answer = lsp.request("textDocument/hover", at(line, character))
+            expect(f"hovering at {line}:{character} shows {shows!r}", hover(answer) == shows, answer)
+        answer = lsp.request("textDocument/hover", at(10, 5))
+        expect("hovering over println shows nothing, as it is part of the language", answer and answer.get("result") is None, answer)
+        answer = lsp.request("textDocument/definition", at(8, 18))
+        expect("the definition of a function is where it is declared", (answer or {}).get("result") == {
+            "uri": uri, "range": {"start": {"line": 4, "character": 4}, "end": {"line": 4, "character": 7}}}, answer)
+        answer = lsp.request("textDocument/definition", at(10, 20))
+        expect("the definition of a variable is where it is declared", ((answer or {}).get("result") or {}).get("range", {}).get("start") == {"line": 8, "character": 9}, answer)
+        generic = "template<typename T> T twice(T a) { return a * 2; }\nint main() {\n    string s = twice(\"s\");\n    return 0;\n}\n"
+        lsp.send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 2}, "contentChanges": [{"text": generic}]}, request=False)
+        found = lsp.diagnostics(uri)
+        errors = (found or {}).get("diagnostics", [])
+        expect("an error in a generic says where it was used", found and found.get("version") == 2 and len(errors) == 1 and errors[0].get("relatedInformation") == [
+            {"location": {"uri": uri, "range": {"start": {"line": 2, "character": 15}, "end": {"line": 2, "character": 20}}},
+             "message": "in 'twice<string>', which is used here"}], found)
+        lsp.send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 3}, "contentChanges": [
+            {"range": {"start": {"line": 2, "character": 15}, "end": {"line": 2, "character": 25}}, "text": "\"ss\""}]}, request=False)
+        found = lsp.diagnostics(uri)
+        expect("a change of part of the file is made where it says", found and found.get("version") == 3 and found.get("diagnostics") == [], found)
+        lsp.send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 4}, "contentChanges": [{"text": "int main(){return 0;}\n"}]}, request=False)
+        answer = lsp.request("textDocument/formatting", {"textDocument": {"uri": uri}, "options": {"tabSize": 4, "insertSpaces": True}})
+        expect("formatting gives the file as cplus fmt writes it", (answer or {}).get("result") == [
+            {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 1, "character": 0}}, "newText": "int main() { return 0; }\n"}], answer)
+        lsp.send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 5}, "contentChanges": [{"text": "int main() { return 0; }\n"}]}, request=False)
+        answer = lsp.request("textDocument/formatting", {"textDocument": {"uri": uri}})
+        expect("formatting a formatted file changes nothing", (answer or {}).get("result") == [], answer)
+        lsp.send("textDocument/didChange", {"textDocument": {"uri": uri, "version": 6}, "contentChanges": [{"text": "int main( { return 0; }\n"}]}, request=False)
+        answer = lsp.request("textDocument/formatting", {"textDocument": {"uri": uri}})
+        expect("a file with syntax errors is left as it is", (answer or {}).get("result") == [], answer)
+        answer = lsp.request("workspace/symbol", {"query": "x"})
+        expect("a method it does not have is answered with an error", answer and answer.get("error", {}).get("code") == -32601, answer)
+        lsp.send("textDocument/didClose", {"textDocument": {"uri": uri}}, request=False)
+        found = lsp.diagnostics(uri)
+        expect("closing a file takes its errors away", found and found.get("diagnostics") == [], found)
+        answer = lsp.request("shutdown")
+        expect("shutdown is answered", answer and "result" in answer and answer["result"] is None, answer)
+        answer = lsp.request("textDocument/hover", at(0, 0))
+        expect("a request after shutdown is refused", answer and answer.get("error", {}).get("code") == -32600, answer)
+        lsp.send("exit", request=False)
+        code, stderr = lsp.finish()
+        expect("exit after shutdown ends it with 0", code == 0 and "no Content-Length header" in stderr, [code, stderr])
+
+        # An editor that counts in bytes gets bytes; one that goes away without shutdown ends it with 1.
+        lsp = LspClient(cplus)
+        answer = lsp.request("initialize", {"capabilities": {"general": {"positionEncodings": ["utf-8", "utf-16"]}}})
+        expect("utf-8 is chosen when the editor can count bytes", (answer or {}).get("result", {}).get("capabilities", {}).get("positionEncoding") == "utf-8", answer)
+        lsp.send("textDocument/didOpen", {"textDocument": {"uri": uri, "languageId": "cplus", "version": 1, "text": program}}, request=False)
+        found = lsp.diagnostics(uri)
+        expect("a place counted in bytes", found and found["diagnostics"][0]["range"]["start"] == {"line": 9, "character": 31}, found)
+        code, _ = lsp.finish()
+        expect("an input that ends without shutdown ends it with 1", code == 1, code)
+
+        # Every example, with a hover and a definition asked for at each word: no check crashes, and the names have meanings.
+        lsp = LspClient(cplus)
+        lsp.request("initialize", {"capabilities": {}})
+        meanings = 0
+        for path in sorted((ROOT / "examples").rglob("*.cplus")):
+            file_uri = "file:///" + str(path.relative_to(ROOT))
+            text = path.read_text()
+            lsp.send("textDocument/didOpen", {"textDocument": {"uri": file_uri, "languageId": "cplus", "version": 1, "text": text}}, request=False)
+            found = lsp.diagnostics(file_uri)
+            expect(f"{path.relative_to(ROOT)} is checked without errors", found and found["diagnostics"] == [], found)
+            for line_number, line in enumerate(text.split("\n")):
+                for word in re.finditer(r"[A-Za-z_]\w*", line):
+                    place = {"textDocument": {"uri": file_uri}, "position": {"line": line_number, "character": word.start()}}
+                    meanings += bool((lsp.request("textDocument/hover", place) or {}).get("result"))
+                    lsp.request("textDocument/definition", place)
+            lsp.send("textDocument/didClose", {"textDocument": {"uri": file_uri}}, request=False)
+            lsp.diagnostics(file_uri)
+        lsp.request("shutdown")
+        lsp.send("exit", request=False)
+        code, _ = lsp.finish()
+        expect("the examples have names with meanings, and the server ends as it should", meanings > 1000 and code == 0, [meanings, code])
+
+        # A check that crashes is an error in the file, and the server goes on.
+        lsp = LspClient(cplus, env=dict(os.environ, CPLUS_LSP_CRASH_FOR_TESTS="1"))
+        lsp.request("initialize", {"capabilities": {}})
+        lsp.send("textDocument/didOpen", {"textDocument": {"uri": uri, "languageId": "cplus", "version": 1, "text": program}}, request=False)
+        found = lsp.diagnostics(uri)
+        errors = (found or {}).get("diagnostics", [])
+        expect("a crash in a check is reported", len(errors) == 1 and "cplus could not check this file, because the compiler stopped" in errors[0]["message"]
+               and "\nhelp: " in errors[0]["message"], found)
+        answer = lsp.request("textDocument/hover", at(8, 10))
+        expect("after a crash, the server still answers", answer and answer.get("result") is None, answer)
+        lsp.request("shutdown")
+        lsp.send("exit", request=False)
+        code, _ = lsp.finish()
+        expect("after a crash, the server ends as it should", code == 0, code)
+    except (TimeoutError, OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        print(f"FAIL cplus lsp: {type(e).__name__}: {e}")
+        ok = False
+    return ok
+
+
+def check_editor():
+    """The VS Code extension in editors/vscode is what VS Code can read, is for .cplus files, and colors every keyword the
+    compiler has."""
+    ok = True
+    folder = ROOT / "editors" / "vscode"
+    try:
+        manifest = json.loads((folder / "package.json").read_text())
+        json.loads((folder / "language-configuration.json").read_text())
+        grammar = (folder / "syntaxes" / "cplus.tmLanguage.json").read_text()
+        json.loads(grammar)
+    except (OSError, ValueError) as e:
+        print(f"FAIL editors/vscode: {e}")
+        return False
+    languages = manifest.get("contributes", {}).get("languages", [])
+    if not any(".cplus" in language.get("extensions", []) for language in languages):
+        print("FAIL editors/vscode/package.json does not say that .cplus files are C+")
+        ok = False
+    keywords = re.findall(r'X\(\w+, "([a-z_]+)"\)', (ROOT / "compiler" / "Lexer.h").read_text())
+    missing = [k for k in keywords if not re.search(r"\b" + k + r"\b", grammar)]
+    if not keywords or missing:
+        print(f"FAIL editors/vscode/syntaxes/cplus.tmLanguage.json does not color the keywords {missing or 'of compiler/Lexer.h'}")
+        ok = False
     return ok
 
 
@@ -1373,6 +1613,7 @@ def main():
     ok = check_spec_anchors()
     if not name_filter:
         ok = check_examples(cplus) and ok
+        ok = check_editor() and ok
         ok = check_example_for_each_section() and ok
         ok = check_explain(cplus) and ok
     passed = failed = 0
@@ -1416,6 +1657,8 @@ def main():
             ok = check_spec_code(cplus, pathlib.Path(tmp)) and ok
         if not name_filter or name_filter == "fmt":
             ok = check_format(cplus, pathlib.Path(tmp)) and ok
+        if not name_filter or name_filter == "lsp":
+            ok = check_lsp(cplus) and ok
 
         def run_in_own_folder(path):
             workdir = pathlib.Path(tmp) / f"{path.parent.name}-{path.stem}"

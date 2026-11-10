@@ -25,9 +25,19 @@ struct Loc {
     uint32_t len = 1;   // how many columns to underline
 };
 
+// A message as `cplus lsp` passes it to an editor, instead of printing it.
+struct Message {
+    std::string level;  // "error", "warning" or "note"; a note adds to the message before it
+    Loc loc;
+    std::string message, help, spec;
+};
+
 class Diagnostics {
 public:
     explicit Diagnostics(const SourceFile& file);
+
+    // From then on, what would be printed is kept in `into`.
+    void collectInto(std::vector<Message>* into) { collected_ = into; }
 
     // help: a concrete fix. spec: a heading anchor in docs/SPEC.md (see SpecRefs.h). Neither can be left out, as an error is
     // the first thing someone who has never seen C+ learns from.
@@ -61,6 +71,7 @@ private:
         std::string message;
     };
     std::vector<Context> contexts_;
+    std::vector<Message>* collected_ = nullptr;
     int muted_ = 0;
     int mutedErrors_ = 0;
 };

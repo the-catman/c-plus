@@ -33,7 +33,7 @@ void Diagnostics::error(Loc loc, const std::string& message, const std::string& 
     }
     ++errorCount_;
     if (errorCount_ > kMaxErrors) {
-        if (!suppressed_) std::fprintf(stderr, "error: too many errors, stopping here\n");
+        if (!suppressed_ && !collected_) std::fprintf(stderr, "error: too many errors, stopping here\n");
         suppressed_ = true;
         return;
     }
@@ -54,6 +54,10 @@ void Diagnostics::note(Loc loc, const std::string& message) {
 
 void Diagnostics::report(const char* level, const char* color, Loc loc, const std::string& message,
                          const std::string& help, const std::string& spec) {
+    if (collected_) {
+        collected_->push_back({level, loc, message, help, spec});
+        return;
+    }
     const char* bold = color_ ? "\x1b[1m" : "";
     const char* reset = color_ ? "\x1b[0m" : "";
     const char* blue = color_ ? "\x1b[1;34m" : "";

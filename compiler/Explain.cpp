@@ -49,6 +49,7 @@ constexpr Alias kAliases[] = {
     {"websocket", "http"},           {"websockets", "http"},         {"while", "control-flow"},
     {"array", "arrays"},             {"delay", "async-functions"},   {"sleep", "async-functions"},
     {"fmt", "formatting"},           {"formatter", "formatting"},    {"style", "formatting"},
+    {"lsp", "the-language-server"},  {"editor", "the-language-server"}, {"vscode", "the-language-server"},
 };
 
 std::string slug(std::string_view heading) {

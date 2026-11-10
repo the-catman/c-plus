@@ -1,0 +1,326 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "C+",
+  "scopeName": "source.cplus",
+  "fileTypes": [
+    "cplus"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#attributes"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#modules"
+    },
+    {
+      "include": "#calls"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.cplus",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.cplus"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.cplus"
+            }
+          }
+        },
+        {
+          "name": "comment.line.double-slash.cplus",
+          "begin": "//",
+          "end": "$",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.cplus"
+            }
+          }
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.attribute.cplus",
+          "begin": "\\[\\[",
+          "end": "\\]\\]",
+          "patterns": [
+            {
+              "name": "entity.other.attribute-name.cplus",
+              "match": "[A-Za-z_]\\w*"
+            }
+          ]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.raw.cplus",
+          "begin": "R\"([^\\s\\\\()]{0,16})\\(",
+          "end": "\\)\\1\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.cplus"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.cplus"
+            }
+          }
+        },
+        {
+          "name": "string.quoted.double.cplus",
+          "begin": "\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.cplus"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.cplus"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.cplus",
+              "match": "\\\\(?:x[0-9A-Fa-f]{2}|[0-7]{1,3}|.)"
+            },
+            {
+              "name": "constant.character.escape.cplus",
+              "match": "\\{\\{|\\}\\}"
+            },
+            {
+              "name": "constant.other.placeholder.cplus",
+              "match": "\\{[^{}\\\"]*\\}"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.cplus",
+          "match": "'(?:\\\\(?:x[0-9A-Fa-f]{2}|[0-7]{1,3}|.)|[^'\\\\])'",
+          "captures": {
+            "0": {
+              "name": "constant.character.cplus"
+            }
+          }
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.cplus",
+          "match": "\\b0[xX][0-9A-Fa-f](?:'?[0-9A-Fa-f])*(?:LL|L)?\\b"
+        },
+        {
+          "name": "constant.numeric.binary.cplus",
+          "match": "\\b0[bB][01](?:'?[01])*(?:LL|L)?\\b"
+        },
+        {
+          "name": "constant.numeric.octal.cplus",
+          "match": "\\b0[oO][0-7](?:'?[0-7])*(?:LL|L)?\\b"
+        },
+        {
+          "name": "constant.numeric.decimal.cplus",
+          "match": "(?:\\b[0-9](?:'?[0-9])*(?:\\.(?:[0-9](?:'?[0-9])*)?)?|\\B\\.[0-9](?:'?[0-9])*)(?:[eE][+-]?[0-9]+)?(?:f|LL|L)?\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(struct|class|interface|concept)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.cplus"
+            },
+            "2": {
+              "name": "entity.name.type.cplus"
+            }
+          }
+        },
+        {
+          "match": "\\b(template)\\s*(<)",
+          "captures": {
+            "1": {
+              "name": "storage.type.template.cplus"
+            },
+            "2": {
+              "name": "punctuation.definition.template.cplus"
+            }
+          }
+        },
+        {
+          "match": "\\b(extern)\\s+(\"C\")",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.cplus"
+            },
+            "2": {
+              "name": "string.quoted.double.cplus"
+            }
+          }
+        },
+        {
+          "match": "\\b(import)\\s+([A-Za-z_][\\w.]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.cplus"
+            },
+            "2": {
+              "name": "entity.name.namespace.cplus"
+            }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.cplus",
+          "match": "\\b(?:if|else|for|while|do|switch|case|default|break|continue|return|try|catch|throw|await|spawn)\\b"
+        },
+        {
+          "name": "storage.modifier.cplus",
+          "match": "\\b(?:const|constexpr|static|extern|virtual|override|throws|async|public|private|protected)\\b"
+        },
+        {
+          "name": "storage.type.cplus",
+          "match": "\\b(?:struct|class|interface|enum|namespace|template|typename|concept|requires|operator)\\b"
+        },
+        {
+          "name": "keyword.control.import.cplus",
+          "match": "\\b(?:import)\\b"
+        },
+        {
+          "name": "constant.language.cplus",
+          "match": "\\b(?:true|false|null)\\b"
+        },
+        {
+          "name": "variable.language.this.cplus",
+          "match": "\\b(?:this)\\b"
+        },
+        {
+          "name": "keyword.operator.cast.cplus",
+          "match": "\\b(?:static_cast|dynamic_cast|reinterpret_cast|const_cast)\\b"
+        },
+        {
+          "name": "keyword.operator.word.cplus",
+          "match": "\\b(?:new|delete|sizeof|move)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.cplus",
+          "match": "\\b(?:int|long|bool|char|double|float|void|string|auto)\\b"
+        },
+        {
+          "name": "support.type.cplus",
+          "match": "\\b(?:vector|array|hashmap|Task|unique|local|weak|Mutex|LockGuard|Error)\\b"
+        },
+        {
+          "name": "support.type.constraint.cplus",
+          "match": "\\b(?:Comparable|Number|Integer|Floating|Hashable|same_as|derived_from)\\b"
+        }
+      ]
+    },
+    "modules": {
+      "patterns": [
+        {
+          "match": "\\b(json|http|reflect)(::)",
+          "captures": {
+            "1": {
+              "name": "entity.name.namespace.cplus"
+            },
+            "2": {
+              "name": "punctuation.separator.scope-resolution.cplus"
+            }
+          }
+        }
+      ]
+    },
+    "calls": {
+      "patterns": [
+        {
+          "match": "\\b([A-Za-z_]\\w*)\\s*(?=\\()",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.cplus"
+            }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.optional.cplus",
+          "match": "\\?\\?|\\?\\."
+        },
+        {
+          "name": "keyword.operator.member.cplus",
+          "match": "->|::"
+        },
+        {
+          "name": "keyword.operator.assignment.compound.cplus",
+          "match": "(?:<<|>>|[-+*/%&|^])="
+        },
+        {
+          "name": "keyword.operator.comparison.cplus",
+          "match": "==|!=|<=|>="
+        },
+        {
+          "name": "keyword.operator.logical.cplus",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.increment.cplus",
+          "match": "\\+\\+|--"
+        },
+        {
+          "name": "keyword.operator.assignment.cplus",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.cplus",
+          "match": "[-+*/%&|^~<>?:]"
+        }
+      ]
+    }
+  }
+}

@@ -13,4 +13,6 @@ build/cplus run examples/bank.cplus
 
 `cplus explain <topic>` prints what the language says on a topic, such as `hashmap` or `spawn`, with an example that runs.
 
+`cplus fmt` writes C+ in its one style. For editors, `cplus lsp` is a language server, and [editors/vscode](editors/vscode) is an extension for VS Code.
+
 See [docs/CHEATSHEET.md](docs/CHEATSHEET.md) for the language and [PLAN.md](PLAN.md) for the roadmap.

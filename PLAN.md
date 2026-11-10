@@ -579,6 +579,17 @@ What §5 asks for, as built in Phase 4. Decided 2026-11-07.
 - It works on the tokens and the comments, once the parser has accepted the file. What it writes is read again, and kept only if it
   has the same tokens and comments, so it cannot change what a program does. A file with syntax errors is left as it is.
 
+### 2.29 Language server — DECIDED
+`cplus lsp`, with errors as you type, hover, go to definition and formatting first, and an extension for VS Code in
+`editors/vscode`. Decided 2026-11-10.
+- It is part of the compiler, so it is always the version that builds the code, and there is nothing more to install.
+- Completion comes later, when it is wanted: it needs the parser to make sense of a line that is half written.
+- Each version of a file is checked in a child process. The compiler keeps types in tables for as long as it runs, keyed by
+  where things are in memory, which is right for one compile and wrong for a server that runs for hours, and a crash on half
+  written code then costs one check and not the server. The child comes from `fork`, which Windows does not have: Phase 7 starts
+  `cplus` itself there instead.
+- The protocol is read and written with LLVM's JSON, which the compiler links already.
+
 ## 3. Compiler architecture
 
 ```
@@ -603,7 +614,7 @@ Open implementation questions are listed in §6.
 
 ## 4. Phases
 
-Status: Phases 0 to 5 are done. Phase 6 is under way: the formatter is done, and the LSP is next. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+Status: Phases 0 to 5 are done. Phase 6 is under way: the formatter and the language server are done, and C header import is next. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error

@@ -19,6 +19,7 @@
 #include "Explain.h"
 #include "Format.h"
 #include "Lexer.h"
+#include "Lsp.h"
 #include "Parser.h"
 #include "Sema.h"
 
@@ -34,6 +35,7 @@ static const char* kUsage =
     "  cplus build <file.cplus> --emit-llvm [-O]     print the LLVM IR instead\n"
     "  cplus run <file.cplus> [-O] [-- <args>...]    build to a temporary file and run it\n"
     "  cplus fmt <file or folder>... [--check]       write files in the one style of C+, or say which are not\n"
+    "  cplus lsp                                     a language server, which an editor starts, for errors as you type\n"
     "  cplus explain [<topic>]                       what the language says on a topic, with an example\n"
     "  cplus --version\n"
     "\n"
@@ -333,6 +335,12 @@ static int compilerMain(int argc, char** argv) {
         return explainTopic(argc == 3 ? argv[2] : "");
     }
     if (opts.command == "fmt") return formatFiles(argc, argv);
+    if (opts.command == "lsp") {
+        for (int i = 2; i < argc; ++i)  // editors often say how they connect, and stdin and stdout is the one way
+            if (std::strcmp(argv[i], "--stdio") != 0)
+                return usageError(std::string("unknown option '") + argv[i] + "' for `cplus lsp`, which an editor starts with no options, and talks to on stdin and stdout");
+        return runLanguageServer(CPLUS_VERSION);
+    }
     if (opts.command != "build" && opts.command != "run" && opts.command != "check")
         return usageError("unknown command '" + opts.command + "'");
 
