@@ -671,9 +671,9 @@ what holds real programs back most:
 2. A program's own modules, `import net.server;`, as §2.13 decides, so that a program can be more than one file. `.hplus`
    files wait for libraries that ship compiled.
 3. Enums and `switch`.
-4. References (§6): whether C+ has them, and in what form. This comes before lambdas and overloading, which depend on the
-   answer: what a lambda captures, what `operator[]` gives, and what a parameter can be. It decides `T&` parameters and
-   `for (auto& x : v)`, may replace the rules of §2.17 and §2.24 on when a result is a copy, and is where the safety of
+4. References, in the form chosen on 2026-11-11 (§6): C++'s, for references that are used but not kept. This comes
+   before lambdas and overloading, which depend on it: what a lambda captures, what `operator[]` gives, and what a
+   parameter can be. It may replace the rules of §2.17 and §2.24 on when a result is a copy, and is where the safety of
    §2.7 is tested hardest. `return &x;` of a local, which compiles today, is caught first.
 5. Lambdas, and a type for a function, then `sort` and the other functions that take one, and C callbacks.
 6. Function overloading, more than one constructor and default arguments, then operator overloading. Overloading also
@@ -734,9 +734,16 @@ will confidently write C++ wherever the two differ.
 - What a module has is one token with `::` in it, not a scope, which is what `joinModuleNames` makes. A program cannot tell, since it cannot declare such a name (`err_module_add`). Real scopes come with a program's own modules, which need them.
 - `main` takes its arguments as in C++, through raw pointers. A checked form,
   `int main(vector<string> args)`, comes in Phase 7.
-- References (`T&`): whether C+ gets them, and in what form, settled in Phase 7. They decide how
-  `for (auto& x : v)` and `const T&` parameters work; today both are errors that point to a
-  copy, which is cheap for vectors.
+- References (`T&`), in Phase 7. The direction was decided on 2026-11-11: C++'s syntax and meaning, for references that
+  are used but not kept, as in Swift and Hylo.
+  - In: parameters (`Point& p`, `const T&`), `for (auto& x : v)`, a result used where it is made (`v.back().x = 1`,
+    `m[k].count++`), and a reference variable in a block (`auto& e = m[k];`).
+  - Out: a reference in a field, a returned reference to a local, and a reference kept by a lambda that outlives the call.
+  - While a reference into a vector, string or hashmap lives, that one cannot grow or share its buffer. The compiler checks
+    this where it can tell, and the running program where it cannot, so a reference never dangles or changes a copy.
+  - Plain C++ references were turned down. Copies share a buffer until one is written (§2.12, §2.17), so writing through a
+    reference could change another variable's value, silently, where C++ would at worst crash under `--debug`.
+  - The details are decided when the item is reached. Today `for (auto& x : v)` and `T&` are errors that point to a copy.
 - A scheduler that shares async work between threads, which the rules in 2.9 allow
   (decided 2026-11-10), when real workloads need more than one loop per thread.
 - A runtime error stops the whole program, as in Swift. A server may want to end only the request that failed, which
