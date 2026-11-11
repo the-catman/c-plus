@@ -119,10 +119,21 @@ The default path:
 - Integer overflow traps always, with an error naming file and line. Explicit wrapping
   operators for hashing and crypto code are planned. A compiler flag could disable checks for a
   hot loop, if profiling ever justifies it.
-  - Reversed by the owner on 2026-11-11, to be built with unsigned integers: every integer, signed and unsigned,
-    wraps on overflow, as C# does, so that hash and crypto code works as written and one rule covers both. A keyword
-    makes overflow stop the program where that is wanted. Its form, and the rules for shifts, casts, constants and
-    unsigned numbers, are being settled; until it is built, overflow still traps.
+  - Reversed by the owner on 2026-11-11: every integer, signed and unsigned, wraps on overflow, as C# does, so that
+    hash and crypto code works as written and one rule covers both. `checked(a * b)` stops the program on overflow
+    instead, as does all of a function marked `[[checked]]`, or a file that starts with `[[checked]];`, where
+    `unchecked(...)` wraps again. It is lexical: it covers the operators written inside it, not the functions they call.
+    - Wrapping: `+ - *`, unary `-`, `++ --` and compound assignment, on every integer type and `char`; `MIN / -1` is
+      `MIN` and `abs(MIN)` is `MIN`. `MIN % -1` is 0. Division by zero always stops.
+    - A shift count out of range is masked to the width, as in JavaScript and C#, so `1 << 32` on an `int` is 1. Bits
+      shifted out fall off. In `checked`, a count out of range stops.
+    - A narrowing cast, `int(someLong)`, keeps the low bits, as in C++20. A float out of an integer's range becomes the
+      nearest end, and NaN becomes 0. In `checked`, both stop. `Color(n)` with no enumerator still stops.
+    - Constants and `constexpr` work out what the running program would, so they wrap too. In `checked`, an overflow there
+      is a compile error. `--debug` changes nothing.
+    - Unsigned integers: signed and unsigned never mix without a cast, and literals adapt. `char`, `uint8_t`, `uint16_t`
+      and `uint32_t` widen by themselves to a wider unsigned type, and `uint32_t` and smaller to `long`. `size()` stays
+      `long`. A C `unsigned` from a header becomes the unsigned type.
 
 Always available, no `unsafe` block:
 - Raw pointers `T*`, address-of, pointer arithmetic, casts, `new`/`delete`, `malloc`/`free`.
@@ -807,8 +818,13 @@ will confidently write C++ wherever the two differ.
 - Remaining syntax: lambdas, in Phase 7. Enums and `switch` are in §2.32.
   - Decided 2026-11-11 by the owner: a lambda captures as a JavaScript closure does. `[&]` shares the variable with
     the function, and the variable lives as long as anything uses it: one that a kept lambda captures moves into a
-    counted box. `[=]` copies, as in C++. One type, `function<R(Args...)>`, and no `mutable`. The details, such as a
-    loop's own variable and what cannot be shared, are being settled.
+    counted box. `[=]` copies, as in C++. One type, `function<R(Args...)>`, and no `mutable`.
+    - A lambda is borrowed when it is only called where it is written or passed to a parameter that only calls it,
+      as `sort`'s does, and then it boxes nothing. Otherwise it is kept: returned, stored, given to `spawn`.
+    - A loop's own variable, `for (int i = 0; ...)`, is a new one each round when a kept lambda shares it, as JavaScript's
+      `let` is, so the lambdas of three rounds see 0, 1 and 2.
+    - A kept lambda cannot share what the function only borrows: a `T&` parameter is an error, and a `const T&` one is
+      copied. In a struct's method, `this` is copied in a `const` method and an error otherwise.
 - Default arguments in generics, and a template beside a function of its name, in Phase 7 (§2.33).
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, keeps a copy of it or frees it, since the update to the element would be lost (decided
