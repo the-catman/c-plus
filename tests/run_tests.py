@@ -564,7 +564,7 @@ PLANNED_FEATURES = [
     ("vectors passed to C", 'extern "C" void f(vector<int> v);\n' + M % ""),
     ("unsigned types", M % "unsigned x = 10;"),
     ("unsigned literals", M % "int x = 10u;"),
-    ("overloading methods", 'struct P { int x = 0; int f(int a) { return a; } int f(long a) { return 1; } };\n' + M % ""),
+    ("a const and a non-const method that take the same parameters", 'struct P { int x = 0; int f(int a) { return a; } int f(int a) const { return 1; } };\n' + M % ""),
     ("more than one constructor", 'class C { public: C(int a) {} C(long a) {} };\n' + M % ""),
     ("a template beside a function of its name", 'template<typename T> T f(T x) { return x; }\nint f(int x) { return x; }\n' + M % ""),
     ("stoul", M % 'long n = stoul("1");'),

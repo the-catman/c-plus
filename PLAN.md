@@ -663,8 +663,11 @@ predict:
 - The return type and `throws` do not tell functions apart. `f(T)` beside `f(const T&)` is an error where they are declared.
   A C function and `main` cannot be overloaded. The LLVM name of an overloaded function carries what it takes:
   `cplus.f(int,long)`.
-- Next, in this order: methods, more than one constructor, then default arguments. A template beside a function of its name
-  waits until templates are chosen between too.
+- Methods overload the same way (built the same day). A class that overrides one method of an inherited name keeps the
+  others, which C++ hides; it cannot add to them. A `const` and a non-const method with the same parameters wait for `T&`
+  returns, which are what that pair is for.
+- Next: more than one constructor, then default arguments. A template beside a function of its name waits until templates
+  are chosen between too.
 
 ## 3. Compiler architecture
 
@@ -691,7 +694,7 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, the core
-language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references except the functions that return them, overloading of functions, and the library parts of item 7. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references except the functions that return them, overloading of functions and methods, and the library parts of item 7. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
@@ -777,7 +780,7 @@ will confidently write C++ wherever the two differ.
 ## 6. Open items
 
 - Remaining syntax: lambdas, in Phase 7. Enums and `switch` are in §2.32.
-- Overloading methods and constructors, and default arguments, in Phase 7 (§2.33).
+- More than one constructor, and default arguments, in Phase 7 (§2.33).
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, keeps a copy of it or frees it, since the update to the element would be lost (decided
   2026-11-06). Since 2026-11-11 the same goes for a function given a reference to an element (§2.31). The alternative is to pin a buffer separately from its reference count, so that writes

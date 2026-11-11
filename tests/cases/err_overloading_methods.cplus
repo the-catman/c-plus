@@ -1,0 +1,38 @@
+// Methods of one name that cannot be told apart, an override that replaces none of them, and calls that fit none or two.
+struct Point {
+    int x = 0;
+    int get(int n) { return x; }
+    int get(int n) const { return x; }
+    int area(int n) { return 1; }
+    long area(int k) { return 2; }
+    void take(string s) {}
+    void take(const string& s) {}
+    void scale(int a, long b) {}
+    void scale(long a, int b) {}
+};
+
+class Animal {
+public:
+    virtual string speak(int times) const { return "..."; }
+    virtual string speak(string word) const { return word; }
+};
+class Dog : public Animal {
+public:
+    string speak(double d) const override { return ""; }
+};
+
+int main() {
+    Point p = Point{};
+    p.scale(1, 2);
+    p.scale("x", 2);
+    return 0;
+}
+// error: 'speak' must take the parameters of one of the methods of 'Animal' that it replaces
+// error: make it take what one of them takes: `speak(int times)` and `speak(string word)`. A class cannot add to the methods of a name it inherits
+// error: this compiler does not support a `const` and a non-const method that take the same parameters yet
+// error: 'Point' already has a method named 'area'
+// error: rename one of them, or give them different parameters: what a method returns does not choose it
+// error: `Point.take(const string& s)` and `Point.take(string s)` would fit every call as well as each other
+// error: this call to 'scale' fits `Point.scale(int a, long b)` and `Point.scale(long a, int b)` as well as each other
+// error: convert an argument so that one fits better, as in `p.scale(1, long(2))`
+// error: 'Point' has no method 'scale' that takes (string, int)

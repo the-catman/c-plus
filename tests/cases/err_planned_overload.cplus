@@ -1,8 +1,8 @@
-// What overloading does not reach yet: methods, constructors, and a template beside a function.
+// What overloading does not reach yet: constructors, a template beside a function, and a const pair of methods.
 struct Point {
     int x = 0;
-    int scale(int n) { return x * n; }
-    int scale(double d) { return 0; }
+    int get(int n) { return x; }
+    int get(int n) const { return x; }
 };
 
 class Box {
@@ -19,7 +19,6 @@ int twice(int x) { return x; }
 int main() {
     return 0;
 }
-// error: this compiler does not support overloaded methods yet
-// error: rename one of them. Functions outside a type can share a name, when they take different parameters
+// error: this compiler does not support a `const` and a non-const method that take the same parameters yet
 // error: this compiler does not support more than one constructor yet
 // error: this compiler does not support a template function and another function of the same name yet

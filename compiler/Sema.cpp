@@ -141,6 +141,7 @@ static bool showsAsWritten(const std::string& text) {
 }
 
 static std::string spelled(const Expr& e, const std::string& fallback = "opt");
+static std::vector<FuncDecl*> methodsNamed(const StructDecl& at, const std::string& name);
 
 // A char as a literal would write it: `'a'`, `'\n'`, `'\''`, or `char(7)` for one that has no escape.
 static std::string charLiteral(unsigned char c) {
@@ -1692,15 +1693,32 @@ void Sema::checkMembers(StructDecl& sd) {
             continue;
         }
         auto [it, inserted] = seen.emplace(m->name, m.get());
-        if (!inserted) {
-            bool same = it->second->params.size() == m->params.size();
-            for (size_t i = 0; same && i < m->params.size(); ++i) same = it->second->params[i]->declType == m->params[i]->declType;
-            if (same)
-                diags_.error(m->nameLoc, q(sd.name) + " already has a method named " + q(m->name), "rename one of them, or remove it", spec::Methods);
-            else
-                diags_.error(m->nameLoc, "this compiler does not support overloaded methods yet",
-                             "rename one of them. Functions outside a type can share a name, when they take different parameters", spec::Overloading);
-            diags_.note(it->second->nameLoc, "the first one is here");
+        if (!inserted) {  // overloads, which must take different parameters
+            const FuncDecl* clash = nullptr;
+            bool constPair = false;
+            for (FuncDecl* other : sd.ownMethods(m->name)) {
+                if (other == m.get()) break;
+                bool same = false;
+                checkOverloadPair(*other, *m, same);
+                if (same && other->isConst != m->isConst) constPair = true;
+                if (same) {
+                    clash = other;
+                    break;
+                }
+            }
+            if (constPair) {
+                diags_.error(m->nameLoc, "this compiler does not support a `const` and a non-const method that take the same parameters yet",
+                             "keep one of them: a method that only reads the object is `const`, and can be called on any of them", spec::Overloading);
+                diags_.note(clash->nameLoc, "the other one is here");
+            } else if (clash) {
+                diags_.error(m->nameLoc, q(sd.name) + " already has a method named " + q(m->name),
+                             clash->retType != m->retType ? "rename one of them, or give them different parameters: what a method returns does not choose it"
+                                                          : "rename one of them, or remove it",
+                             spec::Methods);
+                diags_.note(clash->nameLoc, "the first one is here");
+            } else {
+                for (FuncDecl* other : sd.ownMethods(m->name)) other->overloaded = true;
+            }
         }
     }
 }
@@ -1846,7 +1864,24 @@ void Sema::checkOverrides(StructDecl& sd) {
         }
         bool fits = true;
         for (const StructDecl* other : declaring) {
-            const FuncDecl* method = other->ownMethod(m->name);
+            // What `other` has of the name, its own and what it inherits, of which this must replace one.
+            const std::vector<FuncDecl*> named = other->fieldIndex(m->name) >= 0 ? std::vector<FuncDecl*>{} : methodsNamed(*other, m->name);
+            const FuncDecl* method = nullptr;
+            for (const FuncDecl* n : named)
+                if (takesSameParams(*n, *m)) method = n;
+            auto bare = [](const FuncDecl& f) { return signature(f).substr(f.owner->name.size() + 1); };  // `speak(int times)`
+            if (!method && named.size() > 1) {
+                std::string list;
+                for (size_t i = 0; i < named.size(); ++i)
+                    list += (i == 0 ? "" : i + 1 == named.size() ? " and " : ", ") + std::string("`") + bare(*named[i]) + "`";
+                diags_.error(m->nameLoc, q(m->name) + " must take the parameters of one of the methods of " + q(other->name) + " that it replaces",
+                             "make it take what one of them takes: " + list + ". A class cannot add to the methods of a name it inherits",
+                             spec::Inheritance);
+                for (const FuncDecl* n : named) diags_.note(n->nameLoc, "`" + bare(*n) + "` is here");
+                fits = false;
+                break;
+            }
+            if (!method && !named.empty()) method = named[0];
             if (!method) {
                 diags_.error(m->nameLoc, q(sd.name) + " cannot have a method named " + q(m->name) + ", because its base class " +
                                              q(other->name) + " has a field with that name",
@@ -1907,7 +1942,7 @@ void Sema::checkOverrides(StructDecl& sd) {
         // The slot of the first base class, or a new one when only another base class has it.
         m->vtableSlot = (int)sd.vtable.size();
         for (size_t i = 0; i < sd.vtable.size(); ++i)
-            if (sd.vtable[i]->name == m->name) m->vtableSlot = (int)i;
+            if (sd.vtable[i]->name == m->name && takesSameParams(*sd.vtable[i], *m)) m->vtableSlot = (int)i;
         if (m->vtableSlot == (int)sd.vtable.size()) sd.vtable.push_back(m.get());
         else sd.vtable[m->vtableSlot] = m.get();
     }
@@ -5308,6 +5343,9 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (StructDecl* o = owner()) {
         BasePath found = findMember(*o, call.callee, nameLoc);
         if (FuncDecl* m = found.empty() ? nullptr : found.back()->ownMethod(call.callee)) {
+            const std::vector<FuncDecl*> named = methodsNamed(*found.back(), call.callee);
+            const bool chosen = named.size() > 1;
+            if (chosen && !(m = chooseOverload(call.callee, call.callee, found.back(), named, call.args, flow, nameLoc))) return Type::error();
             call.method = m;
             call.path = std::move(found);
             requestMethod(m);
@@ -5317,7 +5355,8 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             if (!m->isConst && fn_->isConst)
                 diags_.error(nameLoc, "const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
                              "remove `const` from " + q(fn_->name) + ", or mark " + q(m->name) + " `const` if it does not change any field", spec::Methods);
-            checkArgs(call.args, *m, flow, call.loc, q(m->name));
+            if (chosen) checkChosenArgs(call.args, *m, flow);
+            else checkArgs(call.args, *m, flow, call.loc, q(m->name));
             checkTaskKept(*m, call, nameLoc);
             return m->retType;
         }
@@ -5502,7 +5541,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     }
     FuncDecl* fn = it->second;
     if (fn->overloaded) {
-        fn = chooseOverload(call.callee, overloads_.at(call.callee), call.args, flow, nameLoc);
+        fn = chooseOverload(call.callee, call.callee, nullptr, overloads_.at(call.callee), call.args, flow, nameLoc);
         if (!fn) return Type::error();
         call.target = fn;
         if (&call != spawned_) checkCanFail(*fn, nameLoc);
@@ -5529,6 +5568,19 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
 }
 
 // ---- Overloading -----------------------------------------------------------
+
+// The methods of a name that a call on `at` can choose from: its own, and those of its base classes that it does not
+// override. A class can only override what it inherits of a name, never add to it, so these are one set of overloads.
+static std::vector<FuncDecl*> methodsNamed(const StructDecl& at, const std::string& name) {
+    std::vector<FuncDecl*> out = at.ownMethods(name);
+    for (const StructDecl* base : at.bases)
+        for (FuncDecl* m : methodsNamed(*base, name)) {
+            bool overridden = false;
+            for (const FuncDecl* own : out) overridden = overridden || takesSameParams(*own, *m);
+            if (!overridden) out.push_back(m);
+        }
+    return out;
+}
 
 namespace {
 // How well an argument fits a parameter, lower being better: the type itself, then widening within a kind, then any other
@@ -5574,7 +5626,9 @@ void Sema::checkOverloadPair(const FuncDecl& first, const FuncDecl& second, bool
 }
 
 // The function of a name that a call's arguments fit best (see Fit), or null after an error that says why there is none.
-FuncDecl* Sema::chooseOverload(const std::string& name, const std::vector<FuncDecl*>& candidates, std::vector<ExprPtr>& args, Flow& flow, Loc loc) {
+// `calledAs` is the call as written up to its arguments, as `describe` or `p.scale`, and `owner` the type of a method's.
+FuncDecl* Sema::chooseOverload(const std::string& name, const std::string& calledAs, const StructDecl* owner, const std::vector<FuncDecl*>& candidates,
+                               std::vector<ExprPtr>& args, Flow& flow, Loc loc) {
     bool broken = false;
     for (auto& a : args)
         if (!typelessList(*a)) broken = checkExpr(*a, flow)->isError() || broken;
@@ -5638,7 +5692,7 @@ FuncDecl* Sema::chooseOverload(const std::string& name, const std::vector<FuncDe
         std::string list;
         for (size_t i = 0; i < candidates.size(); ++i)
             list += (i == 0 ? "" : i + 1 == candidates.size() ? " and " : ", ") + std::string("`") + signature(*candidates[i]) + "`";
-        diags_.error(loc, "no function named " + q(name) + " takes " + given,
+        diags_.error(loc, owner ? q(owner->name) + " has no method " + q(name) + " that takes " + given : "no function named " + q(name) + " takes " + given,
                      "there are " + std::to_string(candidates.size()) + ": " + list + ". Give one of them what it takes, or add one that takes these", spec::Overloading);
         for (FuncDecl* f : candidates) diags_.note(f->nameLoc, "`" + signature(*f) + "` is here");
         return nullptr;
@@ -5656,7 +5710,7 @@ FuncDecl* Sema::chooseOverload(const std::string& name, const std::vector<FuncDe
     size_t pick = args.size();
     for (size_t i = 0; i < args.size() && pick == args.size(); ++i)
         if (a.params[i]->declType != b.params[i]->declType && (typelessList(*args[i]) || args[i]->type != a.params[i]->declType)) pick = i;
-    std::string example = name + "(";
+    std::string example = calledAs + "(";
     bool converted = false;
     for (size_t i = 0; i < args.size(); ++i) {
         const bool list = typelessList(*args[i]);
@@ -6212,6 +6266,13 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     }
     BasePath found = findMember(*toStart.back(), call.name, call.loc);
     FuncDecl* m = found.empty() ? nullptr : found.back()->ownMethod(call.name);
+    const std::vector<FuncDecl*> named = m ? methodsNamed(*found.back(), call.name) : std::vector<FuncDecl*>{};
+    const bool chosen = named.size() > 1;
+    if (chosen) {
+        const std::string calledAs = (call.receiver ? asBase(spelled(*call.receiver, "x")) + "." : "") + call.name;
+        m = chooseOverload(call.name, calledAs, found.back(), named, call.args, flow, call.loc);
+        if (!m) return Type::error();
+    }
     if (!m) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
         std::string help;
@@ -6348,7 +6409,8 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
             diags_.error(call.loc, "cannot call " + q(m->name) + " on const " + q(holder->name) + ", because it may change fields",
                          "declare " + q(holder->name) + " without `const`, or " + markConst, spec::Methods);
     }
-    checkArgs(call.args, *m, flow, call.loc, q(m->name));
+    if (chosen) checkChosenArgs(call.args, *m, flow);
+    else checkArgs(call.args, *m, flow, call.loc, q(m->name));
     checkTaskKept(*m, call, call.loc);
     return m->retType;
 }

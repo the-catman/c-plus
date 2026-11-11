@@ -737,8 +737,8 @@ println("{}", r.area());    // 24
   class is shared when copied. If the type's constructor or first field can take the value, that comes first.
 - A struct method works on the struct in place: `r.scale(2)` changes `r`. Called on a
   temporary, as in `makeRect().scale(2)`, it changes a copy that is then dropped.
-- A method cannot share its name with a field. Two methods cannot share a name until
-  methods can be [overloaded](#overloading).
+- A method cannot share its name with a field. Two methods can share a name when they
+  take different parameters: see [overloading](#overloading).
 
 A **constructor** is written as in C++: the type's name, the parameters, an optional
 initializer list, and a body.
@@ -1765,7 +1765,11 @@ grow(5);                         // 5 is not a variable, so it stays
   can change goes to the `T&`, and any other value to the `T`.
 - **A [C function](#c-functions) has its name alone**, as C has one function of each name.
   So does `main`.
-- Templates, methods and constructors do not share names with others yet.
+- **Methods overload the same way.** A class that overrides one of the methods of a name it
+  inherits keeps the others, which C++ would hide. It cannot add to them: a method with an
+  inherited name must override one of them.
+- Constructors, a template beside a function of its name, and a `const` and a non-const
+  method that take the same parameters are not supported yet.
 
 ### The main function
 
@@ -3240,8 +3244,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | C functions with variable arguments; vectors passed to or from C | planned |
 | Unsigned types | planned |
 | Format options for width, alignment and `{:x}`; math constants | planned |
-| Overloading functions | implemented |
-| Overloading methods and constructors, a template beside a function of its name | planned |
+| Overloading functions and methods | implemented |
+| Overloading constructors, a template beside a function of its name, a `const` and a non-const method that take the same parameters | planned |
 | Strings: `append`, `insert`, `erase`, `replace`, `rfind`, `compare`, `split`, `trim`, `join`, `replace_all` | implemented |
 | Reading numbers from strings: `stoi`, `stol`, `stod`, `stof` | implemented |
 | `hashmap<K, V>` | implemented |

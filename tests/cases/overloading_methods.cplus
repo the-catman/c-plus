@@ -1,0 +1,56 @@
+// Methods that share a name, in a struct and through virtual methods of a class.
+struct Point {
+    int x = 0;
+    int y = 0;
+    void move(int dx) { x += dx; }
+    void move(int dx, int dy) {
+        x += dx;
+        y += dy;
+    }
+    void move(const Point& by) { move(by.x, by.y); }  // a call inside chooses too
+    string kind(int n) const { return "int"; }
+    string kind(double d) const { return "double"; }
+};
+
+class Animal {
+public:
+    virtual string speak(int times) const { return "..."; }
+    virtual string speak(string word) const { return word; }
+    string name() const { return "animal"; }
+};
+class Dog : public Animal {
+public:
+    string speak(int times) const override {  // the other speak stays the base class's
+        string s = "";
+        for (int i = 0; i < times; ++i) s += "woof";
+        return s;
+    }
+};
+class Puppy : public Dog {
+public:
+    string speak(string word) const override { return "small " + word; }
+};
+
+int main() {
+    Point p = Point{};
+    p.move(1);
+    p.move(2, 3);
+    p.move(Point{10, 10});
+    println("{} {}", p.x, p.y);
+    // expect: 13 13
+    println("{} {}", p.kind(1), p.kind(1.5));
+    // expect: int double
+    Animal a = Dog();
+    println("{} {}", a.speak(2), a.speak("hi"));
+    // expect: woofwoof hi
+    Dog d = Dog();
+    println("{} {}", d.speak(1), d.speak("bark"));
+    // expect: woof bark
+    Animal small = Puppy();
+    println("{} {}", small.speak(3), small.speak("yip"));
+    // expect: woofwoofwoof small yip
+    Puppy q = Puppy();
+    println("{} {}", q.speak(1), q.Dog::speak("x"));
+    // expect: woof x
+    return 0;
+}

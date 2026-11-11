@@ -792,6 +792,17 @@ struct FieldDecl {
 
 // A struct (value type) or a class (reference-counted object). They share fields,
 // methods, constructors and access control.
+// Whether two functions of one name take the same parameters, passed the same way, which is what tells them apart.
+inline bool takesSameParams(const FuncDecl& a, const FuncDecl& b) {
+    if (a.params.size() != b.params.size()) return false;
+    for (size_t i = 0; i < a.params.size(); ++i) {
+        const VarDecl& x = *a.params[i];
+        const VarDecl& y = *b.params[i];
+        if (x.declType != y.declType || x.isRef != y.isRef || (x.isRef && x.isConst != y.isConst)) return false;
+    }
+    return true;
+}
+
 struct StructDecl {
     std::string name;
     Loc nameLoc;
@@ -856,10 +867,23 @@ struct StructDecl {
     // For an enum: the enumerator whose value is 0, which a variable without a value starts as, or -1. Without
     // one, the enum has no default value.
     int zeroEnumerator() const { return enumeratorWithValue(0); }
-    // The method with this name that this type declares itself.
+    // The method with this name that this type declares itself, the first if it has more (see ownMethods).
     FuncDecl* ownMethod(const std::string& methodName) const {
         for (auto& m : methods)
             if (m->role == FuncDecl::Role::Method && m->name == methodName) return m.get();
+        return nullptr;
+    }
+    // Every method with this name that this type declares itself, which are overloads of each other.
+    std::vector<FuncDecl*> ownMethods(const std::string& methodName) const {
+        std::vector<FuncDecl*> out;
+        for (auto& m : methods)
+            if (m->role == FuncDecl::Role::Method && m->name == methodName) out.push_back(m.get());
+        return out;
+    }
+    // The method this type declares itself with the name and parameters of `like`, which overrides it.
+    FuncDecl* ownMethodLike(const FuncDecl& like) const {
+        for (auto& m : methods)
+            if (m->role == FuncDecl::Role::Method && m->name == like.name && takesSameParams(*m, like)) return m.get();
         return nullptr;
     }
     // Everywhere in this type a field or method of this name is declared, as the path to it. A
@@ -925,7 +949,7 @@ struct StructDecl {
     // closest to the whole object on the way to that part. Other branches do not count.
     static const FuncDecl* finalOverrider(const BasePath& place, const FuncDecl* m) {
         for (const StructDecl* d : place)
-            if (const FuncDecl* own = d->ownMethod(m->name)) return own;
+            if (const FuncDecl* own = d->ownMethodLike(*m)) return own;
         return m;
     }
     // A virtual method without a body that this class still has, which makes it abstract.

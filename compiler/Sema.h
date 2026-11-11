@@ -193,7 +193,7 @@ private:
     // Checks arguments against parameters; `what` names the callee in messages.
     void checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow, Loc loc, const std::string& what);
     // Overloading: the function a call means, of those with its name, and its arguments checked against it.
-    FuncDecl* chooseOverload(const std::string& name, const std::vector<FuncDecl*>& candidates, std::vector<ExprPtr>& args, Flow& flow, Loc loc);
+    FuncDecl* chooseOverload(const std::string& name, const std::string& calledAs, const StructDecl* owner, const std::vector<FuncDecl*>& candidates, std::vector<ExprPtr>& args, Flow& flow, Loc loc);
     void checkChosenArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow);
     void checkOverloadPair(const FuncDecl& first, const FuncDecl& second, bool& sameParams);
     // One value given when building a struct or class: `Type(args)` or a `{ }` list.
