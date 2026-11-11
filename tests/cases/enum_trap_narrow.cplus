@@ -1,0 +1,14 @@
+// int(c) of an enum held in a long stops the program when its number does not fit in an int.
+enum class Big : long { Small = 1, Huge = 5000000000 };
+
+int main() {
+    Big b = Big::Small;
+    println("{}", int(b));
+    // expect: 1
+    b = Big::Huge;
+    println("{}", long(b));
+    // expect: 5000000000
+    println("{}", int(b));
+    return 0;
+}
+// trap: int(x) was given 5000000000, which does not fit in an int

@@ -1,0 +1,11 @@
+export enum class Color { Red, Green, Blue };
+
+export string name(Color c) {
+    switch (c) {
+        case Color::Red: return "red";
+        case Color::Green: return "green";
+        case Color::Blue: return "blue";
+    }
+}
+
+enum class Secret { A, B };

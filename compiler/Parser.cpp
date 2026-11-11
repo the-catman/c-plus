@@ -676,6 +676,7 @@ void Parser::parseProgram(Program& prog) {
     closeProgramBlocks();
     try {
         scanDeclarations(prog);
+        readEnums();
         for (auto& t : prog.templates) readTemplate(*t);
     } catch (TooDeep&) {
         return;
@@ -720,6 +721,18 @@ void Parser::scanDeclarations(Program& prog) {
             continue;
         }
         if ((kind == Tok::KwConst || kind == Tok::KwConstexpr) && depth == 0) constantStarts_.push_back(i);
+        // `enum class Color`, and `enum Color`, which is reported where it is, as is one inside a function or a type.
+        const bool usingEnum = i > 0 && toks_[i - 1].kind == Tok::Ident && toks_[i - 1].text == "using";
+        if (kind == Tok::KwEnum && !usingEnum) {
+            size_t at = i + 1;
+            if (toks_[at].kind == Tok::KwClass || toks_[at].kind == Tok::KwStruct) ++at;
+            if (at < toks_.size() && toks_[at].kind == Tok::Ident && typeNames_.insert(toks_[at].text).second) {
+                prog.structs.push_back(std::make_unique<StructDecl>(toks_[at].text, false));
+                prog.structs.back()->isEnum = true;
+                prog.structs.back()->type.kind = Type::Kind::Enum;
+                if (depth == 0) enumStarts_.push_back(i);
+            }
+        }
         bool isRecord = kind == Tok::KwStruct || kind == Tok::KwClass || kind == Tok::KwInterface;
         if (isRecord && toks_[i + 1].kind == Tok::Ident && typeNames_.insert(toks_[i + 1].text).second)
             prog.structs.push_back(std::make_unique<StructDecl>(toks_[i + 1].text, kind != Tok::KwStruct));
@@ -1017,6 +1030,7 @@ ConstHooks Parser::constHooks() {
             case Type::Kind::Vector: case Type::Kind::Weak:
                 return 8;
             case Type::Kind::String: return 24;
+            case Type::Kind::Enum: return t->decl->underlying && t->decl->underlying->is(Type::Kind::Long) ? 8 : 4;
             default: throw ConstError{loc, "the size of '" + std::string(t->name) + "' is not known yet where this is read"};
         }
     };
@@ -1401,11 +1415,14 @@ Loc Parser::parseAttribute() {
     Loc loc = advance().loc;
     advance();
     const Token& name = peek();
+    if (name.kind == Tok::Ident && name.text == "fallthrough")
+        fail(name.loc, "`[[fallthrough]];` is a statement, written in a switch",
+             "remove it here. It ends a section of a switch that runs on into the next one: `case 1: f(); [[fallthrough]]; case 2: g();`", spec::Switch);
     if (name.kind != Tok::Ident || name.text != "allow")
         fail(name.loc,
              name.kind == Tok::Ident ? "C+ has no attribute '" + name.text + "'"
                                      : "expected an attribute name after '[[', found " + describeToken(name),
-             "remove it. The one attribute C+ has is `[[allow(new_delete)]]`, which turns off the warning for new and delete",
+             "remove it. The attributes C+ has are `[[allow(new_delete)]]`, which turns off the warning for new and delete, and `[[fallthrough]];` in a switch",
              spec::NewDelete);
     advance();
     expect(Tok::LParen, "after 'allow'");
@@ -1432,6 +1449,13 @@ void Parser::rejectOtherLanguages() {
     // Only when a name or a type comes next, which an expression cannot have: `let` can still be the name of a variable.
     Tok next = peek(1).kind;
     if (t.text == "union" && next == Tok::LBrace) notYet(t.loc, "unions", "use a struct with a field for each, or classes that derive from one");
+    if (t.text == "using" && next == Tok::KwEnum) {  // `using enum Color;`
+        const std::string en = peek(2).kind == Tok::Ident ? peek(2).text : "Color";
+        const StructDecl* sd = prog_->findStruct(en);
+        const std::string value = sd && sd->isEnum && !sd->enumerators.empty() ? sd->enumerators[0].name : "Red";
+        fail(t.loc, "C+ has no `using enum`: an enumerator is always named with its enum",
+             "remove this line, and write `" + en + "::` before each value, as in `" + en + "::" + value + "`", spec::Enums);
+    }
     if (next != Tok::Ident && next != Tok::KwInt && next != Tok::KwLong && next != Tok::KwBool && next != Tok::KwString && next != Tok::KwDouble && next != Tok::KwFloat &&
         next != Tok::KwChar && next != Tok::KwVoid && next != Tok::KwAuto && next != Tok::KwConst && next != Tok::KwStruct && next != Tok::KwClass && next != Tok::KwNamespace)
         return;
@@ -1697,7 +1721,10 @@ void Parser::parseTopLevel(Program& prog) {
             else throw ParseError{};
             return;
         }
-        case Tok::KwEnum: notYet(t.loc, "enums", "use constants for now: `const int RED = 0;`");
+        case Tok::KwEnum:  // read before the rest
+            if (auto it = enumEnds_.find(pos_); it != enumEnds_.end()) pos_ = it->second;
+            else parseEnum();
+            return;
         case Tok::KwAsync:
             asyncPending_ = parseAsyncMark(asyncAt_);
             break;  // a function follows, read as any other
@@ -1846,6 +1873,13 @@ void Parser::parseExtern(Program& prog) {
 }
 
 void Parser::parseExternItem(Program& prog) {
+    if (check(Tok::KwEnum)) {
+        diags_.error(peek().loc, "an enum is not declared inside `extern \"C\"`",
+                     "define it outside the block, as a C+ enum. A C function takes it as an `int`: declare the parameter `int`, pass "
+                     "`int(c)`, and turn what C gives back into the enum with `Color(n)`, which checks it",
+                     spec::Enums);
+        return parseEnum();  // its values can still be used
+    }
     if (check(Tok::KwStruct) || check(Tok::KwClass) || (check(Tok::Ident) && peek().text == "typedef"))
         return parseOpaqueStruct();
     prog.funcs.push_back(parseExternFunction());
@@ -1886,8 +1920,8 @@ void Parser::parseOpaqueStruct() {
     advance();
     StructDecl* sd = prog_->findStruct(name.text);  // created by the scan in parseProgram
     if (sd->opaque && sd->nameLoc.file != name.loc.file) return;  // one C type, declared in two files
-    if (sd->defined || sd->opaque || sd->isClass) {
-        diags_.error(name.loc, "the name '" + name.text + "' is already used by another struct or class",
+    if (sd->defined || sd->opaque || sd->isClass || sd->isEnum) {
+        diags_.error(name.loc, "the name '" + name.text + "' is already used by another " + (sd->isEnum ? "type" : "struct or class"),
                      "rename one of them", spec::Structs);
         if (sd->defined || sd->opaque) diags_.note(sd->nameLoc, "the first one is here");
         return;
@@ -2968,10 +3002,10 @@ void Parser::parseRecord(StructDecl* into) {
     }
     StructDecl* sd = into ? into : prog_->findStruct(name.text);  // created by the scan in parseProgram
     std::unique_ptr<StructDecl> duplicate;
-    if (!into && (sd->defined || sd->opaque || sd->isClass != isClass)) {
-        diags_.error(name.loc, "the name '" + name.text + "' is already used by another struct or class",
+    if (!into && (sd->defined || sd->opaque || sd->isEnum || sd->isClass != isClass)) {
+        diags_.error(name.loc, "the name '" + name.text + "' is already used by another " + (sd->isEnum ? "type" : "struct or class"),
                      "rename one of them", spec::Structs);
-        if (sd->defined || sd->opaque) diags_.note(sd->nameLoc, "the first definition is here");
+        if (sd->defined || sd->opaque || (sd->isEnum && sd->nameLoc.line)) diags_.note(sd->nameLoc, "the first definition is here");
         duplicate = std::make_unique<StructDecl>(name.text, isClass);  // parse into a scratch copy to keep going
         sd = duplicate.get();
     }
@@ -3101,6 +3135,14 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         case Tok::KwStruct: case Tok::KwClass:
             rejectStructKeyword();
             notYet(t.loc, "nested type definitions", "define it at the top level instead");
+        case Tok::KwEnum: {
+            const Token& named = peek(peek(1).kind == Tok::KwClass || peek(1).kind == Tok::KwStruct ? 2 : 1);
+            const std::string en = named.kind == Tok::Ident ? named.text : "Kind";
+            diags_.error(t.loc, std::string("an enum is defined at the top level of a file, not inside a ") + sd.keyword(),
+                         "move it out of '" + sd.name + "', before or after it. Its values are then named with the enum alone, as in `" + en + "::...`",
+                         spec::Enums);
+            return parseEnum();  // its values can still be used
+        }
         case Tok::KwStatic: notYet(t.loc, "static members", "use a constant or a function outside the type");
         case Tok::KwConstexpr:
             notYet(t.loc, "constexpr methods and fields", "write a `constexpr` function or constant outside the type");
@@ -3502,7 +3544,13 @@ StmtPtr Parser::parseStmt() {
         case Tok::KwStruct: case Tok::KwClass:
             rejectStructKeyword();
             notYet(t.loc, "types defined inside a function", "define it at the top level of the file");
+        case Tok::KwEnum:
+            diags_.error(t.loc, "an enum is defined at the top level of a file, not inside a function",
+                         "move it out of the function, before or after it", spec::Enums);
+            parseEnum();  // its values can still be used
+            return std::make_unique<BlockStmt>(t.loc);
         case Tok::LBracket:
+            if (atAttribute() && peek(2).kind == Tok::Ident && peek(2).text == "fallthrough") return parseFallthrough();
             if (atAttribute()) {
                 Loc attr = parseAttribute();
                 fail(attr, "[[allow(new_delete)]] is written before a function, not before a statement",
@@ -3562,7 +3610,7 @@ StmtPtr Parser::parseStmt() {
         case Tok::KwStatic:
             notYet(t.loc, "static local variables",
                    "keep the value in a class object, or pass it to the function and return the new value");
-        case Tok::KwSwitch: notYet(t.loc, "switch statements", "use if / else if for now");
+        case Tok::KwSwitch: return parseSwitch();
         case Tok::KwTry:
             if (peek(1).kind == Tok::LBrace) return parseTry();
             break;  // `try f();`, an expression
@@ -4217,6 +4265,8 @@ ExprPtr Parser::parsePrimary() {
                 }
                 if (peek(close).kind == Tok::LBrace) notYet(t.loc, "lambdas", "write a function at the top level of the file, and call it by name");
             }
+            if (const StructDecl* en = isTypeName(t) && !boundType(t) ? prog_->findStruct(t.text) : nullptr; en && en->isEnum)
+                if (ExprPtr use = parseEnumUse(t, *en)) return use;
             if (check(Tok::ColonColon)) {
                 if (t.text == "std") failStd(t.loc, peek(1));
                 if ((isTypeName(t) || classTemplate(t.text)) && peek(1).kind == Tok::Ident) {  // `Animal::speak()`: a member of `this`
@@ -4376,8 +4426,7 @@ ExprPtr Parser::parsePrimary() {
         }
         case Tok::KwElse:
             fail(t.loc, "an `else` comes right after the body of an `if`", "check the braces before it, or remove it", spec::ControlFlow);
-        case Tok::KwCase: case Tok::KwDefault:
-            notYet(t.loc, "switch statements", "use if / else if for now");
+        case Tok::KwCase: case Tok::KwDefault: failStrayLabel(t);
         default:
             fail(t.loc, "expected an expression, found " + describeToken(t), "write a value, a name or a call, such as `1`, `x` or `f(x)`", spec::Grammar);
     }
@@ -4437,6 +4486,315 @@ ExprPtr Parser::parseInitList(Loc start, const Type* explicitType) {
     }
     expect(Tok::RBrace, "to close the { } list");
     return list;
+}
+
+// ---- Enums and switch -----------------------------------------------------------
+
+// An enumerator of the enum, to show in advice.
+static std::string sampleEnumerator(const StructDecl& en) { return en.enumerators.empty() ? "Value" : en.enumerators[0].name; }
+
+// Each enum outside a function is read before anything else, so that its values are known wherever
+// a constant's are. Where it is, parseTopLevel then goes past it.
+void Parser::readEnums() {
+    for (size_t start : enumStarts_) {
+        pos_ = start;
+        try {
+            parseEnum();
+        } catch (ParseError&) {
+            syncTopLevel();
+        }
+        enumEnds_[start] = pos_;
+    }
+    pos_ = 0;
+}
+
+void Parser::parseEnum() {
+    const Token& kw = advance();
+    if (check(Tok::LBrace) || check(Tok::Colon))
+        fail(kw.loc, "C+ has no enums without a name",
+             "for numbers with names, write constants: `const int A = 0, B = 1;`. For a type of its own, give it a name: `enum class Kind { A, B };`",
+             spec::Enums);
+    const bool isStruct = check(Tok::KwStruct), plain = !isStruct && !check(Tok::KwClass);
+    if (!plain) advance();
+    const Token& name = expectNewName("for the name of the enum");
+    if (plain || isStruct) {  // reported, and read as `enum class`
+        std::string first = "A";
+        for (size_t at = 0; at < 8 && !check(Tok::Eof); ++at)
+            if (peek(at).kind == Tok::LBrace) {
+                if (peek(at + 1).kind == Tok::Ident) first = peek(at + 1).text;
+                break;
+            }
+        diags_.error(kw.loc, plain ? "C+ has only scoped enums, written `enum class`" : "C+ writes `enum class`, not `enum struct`",
+                     "write `enum class " + name.text + " { " + first + ", ... };`, and name each value with its enum: `" + name.text + "::" + first + "`",
+                     spec::Enums);
+    }
+    StructDecl* sd = prog_->findStruct(name.text);
+    if (!sd && typeNames_.insert(name.text).second) {  // one the scan did not see, as it is not at the top level
+        prog_->structs.push_back(std::make_unique<StructDecl>(name.text, false));
+        sd = prog_->structs.back().get();
+        sd->isEnum = true;
+        sd->type.kind = Type::Kind::Enum;
+    }
+    std::unique_ptr<StructDecl> duplicate;
+    if (!sd || !sd->isEnum || sd->valuesKnown) {
+        diags_.error(name.loc, "the name '" + name.text + "' is already used by another type", "rename one of them", spec::Enums);
+        if (sd && sd->nameLoc.line) diags_.note(sd->nameLoc, "the first definition is here");
+        duplicate = std::make_unique<StructDecl>(name.text, false);  // read into a scratch copy to keep going
+        sd = duplicate.get();
+        sd->isEnum = true;
+        sd->type.kind = Type::Kind::Enum;
+    }
+    sd->nameLoc = name.loc;
+    sd->underlying = Type::intTy();
+    struct Done {  // what could not be read is reported, and what was is known
+        StructDecl& sd;
+        bool ok = false;
+        ~Done() {
+            sd.valuesKnown = true;
+            sd.enumFailed = sd.enumFailed || !ok;
+        }
+    } done{*sd};
+    if (match(Tok::Colon)) {
+        const Token& u = peek();
+        if (u.kind == Tok::KwInt || u.kind == Tok::KwLong) {
+            advance();
+            sd->underlying = u.kind == Tok::KwLong ? Type::longTy() : Type::intTy();
+        } else {
+            const std::string written = u.text.empty() ? tokSpelling(u.kind) : u.text;
+            const bool integer = u.kind == Tok::KwChar || written == "short" || written == "unsigned" || written == "signed" || written == "int8_t" ||
+                                 written == "uint8_t" || written == "int16_t" || written == "uint16_t" || cIntegerEquivalent(written);
+            if (integer) notYet(u.loc, "enums held in '" + written + "'", "leave out `: " + written + "`, which holds it in an int, or write `: long`");
+            fail(u.loc, "an enum is held in an integer type, not in " + describeToken(u),
+                 "leave out `: " + written + "`, which holds it in an int, or write `: long`", spec::Enums);
+        }
+    }
+    if (check(Tok::Semi))
+        fail(peek().loc, "an enum is declared with its enumerators",
+             "list them in braces: `enum class " + name.text + " { A, B };`. It can be used before or after that, so nothing needs to be declared first",
+             spec::Enums);
+    expect(Tok::LBrace, "to start the enumerators of '" + name.text + "'");
+    if (check(Tok::RBrace))
+        fail(peek().loc, "the enum '" + name.text + "' has no enumerators", "list at least one in the braces: `enum class " + name.text + " { A, B };`",
+             spec::Enums);
+    const bool isLong = sd->underlying->is(Type::Kind::Long);
+    const int64_t high = isLong ? INT64_MAX : INT32_MAX;
+    int64_t next = 0;
+    bool nextFits = true;
+    while (true) {
+        const Token& e = expectNewName("for the name of an enumerator");
+        if (sd->enumeratorIndex(e.text) >= 0)
+            diags_.error(e.loc, "the enum '" + name.text + "' has two enumerators named '" + e.text + "'", "rename one of them", spec::Enums);
+        int64_t value = next;
+        if (match(Tok::Assign)) {
+            const size_t from = pos_;
+            ExprPtr written = parseTernary();
+            for (size_t at = from; at < pos_; ++at)
+                if (toks_[at].kind == Tok::Ident && (toks_[at].text == name.text || toks_[at].text == e.text || sd->enumeratorIndex(toks_[at].text) >= 0))
+                    notYet(toks_[at].loc, "an enumerator's value that uses an enumerator", "write the number itself, such as `" + e.text + " = 2`");
+            value = enumeratorValue(*written, *sd, next);
+        } else if (!nextFits) {
+            diags_.error(e.loc, "the value of '" + e.text + "', one more than the enumerator before it, does not fit in '" + sd->underlying->name + "'",
+                         isLong ? "give it a value of its own"
+                                : "give it a value of its own, or hold the enum in a long: `enum class " + name.text + " : long { ... }`",
+                         spec::Enums);
+        }
+        sd->enumerators.push_back({e.text, e.loc, value});
+        nextFits = value < high;
+        next = nextFits ? value + 1 : value;
+        if (match(Tok::Comma)) {
+            if (check(Tok::RBrace)) break;  // a comma after the last one is allowed, as in C++
+            continue;
+        }
+        if (check(Tok::Ident))
+            fail(peek().loc, "expected ',' between the enumerators of '" + name.text + "', found " + describeToken(peek()),
+                 "write a ',' after '" + e.text + "'", spec::Enums);
+        break;
+    }
+    expect(Tok::RBrace, "to close the enum '" + name.text + "'");
+    done.ok = true;
+    if (!match(Tok::Semi))  // reported without skipping ahead, so the next declaration still parses
+        diags_.error(afterPrev(), "expected ';' after the definition of enum '" + name.text + "', found " + describeToken(peek()),
+                     "an enum definition ends with `};`, as in C++", spec::Enums);
+}
+
+// The value written for an enumerator: an integer, known while compiling, that fits the enum.
+int64_t Parser::enumeratorValue(const Expr& e, const StructDecl& en, int64_t fallback) {
+    ConstValue v;
+    try {
+        ConstEval eval(constHooks());
+        v = eval.eval(e);
+    } catch (ConstError& error) {
+        diags_.error(e.loc, "the value of an enumerator must be known while compiling, but " + error.message,
+                     "write a number, or numbers and constants, such as `1 << 4`", spec::Enums);
+        if (error.loc.line && error.loc.line != e.loc.line) diags_.note(error.loc, "this is what cannot be worked out");
+        return fallback;
+    }
+    if (v.kind != ConstValue::Kind::Int && v.kind != ConstValue::Kind::Long && v.kind != ConstValue::Kind::Char) {
+        diags_.error(e.loc, std::string("the value of an enumerator is an integer, not a '") + v.typeName() + "'",
+                     "write a whole number, such as `= 1`", spec::Enums);
+        return fallback;
+    }
+    if (!en.underlying->is(Type::Kind::Long) && (v.i < INT32_MIN || v.i > INT32_MAX)) {
+        diags_.error(e.loc, "the value " + std::to_string(v.i) + " does not fit in 'int', which holds the enum '" + en.name + "'",
+                     "write a smaller number, or hold the enum in a long: `enum class " + en.name + " : long { ... }`", spec::Enums);
+        return fallback;
+    }
+    return v.i;
+}
+
+ExprPtr Parser::parseEnumUse(const Token& t, const StructDecl& en) {
+    Loc typeLoc = t.loc;
+    auto through = [&](Loc start) {  // from the enum's name to the token just read
+        if (prev().loc.line == start.line) start.len = prev().loc.col + prev().loc.len - start.col;
+        return start;
+    };
+    if (match(Tok::ColonColon)) {
+        if (!check(Tok::Ident))
+            fail(peek().loc, "expected the name of an enumerator after '" + t.text + "::', found " + describeToken(peek()),
+                 "write e.g. `" + t.text + "::" + sampleEnumerator(en) + "`", spec::Enums);
+        const Token& name = advance();
+        return std::make_unique<EnumValueExpr>(through(typeLoc), typeLoc, &en, name.text, name.loc);
+    }
+    if (check(Tok::Dot) && peek(1).kind == Tok::Ident)
+        fail(peek().loc, "an enumerator is named with '::', not '.'", "write `" + t.text + "::" + peek(1).text + "`", spec::Enums);
+    if (check(Tok::LBrace))
+        fail(peek().loc, "a value of an enum is not built with a { } list",
+             "write an enumerator, such as `" + t.text + "::" + sampleEnumerator(en) + "`, or turn a number into one with `" + t.text + "(n)`", spec::Enums);
+    if (!match(Tok::LParen)) return nullptr;
+    if (check(Tok::RParen))
+        fail(peek().loc, "a conversion to '" + t.text + "' takes one value",
+             "write an enumerator, such as `" + t.text + "::" + sampleEnumerator(en) + "`, or turn a number into one with `" + t.text + "(n)`", spec::Enums);
+    ExprPtr operand = parseExpr();
+    if (check(Tok::Comma)) fail(peek().loc, "a conversion to '" + t.text + "' takes one value", "write `" + t.text + "(n)`", spec::Casts);
+    expect(Tok::RParen, "to close the conversion");
+    return std::make_unique<CastExpr>(through(typeLoc), &en.type, std::move(operand));
+}
+
+StmtPtr Parser::parseSwitch() {
+    Loc loc = advance().loc;
+    expect(Tok::LParen, "after 'switch'");
+    try {
+        int depth = 0;
+        for (size_t at = 0; peek(at).kind != Tok::Eof && peek(at).kind != Tok::LBrace; ++at) {  // `switch (auto c = next(); c)`
+            Tok k = peek(at).kind;
+            if (k == Tok::LParen) ++depth;
+            else if (k == Tok::RParen && --depth < 0) break;
+            else if (k == Tok::Semi && depth == 0)
+                notYet(peek(at).loc, "a statement before the value of a switch",
+                       "write it on the line before the switch, and give the switch only the value: `switch (value)`");
+        }
+        if (isDeclarationStart())
+            notYet(peek().loc, "a declaration as the value of a switch", "declare the variable on the line before the switch, and write `switch (value)`");
+    } catch (ParseError&) {  // past its parentheses and its braces, so that what comes after is read as it is
+        for (int parens = 1; parens > 0 && !check(Tok::Eof);) {
+            Tok k = advance().kind;
+            parens += k == Tok::LParen ? 1 : k == Tok::RParen ? -1 : 0;
+        }
+        if (check(Tok::LBrace)) syncStatement();
+        return std::make_unique<ErrorStmt>(loc);
+    }
+    ExprPtr value = parseExpr();
+    expect(Tok::RParen, "after the switch value");
+    if (!check(Tok::LBrace)) {
+        diags_.error(peek().loc, "the body of a switch is a block of cases, in braces", "write `switch (x) { case 1: ...; break; default: ...; }`", spec::Switch);
+        syncStatement();  // the one statement there is, `case 1: f();`
+        return std::make_unique<ErrorStmt>(loc);
+    }
+    advance();
+    auto sw = std::make_unique<SwitchStmt>(loc, std::move(value));
+    if (!check(Tok::KwCase) && !check(Tok::KwDefault) && !check(Tok::RBrace))  // and they are read as a section that no label leads to
+        diags_.error(peek().loc, "the body of a switch starts with a case label", "write `case value:` or `default:` before the first statement", spec::Switch);
+    ++switchDepth_;
+    struct Leave {
+        int& depth;
+        ~Leave() { --depth; }
+    } leave{switchDepth_};
+    while (!check(Tok::RBrace) && !check(Tok::Eof)) {
+        SwitchSection section;
+        while (check(Tok::KwCase) || check(Tok::KwDefault)) parseCaseLabel(section);
+        section.body = std::make_unique<BlockStmt>(peek().loc);
+        localScopes_.emplace_back();  // each section is a scope of its own
+        struct Pop {
+            std::vector<std::unordered_map<std::string, const VarDecl*>>& scopes;
+            ~Pop() { scopes.pop_back(); }
+        } pop{localScopes_};
+        while (!check(Tok::KwCase) && !check(Tok::KwDefault) && !check(Tok::RBrace) && !check(Tok::Eof)) {
+            Loc start = peek().loc;
+            try {
+                section.body->stmts.push_back(parseStmt());
+            } catch (ParseError&) {
+                syncStatement();
+                section.body->stmts.push_back(std::make_unique<ErrorStmt>(start));
+            }
+        }
+        section.body->endLoc = peek().loc;
+        sw->sections.push_back(std::move(section));
+    }
+    sw->endLoc = peek().loc;
+    expect(Tok::RBrace, "to close the switch");
+    return sw;
+}
+
+void Parser::parseCaseLabel(SwitchSection& section) {
+    const Token& kw = advance();
+    try {
+        if (kw.kind == Tok::KwDefault) {
+            section.labels.emplace_back();
+            section.labels.back().loc = kw.loc;
+            expect(Tok::Colon, "after 'default'");
+            return;
+        }
+        int depth = 0;
+        for (size_t at = 0; peek(at).kind != Tok::Eof; ++at) {  // `case 1 ... 5:`, as GCC allows
+            Tok k = peek(at).kind;
+            if (k == Tok::LParen || k == Tok::LBracket || k == Tok::LBrace) ++depth;
+            else if (k == Tok::RParen || k == Tok::RBracket || k == Tok::RBrace) {
+                if (--depth < 0) break;
+            } else if (depth == 0 && (k == Tok::Colon || k == Tok::Semi)) break;
+            else if (depth == 0 && k == Tok::Dot && peek(at + 1).kind == Tok::Dot && peek(at + 2).kind == Tok::Dot)
+                fail(peek(at).loc, "C+ has no ranges of case values",
+                     "write a label for each value, `case 1: case 2: case 3:`, or test the range with `if (x >= 1 && x <= 3)`", spec::Switch);
+        }
+        while (true) {
+            Loc at = peek().loc;
+            ExprPtr value = parseTernary();
+            section.labels.emplace_back();
+            section.labels.back().loc = at;
+            section.labels.back().value = std::move(value);
+            if (!check(Tok::Comma)) break;
+            diags_.error(peek().loc, "a case label has one value", "write a label for each value: `case 1: case 2:`", spec::Switch);
+            advance();  // and the next value is read as a label of its own
+        }
+        expect(Tok::Colon, "after the case value");
+    } catch (ParseError&) {  // to the ':', so the statements after it are still read
+        while (!check(Tok::Eof) && !check(Tok::Colon) && !check(Tok::Semi) && !check(Tok::RBrace) && !check(Tok::KwCase) && !check(Tok::KwDefault))
+            advance();
+        match(Tok::Colon);
+    }
+}
+
+StmtPtr Parser::parseFallthrough() {
+    Loc loc = advance().loc;
+    advance();
+    advance();  // `[[fallthrough`
+    if (check(Tok::LParen))
+        fail(peek().loc, "`[[fallthrough]]` takes nothing in parentheses", "write `[[fallthrough]];`", spec::Switch);
+    expect(Tok::RBracket, "to close `[[fallthrough]]`");
+    expect(Tok::RBracket, "to close `[[fallthrough]]`");
+    if (prev().loc.line == loc.line) loc.len = prev().loc.col + 1 - loc.col;
+    expect(Tok::Semi, "after `[[fallthrough]]`");
+    if (!switchDepth_)
+        fail(loc, "`[[fallthrough]];` is only written in a switch",
+             "remove it. In a switch, it ends a section that runs on into the next one: `case 1: f(); [[fallthrough]]; case 2: g();`", spec::Switch);
+    return std::make_unique<FallthroughStmt>(loc);
+}
+
+void Parser::failStrayLabel(const Token& t) {
+    const std::string word = t.kind == Tok::KwCase ? "case" : "default";
+    if (switchDepth_)
+        fail(t.loc, "a `" + word + "` label is written directly in the braces of its switch, not inside another statement",
+             "end the block or statement before it, so that the label is at the level of the switch's other labels", spec::Switch);
+    fail(t.loc, "a `" + word + "` label is only written inside a switch", "write `switch (x) { case 1: ...; break; default: ...; }`", spec::Switch);
 }
 
 }  // namespace cplus

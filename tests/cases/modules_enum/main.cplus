@@ -1,0 +1,18 @@
+// An enum a module exports: its type and its enumerators go by the module's path, in a switch and as a key too.
+import game.colors;
+
+int main() {
+    game::colors::Color c = game::colors::Color::Green;
+    println("{} {}", c, game::colors::name(c));
+    hashmap<game::colors::Color, int> counts;
+    counts[c] += 2;
+    println("{}", counts);
+    switch (c) {
+        case game::colors::Color::Red: println("r"); break;
+        default: println("other");
+    }
+    return 0;
+}
+// expect: Green green
+// expect: {Green: 2}
+// expect: other

@@ -1,0 +1,12 @@
+// The values of an enum need not follow one another, and a long that is none of them stops the program too.
+enum class Code { Ok = 200, NotFound = 404, Teapot = 418 };
+
+int main() {
+    long n = 404;
+    println("{}", static_cast<Code>(n));
+    // expect: NotFound
+    n = 4294967700;  // 404 above 2^32, which an int would wrap around to
+    println("{}", (Code)n);
+    return 0;
+}
+// trap: Code(n) was given 4294967700, which is not the value of any enumerator of 'Code'

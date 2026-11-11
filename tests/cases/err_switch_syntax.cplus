@@ -1,0 +1,90 @@
+// How a switch is written: a value in parentheses, then labels directly in its braces.
+int next() { return 1; }
+
+[[fallthrough]] int marked() { return 1; }
+
+void initializer() {
+    switch (int k = next(); k) {
+        case 1: break;
+    }
+}
+
+void declared() {
+    switch (int k = next()) {
+        case 1: break;
+    }
+}
+
+void unbraced(int n) {
+    switch (n) case 1: println("one");
+}
+
+void statementFirst(int n) {
+    switch (n) {
+        println("before");
+        case 1: break;
+    }
+}
+
+void ranges(int n) {
+    switch (n) {
+        case 1 ... 5: println("small"); break;
+        default: break;
+    }
+}
+
+void lists(int n) {
+    switch (n) {
+        case 1, 2: println("one or two"); break;
+        default: break;
+    }
+}
+
+void fallthroughArguments(int n) {
+    switch (n) {
+        case 1:
+            println("one");
+            [[fallthrough(2)]];
+        default: break;
+    }
+}
+
+void fallthroughOutside(int n) {
+    println("{}", n);
+    [[fallthrough]];
+}
+
+void strayCase(int n) {
+    case 1: println("one");
+}
+
+void strayDefault(int n) {
+    default: println("other");
+}
+
+void nestedLabel(int n) {
+    switch (n) {
+        case 1:
+            if (n > 0) {
+                case 2: println("two");
+            }
+            break;
+    }
+}
+
+int main() { return 0; }
+// error: `[[fallthrough]];` is a statement, written in a switch
+// error: this compiler does not support a statement before the value of a switch yet
+// error: this compiler does not support a declaration as the value of a switch yet
+// error: the body of a switch is a block of cases, in braces
+// error: the body of a switch starts with a case label
+// error: write `case value:` or `default:` before the first statement
+// error: C+ has no ranges of case values
+// error: write a label for each value, `case 1: case 2: case 3:`, or test the range with `if (x >= 1 && x <= 3)`
+// error: a case label has one value
+// error: write a label for each value: `case 1: case 2:`
+// error: `[[fallthrough]]` takes nothing in parentheses
+// error: `[[fallthrough]];` is only written in a switch
+// error: a `case` label is only written inside a switch
+// error: a `default` label is only written inside a switch
+// error: a `case` label is written directly in the braces of its switch, not inside another statement

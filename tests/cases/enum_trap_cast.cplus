@@ -1,0 +1,12 @@
+// Color(n) stops the program when n is the value of no enumerator, where C++ would make a value that names nothing.
+enum class Color { Red, Green, Blue };
+
+int main() {
+    int n = 2;
+    println("{}", Color(n));
+    // expect: Blue
+    n = 3;
+    println("{}", Color(n));
+    return 0;
+}
+// trap: Color(n) was given 3, which is not the value of any enumerator of 'Color'

@@ -1,0 +1,23 @@
+// The forms of enums and switch that the cheat sheet shows, which need an enum around them, as it writes them.
+// check_cheat_sheet in tests/run_tests.py looks for each one here or in the other cheatsheet_forms files.
+enum class Color { Red, Green, Blue };
+
+int main() {
+    Color c = Color::Green;
+    int n = 2;
+    println("{} {}", Color(n), c != Color::Red);
+    // expect: Blue true
+    switch (c) {
+        case Color::Red:
+            println("red");
+            break;
+        case Color::Green:
+            println("green");
+            [[fallthrough]];
+        default:
+            println("not red");
+    }
+    // expect: green
+    // expect: not red
+    return 0;
+}

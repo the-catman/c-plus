@@ -4,4 +4,4 @@ int main() {
     println("{}", json::stringify(m));
     return 0;
 }
-// error: has keys of type 'double', while a JSON object has strings. Use a string, an int or a long for the key
+// error: has keys of type 'double', while a JSON object has strings. Use a string, an int, a long or an enum for the key

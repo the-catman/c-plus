@@ -35,6 +35,7 @@ enum class Role : uint8_t {
     Binary,         // everything else between two values: `a + b`, `a ? b : c`
     CastClose,      // `)` of `(int)x`
     AccessColon,    // `:` of `public:`
+    CaseColon,      // `:` of `case 1:` or `default:`
 };
 
 const std::set<std::string> kTemplates = {"vector", "array", "hashmap", "Task", "unique", "local", "static_cast", "reinterpret_cast", "dynamic_cast",
@@ -97,6 +98,7 @@ public:
         do_.assign(n, false);
         kept_.assign(n, false);
         tail_.assign(n, false);
+        enum_.assign(n, false);
     }
 
     void knowModuleNames(std::set<std::string> types, std::set<std::string> templates) {
@@ -125,6 +127,7 @@ private:
     std::vector<bool> do_;         // `{` of a `do`
     std::vector<bool> kept_;       // `{` of a declaration's body, on one line with its `}`, which stays on one line
     std::vector<bool> tail_;       // `(` of the `while` that ends a `do`
+    std::vector<bool> enum_;       // `{` of an enum, whose enumerators each start a line, or share one
     std::set<std::string> types_, templates_;
     std::set<std::string> moduleTypes_, moduleTemplates_;  // of the modules the file imports, with their paths: `geo::Box`
     std::vector<Line> lines_;
@@ -132,6 +135,8 @@ private:
     std::string text(size_t i) const { return src_.substr(toks_[i].begin, toks_[i].end - toks_[i].begin); }
     Tok kind(size_t i) const { return i < toks_.size() ? toks_[i].kind : Tok::Eof; }
     bool isIdent(size_t i, const char* name) const { return kind(i) == Tok::Ident && toks_[i].text == name; }
+    // `case` or the `default` of `default:`, which start a section of a switch.
+    bool isLabel(size_t i) const { return kind(i) == Tok::KwCase || (kind(i) == Tok::KwDefault && kind(i + 1) == Tok::Colon); }
 
     // ---- What the names are ------------------------------------------------
 
@@ -242,6 +247,8 @@ private:
         if (isTypeKeyword(k)) return true;
         if (k == Tok::Ident) {
             const std::string& name = toks_[i].text;
+            if (i >= 2 && kind(i - 1) == Tok::ColonColon && kind(i - 2) == Tok::Ident && std::isupper((unsigned char)toks_[i - 2].text[0]))
+                return false;  // `Color::Red`, an enumerator
             if (types_.count(name) || kTypes.count(name)) return true;
             if (i >= 2 && kind(i - 1) == Tok::ColonColon && moduleTypes_.count(pathTo(i))) return true;
             return i >= 1 && kind(i - 1) == Tok::ColonColon && std::isupper((unsigned char)name[0]);  // `http::Response`
@@ -318,6 +325,9 @@ private:
                 if (role_[*it] == Role::Block) return *it;
             return kNone;
         };
+        bool enumAhead = false;      // `enum class`, whose body has not begun
+        size_t caseDepth = kNone;    // after `case`: how many brackets are open around it, until its `:`
+        int caseQuestions = 0;       // the `?` of a `a ? b : c` in the label, each of which takes a `:`
         for (size_t i = 0; i < toks_.size(); ++i) {
             const Tok k = kind(i);
             const size_t p = i == 0 ? kNone : i - 1;
@@ -358,7 +368,11 @@ private:
                 } else if (p == kNone || pk == Tok::Semi || (pk == Tok::LBrace && role_[p] == Role::Block) ||
                            (pk == Tok::RBrace && role_[p] == Role::Block) || role_[p] == Role::AccessColon) {
                     isBlock = true;  // a block of its own
+                } else if (role_[p] == Role::CaseColon) {
+                    isBlock = true;  // `case 1: {`
                 }
+                enum_[i] = isBlock && typeAhead && enumAhead;
+                enumAhead = false;
                 typeAhead = false;
                 role_[i] = isBlock ? Role::Block : Role::Init;
                 decl_[i] = isBlock && amongDeclarations;
@@ -399,12 +413,18 @@ private:
             case Tok::Semi:
                 dropTemplates();
                 typeAhead = false;
+                enumAhead = false;
+                break;
+            case Tok::KwCase:
+                caseDepth = open.size();
+                caseQuestions = 0;
                 break;
             case Tok::Star:
                 role_[i] = isType(p) ? Role::Pointer : endsValue(p) ? Role::Binary : Role::Prefix;
                 break;
             case Tok::Question:
                 role_[i] = isType(p) ? Role::Optional : Role::Binary;
+                if (role_[i] == Role::Binary && caseDepth == open.size()) ++caseQuestions;
                 break;
             case Tok::Amp:  // `const Point& p` is a reference, like the `*` of a pointer
                 role_[i] = isType(p) ? Role::Pointer : endsValue(p) ? Role::Binary : Role::Prefix;
@@ -422,12 +442,19 @@ private:
                 role_[i] = Role::Prefix;
                 break;
             case Tok::Colon:
+                if (pk == Tok::KwDefault || (caseDepth == open.size() && caseQuestions == 0)) {
+                    role_[i] = Role::CaseColon;
+                    caseDepth = kNone;
+                    break;
+                }
+                if (caseDepth == open.size()) --caseQuestions;
                 role_[i] = isAccess(pk) ? Role::AccessColon : Role::Binary;
                 break;
             case Tok::KwStruct:
             case Tok::KwClass:
             case Tok::KwInterface:
                 if (kind(i + 1) == Tok::Ident && (open.empty() || role_[open.back()] == Role::Block)) typeAhead = true;
+                enumAhead = typeAhead && pk == Tok::KwEnum;
                 break;
             default:
                 break;
@@ -453,6 +480,7 @@ private:
         if (bk == Tok::LBrace) return br == Role::Block || !(ak == Tok::Ident || ar == Role::TemplateClose || isTypeKeyword(ak));
         if (ar == Role::TemplateOpen || br == Role::TemplateOpen || br == Role::TemplateClose) return false;
         if (br == Role::Pointer || br == Role::Optional || br == Role::Postfix || br == Role::AccessColon) return false;
+        if (br == Role::CaseColon) return false;
         if (ar == Role::TemplateClose) return bk != Tok::LParen;
         if (ar == Role::Prefix || ar == Role::CastClose) return false;
         if (bk == Tok::LParen)
@@ -477,6 +505,7 @@ private:
         bool type = false;
         bool isDo = false;
         int indent = 0;  // of a Body
+        bool isCase = false;  // a Body that is the statements after a `case 1:`, up to the next label or the switch's `}`
     };
 
     struct Item {
@@ -515,7 +544,7 @@ private:
         };
         // When a statement ends: the bodies it ends end with it, all of them unless the statement goes on.
         auto endBodies = [&](size_t next) {
-            while (!opens.empty() && opens.back().frame == Frame::Body) {
+            while (!opens.empty() && opens.back().frame == Frame::Body && !opens.back().isCase) {
                 const bool fromDo = opens.back().isDo;
                 opens.pop_back();
                 if (fromDo) {
@@ -554,6 +583,9 @@ private:
                 forced = forced || mustBreak;
             }
             const bool breakBefore = prev && ((newlines > 0 || forced) && !join);
+            // A label ends the section before it, and so does a comment on the lines just above one.
+            if (!opens.empty() && opens.back().isCase && (item.comment ? breakBefore && stmtStart && labelAfter(items, n) : isLabel(t)))
+                opens.pop_back();
 
             if (breakBefore) {
                 const bool userBlank = newlines > 1;
@@ -630,6 +662,8 @@ private:
                 stmtIndent = cur.indent;  // after `for (...)` on the same line, too, its block closes under the `for`
                 stmtStart = false;
             }
+            if (!breakBefore && prevToken && role_[prev->index] == Role::CaseColon && k != Tok::LBrace && !opens.empty() && opens.back().isCase)
+                stmtIndent = opens.back().indent;  // a statement on its label's line is one of the section's, but a `{` closes under the label
             cur.code += text(t);
             mustBreak = false;
 
@@ -731,6 +765,17 @@ private:
                     mustBreak = keptDepth == 0;
                     stmtStart = true;
                 }
+                if (r == Role::CaseColon && keptDepth == 0) {  // what comes after it is one level in, or on its line
+                    Open section{Frame::Body};
+                    section.indent = stmtIndent + 4;
+                    section.isCase = true;
+                    opens.push_back(section);
+                    stmtStart = true;
+                    mustBreak = statementsOnLine(next) > 1;  // one statement stays on the label's line, and more go under it
+                }
+                break;
+            case Tok::Comma:  // in an enum, a line starts with an enumerator
+                if (!opens.empty() && opens.back().frame == Frame::Block && enum_[opens.back().at]) stmtStart = true;
                 break;
             default:
                 break;
@@ -738,6 +783,25 @@ private:
         }
         flush();
         while (!lines_.empty() && lines_.back().blank) lines_.pop_back();
+    }
+
+    // How many statements end on the line of the token before `from`, from there on, outside brackets and braces.
+    int statementsOnLine(size_t from) const {
+        int count = 0, depth = 0;
+        for (size_t j = from; j > 0 && j < toks_.size() && src_.find('\n', toks_[j - 1].end) >= toks_[j].begin; ++j) {
+            const Tok k = kind(j);
+            if (k == Tok::LParen || k == Tok::LBracket || k == Tok::LBrace) ++depth;
+            if (k == Tok::RParen || k == Tok::RBracket || k == Tok::RBrace) --depth;
+            if (k == Tok::Semi && depth == 0) ++count;
+        }
+        return count;
+    }
+
+    // Whether the first token after the comments that follow item n is a label.
+    bool labelAfter(const std::vector<Item>& items, size_t n) const {
+        for (size_t m = n + 1; m < items.size(); ++m)
+            if (!items[m].comment) return isLabel(items[m].index);
+        return false;
     }
 
     // Inside the parentheses of an `if`, `for`, `while` or `switch`.

@@ -1,0 +1,48 @@
+enum class Color { Red, Green, Blue };
+
+int pick(Color c) {
+    switch (c) {
+    case Color::Red : return 1;
+    case Color::Green:
+        return 2;
+    case Color::Blue:
+    {
+        int x = 3;
+        return x;
+    }
+    }
+}
+
+int main() {
+    int n = 2;
+    switch(n){
+        case 0:
+            case 1:
+        println("small");
+        [[fallthrough]];
+        case 2: println("two"); break;
+        // the rest
+        default :
+            println("big");
+            break;
+    }
+    switch (n) { case 1: n = 2; break; default: break; }
+    for (int i = 0; i < 3; i++)
+        switch (i) {
+            case 0: continue;
+            case -1: case 1:
+                switch (n) {
+                case 2: println("inner"); break;
+                default: break;
+                }
+                break;
+            default: println("{}", i);
+        }
+    switch (n) {
+    case 1 ? 2 : 3: break;
+    default: if (n > 1)
+            println("big");
+        break;
+    }
+    return 0;
+}

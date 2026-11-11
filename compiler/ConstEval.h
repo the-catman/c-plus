@@ -16,11 +16,12 @@
 namespace cplus {
 
 struct ConstValue {
-    enum class Kind { Int, Long, Float, Double, Bool, Char, String };
+    enum class Kind { Int, Long, Float, Double, Bool, Char, String, Enum };
     Kind kind = Kind::Int;
-    int64_t i = 0;  // for Int, Long, Bool and Char
+    int64_t i = 0;  // for Int, Long, Bool, Char and Enum
     double d = 0;   // for Float and Double
     std::string s;  // for String
+    const Type* enumType = nullptr;  // for Enum: which enum
     const char* typeName() const;
 };
 
@@ -76,6 +77,7 @@ private:
     ConstValue callFunction(const FuncDecl& f, std::vector<ConstValue> args, Loc loc);
     Flow exec(const Stmt& s);
     Flow execVar(const VarDecl& v);
+    Flow execSwitch(const SwitchStmt& s);
     // What type an expression has, without running it, when no type was set on it. Null if not known.
     const Type* staticType(const Expr& e);
 

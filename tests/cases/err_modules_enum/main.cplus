@@ -1,0 +1,12 @@
+// An enum of a module written without the module's path, once as a type and once before `::`, is one error, and a private
+// one is another.
+import game.colors;
+
+int main() {
+    auto s = game::colors::Secret::A;
+    Color c = Color::Red;
+    return 0;
+}
+// error: 'Color' is in the module 'game.colors', and outside its file it is written `game::colors::Color`
+// error: 'Secret' is not exported by the module 'game.colors'
+// not-error: there is no module 'Color'

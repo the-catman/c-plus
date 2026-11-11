@@ -26,6 +26,8 @@ enum {
     CPLUS_KIND_MAP,       // a hashmap. Its entries are a vector at its start, of type `elem`, whose fields are the key
                           // and the value, and `length` is where the vector of hashes is. -1 there is an erased entry
     CPLUS_KIND_JSON_VALUE,  // a json::Value, whose fields json.c knows by position: see compiler/Builtins.h
+    CPLUS_KIND_ENUM,      // `fields` are its enumerators, in order, each with its value as the offset. `size` is 4 for an
+                          // int and 8 for a long
     CPLUS_KIND_OTHER      // a pointer, which only this program can make sense of
 };
 

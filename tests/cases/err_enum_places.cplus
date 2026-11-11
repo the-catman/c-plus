@@ -1,0 +1,37 @@
+// An enum is defined at the top level, outside functions, types and `extern "C"`, and is not opened with `using enum`.
+enum class Color { Red, Green };
+
+struct Holder {
+    enum class Inner { A, B };
+    int x = 0;
+};
+
+extern "C" {
+    enum class FromC { One };
+    int abs(int n);
+}
+
+extern "C" int takes(Color c);
+extern "C" Color gives();
+
+using enum Color;
+using enum Missing;
+
+int main() {
+    enum class Local { X, Y };
+    println("{}", Local::X);
+    return 0;
+}
+// error: an enum is defined at the top level of a file, not inside a struct
+// error: move it out of 'Holder', before or after it. Its values are then named with the enum alone, as in `Inner::...`
+// error: an enum is not declared inside `extern "C"`
+// error: A C function takes it as an `int`: declare the parameter `int`, pass `int(c)`
+// error: C+ has no `using enum`: an enumerator is always named with its enum
+// error: remove this line, and write `Color::` before each value, as in `Color::Red`
+// error: remove this line, and write `Missing::` before each value, as in `Missing::Red`
+// error: an enum is defined at the top level of a file, not inside a function
+// error: move it out of the function, before or after it
+// error: a C function cannot take an enum, as C would not keep to its values
+// error: declare the parameter as `int`, and pass `int(c)`. What C gives back becomes a 'Color' with `Color(n)`, which checks that it is one
+// error: a C function cannot return an enum, as C would not keep to its values
+// error: declare the result as `int`

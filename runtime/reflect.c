@@ -24,6 +24,7 @@ const char* cplus_type_kind(const cplus_type* t) {
         case CPLUS_KIND_LOCAL: return "local";
         case CPLUS_KIND_WEAK: return "weak";
         case CPLUS_KIND_MAP: return "hashmap";
+        case CPLUS_KIND_ENUM: return "enum";
         default: return "pointer";
     }
 }
@@ -31,7 +32,7 @@ const char* cplus_type_kind(const cplus_type* t) {
 int64_t cplus_type_size(const cplus_type* t) { return t->size; }
 int64_t cplus_type_length(const cplus_type* t) { return t->kind == CPLUS_KIND_ARRAY ? t->length : 0; }
 const cplus_type* cplus_type_elem(const cplus_type* t) { return t->elem; }
-int64_t cplus_type_field_count(const cplus_type* t) { return t->kind == CPLUS_KIND_MAP ? 0 : t->field_count; }
+int64_t cplus_type_field_count(const cplus_type* t) { return t->kind == CPLUS_KIND_MAP || t->kind == CPLUS_KIND_ENUM ? 0 : t->field_count; }
 const char* cplus_type_field_name(const cplus_type* t, int64_t i) { return t->fields[i].name; }
 int64_t cplus_type_field_offset(const cplus_type* t, int64_t i) { return t->fields[i].offset; }
 const cplus_type* cplus_type_field_type(const cplus_type* t, int64_t i) { return t->fields[i].type; }

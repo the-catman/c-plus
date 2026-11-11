@@ -56,7 +56,7 @@ int main() {
     return 0;
 }
 // error: 'Point' cannot be used for 'T' of 'largest', which must be 'Comparable'
-// error: 'Point' has no `<`. Only numbers, chars, strings and pointers do
+// error: 'Point' has no `<`. Only numbers, chars, strings, enums and pointers do
 // error: 'string' cannot be used for 'T' of 'twice', which must be 'Number'
 // error: 'double' cannot be used for 'T' of 'half', which must be 'Integer'
 // error: 'int' cannot be used for 'T' of 'third', which must be 'Floating'

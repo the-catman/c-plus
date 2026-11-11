@@ -69,6 +69,8 @@ long square(long n) { return n * n; }
 | C headers | `import <sqlite3.h>;` or `import "mine.h";` (next to the program first), then its functions, structs, macro constants and enum constants by their C names. `-I dir` for another folder. A `const char*` parameter is `string?`, a `const char*` result `string`, `size_t` `long`, a function pointer `void*`. What C+ cannot take, such as `printf` or `short`, is an error that says why. The program's own declaration of a name wins |
 | C structs | `extern "C" { struct ldiv_t { long quot; long rem; }; ldiv_t ldiv(long a, long b); tm* gmtime_r(const long* t, tm* out); }`. Fields are numbers, `char`, `bool`, pointers, such structs and arrays of those, in C's order. By value or through a pointer. Before C fills one: `tm t = {};` |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)` over a vector or an array, `break`, `continue`, `?:` |
+| Enums | `enum class Color { Red, Green, Blue };`, `enum class Big : long { Far = 5000000000 };`, then `Color c = Color::Green;`. Nothing converts by itself: `int(c)` is its number, and `Color(n)` **stops the program** unless `n` is the value of one. `==` and `<` on one enum. `println("{}", c)` prints `Green`. A hashmap key; JSON writes the name |
+| Switch | `switch (n) { case 1: println("one"); break; case 2: case 3: n++; break; default: n = 0; }` on an `int`, `long`, `char`, enum or `string`, as in C++. A case that would run into the next is an error: end it with `break;`, or with `[[fallthrough]];` when that is meant. Without `default:`, a switch on an enum needs a case for each enumerator |
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors and arrays element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
@@ -78,7 +80,7 @@ long square(long n) { return n * n; }
 | Program | `int main()`, or `int main(int argc, char** argv)`, with `string(argv[1])` for the first argument. `cplus run app.cplus -- arg1 arg2` |
 | Modules | each file is one. `import geometry;` reads geometry.cplus, and `import net.server;` net/server.cplus, from the folder of the main file, which is the one with `main`. There, `export int area(int w, int h) { ... }` makes a name visible, and other files write it with the module's path: `geometry::area(2, 3)`, `net::server::start()`. What has no `export` is private to its file. `cplus run app` runs app/main.cplus |
 | Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long), `1.5`, `1e-9`, `2.5f` (float), `'a'`, `'\n'` (char) |
-| Conditions | `bool`, a number, a pointer or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (p)` (not null), `if (opt)` (holds a value). Not a `char`: write `c != '\0'` |
+| Conditions | `bool`, a number, a pointer or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (p)` (not null), `if (opt)` (holds a value). Not a `char`: write `c != '\0'`. Not an enum: write `c != Color::Red` |
 
 ## Different from C++. Do not write the C++ version
 
@@ -162,7 +164,9 @@ long square(long n) { return n * n; }
 | `int x{5}`, `int x(5)` | `int x = 5;` for now |
 | `new User("a")`, `delete u` on a class | `User("a")`; the object is freed automatically. `new` is for other values: `new Point{1, 2}` |
 | `int* p = new int;` then read `*p` | it is 0: `new` always gives a default value |
-| `#pragma`, `[[nodiscard]]`, `[[maybe_unused]]` | the one attribute is `[[allow(new_delete)]]` |
+| `#pragma`, `[[nodiscard]]`, `[[maybe_unused]]` | the attributes are `[[allow(new_delete)]]` and, in a switch, `[[fallthrough]];` |
+| `enum Color { RED };` | `enum class Color { Red };`, used as `Color::Red`: C+ has only scoped enums |
+| `switch (n) { case 1: n++; case 2: n--; }` | error: a case does not fall into the next by itself. End it with `break;`, or `[[fallthrough]];` |
 | `-g`, `-fsanitize=address,undefined`, valgrind for a memory bug | `cplus run app.cplus --debug`: memory errors stop the program with a stack trace, and leaks are reported at exit |
 | `new (buffer) T`, `new int[3]{1, 2, 3}` | no placement new; set array elements afterward, in a loop |
 | `this->x`, `u->name` | `this.x`, `u.name`; `->` is only for pointers, `T*` |
@@ -236,9 +240,9 @@ long square(long n) { return n * n; }
 | JSON | other names for fields, marking a field to leave out |
 | Reflection | reading a field through its `reflect::Field`, methods |
 | Memory | pointers into vectors and strings |
-| Types | enums, unions, unsigned integers, `const` fields, types nested in a type or a function, `short` and other small integers |
+| Types | unions, unsigned integers, `const` fields, types nested in a type or a function, `short` and other small integers, enums held in them |
 | Functions | overloading, default arguments, `auto` parameters and return types, lambdas |
-| Statements | `switch` |
+| Statements | a declaration before a switch's value: `switch (auto k = f(); k)` |
 | Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
 | Containers | `insert`, `erase` and iterators on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |
 | References | `T&` to elements of vectors, strings and hashmaps, `for (auto& x : v)`, `T& f()` |

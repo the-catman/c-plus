@@ -301,6 +301,7 @@ integer, any other `double` to `float`, a number to `char`, `char` to `string` o
 `bool` to a number, `T?` to `T`, one optional type to another, a pointer to `bool`, a
 number to a pointer, and one pointer type to another. A [cast](#casts) converts between
 numbers, `char` and `bool`, and between pointer types, explicitly.
+Nothing converts to or from an [enum](#enums) by itself.
 
 ```cpp
 long big = 5;       // ok: int widens to long
@@ -349,6 +350,8 @@ double share = double(n) / total;   // without the cast, n / total divides integ
   looking at an address as a number. Between pointers it works as the other casts do.
 - `const_cast` does not exist, since `const` cannot be cast away. `dynamic_cast` would need
   inheritance, which is planned.
+- `int(c)` is the number of an [enum](#enums), and `Color(n)` the enumerator whose value is
+  `n`, which stops the program when there is none.
 
 ### Optionals
 
@@ -721,6 +724,59 @@ the object's last reference goes away. Then the object's fields are released, la
 declared first. A destructor must not store `this` anywhere that outlives it; doing so
 stops the program with an error.
 
+### Enums
+
+`enum class` makes a type whose values are a list of names, its enumerators, as in C++. An
+enumerator is always written with its enum:
+
+```cpp
+enum class Color { Red, Green, Blue };
+enum class Status : long { Ok = 200, NotFound = 404, Far = 5000000000 };
+
+Color c = Color::Green;
+if (c == Color::Green) println("{}", c);   // Green
+int n = int(c);                            // 1
+Color next = Color(n + 1);                 // Color::Blue
+```
+
+- **Only `enum class`.** C's plain `enum`, whose names spill into the code around it and
+  turn into numbers by themselves, is an error, and so are `enum struct` and `using enum`.
+  An enum is declared outside functions and types, has at least one enumerator, and may
+  end with a comma: `enum class A { X, Y, };`. It can be used before its definition.
+- **Values.** As in C++, the first enumerator is 0, and each one after is one more than the
+  one before it, unless it is given a value: an integer [constant](#constants), such as
+  `Big = 1 << 20` or `Last = LIMIT - 1`. A value that does not fit is an error. Two
+  enumerators can have the same value. A value that uses an enumerator, such as
+  `B = A + 1`, is not supported yet.
+- **Held in an `int`**, or in a `long` with `enum class Status : long { ... }`. Other types
+  after the `:` are not supported yet.
+- **No implicit conversions,** in either direction, as with C++'s `enum class`, and an enum
+  is not a condition: write `if (c != Color::Red)`.
+- **Casts.** `int(c)`, `long(c)`, `static_cast<int>(c)` and `(int)c` give its number.
+  `Color(n)`, `static_cast<Color>(n)` and `(Color)n` give the enumerator whose value is `n`,
+  an `int`, a `long` or a `char`, and **stop the program** when there is none, where C++
+  would make a value that names nothing. A constant that is none is a compile error.
+- **Operators.** `==`, `!=`, `<`, `<=`, `>` and `>=` compare two values of the same enum, by
+  their numbers. Arithmetic and bit operators are errors. To step to the next enumerator,
+  write `Color(int(c) + 1)`.
+- **Default value.** Where a value is made without one being given, such as a missing field
+  in a `{ }` list or the elements of `vector<Color>(3)`, an enum starts as its enumerator
+  whose value is 0, as in C++. An enum with no such enumerator has no default, so these
+  are errors for it, and a missing key of a hashmap holding it stops the program. A
+  variable must be given a value before it is used, as any variable must.
+- **Printing.** `println` and `format` write the name: `Green`. When two enumerators have
+  the value, it is the first of them. `to_string(c)` is an error: write `format("{}", c)`
+  for the name, or `to_string(int(c))` for the number.
+- **Constants, constraints and keys.** `const Color FAVORITE = Color::Green;` works, and so
+  does `constexpr`. An enum is [`Comparable`](#constraints) and `Hashable`, so it can be a
+  key of a [hashmap](#hash-maps), but it is not a `Number`.
+- **JSON and reflection.** [JSON](#json) writes an enum as the name of its enumerator, and
+  reads only such a name. [`reflect`](#reflection) says its kind is `"enum"`.
+- **C functions** cannot take or return an enum, since C would not keep to its values.
+  Declare the parameter or result as `int`, pass `int(c)`, and turn what comes back into
+  an enum with `Color(n)`, which checks it.
+- A [`switch`](#switch) on an enum names each enumerator, unless it has `default:`.
+
 ### Vectors
 
 `vector<T>` is a growable array of `T`s with the C++ method names. Like a struct, a vector
@@ -914,6 +970,7 @@ for (auto e : ages) println("{}: {}", e.first, e.second);
   the same key only for the same object. `0.0` and `-0.0` are one key, and NaN is never found, since it is not
   `==` to itself, as in C++. The hash comes by itself, and a hash function of your own is planned. A generic can ask
   for such a type with the [constraint](#constraints) `Hashable`.
+  An [enum](#enums) can be a key too.
 - **Values** can be of any type except `void`. With a `unique<T>`, the map cannot be copied either: put values in
   with `m[key] = move(u)`, reach them as `m[key].x`, and take them out with `move(m[key])`. `get`, `values`, `items` and
   a loop over the map copy values, so they are errors then.
@@ -968,6 +1025,7 @@ User back = try json::parse<User>(text);   // fails with a json::Error if the te
 | `unique<T>` | what it owns |
 | `weak<T>` | left out, which is what lets a child know its parent without going in circles |
 | `hashmap<K, V>` | an object, in order. `K` is a `string`, or an `int` or a `long`, which is written as a string |
+| an [enum](#enums) | a string, the name of its enumerator, also as the key of a hashmap. Reading takes only such a name |
 | `json::Value` | anything |
 
 A pointer means nothing outside the program, so it is a compile error, naming the field, as long as it is public.
@@ -1321,7 +1379,7 @@ delete[] many;
 - `-Wno-new-delete` on the command line of `cplus check`, `build` or `run`, for the whole
   program.
 
-This is the one attribute C+ has. C++'s others, such as `[[nodiscard]]`, are errors.
+This is the one attribute C+ has besides `[[fallthrough]];`, in a [switch](#switch). C++'s others, such as `[[nodiscard]]`, are errors.
 
 ### References
 
@@ -1853,7 +1911,7 @@ are always generated, never hand-written.
 
 `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue` and `return` work exactly as
 in C++. The step of a `for` loop may list several expressions: `for (...; ...; i++, j--)`.
-`switch` is planned.
+`switch` is in [Switch](#switch).
 
 #### Conditions
 
@@ -1873,6 +1931,7 @@ if (auto u = found) ... // runs with the User inside found
 
 Strings, vectors, chars and `void` values are not conditions. For a vector, write
 `!v.empty()`; for a char, `c != '\0'`.
+An [enum](#enums) is not one either: compare it, `if (c != Color::Red)`.
 
 #### Range-based for loops
 
@@ -1894,6 +1953,67 @@ for (const Point p : points) total += p.x;
   undefined behavior. An [array](#arrays) works the same way.
 - A string can be looped over too: `for (char c : s)` goes over its bytes.
 - Only vectors, arrays and strings can be looped over for now.
+
+### Switch
+
+`switch` runs the statements after the label that matches a value, with the syntax and
+meaning of C++:
+
+```cpp
+enum class Light { Red, Amber, Green, Off };
+
+string advice(Light light) {
+    switch (light) {
+        case Light::Red:
+        case Light::Amber:
+            return "stop";
+        case Light::Green:
+            return "go";
+        case Light::Off:
+            break;
+    }
+    return "look around";
+}
+
+int main() {
+    int n = 2;
+    switch (n) {
+        case 1:
+            println("one");
+            break;
+        case 2:
+            println("two");
+            [[fallthrough]];
+        default:
+            println("some");
+    }
+    println("{}", advice(Light::Amber));
+    return 0;
+}
+```
+
+- **The value** is an `int`, a `long`, a `char`, an [enum](#enums) or a `string`. It is
+  worked out once. A string is compared with each case in turn. A `bool`, a floating-point
+  number, an optional, a struct or a class is an error, whose help says what to write.
+- **Labels** are written directly in the braces: `case value:` and `default:`, which may
+  come anywhere. A label's value is a constant that converts to the value's type, as an
+  initializer would, and no two labels have the same value. Several labels can stand
+  before the same statements. `case 1, 2:` and the range `case 1 ... 5:` are errors.
+- **No falling through by accident.** As in C++, the statements of a case run on into the
+  next case's, unless they end with `break`, `return`, `throw` or `continue`. Here, a case
+  that would run on by itself is an error, since that is almost always a mistake. Where
+  it is meant, the case ends with `[[fallthrough]];`, as C++17 writes it, which must be
+  just before the next label.
+- `break` leaves the switch, and `continue` goes on with the loop around it, as in C++.
+- **Every enumerator.** A switch on an enum without `default:` must have a case for each
+  enumerator, and the error names those it leaves out. Such a switch covers every value,
+  so a function can end with it: `advice` above needs no `return` after its switch if
+  every case returns. A value that is no enumerator, which only a pointer cast could
+  make, stops the program there.
+- Each case's statements are a scope of their own, as if they were in braces, so a
+  variable declared in one case is not seen in another. After `[[fallthrough]];`, a
+  variable counts as having a value only if it has one on both ways in.
+- Not supported yet: a declaration before the value, `switch (auto k = f(); k)`.
 
 ---
 
@@ -1931,7 +2051,7 @@ and the ordering operators compare them by address (see [Pointers](#pointers)).
 `==` and `!=` take any two values of the same type: numbers, `bool`s, `char`s, strings by
 contents, structs field by field, vectors element by element, class references by
 identity, and pointers by address. They also compare an optional with a value or `null` (see
-[Optionals](#optionals)). Operands are evaluated left
+[Optionals](#optionals)). Values of one [enum](#enums) are compared by `==`, `!=` and the ordering operators. Operands are evaluated left
 to right; in `v[i]`, `v` is evaluated before `i`, as in C++17. In `v[i].f(x)`, `i` is
 evaluated before `x`, and the element is found after `x`, so `x` can change `v`.
 
@@ -2051,6 +2171,7 @@ println("{{literal braces}}");
   A class object prints its type name first: `User {name: "Ada", born: 1815}`. All fields
   print, private ones included. An object met again while it is being printed prints as
   `User {...}`, so an object that refers back to itself does not print forever.
+- An [enum](#enums) prints the name of its enumerator: `Green`.
 - A method named `toString` is an ordinary method for now, which printing does not call.
 - What holds something of the runtime's prints as its name: `Task<int> {...}`, `Mutex {...}`, `LockGuard {...}`,
   `http::WebSocket {...}`, `reflect::Type {...}`. Its fields would only show addresses that change, or a secret in a URL.
@@ -2500,12 +2621,12 @@ largest(Point{1}, Point{2});
 
 ```
 error: 'Point' cannot be used for 'T' of 'largest', which must be 'Comparable'
-  = help: 'Point' has no `<`. Only numbers, chars, strings and pointers do, until operators can be overloaded
+  = help: 'Point' has no `<`. Only numbers, chars, strings, enums and pointers do, until operators can be overloaded
 ```
 
 The name is one of:
 
-- **Built in.** `Comparable` has `<`: numbers, `char`, strings and pointers. `Number` is `int`, `long`, `float` or
+- **Built in.** `Comparable` has `<`: numbers, `char`, strings, enums and pointers. `Number` is `int`, `long`, `float` or
   `double`. `Integer` is `int` or `long`, and `Floating` is `float` or `double`. `Hashable` can be a key of a
   [hashmap](#hash-maps).
 - **An interface or a class.** The type must derive from it, holding it once:
@@ -2799,8 +2920,10 @@ reasons, such as the type of a value. What is reported as not supported yet is l
 ```
 program      = { import | [ "export" ] item } ;
 import       = "import" name { "." name } ";" ;
-item         = function | record | generic | constant | extern | attribute ;
+item         = function | record | generic | constant | extern | attribute | enum ;
 attribute    = "[[" "allow" "(" "new_delete" ")" "]]" [ ";" ] ;
+enum         = "enum" "class" name [ ":" ( "int" | "long" ) ] "{" enumerator { "," enumerator } [ "," ] "}" ";" ;
+enumerator   = name [ "=" expr ] ;
 name         = letter { letter | digit | "_" } ;              (* with `module::name` for what a module has *)
 
 function     = type name "(" [ params ] ")" [ "throws" ] block ;
@@ -2845,7 +2968,10 @@ statement    = block | ";" | declaration | expr ";"
              | "for" "(" type name ":" expr ")" statement
              | "return" [ value ] ";" | "break" ";" | "continue" ";"
              | "throw" [ expr ] ";"
-             | "try" block catch { catch } ;
+             | "try" block catch { catch }
+             | "switch" "(" expr ")" "{" { label { label } { statement } } "}"
+             | "[[" "fallthrough" "]]" ";" ;                  (* the last statement before a label *)
+label        = "case" expr ":" | "default" ":" ;
 catch        = "catch" "(" ( type [ name ] | "..." ) ")" block ;
 condition    = expr | type name "=" expr ;                    (* the second unwraps an optional *)
 declaration  = [ "const" | "constexpr" ] type declarator { "," declarator } ";" ;
@@ -2872,6 +2998,7 @@ postfix      = primary { "." name [ "::" name ] [ "(" [ args ] ")" ]
                        | "->" name [ "(" [ args ] ")" ]
                        | "[" expr "]" | "++" | "--" } ;
 primary      = literal | name | "this" | "null" | "(" expr ")"
+             | name "::" name                                 (* an enumerator: `Color::Red` *)
              | name [ "<" targ { "," targ } ">" ] "(" [ args ] ")"
              | type list | type "(" [ args ] ")"              (* builds a value, or converts one *)
              | ( "static_cast" | "reinterpret_cast" | "dynamic_cast" ) "<" type ">" "(" expr ")"
@@ -2894,6 +3021,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Definite assignment checking | implemented |
 | Functions, recursion, calls before definition | implemented |
 | `if`, `while`, `do`-`while`, `for`, `break`, `continue`, `?:` | implemented |
+| Enums: `enum class`, `: long`, values, casts that stop the program, printing, JSON, hashmap keys | implemented |
+| `switch` on integers, chars, enums and strings, `[[fallthrough]]`, every enumerator in an enum switch | implemented |
 | All integer operators with overflow, division and shift traps | implemented |
 | `print` / `println` with checked `{}` placeholders | implemented |
 | Structs: fields, defaults, `{ }` lists, named fields, copying, printing | implemented |
@@ -2927,7 +3056,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | `constexpr` values and functions, `if constexpr`, array sizes and template arguments worked out while compiling | implemented |
 | `constexpr` methods and structs; a generic `constexpr` function in an array's size | planned |
 | Variables outside functions; constants of other types | planned |
-| Enums, `switch`, lambdas | planned |
+| Lambdas | planned |
+| Enums held in other integer types, enumerator values that use enumerators, a switch with an initializer | planned |
 | Default arguments, `auto` parameters and return types | planned |
 | `const` fields, nested types, types defined inside a function | planned |
 | `int x{5}`, `int x(5)`, brace initializers for fields | planned |

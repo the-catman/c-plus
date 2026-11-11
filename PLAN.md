@@ -633,6 +633,17 @@ program and never dangles, but when its container is resized, replaced or was sh
 - Order: `const T&` first, with no change to the runtime, then `T&` to variables and fields (both done 2026-11-11), then the pins,
   then `T&` returns with item 6. Until the pins, `const auto& e = v[i];` holds a copy of the element.
 
+### 2.32 Enums and switch — DECIDED
+Decided and built 2026-11-11, with C++'s syntax and meaning where they agree:
+- Only `enum class`, held in an `int` or, with `: long`, a `long`. A plain `enum` and `enum struct` are errors whose help gives
+  `enum class`. An enum converts to nothing and nothing converts to it without a cast: `int(c)`, `Color(n)`, `static_cast`.
+  `Color(n)` stops the program unless n is the value of an enumerator, so an enum always holds one of its enumerators.
+- Enums compare with the six comparisons, are hashable, print and go to JSON as the name, and have as default the enumerator
+  whose value is 0; a type with none has no default.
+- `switch` takes an integer, a `char`, an enum or a `string`. A section that can reach the next is an error unless it ends in
+  `[[fallthrough]];`. A switch on an enum with no `default` must name every enumerator.
+- Not yet: other underlying types, enumerator values that use other enumerators, and `switch (init; x)`.
+
 ## 3. Compiler architecture
 
 ```
@@ -658,7 +669,7 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, the core
-language, is under way, then servers, then platforms. Of Phase 7, items 1 and 2 are done, and so are references except those into
+language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references except those into
 vectors, strings and hashmaps and the functions that return them. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
@@ -744,8 +755,7 @@ will confidently write C++ wherever the two differ.
 
 ## 6. Open items
 
-- Remaining syntax: lambdas, enums, `switch`, in Phase 7. Settled as each
-  feature is reached.
+- Remaining syntax: lambdas, in Phase 7. Enums and `switch` are in §2.32.
 - Function overloading, as in C++, in Phase 7.
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, keeps a copy of it or frees it, since the update to the element would be lost (decided

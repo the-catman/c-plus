@@ -111,7 +111,13 @@ private:
     std::string describe(const StructDecl& s) const {
         std::string text = std::string(s.keyword()) + " " + s.type.name;
         for (size_t i = 0; i < s.baseNames.size(); ++i) text += (i == 0 ? " : public " : ", public ") + s.baseNames[i].name;
+        if (s.isEnum && s.underlying && s.underlying->is(Type::Kind::Long)) text += " : long";
         return with(text, s.nameLoc);
+    }
+
+    // `Color::Red = 0`, an enumerator with its value.
+    std::string describe(const StructDecl::Enumerator& e, const StructDecl& owner) const {
+        return with(std::string(owner.type.name) + "::" + e.name + " = " + std::to_string(e.value), e.loc, std::string("An enumerator of `") + owner.type.name + "`.");
     }
 
     std::string describe(const FieldDecl& f, const StructDecl& owner) const {
@@ -123,6 +129,7 @@ private:
     void record(const StructDecl& s) {
         if (!walked_.insert(&s).second) return;
         add(s.nameLoc, describe(s), s.nameLoc);
+        for (auto& e : s.enumerators) add(e.loc, describe(e, s), e.loc);
         for (size_t i = 0; i < s.baseNames.size() && i < s.bases.size(); ++i)
             if (s.bases[i]) add(s.baseNames[i].loc, describe(*s.bases[i]), s.bases[i]->nameLoc);
         for (auto& f : s.fields) {
@@ -231,6 +238,16 @@ private:
             break;
         }
         case Stmt::Kind::Throw: expr(static_cast<const ThrowStmt*>(s)->value.get()); break;
+        case Stmt::Kind::Switch: {
+            auto* w = static_cast<const SwitchStmt*>(s);
+            expr(w->value.get());
+            for (auto& section : w->sections) {
+                for (auto& label : section.labels) expr(label.value.get());
+                stmt(section.body.get());
+            }
+            break;
+        }
+        case Stmt::Kind::Fallthrough:
         case Stmt::Kind::Break:
         case Stmt::Kind::Continue:
         case Stmt::Kind::Error: break;
@@ -327,7 +344,21 @@ private:
             expr(c->rhs.get());
             break;
         }
-        case Expr::Kind::Cast: expr(static_cast<const CastExpr*>(e)->operand.get()); break;
+        case Expr::Kind::Cast: {
+            auto* c = static_cast<const CastExpr*>(e);
+            const StructDecl* en = c->target && c->target->isEnum() ? c->target->decl : nullptr;
+            if (en && file_.line(c->loc.line).substr(c->loc.col ? c->loc.col - 1 : 0).starts_with(en->type.name))  // `Color(n)`
+                add(Loc{c->loc.line, c->loc.col, (uint32_t)std::string_view(en->type.name).size()}, describe(*en), en->nameLoc);
+            expr(c->operand.get());
+            break;
+        }
+        case Expr::Kind::EnumValue: {  // `Color::Red`: the enum, then the enumerator
+            auto* v = static_cast<const EnumValueExpr*>(e);
+            add(v->typeLoc, describe(*v->decl), v->decl->nameLoc);
+            if (v->index >= 0 && (size_t)v->index < v->decl->enumerators.size())
+                add(v->nameLoc, describe(v->decl->enumerators[(size_t)v->index], *v->decl), v->decl->enumerators[(size_t)v->index].loc);
+            break;
+        }
         case Expr::Kind::Sizeof: expr(static_cast<const SizeofExpr*>(e)->operand.get()); break;
         case Expr::Kind::New: {
             auto* n = static_cast<const NewExpr*>(e);

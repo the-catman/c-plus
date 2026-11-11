@@ -384,18 +384,23 @@ void Modules::checkNames(ModuleFile& file, Diagnostics& diags) const {
     for (size_t i = 0; i + 1 < t.size(); ++i) {
         Token& tok = t[i];
         if (tok.kind != Tok::Ident || tok.moduleName || afterMemberAccess(t, i) || declaratorAt(t, i) || file.members.count(tok.text)) continue;
-        if (t[i + 1].kind == Tok::ColonColon || isReplaceable(tok.text)) continue;  // a path, or what may be the main file's own for the whole program
-        if (reported.count(tok.text)) continue;
+        if (isReplaceable(tok.text)) continue;  // what may be the main file's own for the whole program
+        if (t[i + 1].kind == Tok::ColonColon) {  // a module's path, or a type's member, as in `Color::Red`
+            bool path = false;
+            for (const ModuleFile& other : files)
+                path = path || other.name == tok.text || other.name.compare(0, tok.text.size() + 1, tok.text + ".") == 0;
+            if (path) continue;
+        }
         if (isModule && mainFile) {
             auto it = mainFile->members.find(tok.text);
             if (it != mainFile->members.end() && it->second.isType) {
-                reported.insert(tok.text);
-                diags.error(tok.loc, "'" + tok.text + "' is declared in the main file, which other files cannot use",
-                            "move it into a module of its own, export it there, and import that module in each file that uses it", spec::Modules);
+                if (reported.insert(tok.text).second)
+                    diags.error(tok.loc, "'" + tok.text + "' is declared in the main file, which other files cannot use",
+                                "move it into a module of its own, export it there, and import that module in each file that uses it", spec::Modules);
                 continue;
             }
         }
-        if (!file.cTypes.count(tok.text) && !file.importsHeader)
+        if (!file.cTypes.count(tok.text) && !file.importsHeader && !reported.count(tok.text))
             for (const ModuleFile& other : files)
                 if (&other != &file && other.cTypes.count(tok.text)) {
                     reported.insert(tok.text);
