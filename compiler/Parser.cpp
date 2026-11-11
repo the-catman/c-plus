@@ -4,6 +4,8 @@
 
 #include "SpecRefs.h"
 
+#include <cstring>
+
 namespace cplus {
 
 Parser::Parser(std::vector<Token> tokens, Diagnostics& diags) : toks_(std::move(tokens)), diags_(diags) {}
@@ -912,7 +914,8 @@ void Parser::parseTemplateHeader(TemplateDecl& t) {
         TemplateParam p;
         if (match(Tok::KwTypename) || match(Tok::KwClass)) {
             // a type, which can be anything
-        } else if (check(Tok::KwInt) || check(Tok::KwLong) || check(Tok::KwBool) || check(Tok::KwChar)) {
+        } else if (check(Tok::KwInt) || check(Tok::KwLong) || check(Tok::KwBool) || check(Tok::KwChar) ||
+                   (check(Tok::Ident) && unsignedTypeNamed(peek().text))) {  // `uint32_t N` is a value, and not a constraint
             Loc loc;
             p.valueType = parseBaseType(loc);
         } else if (check(Tok::Ident)) {
@@ -1060,9 +1063,10 @@ ConstHooks Parser::constHooks() {
     };
     hooks.sizeOf = [](const Type* t, Loc loc) -> int64_t {
         switch (t->kind) {
-            case Type::Kind::Bool: case Type::Kind::Char: return 1;
-            case Type::Kind::Int: case Type::Kind::Float: return 4;
-            case Type::Kind::Long: case Type::Kind::Double: case Type::Kind::Pointer: case Type::Kind::Class:
+            case Type::Kind::Bool: case Type::Kind::Char: case Type::Kind::UInt8: return 1;
+            case Type::Kind::UInt16: return 2;
+            case Type::Kind::Int: case Type::Kind::Float: case Type::Kind::UInt32: return 4;
+            case Type::Kind::Long: case Type::Kind::Double: case Type::Kind::Pointer: case Type::Kind::Class: case Type::Kind::UInt64:
             case Type::Kind::Vector: case Type::Kind::Weak:
                 return 8;
             case Type::Kind::String: return 24;
@@ -1230,6 +1234,7 @@ std::string Parser::instanceName(const TemplateDecl& t, const std::vector<Templa
         else if (args[i].valueParam >= 0) name += t.params[args[i].valueParam].name;
         else if (valueType->is(Type::Kind::Bool)) name += args[i].value ? "true" : "false";
         else if (valueType->is(Type::Kind::Char)) name += "'" + std::string(1, (char)args[i].value) + "'";
+        else if (valueType->isUnsigned()) name += std::to_string((uint64_t)args[i].value) + "u";
         else name += std::to_string(args[i].value);
     }
     return name + ">";
@@ -1372,7 +1377,9 @@ const Type* Parser::boundType(const Token& t) const {
     return nullptr;
 }
 
-bool Parser::isTypeName(const Token& t) const { return t.kind == Tok::Ident && (typeNames_.count(t.text) || boundType(t)); }
+bool Parser::isTypeName(const Token& t) const {
+    return t.kind == Tok::Ident && (typeNames_.count(t.text) || boundType(t) || unsignedTypeNamed(t.text));
+}
 
 void Parser::rejectTemplateParamName(const Token& name) {
     if (bindings_.count(name.text))
@@ -1397,8 +1404,20 @@ TemplateArg Parser::parseTemplateValue(const TemplateParam& p) {
     bool wantsBool = p.valueType->is(Type::Kind::Bool), wantsChar = p.valueType->is(Type::Kind::Char);
     bool fits = wantsBool ? v.kind == ConstValue::Kind::Bool
                 : wantsChar ? v.kind == ConstValue::Kind::Char
-                            : v.kind == ConstValue::Kind::Int || v.kind == ConstValue::Kind::Long || v.kind == ConstValue::Kind::Char;
+                            : v.kind != ConstValue::Kind::Bool && v.kind != ConstValue::Kind::Float && v.kind != ConstValue::Kind::Double &&
+                                  v.kind != ConstValue::Kind::String && v.kind != ConstValue::Kind::Enum;
     if (p.valueType->is(Type::Kind::Int) && (v.i < INT32_MIN || v.i > INT32_MAX)) fits = false;
+    if (fits && p.valueType->isUnsigned()) {  // from 0 to its largest; a uint64_t above the largest long is held as its bits
+        const bool aboveLong = v.kind == ConstValue::Kind::UInt64 && v.i < 0;
+        const unsigned bits = p.valueType->bits();
+        fits = aboveLong ? bits == 64 : v.i >= 0 && (bits == 64 || (uint64_t)v.i <= ((uint64_t)1 << bits) - 1);
+        if (!fits && !aboveLong && v.i >= 0)
+            fail(e->loc, "the value " + std::to_string(v.i) + " does not fit in '" + std::string(p.valueType->name) + "', the type of the template parameter '" + p.name + "'",
+                 "write a value from 0 to " + std::to_string(((uint64_t)1 << bits) - 1), spec::Generics);
+        if (!fits)
+            fail(e->loc, "a '" + std::string(p.valueType->name) + "' cannot be below 0, as the template parameter '" + p.name + "' would be",
+                 "write a value from 0 up", spec::Generics);
+    }
     if (!fits)
         fail(e->loc, "expected a value of type '" + std::string(p.valueType->name) + "' for the template parameter '" + p.name +
                          "', but this is a '" + v.typeName() + "'",
@@ -1686,16 +1705,17 @@ std::string Parser::cplusSpelling(size_t from, size_t to, bool& known) const {
     };
     // What a word can stand for: a type of C+, a C++ name C+ has another form of, or a type of the program's own
     auto cName = [](const std::string& w) -> std::string {  // C's names for numbers, as C+ writes them: the same size
-        if (w == "uint8_t") return "char";  // a char is one byte, 0 to 255
-        if (w == "int32_t" || w == "uint32_t") return "int";
-        if (w == "int64_t" || w == "uint64_t" || w == "size_t" || w == "ssize_t" || w == "ptrdiff_t" || w == "intptr_t" || w == "uintptr_t") return "long";
+        if (w == "int32_t") return "int";
+        if (w == "int64_t" || w == "size_t" || w == "ssize_t" || w == "ptrdiff_t" || w == "intptr_t" || w == "uintptr_t") return "long";
         return "";
     };
     static const char* const ownWords[] = {"int", "long", "bool", "char", "double", "float", "void", "string", "vector", "array", "hashmap", "unique", "weak", "local", "Mutex", "Task",
-                                           "__TaskThrows"};
+                                           "__TaskThrows", "uint8_t", "uint16_t", "uint32_t", "uint64_t"};
     static const char* const stdWords[] = {"string", "vector", "array", "optional", "unique_ptr", "weak_ptr", "shared_ptr", "unordered_map", "map", "mutex"};
     auto among = [](const auto& list, const std::string& w) { return std::find_if(std::begin(list), std::end(list), [&](const char* n) { return w == n; }) != std::end(list); };
-    auto isKey = [](const std::string& k) { return k == "int" || k == "long" || k == "char" || k == "bool" || k == "string"; };  // what a hashmap can hash
+    auto isKey = [](const std::string& k) {  // what a hashmap can hash
+        return k == "int" || k == "long" || k == "char" || k == "bool" || k == "string" || unsignedTypeNamed(k);
+    };
     bool madeOfSmart = false;  // what `typeAt` gave last came from a smart pointer, whose ownership a C+ type of it would lose
     std::function<std::string()> typeAt = [&]() -> std::string {
         madeOfSmart = false;
@@ -1708,9 +1728,14 @@ std::string Parser::cplusSpelling(size_t from, size_t to, bool& known) const {
         const bool isStd = fromStd[pos];
         std::string w = words[pos++];
         if (w == "signed" && pos < words.size() && words[pos] == "char") known = false;  // a char is 0 to 255, and C+ has no signed byte
-        if (w == "unsigned" || w == "signed") {  // the C+ type of the same size
-            w = pos < words.size() && (words[pos] == "long" || words[pos] == "char") ? words[pos] : "int";
-            if (pos < words.size() && (words[pos] == "int" || words[pos] == "long" || words[pos] == "char")) ++pos;
+        if (w == "unsigned" || w == "signed") {  // the C+ type of the same size: `unsigned long` is a uint64_t
+            const std::string next = pos < words.size() ? words[pos] : "";
+            const bool isUnsigned = w == "unsigned";
+            w = next == "char" ? "char" : next == "long" ? (isUnsigned ? "uint64_t" : "long") : next == "short" ? (isUnsigned ? "uint16_t" : "short")
+                                                                                                             : (isUnsigned ? "uint32_t" : "int");
+            if (next == "int" || next == "long" || next == "char" || next == "short") ++pos;
+            if (next == "long" && pos < words.size() && words[pos] == "long") ++pos;
+            if ((next == "long" || next == "short") && pos < words.size() && words[pos] == "int") ++pos;
         }
         if (w == "long" && pos < words.size() && words[pos] == "long") ++pos;
         if (w == "long" && pos < words.size() && words[pos] == "int") ++pos;
@@ -1719,7 +1744,7 @@ std::string Parser::cplusSpelling(size_t from, size_t to, bool& known) const {
             if (!cName(w).empty() && !typeNames_.count(w)) w = cName(w);
             else if (isStd ? !among(stdWords, w) : !among(ownWords, w)) known = false;
         }
-        if (w == "int8_t" || w == "int16_t" || w == "uint16_t") known = false;  // no C+ type of that size
+        if (w == "int8_t" || w == "int16_t" || w == "short") known = false;  // no C+ type of that size
         std::vector<std::string> args;
         bool smartInside = false;
         if (pos < words.size() && words[pos] == "<") {
@@ -2045,7 +2070,7 @@ void Parser::parseTopLevel(Program& prog) {
         case Tok::Ident:
             if (peek(1).kind == Tok::ColonColon && (isTypeName(t) || classTemplate(t.text)))
                 fail(t.loc, "methods and constructors are defined inside their " +
-                                std::string(isTypeName(t) ? prog_->findStruct(t.text)->keyword() : "class"),
+                                std::string(prog_->findStruct(t.text) ? prog_->findStruct(t.text)->keyword() : "class"),
                      "move this definition into the body of '" + t.text + "'; C+ has no headers, so there is no "
                      "separate declaration to match",
                      spec::Classes);
@@ -2069,7 +2094,7 @@ void Parser::parseTopLevel(Program& prog) {
     const Type* ret = parseType(retLoc, &isConst);
     parseReturnReference(ret, isConst, false);
     if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && (isTypeName(peek()) || classTemplate(peek().text)))
-        fail(peek().loc, "methods are defined inside their " + std::string(isTypeName(peek()) ? prog_->findStruct(peek().text)->keyword() : "class"),
+        fail(peek().loc, "methods are defined inside their " + std::string(prog_->findStruct(peek().text) ? prog_->findStruct(peek().text)->keyword() : "class"),
              "move this definition into the body of '" + peek().text + "'; C+ has no headers, so there is no "
              "separate declaration to match",
              spec::Classes);
@@ -2316,23 +2341,25 @@ const Type* Parser::parseCType(Loc& loc, bool isReturn) {
         if (n == "size_t" || n == "ssize_t" || n == "ptrdiff_t" || n == "intptr_t" || n == "int64_t" ||
             n == "off_t" || n == "time_t")
             use = "long", why = "it is 64 bits, like '" + n + "'";
-        else if (n == "uint64_t" || n == "uintptr_t")
-            use = "long", why = "it passes the same 64 bits; C+ has no unsigned types yet";
-        else if (n == "int32_t" || n == "pid_t" || n == "uid_t" || n == "gid_t")
+        else if (n == "uintptr_t")
+            use = "long", why = "it passes the same 64 bits, and `reinterpret_cast<long>(p)` makes one from a pointer";
+        else if (n == "int32_t" || n == "pid_t")
             use = "int", why = "it is 32 bits, like '" + n + "'";
-        else if (n == "uint32_t" || n == "unsigned")
-            use = "int", why = "it passes the same 32 bits; C+ has no unsigned types yet";
-        if (n == "int8_t" || n == "uint8_t")
-            notYet(base.loc, "8-bit and 16-bit integer types such as '" + n + "'", "write `char`, one byte from 0 to 255, or `char*` for a buffer of bytes");
-        if (n == "short" || n == "int16_t" || n == "uint16_t")
-            notYet(base.loc, "8-bit and 16-bit integer types such as '" + n + "'", "write a small wrapper in C that takes an `int`, and declare that. A pointer to them can be a `void*`");
+        else if (n == "uid_t" || n == "gid_t")
+            use = "uint32_t", why = "it is 32 bits and unsigned, like '" + n + "'";
+        else if (n == "unsigned")
+            use = "uint32_t", why = "it is 32 bits and unsigned";
+        if (n == "int8_t")
+            notYet(base.loc, "signed 8-bit and 16-bit integer types such as 'int8_t'", "write `char`, one byte from 0 to 255, or `uint8_t` for a small number");
+        if (n == "short" || n == "int16_t")
+            notYet(base.loc, "signed 8-bit and 16-bit integer types such as '" + n + "'", "write `uint16_t` if its values are never negative, or write a small wrapper in C that takes an `int`, and declare that");
         if (n == "unsigned" && peek(isConst ? 2 : 1).kind == Tok::KwChar)
-            fail(t.loc, "'unsigned char' is a C type; write `char` here", "write `char`, one byte from 0 to 255, or `char*` for a buffer of bytes", spec::CFunctions);
+            fail(t.loc, "'unsigned char' is a C type; write `char` here", "write `char`, one byte from 0 to 255, `char*` for a buffer of bytes, or `uint8_t` for a small number", spec::CFunctions);
         if (n == "unsigned" && peek(isConst ? 2 : 1).kind == Tok::Ident && peek(isConst ? 2 : 1).text == "short")
-            notYet(base.loc, "8-bit and 16-bit integer types such as 'unsigned short'", "write a small wrapper in C that takes an `int`, and declare that. A pointer to them can be a `void*`");
+            fail(t.loc, "'unsigned short' is a C type; write `uint16_t` here", "write `uint16_t` in place of `unsigned short`: it is 16 bits and unsigned", spec::CFunctions);
         if (!use.empty()) {
             if (n == "unsigned" && peek(isConst ? 2 : 1).kind == Tok::KwLong)
-                use = "long", why = "it passes the same 64 bits; C+ has no unsigned types yet";
+                use = "uint64_t", why = "it is 64 bits and unsigned";
             const Token& after = peek(isConst ? 2 : 1);
             const bool twoWords = (n == "unsigned" || n == "signed") && (after.kind == Tok::KwInt || after.kind == Tok::KwLong || after.kind == Tok::KwChar);
             const bool threeWords = twoWords && after.kind == Tok::KwLong && peek(isConst ? 3 : 2).kind == Tok::KwLong;
@@ -2380,7 +2407,7 @@ void Parser::failStd(Loc loc, const Token& name) {
     if (std::string reader = cNumberReader(n); !reader.empty() && n != "strtol" && n != "strtod") {
         const std::string use = n == "stoi" || n == "atoi" ? "stoi" : n == "stod" || n == "atof" ? "stod" : n == "stof" ? "stof" : "stol";
         fail(loc, "C+ has no std:: namespace",
-             "write `try " + use + "(s)`, which is built in" + (n == "stoll" ? ", as a `long` is 64 bits" : n == "stoul" || n == "stoull" ? ", as there are no unsigned types yet" : "") +
+             "write `try " + use + "(s)`, which is built in" + (n == "stoll" ? ", as a `long` is 64 bits" : n == "stoul" || n == "stoull" ? ", and `uint64_t(n)` gives the unsigned number with its bits" : "") +
                  ". It throws an Error if the text is not a number",
              spec::ParsingNumbers);
     }
@@ -2402,10 +2429,12 @@ void Parser::failStd(Loc loc, const Token& name) {
         fail(loc, "C+ has no std:: namespace", "choose the digits in the format: `println(\"{:.2f}\", x)`", spec::Printing);
     if (n == "make_pair")
         fail(loc, "C+ has no std:: namespace", "write a struct with a name for each part, and build it with `{a, b}`", spec::Structs);
-    if (n == "uint8_t" || n == "int8_t" || n == "byte")
-        fail(loc, "C+ has no std:: namespace", "write `char`, one byte from 0 to 255", spec::Char);
-    if (n == "int16_t" || n == "uint16_t")
-        fail(loc, "C+ has no std:: namespace", "write `int`, as this compiler has no 16-bit integers yet", spec::IntegerTypes);
+    if (unsignedTypeNamed(n))
+        fail(loc, "C+ has no std:: namespace", "write `" + n + "`, which is a type of C+ itself", spec::IntegerTypes);
+    if (n == "int8_t" || n == "byte")
+        fail(loc, "C+ has no std:: namespace", "write `uint8_t` for a small number, or `char`, one byte from 0 to 255", spec::IntegerTypes);
+    if (n == "int16_t")
+        fail(loc, "C+ has no std:: namespace", "write `int`, as this compiler has no int16_t yet", spec::IntegerTypes);
     if (!cDeclarationOf(n).empty())
         fail(loc, "C+ has no std:: namespace", "a C function must be declared: `extern \"C\" " + cDeclarationOf(n) + ";`", spec::CFunctions);
     if (n == "exception" || n == "runtime_error" || n == "logic_error" || n == "invalid_argument" || n == "out_of_range")
@@ -2513,6 +2542,7 @@ bool Parser::isValueOfType() const {
         case Tok::KwChar: case Tok::KwString:
             break;
         case Tok::Ident: case Tok::KwWeak:
+            if (unsignedTypeNamed(peek().text)) break;  // `uint32_t(x)`
             if (peek(1).kind != Tok::Less) return false;
             after = afterAngles(1);
             if (!after) return false;
@@ -2547,14 +2577,14 @@ void Parser::checkUnknownPointerType() {
     if (after != Tok::Assign && after != Tok::Semi && after != Tok::Comma && after != Tok::RParen) return;
     const Token& t = peek();
     rejectNotImported(t);
-    if (t.text == "uint8_t" || t.text == "int8_t")
-        fail(t.loc, "unknown type '" + t.text + "'", "write `char* " + peek(i).text + "`, as a char is one byte", spec::IntegerTypes);
-    if (t.text == "short" || t.text == "int16_t" || t.text == "uint16_t")
-        fail(t.loc, "unknown type '" + t.text + "'", "write `void* " + peek(i).text + "`, as this compiler has no 16-bit integers yet", spec::IntegerTypes);
-    if (t.text == "size_t" || t.text == "int32_t" || t.text == "int64_t" || t.text == "uint32_t" ||
-        t.text == "uint64_t" || t.text == "unsigned")
+    if (t.text == "int8_t")
+        fail(t.loc, "unknown type '" + t.text + "'", "write `uint8_t* " + peek(i).text + "` or `char* " + peek(i).text + "`, as this compiler has no int8_t yet", spec::IntegerTypes);
+    if (t.text == "short" || t.text == "int16_t")
         fail(t.loc, "unknown type '" + t.text + "'",
-             "write `" + std::string(t.text == "unsigned" || t.text == "int32_t" || t.text == "uint32_t" ? "int" : "long") + "* " + peek(i).text + "`, which has the same size", spec::IntegerTypes);
+             "write `uint16_t* " + peek(i).text + "` if its numbers are never negative, or `void* " + peek(i).text + "`, as this compiler has no int16_t yet", spec::IntegerTypes);
+    if (t.text == "size_t" || t.text == "int32_t" || t.text == "int64_t" || t.text == "unsigned")
+        fail(t.loc, "unknown type '" + t.text + "'",
+             "write `" + std::string(t.text == "unsigned" ? "uint32_t" : t.text == "int32_t" ? "int" : "long") + "* " + peek(i).text + "`, which has the same size", spec::IntegerTypes);
     if (t.text == "FILE")
         fail(t.loc, "unknown type 'FILE'",
              "to read all of a file, write `import fs;` at the top of the file, then `string text = try fs::read(path);`. To use C's, declare the type first, at the "
@@ -2595,9 +2625,10 @@ void Parser::rejectStructKeyword() {
 // The C+ type with the size of a C integer type, or null.
 static const char* cIntegerEquivalent(const std::string& n) {
     if (n == "size_t" || n == "ssize_t" || n == "ptrdiff_t" || n == "intptr_t" || n == "uintptr_t" || n == "int64_t" ||
-        n == "uint64_t" || n == "off_t" || n == "time_t")
+        n == "off_t" || n == "time_t")
         return "long";
-    if (n == "int32_t" || n == "uint32_t" || n == "pid_t" || n == "uid_t" || n == "gid_t") return "int";
+    if (n == "int32_t" || n == "pid_t") return "int";
+    if (n == "uid_t" || n == "gid_t") return "uint32_t";
     return nullptr;
 }
 
@@ -2662,7 +2693,7 @@ void Parser::failMakePointer(const Token& t) {
     const std::string keep = wantsUnique ? "have one owner" : "share one";
     // A value of the language, such as `vector<int>`, or a struct, which is copied
     const TemplateDecl* tmpl = isGeneric ? classTemplate(first.text) : nullptr;
-    StructDecl* named = !isGeneric && isTypeName(first) ? prog_->findStruct(first.text) : nullptr;
+    StructDecl* named = !isGeneric ? prog_->findStruct(first.text) : nullptr;
     const bool knownClass = (named && named->isClass) || (tmpl && tmpl->start < toks_.size() && toks_[tmpl->start].kind == Tok::KwClass);
     if (isGeneric && !knownClass)
         fail(t.loc, message, "write `" + whole + "(...)`. It is a value, which is copied, so to " + keep + " hold it in a class", anchor);
@@ -2752,17 +2783,22 @@ void Parser::checkUnknownType() {
         const std::string& n = peek().text;
         const Token& next = peek(1);
         bool sign = n == "unsigned" || n == "signed";
-        if (n == "short" || n == "int16_t" || n == "uint16_t" || (sign && next.kind == Tok::Ident && next.text == "short"))
-            notYet(peek().loc, std::string("16-bit integer types such as '") + (sign ? n + " " : "") + (sign && next.kind == Tok::Ident ? next.text : n) + "'",
+        if (sign && next.kind == Tok::Ident && next.text == "short" && n == "unsigned")
+            fail(peek().loc, "C+ has no 'unsigned short' type", "write `uint16_t`, which has the same size", spec::IntegerTypes);
+        if (n == "short" || n == "int16_t" || (sign && next.kind == Tok::Ident && next.text == "short"))
+            notYet(peek().loc, std::string("signed 16-bit integer types such as '") + (sign ? n + " " : "") + (sign && next.kind == Tok::Ident ? next.text : n) + "'",
                    inExternStruct_ ? "`int` would change its layout. Declare the struct by name, `extern \"C\" struct name;`, and use it through pointers"
-                                   : "write `int`. A C struct with such a field can still be used through pointers, by declaring it by name: "
-                                     "`extern \"C\" struct name;`");
-        if ((n == "int8_t" || n == "uint8_t") && next.kind == Tok::Ident)
-            notYet(peek().loc, "8-bit integer types such as '" + n + "'", "write `int` for a number, or `char` for a byte, as in `char c = char(n);`");
+                                   : "write `int`, or `uint16_t` if it is never negative. A C struct with such a field can still be used through "
+                                     "pointers, by declaring it by name: `extern \"C\" struct name;`");
+        if (n == "int8_t" && next.kind == Tok::Ident)
+            notYet(peek().loc, "signed 8-bit integer types such as 'int8_t'", "write `int` for a number, `uint8_t` for one from 0 to 255, or `char` for a byte of text");
         if (sign && (next.kind == Tok::KwChar || next.kind == Tok::KwInt || next.kind == Tok::KwLong)) {
-            std::string use = tokSpelling(next.kind);
-            fail(peek().loc, "C+ has no '" + n + " " + use + "' type",
-                 (next.kind == Tok::KwChar ? std::string("write `int` for a number, or `char` for a byte, as in `char c = char(n);`") : "write `" + use + "`, which has the same size") + "; C+ has no unsigned types yet", spec::IntegerTypes);
+            const std::string written = tokSpelling(next.kind);
+            const bool isUnsigned = n == "unsigned";
+            const std::string use = next.kind == Tok::KwChar ? "" : next.kind == Tok::KwLong ? (isUnsigned ? "uint64_t" : "long") : (isUnsigned ? "uint32_t" : "int");
+            fail(peek().loc, "C+ has no '" + n + " " + written + "' type",
+                 next.kind == Tok::KwChar ? std::string("write `char` for a byte, which is from 0 to 255, or `uint8_t` for a small number")
+                                          : "write `" + use + "`, which has the same size", spec::IntegerTypes);
         }
     }
     bool optional = check(Tok::Ident) && peek(1).kind == Tok::Question && peek(2).kind == Tok::Ident &&
@@ -2778,7 +2814,7 @@ void Parser::checkUnknownType() {
     if (const char* use = cIntegerEquivalent(t.text))
         help = "write `" + std::string(use) + "`, which has the same size as '" + t.text + "'";
     else if (t.text == "unsigned")
-        notYet(t.loc, "unsigned integer types", "use int (32-bit) or long (64-bit); both are signed and the same size on every platform");
+        help = "write `uint32_t`, which has the same size as 'unsigned', or `uint64_t` for 64 bits";
     else if (t.text == "ifstream" || t.text == "fstream")
         fail(t.loc, "unknown type '" + t.text + "'", "to read all of a file, write `import fs;` at the top of the file, then `string text = try fs::read(path);`", spec::Files);
     else if (t.text == "ofstream")
@@ -2787,8 +2823,8 @@ void Parser::checkUnknownType() {
              "fs::open(path, \"w\");`, then `try f.write(text);`",
              spec::Files);
     else
-        help = "write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the "
-               "structs and classes of the program";
+        help = "write one of the types: int, long, double, float, bool, char, string, void, uint8_t to uint64_t, vector<T>, array<T, N>, "
+               "hashmap<K, V>, T?, T*, or the structs and classes of the program";
     fail(t.loc, "unknown type '" + t.text + "'", help, spec::IntegerTypes);
 }
 
@@ -2917,6 +2953,7 @@ const Type* Parser::parseBaseType(Loc& loc) {
                 loc.len = prev().loc.col + prev().loc.len - t.loc.col;
                 return made;
             }
+            if (const Type* u = unsignedTypeNamed(t.text)) return u;
             if (isTypeName(t)) return &prog_->findStruct(t.text)->type;
             if (TemplateDecl* alias = isAlias(t) ? aliasTemplate(t.text) : nullptr) {
                 const Type* made = aliasType(*alias, t.loc);
@@ -3052,8 +3089,8 @@ const Type* Parser::parseBaseType(Loc& loc) {
                     notYet(t.loc, "'" + t.text + "'", "use a `vector<T>` with `push_back`, and an index for the next one to take: `v[head]; head++;`");
                 notYet(t.loc, "'" + t.text + "'", t.text == "pair" || t.text == "tuple" ? "write a struct with a name for each part" : "use a `vector<T>`, with `push_back`, `pop_back` and `back`");
             }
-            fail(t.loc, "unknown type '" + t.text + "'", "write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program", spec::IntegerTypes);
-        default: fail(t.loc, "expected a type, found " + describeToken(t), "write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program", spec::IntegerTypes);
+            fail(t.loc, "unknown type '" + t.text + "'", "write one of the types: int, long, double, float, bool, char, string, void, uint8_t to uint64_t, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program", spec::IntegerTypes);
+        default: fail(t.loc, "expected a type, found " + describeToken(t), "write one of the types: int, long, double, float, bool, char, string, void, uint8_t to uint64_t, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program", spec::IntegerTypes);
     }
 }
 
@@ -4197,8 +4234,9 @@ ExprPtr Parser::parseUnary() {
             return std::make_unique<TryExpr>(t.loc, parseUnary());
         case Tok::Minus: {
             advance();
-            // Fold "-<literal>" so that -2147483648 is an int and -9223372036854775808 a long.
-            if (check(Tok::IntLit)) {
+            // Fold "-<literal>" so that -2147483648 is an int and -9223372036854775808 a long. `-1u` is unsigned, so it
+            // wraps around, as in C++.
+            if (check(Tok::IntLit) && !peek().unsignedSuffix) {
                 const Token& lit = advance();
                 Loc loc = t.loc;
                 loc.len = lit.loc.col + lit.loc.len - t.loc.col;
@@ -4455,11 +4493,17 @@ ExprPtr Parser::parsePrimary() {
             expect(Tok::RParen, "to close '" + std::string(ty->name) + "(...)'");
             return std::make_unique<CastExpr>(loc, ty, std::move(operand));
         }
-        case Tok::IntLit:
-            if (t.intValue > (uint64_t)INT64_MAX)
-                fail(t.loc, "the number " + t.text + " is too large for any integer type",
-                     "write a smaller number: the largest long is 9223372036854775807", spec::IntegerLiterals);
-            return std::make_unique<IntLitExpr>(t.loc, (int64_t)t.intValue, t.longSuffix);
+        case Tok::IntLit: {
+            // As in C++, a hexadecimal, octal or binary number too large for a long is a uint64_t; a decimal one needs a u.
+            const bool based = t.text.size() > 1 && t.text[0] == '0' && std::strchr("xXoObB", t.text[1]);
+            const bool large = t.intValue > (uint64_t)INT64_MAX;
+            if (large && !t.unsignedSuffix && !based)
+                fail(t.loc, "the number " + t.text + " is too large for a long",
+                     "write `" + t.text + "u` for a uint64_t, which holds up to 18446744073709551615, or a smaller number: the "
+                     "largest long is 9223372036854775807",
+                     spec::IntegerLiterals);
+            return std::make_unique<IntLitExpr>(t.loc, (int64_t)t.intValue, t.longSuffix || large, t.unsignedSuffix || large);
+        }
         case Tok::StringLit: {
             Loc loc = t.loc;
             std::string value = t.text;
@@ -4662,7 +4706,10 @@ ExprPtr Parser::parsePrimary() {
                 const TemplateBinding& b = bound->second;
                 if (b.valueType->is(Type::Kind::Bool)) return std::make_unique<BoolLitExpr>(t.loc, b.value.value != 0);
                 if (b.valueType->is(Type::Kind::Char)) return std::make_unique<CharLitExpr>(t.loc, (uint8_t)b.value.value);
-                return std::make_unique<IntLitExpr>(t.loc, b.value.value, b.valueType->is(Type::Kind::Long));
+                auto lit = std::make_unique<IntLitExpr>(t.loc, b.value.value, b.valueType->is(Type::Kind::Long) || b.valueType->is(Type::Kind::UInt64),
+                                                        b.valueType->isUnsigned());
+                if (b.valueType->isUnsigned()) lit->type = b.valueType;  // a uint8_t, and not the uint32_t its digits would be
+                return lit;
             }
             if (const Type* bound = boundType(t); bound && (check(Tok::LParen) || check(Tok::LBrace)))
                 return parseBoundValue(t, bound);
@@ -4723,6 +4770,7 @@ ExprPtr Parser::parsePrimary() {
                 call->templateArgs = std::move(templateArgs);
                 return call;
             }
+            if (const Type* u = unsignedTypeNamed(t.text); u && (check(Tok::LParen) || check(Tok::LBrace))) return parseBoundValue(t, u);  // `uint32_t(x)`
             if (isTypeName(t) && match(Tok::LBrace)) return parseInitList(t.loc, &prog_->findStruct(t.text)->type);
             if ((t.text == "make_unique" || t.text == "make_shared") && check(Tok::Less)) failMakePointer(t);
             // With a name that is no type, what can only be this goes on, so that the error can say so.
@@ -4944,7 +4992,7 @@ void Parser::parseEnum() {
         } else {
             const std::string written = u.text.empty() ? tokSpelling(u.kind) : u.text;
             const bool integer = u.kind == Tok::KwChar || written == "short" || written == "unsigned" || written == "signed" || written == "int8_t" ||
-                                 written == "uint8_t" || written == "int16_t" || written == "uint16_t" || cIntegerEquivalent(written);
+                                 written == "int16_t" || unsignedTypeNamed(written) || cIntegerEquivalent(written);
             if (integer) notYet(u.loc, "enums held in '" + written + "'", "leave out `: " + written + "`, which holds it in an int, or write `: long`");
             fail(u.loc, "an enum is held in an integer type, not in " + describeToken(u),
                  "leave out `: " + written + "`, which holds it in an int, or write `: long`", spec::Enums);

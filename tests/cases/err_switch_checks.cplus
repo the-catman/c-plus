@@ -135,15 +135,15 @@ int main() {
     break;
     return 0;
 }
-// error: a switch chooses by an int, a long, a char, an enum or a string, but this is 'bool'
+// error: a switch chooses by an integer, a char, an enum or a string, but this is 'bool'
 // error: write `if (flag) { ... } else { ... }`
-// error: a switch chooses by an int, a long, a char, an enum or a string, but this is 'double'
+// error: a switch chooses by an integer, a char, an enum or a string, but this is 'double'
 // error: a floating-point number is seldom exactly a case. Compare it with `if (d < 1.5) ... else if ...`, or switch on `int(d)`
-// error: a switch chooses by an int, a long, a char, an enum or a string, but this is 'int?'
+// error: a switch chooses by an integer, a char, an enum or a string, but this is 'int?'
 // error: switch on the value inside, if there is one: `if (auto v = maybe) { switch (v) { ... } }`
-// error: a switch chooses by an int, a long, a char, an enum or a string, but this is 'Point'
+// error: a switch chooses by an integer, a char, an enum or a string, but this is 'Point'
 // error: switch on one of its fields, such as `switch (p.x)`, or use `if` and `else if`
-// error: a switch chooses by an int, a long, a char, an enum or a string, but this is 'Node'
+// error: a switch chooses by an integer, a char, an enum or a string, but this is 'Node'
 // error: switch on one of its fields, such as `switch (node.name)`, or use `if` and `else if`
 // error: this switch has two `default` labels
 // error: remove one of them. Statements for both go under one

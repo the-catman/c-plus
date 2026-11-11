@@ -564,8 +564,6 @@ PLANNED_FEATURES = [
     ("math constants", M % "double d = M_PI;"),
     ("C functions with variable arguments", 'extern "C" int printf(string f, ...);\n' + M % ""),
     ("vectors passed to C", 'extern "C" void f(vector<int> v);\n' + M % ""),
-    ("unsigned types", M % "unsigned x = 10;"),
-    ("unsigned literals", M % "int x = 10u;"),
     ("a const and a non-const method that take the same parameters", 'struct P { int x = 0; int f(int a) { return a; } int f(int a) const { return 1; } };\n' + M % ""),
     ("a template beside a function of its name", 'template<typename T> T f(T x) { return x; }\nint f(int x) { return x; }\n' + M % ""),
     ("stoul", M % 'long n = stoul("1");'),
@@ -804,6 +802,7 @@ SPEC_NOT_CODE = {
     "cplus run app.cplus --race", "-l<name>", "-L<dir>", "--emit-llvm", "cplus explain", "spec:", "cplus explain cheatsheet", "{ x }", "[ x ]", "value_or()", "new[]",
     "cplus fmt", "--check", "cplus lsp", "editors/vscode", 'import "mine.h";', "-I", "-I<dir>", "cplus build app.cplus -I include", "-lsqlite3",
     "static inline", "const unsigned char*", "const T&", "T&", "case value:", "std::filesystem",
+    "min()", "max()", "abs()", "std::cout", "#define MASK 0xFFFFFFFFu",
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
@@ -817,7 +816,9 @@ SPEC_REJECTED = {
     "#include": "^#include <vector>", "#define": "^#define X 1", "#ifdef": "^#ifdef X", "0'10": "int a = 0'10;", "'ab'": "char a = 'ab';", "'é'": "char a = 'é';",
     "L'a'": "auto a = L'a';", "u'a'": "auto a = u'a';", "U'a'": "auto a = U'a';", 'u8"text"': 'auto a = u8"text";', "long long": "long long a = 1;",
     "long double": "long double a = 1;", "0x1.8p3": "double a = 0x1.8p3;", "int n = true;": "int n = true;", "unsigned char": "unsigned char a = 1;",
-    "signed char": "signed char a = 1;", "c *= 2": "char c = 'a'; c *= 2;", "s.at(i)": 'string s = "a"; int i = 0; s.at(i);', "int??": "int?? a;",
+    "signed char": "signed char a = 1;", "unsigned int": "unsigned int a = 1;", "unsigned long": "unsigned long a = 1;",
+    "unsigned long long": "unsigned long long a = 1;", "unsigned short": "unsigned short a = 1;", "uint32_t x = -1;": "uint32_t x = -1;",
+    "-1 < 1u": "bool b = -1 < 1u;", "c *= 2": "char c = 'a'; c *= 2;", "s.at(i)": 'string s = "a"; int i = 0; s.at(i);', "int??": "int?? a;",
     "auto x = null;": "auto x = null;", "found?.age = 3": 'User? found = null; found?.age = 3;',
     "found.name": 'User? found = null; println("{}", found.name);', "list[i]": 'vector<int>? list = null; int i = 0; println("{}", list[i]);',
     "for (auto x : list)": "vector<int>? list = null; for (auto x : list) {}", "auto p = {1, 2};": "auto p = {1, 2};",

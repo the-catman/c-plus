@@ -6,5 +6,9 @@ int main() {
     long alsoLong = 42L;
     println("{} {}", big, alsoLong);
     // expect: 1000000000000 42
+    auto mask = 0xFFFF'FFFFu;          // a uint32_t
+    auto all = 0xFFFF'FFFF'FFFF'FFFF;  // above the largest long, so a uint64_t
+    println("{} {}", mask, all);
+    // expect: 4294967295 18446744073709551615
     return 0;
 }

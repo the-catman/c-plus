@@ -1,0 +1,47 @@
+// What does not become an unsigned integer by itself, nor comes from one, and what is said to write instead.
+void fromSigned(int n) {
+    uint32_t u = n;
+    // error: expected 'uint32_t' to initialize 'u', but this is 'int'
+    // error: a signed 'int' does not become an unsigned 'uint32_t' by itself, as it may be below 0. Write `uint32_t(n)`, which wraps a negative number around
+}
+void toSigned(uint32_t u) {
+    int n = u;
+    // error: expected 'int' to initialize 'n', but this is 'uint32_t'
+    // error: a 'uint32_t' may not fit in an 'int'. Write `int(u)`, which keeps its lowest bits, or `checked(int(u))`, which stops the program if it does not fit
+}
+void narrower(uint64_t big) {
+    uint32_t u = big;
+    // error: a 'uint64_t' may not fit in a 'uint32_t'. Write `uint32_t(big)`, which keeps its lowest bits
+}
+void smallArithmetic(uint8_t b) {
+    b = b + 1;
+    // error: expected 'uint8_t' when assigning to 'b', but this is 'int'
+    // error: arithmetic on a uint8_t is done in an int, as in C++. Write `uint8_t(b + 1)`, which keeps its lowest bits, or use `+=` and the like, which stay a uint8_t
+}
+void literals() {
+    uint32_t a = -1;
+    // error: a uint32_t cannot be below 0. Write `uint32_t(-1)` for the uint32_t with the same bits
+    uint32_t b = 5000000000u;
+    // error: expected 'uint32_t' to initialize 'b', but this is 'uint64_t'
+    // error: this number is larger than a uint32_t can hold, which is up to 4294967295. Use a wider type
+    uint8_t c = 256;
+    // error: this number is larger than a uint8_t can hold, which is up to 255
+    uint64_t d = 18446744073709551616;
+    // error: the number 18446744073709551616 is too large for any integer type
+    long e = 9223372036854775808;
+    // error: write `9223372036854775808u` for a uint64_t
+}
+void compound(uint32_t u, uint8_t b) {
+    u += -1;
+    // error: expected 'uint32_t' on the right of '+=', but this is 'int'
+    b += 1.5;
+    // error: '+=' on a 'uint8_t' needs an integer, but this is 'double'
+}
+void floats(float f) {
+    uint32_t u = f;
+    // error: expected 'uint32_t' to initialize 'u', but this is 'float'
+}
+enum class Small : uint8_t { A, B };
+// error: this compiler does not support enums held in 'uint8_t' yet
+// error: leave out `: uint8_t`, which holds it in an int, or write `: long`
+int main() { return 0; }

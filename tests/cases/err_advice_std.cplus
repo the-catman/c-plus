@@ -1,6 +1,6 @@
 // What each name of std:: is in C+, in the places a type or a call can be.
 extern "C" void wideUnsigned(unsigned short a);
-// error: this compiler does not support 8-bit and 16-bit integer types such as 'unsigned short' yet
+// error: 'unsigned short' is a C type; write `uint16_t` here
 extern "C" void noName(struct { int a; } x);
 // error: give it a name, at the top level: `struct Point { int x; };`
 void sizeT() {
@@ -52,11 +52,11 @@ void stdMakePair() {
 }
 void stdByte() {
     std::uint8_t b = 1;
-    // error: write `char`, one byte from 0 to 255
+    // error: write `uint8_t`, which is a type of C+ itself
 }
 void stdSixteen() {
     std::int16_t b = 1;
-    // error: write `int`, as this compiler has no 16-bit integers yet
+    // error: write `int`, as this compiler has no int16_t yet
 }
 void noSize() {
     int a[];

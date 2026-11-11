@@ -5,8 +5,8 @@ import "../c/header.h";
 int main() {
     println("{} {} {}", HEADER_ANSWER, HEADER_NEGATIVE, HEADER_BIG);
     // expect: 42 -84 5000000000
-    println("{} {} {}", HEADER_MASK, HEADER_ALL_BITS, HEADER_LETTER);
-    // expect: -1 -1 65
+    println("{} {} {}", HEADER_MASK, HEADER_ALL_BITS, HEADER_LETTER);  // unsigned in C, and so in C+
+    // expect: 4294967295 18446744073709551615 65
     println("{} {} {}", HEADER_HALF, HEADER_THIRD, HEADER_TRUE);
     // expect: 0.5 0.33333334 true
     println("{} {}", HEADER_BYTES.size(), int(HEADER_BYTES[1]));
@@ -61,6 +61,15 @@ int main() {
     char* bytes = header_bytes();  // `const unsigned char*`, which is bytes and not text
     println("{} {}", int(bytes[1]), header_first_byte(bytes));
     // expect: 2 1
+
+    // C's unsigned types are C+'s, except for a size, which is a long, as `size()` gives, and `unsigned char`, a char.
+    uint16_t port = header_port_of(2);
+    uint32_t sum = header_unsigned_add(4000000000u, 5u);
+    uint64_t bits = header_all_bits();
+    long size = header_size_of("four");
+    uint8_t low = header_low_byte(255);
+    println("{} {} {} {} {}", port, sum, bits, size, low);
+    // expect: 2000 4000000005 18446744073709551615 4 0
 
     // The program's names are its own: a local variable with a C name hides it, as in C.
     int header_add = 1;

@@ -16,9 +16,9 @@
 namespace cplus {
 
 struct ConstValue {
-    enum class Kind { Int, Long, Float, Double, Bool, Char, String, Enum };
+    enum class Kind { Int, Long, Float, Double, Bool, Char, String, Enum, UInt8, UInt16, UInt32, UInt64 };
     Kind kind = Kind::Int;
-    int64_t i = 0;  // for Int, Long, Bool, Char and Enum
+    int64_t i = 0;  // for the integers, Bool, Char and Enum. A UInt64 is held as its bits
     double d = 0;   // for Float and Double
     std::string s;  // for String
     const Type* enumType = nullptr;  // for Enum: which enum

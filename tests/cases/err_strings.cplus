@@ -61,7 +61,7 @@ int main() {
 // error: '-' cannot be used with 'string'
 // error: use + to join strings, and == != < <= > >= to compare them
 // error: '<' compares two strings, but this is 'int'
-// error: an index into a string must be an int or long, but this is 'bool'
+// error: an index into a string must be an integer, but this is 'bool'
 // error: the elements of 'string' are 'char', which cannot be stored in 'string' 'ch'
 // error: write `for (auto ch : ...)` or `for (char ch : ...)`
 // error: expected 'char' for push_back(), but this is 'string'

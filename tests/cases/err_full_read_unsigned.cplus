@@ -1,5 +1,5 @@
 // A C type of two words, named whole.
 extern "C" unsigned int sleep(unsigned int s);
-// error: 'unsigned int' is a C type; write `int` here
-// error: write `int` in place of `unsigned int`
+// error: 'unsigned int' is a C type; write `uint32_t` here
+// error: write `uint32_t` in place of `unsigned int`: it is 32 bits and unsigned
 int main() { return 0; }

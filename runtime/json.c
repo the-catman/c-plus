@@ -208,9 +208,23 @@ static void write_json_value(writer* w, const cplus_type* t, const char* place) 
     }
 }
 
+// The value of a uint8_t, uint16_t, uint32_t or uint64_t at `place`.
+static uint64_t unsigned_at(const cplus_type* t, const char* place) {
+    switch (t->size) {
+        case 1: return *(const uint8_t*)place;
+        case 2: return *(const uint16_t*)place;
+        case 4: return *(const uint32_t*)place;
+        default: return *(const uint64_t*)place;
+    }
+}
+
 static void write_value(writer* w, const cplus_type* t, const char* place) {
     char number[32];
     switch (t->kind) {
+        case CPLUS_KIND_UNSIGNED:
+            snprintf(number, sizeof number, "%" PRIu64, unsigned_at(t, place));
+            put(w, number);
+            return;
         case CPLUS_KIND_BOOL: put(w, *place ? "true" : "false"); return;
         case CPLUS_KIND_INT:
             snprintf(number, sizeof number, "%" PRId32, *(const int32_t*)place);
@@ -547,6 +561,40 @@ static bool read_integer(reader* r, int64_t* out, int64_t lowest, int64_t highes
         value = (long long)d;
     }
     if (value < lowest || value > highest) return fail_at(r, begin, "%s does not fit in %s", text, type);
+    *out = value;
+    return true;
+}
+
+// A whole number from 0 to `highest`, for a uint8_t to a uint64_t.
+static bool read_unsigned(reader* r, uint64_t* out, uint64_t highest, const char* type) {
+    const char* begin = r->at;
+    bool whole;
+    if (!scan_number(r, &whole)) return false;
+    size_t size = (size_t)(r->at - begin);
+    char text[64];
+    if (size >= sizeof text) return fail_at(r, begin, "this number does not fit in %s", type);
+    memcpy(text, begin, size);
+    text[size] = 0;
+    if (text[0] == '-') {
+        double d = strtod(text, NULL);
+        if (d == 0) {  // -0, which is 0
+            *out = 0;
+            return true;
+        }
+        return fail_at(r, begin, "%s is below 0, which %s cannot hold", text, type);
+    }
+    unsigned long long value;
+    if (whole) {
+        errno = 0;
+        value = strtoull(text, NULL, 10);
+        if (errno == ERANGE) return fail_at(r, begin, "%s does not fit in %s", text, type);
+    } else {  // `1.0` and `1e3` are whole numbers too, and `1.5` is what cannot be kept
+        double d = strtod(text, NULL);
+        if (d != trunc(d)) return fail_at(r, begin, "%s has a fraction, which %s cannot hold", text, type);
+        if (!(d <= 9007199254740992.0)) return fail_at(r, begin, "%s does not fit in %s exactly", text, type);
+        value = (unsigned long long)d;
+    }
+    if (value > highest) return fail_at(r, begin, "%s does not fit in %s", text, type);
     *out = value;
     return true;
 }
@@ -1004,6 +1052,20 @@ static bool read_value(reader* r, const cplus_type* t, char* place) {
             if (!read_integer(r, &number, INT64_MIN, INT64_MAX, "a long")) return false;
             *(int64_t*)place = number;
             return true;
+        case CPLUS_KIND_UNSIGNED: {
+            char type[32];
+            snprintf(type, sizeof type, "a %s", t->name);
+            uint64_t whole;
+            const uint64_t highest = t->size >= 8 ? UINT64_MAX : ((uint64_t)1 << (t->size * 8)) - 1;
+            if (!read_unsigned(r, &whole, highest, type)) return false;
+            switch (t->size) {
+                case 1: *(uint8_t*)place = (uint8_t)whole; break;
+                case 2: *(uint16_t*)place = (uint16_t)whole; break;
+                case 4: *(uint32_t*)place = (uint32_t)whole; break;
+                default: *(uint64_t*)place = whole; break;
+            }
+            return true;
+        }
         case CPLUS_KIND_FLOAT: {
             const char* begin = r->at;
             if (!read_double(r, &fraction, "a float")) return false;
@@ -1247,6 +1309,14 @@ static void build_value(builder* b, const cplus_type* t, const char* place, char
             *(double*)(out + f[VALUE_NUMBER].offset) = (double)n;
             out[f[VALUE_IS_WHOLE].offset] = 1;
             *(int64_t*)(out + f[VALUE_WHOLE].offset) = n;
+            return;
+        }
+        case CPLUS_KIND_UNSIGNED: {  // whole if it fits in the long a json::Value holds
+            uint64_t n = unsigned_at(t, place);
+            set_kind(b, out, IS_NUMBER);
+            *(double*)(out + f[VALUE_NUMBER].offset) = (double)n;
+            out[f[VALUE_IS_WHOLE].offset] = n <= INT64_MAX;
+            *(int64_t*)(out + f[VALUE_WHOLE].offset) = n <= INT64_MAX ? (int64_t)n : 0;
             return;
         }
         case CPLUS_KIND_FLOAT: {

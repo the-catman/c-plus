@@ -45,6 +45,8 @@ constexpr Alias kAliases[] = {
     {"task", "concurrency"},         {"template", "generics"},       {"thread", "concurrency"},
     {"threads", "concurrency"},      {"throw", "errors"},            {"throws", "errors"},
     {"try", "errors"},               {"unique", "unique-references"}, {"vector", "vectors"},
+    {"unsigned", "integer-types"},   {"uint8_t", "integer-types"},   {"uint16_t", "integer-types"},
+    {"uint32_t", "integer-types"},   {"uint64_t", "integer-types"},  {"overflow", "integer-overflow"},
     {"virtual", "inheritance"},      {"wait", "concurrency"},        {"weak", "weak-references"},
     {"websocket", "http"},           {"websockets", "http"},         {"while", "control-flow"},
     {"array", "arrays"},             {"delay", "async-functions"},   {"sleep", "async-functions"},

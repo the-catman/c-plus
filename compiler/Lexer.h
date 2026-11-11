@@ -60,6 +60,7 @@ struct Token {
     std::string text;       // identifier name, string literal contents, or source spelling
     uint64_t intValue = 0;  // for IntLit, and the byte of a CharLit
     bool longSuffix = false;  // IntLit written with L or LL, e.g. 1L
+    bool unsignedSuffix = false;  // IntLit written with u, e.g. 1u, a uint32_t, or 1ul, a uint64_t
     double floatValue = 0;    // for FloatLit
     bool floatSuffix = false; // FloatLit written with f, e.g. 1.5f
     size_t begin = 0, end = 0;  // where its spelling is in the source, as byte offsets

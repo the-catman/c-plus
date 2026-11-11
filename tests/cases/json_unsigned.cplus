@@ -1,0 +1,47 @@
+// An unsigned field is a JSON number, and reading one checks that it is from 0 to the largest of its type.
+import json;
+import reflect;
+
+struct Packet {
+    uint8_t kind = 0;
+    uint16_t port = 0;
+    uint32_t id = 0;
+    uint64_t big = 0;
+};
+
+void read(string text) {
+    try {
+        Packet p = try json::parse<Packet>(text);
+        println("{}", p);
+    } catch (json::Error e) {
+        println("{}", e.what());
+    } catch (Error e) {
+        println("other: {}", e.what());
+    }
+}
+
+int main() {
+    Packet p = {7, 8080, 4000000000u, 0xFFFFFFFFFFFFFFFF};
+    string text = json::stringify(p);
+    println("{}", text);
+    // expect: {"kind":7,"port":8080,"id":4000000000,"big":18446744073709551615}
+    read(text);
+    // expect: {kind: 7, port: 8080, id: 4000000000, big: 18446744073709551615}
+    read("{\"kind\": 256}");
+    // expect: line 1, column 10: in kind: 256 does not fit in a uint8_t
+    read("{\"id\": -1}");
+    // expect: line 1, column 8: in id: -1 is below 0, which a uint32_t cannot hold
+    read("{\"port\": 1.5}");
+    // expect: line 1, column 10: in port: 1.5 has a fraction, which a uint16_t cannot hold
+    read("{\"big\": 18446744073709551616}");
+    // expect: line 1, column 9: in big: 18446744073709551616 does not fit in a uint64_t
+    read("{\"port\": 1e3, \"kind\": -0}");
+    // expect: {kind: 0, port: 1000, id: 0, big: 0}
+    // A json::Value holds a whole number as a long, so a uint64_t above the largest long is a fraction there.
+    json::Value v = json::of(p);
+    println("{} {}", v.get("id")?.whole() ?? -1L, v.get("big")?.whole() ?? -1L);
+    // expect: 4000000000 -1
+    println("{} {}", reflect::type<uint16_t>().kind(), reflect::type<uint64_t>().size());
+    // expect: uint16_t 8
+    return 0;
+}

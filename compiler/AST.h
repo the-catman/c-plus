@@ -19,7 +19,8 @@ struct StructDecl;
 struct TemplatePattern;
 
 struct Type {
-    enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, Struct, Class, Vector, Optional, Null,
+    enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, UInt8, UInt16, UInt32, UInt64,
+                      Struct, Class, Vector, Optional, Null,
                       Pointer, Opaque, Array, Weak, Unique, Local, Enum,
                       // Only while a generic definition is read, to learn its shape; never in checked code.
                       TypeParam, Dependent };
@@ -46,7 +47,12 @@ struct Type {
     // `enum class Color { Red, Green };`: a value that is one of a list of names, held as an int or a long.
     bool isEnum() const { return kind == Kind::Enum; }
     bool isError() const { return kind == Kind::Error; }
-    bool isInteger() const { return kind == Kind::Int || kind == Kind::Long; }
+    // `uint8_t` to `uint64_t`. Signed and unsigned never mix without a cast, except that the two smaller ones become
+    // an int in arithmetic, as a char does.
+    bool isUnsigned() const { return kind == Kind::UInt8 || kind == Kind::UInt16 || kind == Kind::UInt32 || kind == Kind::UInt64; }
+    bool isSigned() const { return kind == Kind::Int || kind == Kind::Long; }
+    bool isInteger() const { return isSigned() || isUnsigned(); }
+    bool promotesToInt() const { return kind == Kind::Char || kind == Kind::UInt8 || kind == Kind::UInt16; }
     bool isFloating() const { return kind == Kind::Float || kind == Kind::Double; }
     bool isNumber() const { return isInteger() || isFloating(); }
     // A number, or a char, which arithmetic turns into an int first, as in C++.
@@ -54,13 +60,22 @@ struct Type {
     bool isStruct() const { return kind == Kind::Struct; }  // a value type
     bool isClass() const { return kind == Kind::Class; }    // a reference-counted object
     bool hasFields() const { return kind == Kind::Struct || kind == Kind::Class; }
-    unsigned bits() const { return kind == Kind::Long ? 64 : kind == Kind::Int ? 32 : 0; }
+    unsigned bits() const {
+        switch (kind) {
+            case Kind::Long: case Kind::UInt64: return 64;
+            case Kind::Int: case Kind::UInt32: return 32;
+            case Kind::UInt16: return 16;
+            case Kind::UInt8: case Kind::Char: return 8;
+            default: return 0;
+        }
+    }
 
     static const Type* get(Kind k) {
         static const Type types[] = {{Kind::Error, "<error>"}, {Kind::Void, "void"},     {Kind::Bool, "bool"},
                                      {Kind::Int, "int"},       {Kind::Long, "long"},     {Kind::Float, "float"},
                                      {Kind::Double, "double"}, {Kind::Char, "char"},     {Kind::String, "string"},
-                                     {Kind::Auto, "auto"}};
+                                     {Kind::Auto, "auto"},     {Kind::UInt8, "uint8_t"}, {Kind::UInt16, "uint16_t"},
+                                     {Kind::UInt32, "uint32_t"}, {Kind::UInt64, "uint64_t"}};
         return &types[(int)k];
     }
     static const Type* error() { return get(Kind::Error); }
@@ -73,6 +88,10 @@ struct Type {
     static const Type* charTy() { return get(Kind::Char); }
     static const Type* stringTy() { return get(Kind::String); }
     static const Type* autoTy() { return get(Kind::Auto); }
+    static const Type* uint8Ty() { return get(Kind::UInt8); }
+    static const Type* uint16Ty() { return get(Kind::UInt16); }
+    static const Type* uint32Ty() { return get(Kind::UInt32); }
+    static const Type* uint64Ty() { return get(Kind::UInt64); }
     static const Type* nullTy() {
         static const Type t{Kind::Null, "null"};
         return &t;
@@ -182,6 +201,15 @@ struct TemplatePattern {
 
 // ---- Expressions -----------------------------------------------------------
 
+// `uint8_t`, `uint16_t`, `uint32_t` or `uint64_t`, which are written as names, as in C++. Null for any other name.
+inline const Type* unsignedTypeNamed(const std::string& name) {
+    if (name == "uint8_t") return Type::uint8Ty();
+    if (name == "uint16_t") return Type::uint16Ty();
+    if (name == "uint32_t") return Type::uint32Ty();
+    if (name == "uint64_t") return Type::uint64Ty();
+    return nullptr;
+}
+
 // Whether arithmetic written where the parser is now is checked: inside `checked(...)`, in a function marked
 // `[[checked]]`, or in a file that starts with `[[checked]];`. Each expression takes it when it is made.
 inline thread_local bool checkedHere = false;
@@ -209,9 +237,17 @@ struct Expr {
 using ExprPtr = std::unique_ptr<Expr>;
 
 struct IntLitExpr : Expr {
-    int64_t value;
-    bool isLong;  // written with an L suffix
-    IntLitExpr(Loc l, int64_t v, bool longSuffix) : Expr(Kind::IntLit, l), value(v), isLong(longSuffix) {}
+    int64_t value;  // a uint64_t above the largest long is kept as its bits
+    bool isLong;      // written with an L suffix
+    bool isUnsigned;  // written with a u suffix, or in hex, octal or binary above the largest long
+    IntLitExpr(Loc l, int64_t v, bool longSuffix, bool unsignedSuffix = false)
+        : Expr(Kind::IntLit, l), value(v), isLong(longSuffix), isUnsigned(unsignedSuffix) {}
+    // The type it has by itself, as in C++: an int if it fits, or else a long. With a u, a uint32_t if it fits, or else
+    // a uint64_t.
+    const Type* writtenType() const {
+        if (isUnsigned) return !isLong && (uint64_t)value <= UINT32_MAX ? Type::uint32Ty() : Type::uint64Ty();
+        return !isLong && value >= INT32_MIN && value <= INT32_MAX ? Type::intTy() : Type::longTy();
+    }
 };
 
 struct FloatLitExpr : Expr {
@@ -365,6 +401,9 @@ struct BinaryExpr : Expr {
 struct AssignExpr : Expr {
     std::optional<BinOp> op;
     ExprPtr target, value;
+    // For `b += n` on a uint8_t or a uint16_t, set by Sema: the type the arithmetic happens in, an int or wider, before
+    // the result wraps back into the target's type.
+    const Type* opType = nullptr;
     AssignExpr(Loc opLoc, std::optional<BinOp> o, ExprPtr t, ExprPtr v)
         : Expr(Kind::Assign, opLoc), op(o), target(std::move(t)), value(std::move(v)) {}
 };

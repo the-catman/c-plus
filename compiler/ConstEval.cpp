@@ -47,21 +47,52 @@ const Type* typeOfValue(const ConstValue& v) {
         case VK::Char: return Type::charTy();
         case VK::String: return Type::stringTy();
         case VK::Enum: return v.enumType;
+        case VK::UInt8: return Type::uint8Ty();
+        case VK::UInt16: return Type::uint16Ty();
+        case VK::UInt32: return Type::uint32Ty();
+        case VK::UInt64: return Type::uint64Ty();
     }
     return Type::intTy();
+}
+VK kindOfInteger(const Type* t) {
+    switch (t->kind) {
+        case K::Long: return VK::Long;
+        case K::UInt8: return VK::UInt8;
+        case K::UInt16: return VK::UInt16;
+        case K::UInt32: return VK::UInt32;
+        case K::UInt64: return VK::UInt64;
+        case K::Char: return VK::Char;
+        default: return VK::Int;
+    }
+}
+bool isUnsignedKind(VK k) { return k == VK::UInt8 || k == VK::UInt16 || k == VK::UInt32 || k == VK::UInt64; }
+uint64_t maskOfBits(unsigned bits) { return bits >= 64 ? ~(uint64_t)0 : ((uint64_t)1 << bits) - 1; }
+// Whether every value of the integer type `from` is one of `to`, as Sema's canConvert finds.
+bool integerFits(const Type* from, const Type* to) {
+    if (from == to) return true;
+    if (from->is(K::Char) || from->isUnsigned()) return to->isInteger() && (to->bits() > from->bits() || (to->isUnsigned() && to->bits() >= from->bits()));
+    return from->is(K::Int) && to->is(K::Long);
+}
+// The integer type arithmetic on these two happens in, as Sema's arithmeticType finds: a char, a uint8_t and a uint16_t
+// become an int, and a signed type is never mixed with an unsigned one, except by a written number that fits it.
+const Type* commonIntegerType(const Type* a, const Type* b) {
+    a = a->promotesToInt() ? Type::intTy() : a;
+    b = b->promotesToInt() ? Type::intTy() : b;
+    if (integerFits(b, a)) return a;
+    if (integerFits(a, b)) return b;
+    return a->isUnsigned() ? a : b;
 }
 // The type two numbers of these types are worked out in, as Sema's commonNumber finds. Null for anything else.
 const Type* commonNumberType(const Type* a, const Type* b) {
     if (!a || !b || !a->isArithmetic() || !b->isArithmetic()) return nullptr;
     if (a->is(K::Double) || b->is(K::Double)) return Type::doubleTy();
     if (a->is(K::Float) || b->is(K::Float)) return Type::floatTy();
-    if (a->is(K::Long) || b->is(K::Long)) return Type::longTy();
-    return Type::intTy();
+    return commonIntegerType(a, b);
 }
 bool isFloating(const ConstValue& v) { return v.kind == VK::Float || v.kind == VK::Double; }
-bool isIntegerLike(const ConstValue& v) { return v.kind == VK::Int || v.kind == VK::Long || v.kind == VK::Char; }
+bool isIntegerLike(const ConstValue& v) { return v.kind == VK::Int || v.kind == VK::Long || v.kind == VK::Char || isUnsignedKind(v.kind); }
 bool isNumberLike(const ConstValue& v) { return isIntegerLike(v) || isFloating(v); }
-double asDouble(const ConstValue& v) { return isFloating(v) ? v.d : (double)v.i; }
+double asDouble(const ConstValue& v) { return isFloating(v) ? v.d : v.kind == VK::UInt64 ? (double)(uint64_t)v.i : (double)v.i; }
 }  // namespace
 
 const char* ConstValue::typeName() const {
@@ -74,6 +105,10 @@ const char* ConstValue::typeName() const {
         case Kind::Char: return "char";
         case Kind::String: return "string";
         case Kind::Enum: return enumType->name;
+        case Kind::UInt8: return "uint8_t";
+        case Kind::UInt16: return "uint16_t";
+        case Kind::UInt32: return "uint32_t";
+        case Kind::UInt64: return "uint64_t";
     }
     return "?";
 }
@@ -109,29 +144,12 @@ ConstEval::Local* ConstEval::findLocal(const std::string& name) {
 
 bool ConstEval::isTrue(const ConstValue& v, Loc loc) {
     if (v.kind == VK::Bool) return v.i != 0;
-    if (v.kind == VK::Int || v.kind == VK::Long) return v.i != 0;
+    if (v.kind == VK::Int || v.kind == VK::Long || isUnsignedKind(v.kind)) return v.i != 0;
     if (isFloating(v)) return v.d != 0;
     throw ConstError{loc, std::string("a ") + v.typeName() + " is not a condition"};
 }
 
 ConstValue ConstEval::convert(const ConstValue& v, const Type* to, Loc loc, bool wraps) {
-    auto fits = [&](int64_t low, int64_t high) {
-        if (wraps && isFloating(v)) {  // the nearest value that fits, and NaN is 0, as the running program does
-            if (std::isnan(v.d)) return (int64_t)0;
-            if (v.d <= (double)low) return low;
-            if (v.d >= (double)high) return high;
-            return (int64_t)v.d;
-        }
-        if (wraps) return low == 0 ? (int64_t)(uint8_t)v.i : (int64_t)(int32_t)v.i;  // the lowest bits
-        if (isFloating(v)) {
-            // Below these, a truncated value is in range, as the running program finds.
-            if (std::isnan(v.d) || v.d <= (double)low - 1 || v.d >= (double)high + 1)
-                throw ConstError{loc, "the value " + std::to_string(v.d) + " does not fit in '" + to->name + "'"};
-            return (int64_t)v.d;
-        }
-        if (v.i < low || v.i > high) throw ConstError{loc, "the value " + std::to_string(v.i) + " does not fit in '" + to->name + "'"};
-        return v.i;
-    };
     if (to->is(K::Auto)) return v;
     if (to->isEnum()) {  // `Color(n)`, which only an enumerator's value passes
         if (v.kind == VK::Enum && v.enumType == to) return v;
@@ -147,19 +165,37 @@ ConstValue ConstEval::convert(const ConstValue& v, const Type* to, Loc loc, bool
         throw ConstError{loc, std::string("a ") + v.typeName() + " cannot become a string here"};
     }
     if (v.kind == VK::String) throw ConstError{loc, std::string("a string cannot become a '") + to->name + "'"};
-    switch (to->kind) {
-        case K::Int: return intValue(fits(INT32_MIN, INT32_MAX), VK::Int);
-        case K::Long: {
-            if (wraps && isFloating(v)) {
-                if (std::isnan(v.d)) return intValue(0, VK::Long);
-                if (v.d < -9223372036854775808.0) return intValue(INT64_MIN, VK::Long);
-                if (v.d >= 9223372036854775808.0) return intValue(INT64_MAX, VK::Long);
+    if (to->isInteger() || to->is(K::Char)) {
+        const unsigned bits = to->bits();
+        const bool toUnsigned = !to->isSigned();  // a char too, from 0 to 255
+        const VK kind = kindOfInteger(to);
+        const uint64_t mask = maskOfBits(bits);
+        const int64_t largest = toUnsigned ? (int64_t)mask : (int64_t)(mask >> 1), smallest = toUnsigned ? 0 : -(int64_t)(mask >> 1) - 1;
+        if (isFloating(v)) {
+            if (wraps) {  // the nearest value that fits, and NaN is 0, as the running program does
+                if (std::isnan(v.d) || v.d <= (double)smallest) return intValue(std::isnan(v.d) ? 0 : smallest, kind);
+                if (v.d >= std::ldexp(1.0, toUnsigned ? (int)bits : (int)bits - 1)) return intValue(largest, kind);
+                return intValue(toUnsigned ? (int64_t)(uint64_t)v.d : (int64_t)v.d, kind);
             }
-            if (isFloating(v) && !(v.d >= -9223372036854775808.0 && v.d < 9223372036854775808.0))
-                throw ConstError{loc, "the value " + std::to_string(v.d) + " does not fit in 'long'"};
-            return intValue(isFloating(v) ? (int64_t)v.d : v.i, VK::Long);
+            // Above these the value does not fit; below them, a truncated value is in range, as the running program finds.
+            const double low = toUnsigned ? -1.0 : bits >= 64 ? -std::ldexp(1.0, 63) : (double)smallest - 1;
+            const double high = std::ldexp(1.0, toUnsigned ? (int)bits : (int)bits - 1);
+            if (std::isnan(v.d) || (bits >= 64 && !toUnsigned ? v.d < low : v.d <= low) || v.d >= high)
+                throw ConstError{loc, "the value " + std::to_string(v.d) + " does not fit in '" + to->name + "'"};
+            return intValue(toUnsigned ? (int64_t)(uint64_t)v.d : (int64_t)v.d, kind);
         }
-        case K::Char: return intValue(fits(0, 255), VK::Char);
+        if (wraps) {  // the lowest bits
+            uint64_t low = (uint64_t)v.i & mask;
+            if (!toUnsigned && bits < 64 && (low >> (bits - 1)) != 0) low |= ~mask;
+            return intValue((int64_t)low, kind);
+        }
+        const bool aboveLong = v.kind == VK::UInt64 && v.i < 0;  // a uint64_t, held as its bits
+        const bool fitsIn = aboveLong ? toUnsigned && bits >= 64 : v.i >= smallest && (toUnsigned && bits >= 64 ? true : v.i <= largest);
+        if (!fitsIn)
+            throw ConstError{loc, "the value " + (aboveLong ? std::to_string((uint64_t)v.i) : std::to_string(v.i)) + " does not fit in '" + to->name + "'"};
+        return intValue(v.i, kind);
+    }
+    switch (to->kind) {
         case K::Bool: return boolValue(isFloating(v) ? v.d != 0 : v.i != 0);
         case K::Float: return floatValue(asDouble(v), VK::Float);
         case K::Double: return floatValue(asDouble(v), VK::Double);
@@ -201,8 +237,7 @@ const Type* ConstEval::staticType(const Expr& e) {
     if (e.type && !e.type->isError() && !e.type->is(K::Auto)) return e.type;
     switch (e.kind) {
         case Expr::Kind::IntLit: {
-            auto& lit = static_cast<const IntLitExpr&>(e);
-            return !lit.isLong && lit.value >= INT32_MIN && lit.value <= INT32_MAX ? Type::intTy() : Type::longTy();
+            return static_cast<const IntLitExpr&>(e).writtenType();
         }
         case Expr::Kind::FloatLit: return static_cast<const FloatLitExpr&>(e).isFloat ? Type::floatTy() : Type::doubleTy();
         case Expr::Kind::CharLit: return Type::charTy();
@@ -224,13 +259,13 @@ const Type* ConstEval::staticType(const Expr& e) {
             auto& u = static_cast<const UnaryExpr&>(e);
             if (u.op == UnOp::Not) return Type::boolTy();
             const Type* t = staticType(*u.operand);
-            return t && t->is(K::Char) ? Type::intTy() : t;
+            return t && t->promotesToInt() ? Type::intTy() : t;
         }
         case Expr::Kind::Binary: {
             auto& b = static_cast<const BinaryExpr&>(e);
             if ((b.op >= BinOp::Eq && b.op <= BinOp::Ge) || b.op == BinOp::LogAnd || b.op == BinOp::LogOr) return Type::boolTy();
             const Type* l = staticType(*b.lhs);
-            if (b.op == BinOp::Shl || b.op == BinOp::Shr) return l && l->is(K::Long) ? Type::longTy() : Type::intTy();
+            if (b.op == BinOp::Shl || b.op == BinOp::Shr) return l && l->isInteger() && !l->promotesToInt() ? l : Type::intTy();
             const Type* r = staticType(*b.rhs);
             if (l && r && (l->is(K::String) || r->is(K::String))) return Type::stringTy();
             return commonNumberType(l, r);
@@ -267,13 +302,13 @@ ConstValue ConstEval::evalUnary(const UnaryExpr& u) {
         case UnOp::Neg: {
             if (!isNumberLike(v)) throw ConstError{u.loc, std::string("'-' does not work on a ") + v.typeName()};
             if (isFloating(v)) return floatValue(u.op == UnOp::Neg ? -v.d : v.d, v.kind);
-            VK kind = v.kind == VK::Char ? VK::Int : v.kind;
+            VK kind = kindOfInteger(commonIntegerType(typeOfValue(v), typeOfValue(v)));  // a char, uint8_t or uint16_t is an int
             if (u.op == UnOp::Plus) return intValue(v.i, kind);
             return arith(BinOp::Sub, intValue(0, kind), intValue(v.i, kind), u.loc, u.checked);
         }
         case UnOp::BitNot:
             if (!isIntegerLike(v)) throw ConstError{u.loc, std::string("'~' does not work on a ") + v.typeName()};
-            return intValue(v.kind == VK::Long ? ~v.i : (int64_t)(int32_t)~(int32_t)v.i, v.kind == VK::Long ? VK::Long : VK::Int);
+            return arith(BinOp::BitXor, v, intValue(-1, kindOfInteger(commonIntegerType(typeOfValue(v), typeOfValue(v)))), u.loc, false);
         default: break;
     }
     throw ConstError{u.loc, "this operator cannot be worked out while compiling"};
@@ -323,16 +358,52 @@ ConstValue ConstEval::arith(BinOp op, const ConstValue& l, const ConstValue& r, 
             default: throw ConstError{loc, "'" + sym + "' works on integers only"};
         }
     }
-    // A shift keeps the type of its left side, and a char is an int in arithmetic.
-    VK kind = op == BinOp::Shl || op == BinOp::Shr ? (l.kind == VK::Long ? VK::Long : VK::Int)
-              : l.kind == VK::Long || r.kind == VK::Long ? VK::Long
-                                                         : VK::Int;
-    int64_t a = l.i, b = r.i;
-    if (comparison) return boolValue(compared(a, b));
-    const char* typeName = kind == VK::Long ? "long" : "int";
+    // A shift keeps the type of its left side, and a char, uint8_t or uint16_t is an int in arithmetic.
+    const Type* type = op == BinOp::Shl || op == BinOp::Shr ? commonIntegerType(typeOfValue(l), typeOfValue(l))
+                                                            : commonIntegerType(typeOfValue(l), typeOfValue(r));
+    const VK kind = kindOfInteger(type);
+    const unsigned bits = type->bits();
+    const bool isUnsigned = type->isUnsigned();
+    const uint64_t mask = maskOfBits(bits);
+    // Each side as a value of `type`: a number written beside an unsigned one fits it, as Sema checks.
+    int64_t a = isUnsigned ? (int64_t)((uint64_t)l.i & mask) : l.i, b = r.i;
+    if (op != BinOp::Shl && op != BinOp::Shr && isUnsigned) b = (int64_t)((uint64_t)b & mask);
+    if (comparison) return isUnsigned ? boolValue(compared((uint64_t)a, (uint64_t)b)) : boolValue(compared(a, b));
+    const std::string typeName = type->name;
     auto overflow = [&]() -> ConstError {
         return ConstError{loc, "integer overflow: the result of '" + sym + "' does not fit in '" + typeName + "'"};
     };
+    if (isUnsigned) {
+        const uint64_t x = (uint64_t)a, y = (uint64_t)b;
+        uint64_t out = 0;
+        bool over = false;
+        switch (op) {
+            // Wrapped around, as the running program does, unless the arithmetic is checked.
+            case BinOp::Add: over = __builtin_add_overflow(x, y, &out); break;
+            case BinOp::Sub: over = __builtin_sub_overflow(x, y, &out); break;
+            case BinOp::Mul: over = __builtin_mul_overflow(x, y, &out); break;
+            case BinOp::Div:
+            case BinOp::Rem:
+                if (y == 0) throw ConstError{loc, std::string("division by zero: the right side of '") + sym + "' is 0"};
+                out = op == BinOp::Div ? x / y : x % y;
+                break;
+            case BinOp::Shl:
+            case BinOp::Shr: {
+                const bool outOfRange = r.kind == VK::UInt64 ? (uint64_t)b >= bits : b < 0 || b >= (int64_t)bits;
+                if (outOfRange && checked)
+                    throw ConstError{loc, "shift amount " + (r.kind == VK::UInt64 ? std::to_string((uint64_t)b) : std::to_string(b)) + " is out of range for '" + typeName + "'"};
+                const unsigned n = (unsigned)((uint64_t)b & (bits - 1));  // only its lowest bits count
+                out = op == BinOp::Shl ? x << n : x >> n;
+                break;
+            }
+            case BinOp::BitAnd: out = x & y; break;
+            case BinOp::BitOr: out = x | y; break;
+            case BinOp::BitXor: out = x ^ y; break;
+            default: throw ConstError{loc, "this operator cannot be worked out while compiling"};
+        }
+        if ((over || (out & ~mask) != 0) && checked && op != BinOp::Shl) throw overflow();
+        return intValue((int64_t)(out & mask), kind);
+    }
     int64_t out = 0;
     switch (op) {
         // Wrapped around, as the running program does, unless the arithmetic is checked.
@@ -353,9 +424,9 @@ ConstValue ConstEval::arith(BinOp op, const ConstValue& l, const ConstValue& r, 
             break;
         case BinOp::Shl:
         case BinOp::Shr: {
-            int bits = kind == VK::Long ? 64 : 32;
-            if ((b < 0 || b >= bits) && checked)
-                throw ConstError{loc, "shift amount " + std::to_string(b) + " is out of range for '" + typeName + "'"};
+            const bool outOfRange = r.kind == VK::UInt64 ? (uint64_t)b >= bits : b < 0 || b >= (int64_t)bits;
+            if (outOfRange && checked)
+                throw ConstError{loc, "shift amount " + (r.kind == VK::UInt64 ? std::to_string((uint64_t)b) : std::to_string(b)) + " is out of range for '" + typeName + "'"};
             b &= bits - 1;  // only its lowest bits count
             if (op == BinOp::Shr) return intValue(a >> b, kind);
             return intValue(kind == VK::Long ? (int64_t)((uint64_t)a << b) : (int64_t)(int32_t)((uint32_t)a << b), kind);
@@ -419,7 +490,9 @@ ConstValue ConstEval::evalCall(const CallExpr& c) {
             ConstValue v = eval(*c.args[0]);
             if (isFloating(v)) return floatValue(std::fabs(v.d), v.kind);
             if (!isIntegerLike(v)) throw ConstError{c.loc, std::string("abs() does not work on a ") + v.typeName()};
-            return v.i < 0 ? arith(BinOp::Sub, intValue(0, v.kind == VK::Long ? VK::Long : VK::Int), v, c.loc, c.checked) : v;
+            const VK kind = kindOfInteger(commonIntegerType(typeOfValue(v), typeOfValue(v)));
+            if (isUnsignedKind(kind)) return v;
+            return v.i < 0 ? arith(BinOp::Sub, intValue(0, kind), v, c.loc, c.checked) : intValue(v.i, kind);
         }
         if ((c.callee == "min" || c.callee == "max") && c.args.size() == 2) {
             ConstValue x = eval(*c.args[0]);
@@ -486,8 +559,7 @@ ConstValue ConstEval::eval(const Expr& e) {
     switch (e.kind) {
         case Expr::Kind::IntLit: {
             auto& lit = static_cast<const IntLitExpr&>(e);
-            bool isInt = !lit.isLong && lit.value >= INT32_MIN && lit.value <= INT32_MAX;
-            return intValue(lit.value, isInt ? VK::Int : VK::Long);
+            return intValue(lit.value, kindOfInteger(lit.writtenType()));
         }
         case Expr::Kind::FloatLit: {
             auto& lit = static_cast<const FloatLitExpr&>(e);
@@ -534,8 +606,10 @@ ConstValue ConstEval::eval(const Expr& e) {
             if (z.operand) {
                 ConstValue v = eval(*z.operand);
                 switch (v.kind) {
-                    case VK::Bool: case VK::Char: return intValue(1, VK::Long);
-                    case VK::Int: case VK::Float: return intValue(4, VK::Long);
+                    case VK::Bool: case VK::Char: case VK::UInt8: return intValue(1, VK::Long);
+                    case VK::UInt16: return intValue(2, VK::Long);
+                    case VK::Int: case VK::Float: case VK::UInt32: return intValue(4, VK::Long);
+                    case VK::UInt64: return intValue(8, VK::Long);
                     case VK::Long: case VK::Double: return intValue(8, VK::Long);
                     case VK::String: return intValue(24, VK::Long);
                     case VK::Enum: return intValue(v.enumType->decl->underlying && v.enumType->decl->underlying->is(K::Long) ? 8 : 4, VK::Long);

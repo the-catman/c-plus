@@ -102,7 +102,7 @@ void written() {
 // error: To compare their numbers, write `int(a) < int(b)`
 // error: turn it into the name of its enumerator first: `format("{}", c)`
 // error: write `format("{}", c)` for the name of its enumerator, or `to_string(int(c))` for its number
-// error: an enum converts to its number, an int or a long, but this converts it to 'double'
+// error: an enum converts to its number, an integer, but this converts it to 'double'
 // error: convert its number: `double(int(c))`
 // error: compare it instead, e.g. `c != Color::Red`
 // error: convert its number: `char(int(c))`

@@ -228,6 +228,10 @@ private:
     void checkCondition(Expr& e, Flow& flow, const char* what);
     void checkShiftAmount(const Type* lhsType, const Expr* lhs, const Expr& amount, bool checked);
     void requireConvertible(const Expr& e, const Type* to, const std::string& context);
+    // The type that arithmetic or a comparison on `l` and `r` happens in. A signed and an unsigned integer do not mix
+    // without a cast, unless one is a number written there that fits the other's type; that is reported at `at`,
+    // naming `what` mixes them, and gives the error type.
+    const Type* arithmeticType(const Expr& le, const Type* l, const Expr& re, const Type* r, const std::string& what, Loc at);
     // Resolves a variable or field access. When the expression is rooted at a variable,
     // `var` and `path` name the place; otherwise var is null (e.g. `makePoint().x`).
     const Type* resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::string& path);

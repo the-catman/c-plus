@@ -14,8 +14,10 @@ int main() {
 // error: Write 0o10 for octal, or 10 for decimal
 // error: '9' is not a valid digit in an octal number
 // error: '2' is not a valid digit in a binary number
-// error: this compiler does not support unsigned integer types yet
+// error: expected 'int' to initialize 'c', but this is 'uint32_t'
+// error: Write `int(5u)`, which keeps its lowest bits
 // error: 'x' is not a number suffix
+// error: the suffixes are L, which makes a number a long, e.g. `1L << 40`, u for a uint32_t, and ul for a uint64_t
 // error: shifting 'int' by 40 is out of range
 // error: Write the left side as a long with an L suffix, e.g. `1L << 40`
 // error: expected 'int' to initialize 'f', but this is 'long'

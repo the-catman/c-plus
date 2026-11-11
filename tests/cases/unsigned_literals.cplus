@@ -1,0 +1,27 @@
+// `u` makes a number a uint32_t, or a uint64_t when it is larger, and `ul` a uint64_t. A hexadecimal, octal or binary
+// number above the largest long is a uint64_t by itself, as it is in C++.
+int main() {
+    auto a = 5u;
+    auto b = 5000000000u;
+    auto c = 5ul;
+    auto d = 0xFFFFFFFFFFFFFFFF;
+    auto e = 0b1000000000000000000000000000000000000000000000000000000000000000;
+    auto f = 18446744073709551615u;
+    uint64_t g = 0o1777777777777777777777;
+    println("{} {} {} {} {} {} {}", a, b, c, d, e, f, g);
+    // expect: 5 5000000000 5 18446744073709551615 9223372036854775808 18446744073709551615 18446744073709551615
+    println("{} {} {}", sizeof(a), sizeof(b), sizeof(c));
+    // expect: 4 8 8
+    println("{} {}", 5U, 7UL + 1ULL);
+    // expect: 5 8
+    // `-1u` is the minus of a uint32_t, which wraps around, as in C++.
+    println("{}", -1u);
+    // expect: 4294967295
+    // A number written without a suffix takes the unsigned type it is used as, when it fits.
+    uint8_t small = 255;
+    uint16_t port = 8080;
+    uint32_t id = 4000000000;
+    println("{} {} {}", small, port, id);
+    // expect: 255 8080 4000000000
+    return 0;
+}

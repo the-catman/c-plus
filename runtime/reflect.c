@@ -25,6 +25,7 @@ const char* cplus_type_kind(const cplus_type* t) {
         case CPLUS_KIND_WEAK: return "weak";
         case CPLUS_KIND_MAP: return "hashmap";
         case CPLUS_KIND_ENUM: return "enum";
+        case CPLUS_KIND_UNSIGNED: return t->name;
         default: return "pointer";
     }
 }

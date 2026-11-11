@@ -66,7 +66,7 @@ int main() {
 }
 // error: expected 'int' as an element of 'vector<int>', but this is 'string'
 // error: expected 'int' for push_back() on 'vector<int>', but this is 'string'
-// error: an index into a vector must be an int or long, but this is 'bool'
+// error: an index into a vector must be an integer, but this is 'bool'
 // error: an index into a vector cannot be negative
 // error: the last one is `v[v.size() - 1]` or `v.back()`
 // error: '[ ]' picks an element of a vector or an array, or a char of a string, but this is 'int'

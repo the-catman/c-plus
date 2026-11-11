@@ -1,0 +1,14 @@
+// The forms of unsigned integers that the cheat sheet writes.
+int main() {
+    uint32_t h = 2166136261u;
+    uint32_t u = 5u;
+    uint64_t big = 5ul;
+    int n = 3;
+    uint8_t b = 255;
+    b += 1;
+    println("{} {} {} {} {} {}", h, long(u) + n, uint32_t(n) + u, u + 1, u > 0, b);
+    println("{}", big);
+    return 0;
+}
+// expect: 2166136261 8 8 6 true 0
+// expect: 5

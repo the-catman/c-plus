@@ -24,8 +24,8 @@ void withStdAtoi() { int x = std::atoi("1"); }
 // error: write `try stol(s)`, which reads a `long`
 // error: C+ has no `stold`, as there is no `long double`
 // error: write `try stod(s)`, which reads a `double`, of 64 bits
-// error: this compiler does not support `stoul` yet, as it has no unsigned types
-// error: this compiler does not support `stoull` yet, as it has no unsigned types
+// error: this compiler does not support `stoul` yet
+// error: this compiler does not support `stoull` yet
 // error: write `try stol(s)`, which reads a `long`, of 64 bits
 // error: 'stoi' takes 1 argument but 3 were given
 // error: write `try stoi(s)`, which reads all of the text, in decimal. For a number that is only the start of it, or in another base, declare C's: `extern "C" long strtol(string s, char** end, int base);`
@@ -43,6 +43,6 @@ void withStdAtoi() { int x = std::atoi("1"); }
 // error: 'stoi' can fail, so its call must say what happens then
 // error: write `try stod(s)`, which is built in. It throws an Error if the text is not a number
 // error: write `try stol(s)`, which is built in, as a `long` is 64 bits. It throws an Error if the text is not a number
-// error: write `try stol(s)`, which is built in, as there are no unsigned types yet
+// error: write `try stol(s)`, which is built in, and `uint64_t(n)` gives the unsigned number with its bits
 // error: a C function must be declared: `extern "C" long strtol(string s, char** end, int base);`
 // error: write `try stoi(s)`, which is built in. It throws an Error if the text is not a number

@@ -9,10 +9,9 @@ template <typename T>
 struct Stack { T x; };
 using A1 = Task<long, throws>;
 using A3 = vector<Task<int, throws>>;
-using B1 = uint8_t;
-// error: write `using B1 = char;`
+using B1 = uint8_t;  // fine: a type of C+
 using B3 = int16_t;
-// error: write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program
+// error: write one of the types: int, long, double, float, bool, char, string, void, uint8_t to uint64_t, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program
 using C1 = map<int, int>;
 using C2 = mutex;
 using D1 = std::array<const int, 3>;

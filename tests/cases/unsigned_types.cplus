@@ -1,0 +1,123 @@
+// uint8_t, uint16_t, uint32_t and uint64_t: their arithmetic, which wraps at their size, their conversions and casts,
+// and where they work as the other number types do.
+import json;
+
+struct Packet {
+    uint8_t kind = 0;
+    uint16_t port = 0;
+    uint32_t id = 0;
+    uint64_t big = 0;
+};
+
+// FNV-1a, which needs a multiplication that wraps at 32 bits.
+uint32_t fnv(string s) {
+    uint32_t h = 2166136261u;
+    for (char c : s) {
+        h = h ^ c;
+        h = h * 16777619u;
+    }
+    return h;
+}
+
+uint64_t polynomial(string s) {
+    uint64_t h = 0;
+    for (int i = 0; i < s.size(); i++) h = h * 31 + s[i];  // a char and a uint32_t widen to a uint64_t
+    return h;
+}
+
+uint32_t rotateLeft(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
+
+void which(uint32_t x) { println("uint32_t {}", x); }
+void which(string s) { println("string {}", s); }
+
+int main() {
+    // Each wraps at its size.
+    uint8_t b = 250;
+    b += 10;
+    uint16_t w = 65535;
+    w++;
+    uint32_t zero = 0;
+    zero--;
+    uint64_t most = 0xFFFFFFFFFFFFFFFF;
+    most++;
+    println("{} {} {} {}", b, w, zero, most);
+    // expect: 4 0 4294967295 0
+
+    // A uint8_t and a uint16_t are worked out in an int, as a char is; a uint32_t and a uint64_t in their own type.
+    uint8_t small = 200;
+    uint16_t medium = 60000;
+    println("{} {} {}", small * 2, medium + medium, ~small);
+    // expect: 400 120000 -201
+    uint32_t x = 4000000000u;
+    println("{} {} {} {}", x / 3u, x % 7u, x >> 28, x + x);
+    // expect: 1333333333 3 14 3705032704
+    println("{} {}", -x, ~0u);
+    // expect: 294967296 4294967295
+
+    // A signed and an unsigned integer mix through a cast, and a written number that fits works beside an unsigned one.
+    uint32_t u = 7;
+    int n = -2;
+    println("{} {} {} {}", long(u) + n, n + int(u), u + 1, u > 0);
+    // expect: 5 5 8 true
+    // Unsigned comparisons.
+    uint64_t huge = 0x8000000000000000;
+    println("{} {} {} {}", huge > 1u, huge > 5, x == 4000000000u, x < 10);
+    // expect: true true true false
+    println("{} {}", min(x, 5u), max(huge, 1u));
+    // expect: 5 9223372036854775808
+
+    // Widening, which loses nothing, is implicit: to a wider unsigned type, and from a uint32_t or smaller to a long.
+    long l = x;
+    uint64_t wide = x;
+    int fromSmall = medium;
+    double d = huge;
+    println("{} {} {} {}", l + 1, wide * 4u, fromSmall, d);
+    // expect: 4000000001 16000000000 60000 9223372036854775808
+
+    // A cast keeps the lowest bits: -1 is every bit set.
+    int negative = -3;
+    println("{} {} {} {}", uint32_t(negative), uint8_t(300), int(x), long(most - 1u));
+    // expect: 4294967293 44 -294967296 -1
+    println("{} {} {}", uint32_t(3.9e9), uint8_t(-1.5), uint16_t(1e9));
+    // expect: 3900000000 0 65535
+    println("{} {} {}", uint8_t('A'), char(uint8_t(66)), uint64_t(true));
+    // expect: 65 B 1
+
+    println("{} {}", fnv("hello"), polynomial("abc"));
+    // expect: 1335831723 96354
+    println("{}", rotateLeft(0x80000001u, 1));
+    // expect: 3
+
+    // Where the other number types go, so do these.
+    vector<uint32_t> v = {3, 1, 4000000000u};
+    v.push_back(2);
+    uint32_t total = 0;
+    for (uint32_t one : v) total += one;
+    println("{} {}", v, total);
+    // expect: [3, 1, 4000000000, 2] 4000000006
+    hashmap<uint32_t, string> names;
+    names[7u] = "seven";
+    println("{} {}", names[7u], v[uint8_t(2)]);
+    // expect: seven 4000000000
+    uint32_t? maybe = null;
+    bool flag = true;
+    println("{} {} {}", maybe ?? 9u, flag ? 1u : 2u, maybe == 5);
+    // expect: 9 1 false
+    switch (small) {
+        case 200: println("two hundred"); break;
+        default: println("something else");
+    }
+    // expect: two hundred
+    which(5);
+    // expect: uint32_t 5
+    Packet p = {7, 8080, 4000000000u, 0xFFFFFFFFFFFFFFFF};
+    println("{}", p);
+    // expect: {kind: 7, port: 8080, id: 4000000000, big: 18446744073709551615}
+    println("{}", json::stringify(p));
+    // expect: {"kind":7,"port":8080,"id":4000000000,"big":18446744073709551615}
+    println("{} {} {} {}", sizeof(uint8_t), sizeof(uint16_t), sizeof(uint32_t), sizeof(Packet));
+    // expect: 1 2 4 16
+    println("{}", format("{}-{}", x, to_string(w)));
+    // expect: 4000000000-0
+    return 0;
+}

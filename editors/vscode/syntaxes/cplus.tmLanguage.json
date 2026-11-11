@@ -276,7 +276,7 @@
       "patterns": [
         {
           "name": "storage.type.primitive.cplus",
-          "match": "\\b(?:int|long|bool|char|double|float|void|string|auto)\\b"
+          "match": "\\b(?:int|long|bool|char|double|float|void|string|auto|uint8_t|uint16_t|uint32_t|uint64_t)\\b"
         },
         {
           "name": "support.type.cplus",

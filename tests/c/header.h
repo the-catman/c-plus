@@ -114,11 +114,15 @@ int header_sum_values(const int* values, size_t count);
 int header_strings(const char* const* texts, int count);
 const unsigned char* header_bytes(void);
 int header_first_byte(const unsigned char* bytes);
+header_port header_port_of(int n);
+unsigned int header_unsigned_add(unsigned int a, unsigned int b);
+unsigned long long header_all_bits(void);
+size_t header_size_of(const char* text);
+uint8_t header_low_byte(uint8_t b);
 
 // What C+ cannot call.
 int header_print(const char* format, ...);
 static inline int header_inline(int x) { return x + 1; }
-header_port header_port_of(int n);
 int header_take_short(short s);
 int header_take_bits(struct header_bits b);
 int header_take_union(union header_either e);

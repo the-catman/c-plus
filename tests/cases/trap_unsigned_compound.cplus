@@ -1,0 +1,15 @@
+// `b += n` on a uint8_t works in an int, then keeps the lowest 8 bits. In checked code, a result that does not fit
+// stops the program instead.
+[[checked]] void add(uint8_t& b, int n) { b += n; }
+int main() {
+    uint8_t b = 250;
+    b += 10;
+    println("{}", b);
+    add(b, 200);
+    println("{}", b);
+    add(b, 100);
+    return 0;
+}
+// expect: 4
+// expect: 204
+// trap: integer overflow: the result of '+=' does not fit in 'uint8_t'

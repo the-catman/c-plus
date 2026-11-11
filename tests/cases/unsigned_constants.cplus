@@ -1,0 +1,38 @@
+// Constants and constexpr functions work out unsigned arithmetic as the running program does: wrapping at the size.
+constexpr uint32_t fnv(string s) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < s.size(); i++) h = (h ^ s[i]) * 16777619u;
+    return h;
+}
+const uint32_t HELLO = fnv("hello");
+const uint32_t ALL = ~0u;
+const uint64_t TOP = 1ul << 63;
+const uint8_t WRAPPED = uint8_t(250 + 10);
+const uint16_t SMALL = 0xFFFF;
+constexpr uint64_t mask(int bits) { return bits >= 64 ? ~0ul : (1ul << bits) - 1u; }
+constexpr uint8_t bump(uint8_t b) {
+    b += 10;
+    b++;
+    return b;
+}
+int main() {
+    println("{} {} {} {} {}", HELLO, ALL, TOP, WRAPPED, SMALL);
+    // expect: 1335831723 4294967295 9223372036854775808 4 65535
+    constexpr uint64_t m = mask(40);
+    constexpr uint64_t full = mask(64);
+    constexpr uint8_t b = bump(250);
+    println("{} {} {}", m, full, b);
+    // expect: 1099511627775 18446744073709551615 5
+    constexpr bool ordered = 0x8000000000000000 > 1u;
+    constexpr uint32_t quotient = 4000000000u / 3u;
+    constexpr uint32_t shifted = 0x80000000u >> 31;
+    constexpr uint32_t negated = -1u;
+    println("{} {} {} {}", ordered, quotient, shifted, negated);
+    // expect: true 1333333333 1 4294967295
+    switch (HELLO) {
+        case 1335831723u: println("hello"); break;
+        default: println("other");
+    }
+    // expect: hello
+    return 0;
+}

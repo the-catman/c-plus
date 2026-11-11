@@ -8,9 +8,8 @@ using F = std::vector<std::string>;
 // error: write `using F = vector<string>;`
 using N = long long;
 // error: write `using N = long;`
-using U = uint32_t;
-// error: write `using U = int;`
+using U = uint32_t;  // fine: a type of C+
 extern "C" unsigned long long strtoull(string s, char** e, int b);
-// error: write `long` in place of `unsigned long long`
+// error: write `uint64_t` in place of `unsigned long long`: it is 64 bits and unsigned
 // not-error: make it a constant if it never changes
 int main() { return 0; }

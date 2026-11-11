@@ -1,0 +1,10 @@
+// A template's unsigned value parameter takes a value from 0 to the largest of its type.
+template <uint8_t B> int f() { return B; }
+int main() {
+    println("{}", f<300>());
+    // error: the value 300 does not fit in 'uint8_t', the type of the template parameter 'B'
+    // error: write a value from 0 to 255
+    println("{}", f<-1>());
+    // error: a 'uint8_t' cannot be below 0, as the template parameter 'B' would be
+    return 0;
+}

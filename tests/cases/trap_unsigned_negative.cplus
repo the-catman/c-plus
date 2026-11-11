@@ -1,0 +1,9 @@
+// In checked code, a negative number cast to an unsigned type stops the program, rather than wrapping around.
+[[checked]] uint32_t asUnsigned(int n) { return uint32_t(n); }
+int main() {
+    println("{}", asUnsigned(5));
+    println("{}", asUnsigned(-5));
+    return 0;
+}
+// expect: 5
+// trap: uint32_t(x) was given -5, which does not fit in a uint32_t (from 0 to 4294967295)

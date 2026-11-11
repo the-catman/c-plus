@@ -1,0 +1,11 @@
+// Unsigned arithmetic wraps at its size. In checked code, a result below 0 or above the largest stops the program.
+int main() {
+    uint32_t zero = 0;
+    println("{}", zero - 1u);
+    uint32_t n = checked(zero - 1u);
+    println("{}", n);
+    return 0;
+}
+// expect: 4294967295
+// trap: integer overflow: the result of '-' does not fit in 'uint32_t'
+// trap: trap_unsigned_overflow.cplus:5:31

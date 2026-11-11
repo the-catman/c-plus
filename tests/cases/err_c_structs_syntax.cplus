@@ -5,13 +5,13 @@ extern "C" {
         short port;
     };
     struct Other {
-        uint16_t port;
+        uint16_t port;  // fine: a type of C+
     };
     struct Third {
         unsigned short port;
     };
     struct Bytes {
-        uint8_t tag;
+        uint8_t tag;  // fine: a type of C+
     };
     struct Sized {
         unsigned int count;
@@ -36,15 +36,14 @@ int main() {
     struct Local { int x; };
     return 0;
 }
-// error: this compiler does not support 16-bit integer types such as 'short' yet
+// error: this compiler does not support signed 16-bit integer types such as 'short' yet
 // error: `int` would change its layout. Declare the struct by name, `extern "C" struct name;`, and use it through pointers
-// error: this compiler does not support 16-bit integer types such as 'uint16_t' yet
-// error: this compiler does not support 16-bit integer types such as 'unsigned short' yet
-// error: this compiler does not support 8-bit integer types such as 'uint8_t' yet
-// error: write `int` for a number, or `char` for a byte, as in `char c = char(n);`
+// error: C+ has no 'unsigned short' type
+// error: write `uint16_t`, which has the same size
 // error: C+ has no 'unsigned int' type
-// error: write `int`, which has the same size; C+ has no unsigned types yet
+// error: write `uint32_t`, which has the same size
 // error: C+ has no 'signed char' type
+// error: write `char` for a byte, which is from 0 to 255, or `uint8_t` for a small number
 // error: C+ has no C-style arrays
 // error: write `array<char, 64> name`
 // error: C+ has no typedef

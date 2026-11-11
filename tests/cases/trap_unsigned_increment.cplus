@@ -1,0 +1,15 @@
+// `u++` wraps from the largest value to 0, and `u--` from 0 to the largest. In checked code it stops the program.
+int main() {
+    uint16_t w = 65535;
+    w++;
+    println("{}", w);
+    uint64_t u = 0;
+    u--;
+    println("{}", u);
+    checked(w--);
+    println("{}", w);
+    return 0;
+}
+// expect: 0
+// expect: 18446744073709551615
+// trap: integer overflow: the result of '--' does not fit in 'uint16_t'

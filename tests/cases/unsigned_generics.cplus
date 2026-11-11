@@ -1,0 +1,20 @@
+// The unsigned types as the arguments of generics, and as the type of a template's value parameter.
+template <uint32_t N> uint32_t times(uint32_t x) { return x * N; }
+template <uint8_t B> int doubled() { return B * 2; }  // a uint8_t, worked out in an int
+template <uint64_t M> uint64_t top() { return M; }
+template <typename T> T twice(T x) { return x + x; }
+template <Integer T> struct Counter {
+    T count;
+    void bump() { count++; }
+};
+int main() {
+    println("{} {} {} {}", times<3u>(5u), times<4>(5u), doubled<200>(), top<0xFFFFFFFFFFFFFFFF>());
+    // expect: 15 20 400 18446744073709551615
+    println("{} {}", twice(4000000000u), twice(3000000000ul));
+    // expect: 3705032704 6000000000
+    Counter<uint8_t> c = {255};
+    c.bump();
+    println("{}", c.count);
+    // expect: 0
+    return 0;
+}

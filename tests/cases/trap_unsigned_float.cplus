@@ -1,0 +1,12 @@
+// A floating-point number becomes the nearest unsigned value, without its fraction: a negative one is 0. In checked
+// code, one that does not fit stops the program.
+int main() {
+    double d = -2.5;
+    println("{} {} {}", uint32_t(d), uint8_t(300.7), uint64_t(1e30));
+    println("{}", checked(uint8_t(255.9)));
+    println("{}", checked(uint32_t(d)));
+    return 0;
+}
+// expect: 0 255 18446744073709551615
+// expect: 255
+// trap: uint32_t(x) was given -2.5, which does not fit in a uint32_t

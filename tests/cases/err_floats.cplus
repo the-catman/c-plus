@@ -52,13 +52,13 @@ int main() {
 // error: expected 'int' to initialize 'h', but this is 'double'
 // error: expected 'int' to initialize 'r', but this is 'double'
 // error: expected 'float' to initialize 'q', but this is 'double'
-// error: '%' needs an int or a long, but this is 'double'
+// error: '%' needs an integer, but this is 'double'
 // error: for the remainder of a division of floating-point numbers, write `fmod(a, b)`, as in C++
-// error: '&' needs an int or a long, but this is 'double'
+// error: '&' needs an integer, but this is 'double'
 // error: bit operations work on integers; convert with `long(x)` first
-// error: '~' needs an int or a long, but this is 'double'
-// error: '<<' needs an int or a long, but this is 'double'
-// error: '%=' needs an int or a long, but this is 'float'
+// error: '~' needs an integer, but this is 'double'
+// error: '<<' needs an integer, but this is 'double'
+// error: '%=' needs an integer, but this is 'float'
 // error: for floating-point numbers, write `x = float(fmod(x, y))`
 // error: {:.2f} formats a float or a double, but this is 'int'
 // error: write {} for an integer, or convert it first: `double(n)`

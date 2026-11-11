@@ -10,7 +10,7 @@ using A3 = Box<int>**;
 using A4 = std::vector<Box<int>*>;
 // error: write `using A4 = vector<Box<int>?>;`
 using A6 = signed char;
-// error: write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program
+// error: write one of the types: int, long, double, float, bool, char, string, void, uint8_t to uint64_t, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program
 using A7 = unsigned char;
 // error: write `using A7 = char;`
 using B1 = LaterClass*;

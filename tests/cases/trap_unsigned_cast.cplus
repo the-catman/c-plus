@@ -1,0 +1,16 @@
+// A cast to an unsigned type keeps the lowest bits, so -1 is every bit set. In checked code, a value that does not
+// fit stops the program, saying what it was.
+int main() {
+    int n = -1;
+    long big = 5000000000L;
+    println("{} {} {}", uint32_t(n), uint8_t(big), uint16_t(n));
+    uint64_t most = uint64_t(n);
+    println("{}", most);
+    println("{}", checked(uint32_t(big - 1000000000L)));
+    long l = checked(long(most));
+    return 0;
+}
+// expect: 4294967295 0 65535
+// expect: 18446744073709551615
+// expect: 4000000000
+// trap: long(x) was given 18446744073709551615, which does not fit in a long (from -9223372036854775808 to 9223372036854775807)

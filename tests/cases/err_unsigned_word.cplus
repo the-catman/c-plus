@@ -1,0 +1,7 @@
+// C's `unsigned` is not a word of C+, whose unsigned types say how many bits they have.
+int main() {
+    unsigned n = 1;
+    return 0;
+}
+// error: unknown type 'unsigned'
+// error: write `uint32_t`, which has the same size as 'unsigned', or `uint64_t` for 64 bits

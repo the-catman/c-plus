@@ -1,4 +1,11 @@
 // `int` is always 32 bits and `long` always 64. A value only converts to a smaller type when you say so.
+// uint8_t to uint64_t are unsigned, for bits and hashes, and do not mix with signed integers without a cast.
+uint32_t fnv(string s) {
+    uint32_t h = 2166136261u;
+    for (char c : s) h = (h ^ c) * 16777619u;  // wraps at 32 bits
+    return h;
+}
+
 int main() {
     int small = 2147483647;
     long big = small;
@@ -8,5 +15,13 @@ int main() {
     int back = int(big - 1);
     println("{}", back);
     // expect: 2147483647
+    println("{}", fnv("hello"));
+    // expect: 1335831723
+    uint8_t b = 250;
+    b += 10;  // wraps at 256
+    uint32_t u = 7;
+    long sum = long(u) + small;  // a cast, as `u + small` mixes unsigned and signed
+    println("{} {}", b, sum);
+    // expect: 4 2147483654
     return 0;
 }

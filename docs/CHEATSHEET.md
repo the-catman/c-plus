@@ -20,7 +20,8 @@ long square(long n) { return n * n; }
 
 | Area | C+ |
 |------|----|
-| Types | `int` (32-bit), `long` (64-bit), `double` (64-bit), `float` (32-bit), `bool`, `char` (one byte, 0 to 255), `string`, `void`, `auto`, structs, classes, `vector<T>`, `array<T, N>`, `T?`, `T*` |
+| Types | `int` (32-bit), `long` (64-bit), `uint8_t`, `uint16_t`, `uint32_t`, `uint64_t`, `double` (64-bit), `float` (32-bit), `bool`, `char` (one byte, 0 to 255), `string`, `void`, `auto`, structs, classes, `vector<T>`, `array<T, N>`, `T?`, `T*` |
+| Unsigned | `uint32_t h = 2166136261u;` wraps at its size. `5u` is a `uint32_t` (a `uint64_t` if larger), `5ul` a `uint64_t`, and a hex number above the largest `long` a `uint64_t`. A `uint8_t` or `uint16_t` is worked out in an `int`, as a `char` is; `b += 1` stays one. **A signed and an unsigned integer do not mix**: write `long(u)` or `uint32_t(n)`. A written number that fits works: `u + 1`, `u > 0`, `uint8_t b = 255;`. Sizes and counts stay `long` |
 | Floating point | `1.5`, `.5`, `1e9`, `2.5f`, as in C++. `7 / 2` is 3, `7 / 2.0` is 3.5. IEEE: `1 / 0.0` is `inf`, no traps. `float f = 0.5;` works for a written number |
 | Casts | `int(x)`, `static_cast<int>(x)`, `(int)x` between numbers, `char` and `bool`. A fraction is dropped toward zero. A smaller integer keeps the lowest bits, and a float out of range gives the nearest integer (NaN gives 0); in checked code a value that does not fit **stops the program**. `(int*)p`, `static_cast<int*>(p)` between pointer types. `reinterpret_cast<void*>(-1)`, `reinterpret_cast<long>(p)` between a pointer and a number |
 | Math | `sqrt`, `pow`, `sin`, `floor`, `round`, `fmod`, `isnan`, `abs`, `min`, `max` and the rest of `<cmath>`, with no `std::` |
@@ -73,7 +74,7 @@ long square(long n) { return n * n; }
 | C structs | `extern "C" { struct ldiv_t { long quot; long rem; }; ldiv_t ldiv(long a, long b); tm* gmtime_r(const long* t, tm* out); }`. Fields are numbers, `char`, `bool`, pointers, such structs and arrays of those, in C's order. By value or through a pointer. Before C fills one: `tm t = {};` |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)` over a vector or an array, `break`, `continue`, `?:` |
 | Enums | `enum class Color { Red, Green, Blue };`, `enum class Big : long { Far = 5000000000 };`, then `Color c = Color::Green;`. Nothing converts by itself: `int(c)` is its number, and `Color(n)` **stops the program** unless `n` is the value of one. `==` and `<` on one enum. `println("{}", c)` prints `Green`. A hashmap key; JSON writes the name |
-| Switch | `switch (n) { case 1: println("one"); break; case 2: case 3: n++; break; default: n = 0; }` on an `int`, `long`, `char`, enum or `string`, as in C++. A case that would run into the next is an error: end it with `break;`, or with `[[fallthrough]];` when that is meant. Without `default:`, a switch on an enum needs a case for each enumerator |
+| Switch | `switch (n) { case 1: println("one"); break; case 2: case 3: n++; break; default: n = 0; }` on an integer, `char`, enum or `string`, as in C++. A case that would run into the next is an error: end it with `break;`, or with `[[fallthrough]];` when that is meant. Without `default:`, a switch on an enum needs a case for each enumerator |
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors and arrays element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
@@ -100,7 +101,7 @@ long square(long n) { return n * n; }
 | `static int count = 0;` at the top of a file, or in a function | `int count = 0;` outside the functions: a name is private to its file unless it is marked `export` |
 | `extern int count;` | `export int count = 0;` in its file, and `other::count` after `import other;` |
 | `int count = 0;` outside a function | not supported yet. A value that never changes is a `const`; otherwise pass it to the functions that use it |
-| `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `int`. `char*` is a raw pointer, for buffers and text to free |
+| `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `uint32_t`. `char*` is a raw pointer, for buffers and text to free |
 | `struct FILE* f`, `struct tm t;`, `typedef struct x x;` | `extern "C" struct FILE;` once, then `FILE* f`; `tm t;`, no word `struct`; no `typedef` |
 | `char name[64];` in a C struct | `array<char, 64> name;`, read with `string(s.name)` |
 | `short` in a C struct | not supported yet; use the struct through pointers, declared by name |
@@ -167,7 +168,9 @@ long square(long n) { return n * n; }
 | `long double`, `1.5L` | no `long double`; `double` is 64 bits |
 | `int n = true;` | error: `bool` does not convert to a number (numbers do convert to `bool`) |
 | `010` (octal) | `0o10`. A leading zero is an error |
-| `10u`, `unsigned` | unsigned types are planned |
+| `unsigned`, `unsigned long` | `uint32_t`, `uint64_t`. `10u` is a `uint32_t` |
+| `-1 < 1u`, which is false in C++ | error: a signed and an unsigned integer do not mix. Cast one: `long(u)` or `uint32_t(n)` |
+| `uint8_t b = 65; std::cout << b;`, which prints `A` | `println("{}", b)` prints a `uint8_t` as a number: `65`. A character is a `char` |
 | `long long`, `size_t`, `int32_t` | `long` / `int` |
 | `int f() { if (c) return 1; }` | error: every path must return |
 | signed overflow is UB | overflow is defined: it wraps around, as two's complement. `/0` **stops the program** with file:line |
@@ -194,7 +197,7 @@ long square(long n) { return n * n; }
 | `bool operator==(...) = default` | not needed: every struct already has `==` |
 | several constructors | as in C++, chosen as overloads are, and one can hand its work to another in its list, as in C++. There are no copy constructors: a struct copies field by field, and a class object is shared |
 | `auto p = {1, 2};` | `auto p = Point{1, 2};`, since a bare `{ }` needs a known type |
-| `int n = v.size();` | error: `size()` is a `long`, since there are no unsigned types. Write `long n` or `auto n`; `i < v.size()` with an `int i` is fine |
+| `int n = v.size();`, `size_t n = v.size();` | error: `size()` is a `long`, as every size is in C+. Write `long n` or `auto n`; `i < v.size()` with an `int i` is fine |
 | `v[i]` past the end is UB | every index is checked and a bad one **stops the program** with file:line; so do `pop_back()`, `front()`, `back()` on an empty vector |
 | `v.back().x = 1`, `v.back().set()`, `v.back().p.set()`, `m.at(k) = 1`, `(first ? a : b).set()` | error: `back()`, `front()`, `at()` and `?:` give copies. Write `v[v.size() - 1].x = 1`, `m[k] = 1`, `if (first) a.set(); else b.set();` |
 | `v.push_back(...)` inside `for (x : v)` is UB | safe: the loop goes over `v` as it was when the loop started |
@@ -251,7 +254,7 @@ long square(long n) { return n * n; }
 | JSON | other names for fields, marking a field to leave out |
 | Reflection | reading a field through its `reflect::Field`, methods |
 | Memory | pointers into vectors and strings |
-| Types | unions, unsigned integers, `const` fields, types nested in a type or a function, `short` and other small integers, enums held in them |
+| Types | unions, `const` fields, types nested in a type or a function, `short`, `int8_t` and `int16_t`, enums held in an unsigned type |
 | Functions | default arguments in generics, `auto` parameters and return types, lambdas |
 | Statements | a declaration before a switch's value: `switch (auto k = f(); k)` |
 | Top level | `thread_local`, `static` variables in a function, `constexpr` methods and structs |

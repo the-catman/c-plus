@@ -1077,6 +1077,11 @@ void cplus_print_i64(cplus_string* out, int64_t value) {
     out_write(out, text, snprintf(text, sizeof text, "%" PRId64, value));
 }
 
+void cplus_print_u64(cplus_string* out, uint64_t value) {
+    char text[24];
+    out_write(out, text, snprintf(text, sizeof text, "%" PRIu64, value));
+}
+
 // A pointer prints as its address in hexadecimal, as std::format prints a void*: 0x0 for
 // a null pointer.
 void cplus_print_ptr(cplus_string* out, const void* p) {
@@ -1213,10 +1218,17 @@ void cplus_print_float_spec(cplus_string* out, double value, int32_t type, int32
 }
 
 // `int(x)` given a long that an int cannot hold.
-_Noreturn void cplus_trap_narrow(int64_t value, const char* file, int32_t line, int32_t column) {
-    char message[160];
-    snprintf(message, sizeof message,
-             "int(x) was given %" PRId64 ", which does not fit in an int (from -2147483648 to 2147483647)", value);
+// In checked code, `int(x)` or `uint8_t(x)` given a number that the type does not hold. `value` is the number as an
+// int64_t, or the bits of a uint64_t when `isUnsigned`; `what` says what gave it, and `range` what the type holds.
+_Noreturn void cplus_trap_narrow(int64_t value, int32_t isUnsigned, const char* what, const char* type, const char* range,
+                                 const char* file, int32_t line, int32_t column) {
+    char message[320];
+    if (isUnsigned)
+        snprintf(message, sizeof message, "%s %" PRIu64 ", which does not fit in %s %s (%s)", what, (uint64_t)value,
+                 strcmp(type, "int") == 0 ? "an" : "a", type, range);
+    else
+        snprintf(message, sizeof message, "%s %" PRId64 ", which does not fit in %s %s (%s)", what, value,
+                 strcmp(type, "int") == 0 ? "an" : "a", type, range);
     cplus_trap(message, file, line, column);
 }
 

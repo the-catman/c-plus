@@ -2,5 +2,5 @@ int main() {
     long a = 9223372036854775808;
     return 0;
 }
-// error: the number 9223372036854775808 is too large for any integer type
-// error: the largest long is 9223372036854775807
+// error: the number 9223372036854775808 is too large for a long
+// error: write `9223372036854775808u` for a uint64_t, which holds up to 18446744073709551615, or a smaller number: the largest long is 9223372036854775807

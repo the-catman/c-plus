@@ -47,6 +47,8 @@ static bool canConvert(const Type* from, const Type* to) {
     // To a base class that the object holds once. Holding it twice, it is not known which is meant.
     if (from->isClass() && to->isClass()) return from->decl->partsOf(to->decl) == 1;
     if (from->is(K::Int) && to->is(K::Long)) return true;      // widening never loses information
+    // An unsigned integer to a wider one, signed or not, which holds all of its values: a uint32_t to a long or a uint64_t.
+    if (from->isUnsigned() && to->isInteger() && to->bits() > from->bits()) return true;
     if (from->isInteger() && to->isFloating()) return true;    // as in C++; a very large long is rounded
     if (from->is(K::Float) && to->is(K::Double)) return true;  // never loses information
     if (from->is(K::Char) && to->isNumber()) return true;      // its code, from 0 to 255, as in C++
@@ -78,8 +80,17 @@ static const Type* commonReference(const Type* a, const Type* b) {
 // and not a C type known only by name, since neither has a known size.
 static bool pointsToKnownType(const Type* p) { return !p->elem->is(K::Void) && !p->elem->isOpaque(); }
 
-// As in C++, arithmetic on a char works on its code, as an int.
-static const Type* promoted(const Type* t) { return t->is(K::Char) ? Type::intTy() : t; }
+// As in C++, arithmetic on a char works on its code, as an int, and so does arithmetic on a uint8_t or a uint16_t.
+static const Type* promoted(const Type* t) { return t->promotesToInt() ? Type::intTy() : t; }
+
+// Whether `e` is a number written in the program, such as `5`, which takes the type of an unsigned number it is used with
+// when it fits in it: `u + 1`, `uint8_t b = 200;`. A negative one never fits.
+static bool fitsUnsigned(const Expr& e, const Type* to) {
+    if (e.kind != Expr::Kind::IntLit || !to->isUnsigned()) return false;
+    auto& lit = static_cast<const IntLitExpr&>(e);
+    if (!lit.isUnsigned && lit.value < 0) return false;
+    return to->bits() == 64 || (uint64_t)lit.value <= ((uint64_t)1 << to->bits()) - 1;
+}
 
 static const Type* commonInteger(const Type* a, const Type* b) {
     return (a->is(K::Long) || b->is(K::Long)) ? Type::longTy() : Type::intTy();
@@ -192,7 +203,10 @@ static std::string plainKey(const Expr& key) {
             const std::string& text = static_cast<const StringLitExpr&>(key).value;
             return showsAsWritten(text) ? "\"" + text + "\"" : "";
         }
-        case Expr::Kind::IntLit: return std::to_string(static_cast<const IntLitExpr&>(key).value);
+        case Expr::Kind::IntLit: {
+            auto& lit = static_cast<const IntLitExpr&>(key);
+            return lit.isUnsigned ? std::to_string((uint64_t)lit.value) + (lit.isLong ? "ul" : "u") : std::to_string(lit.value);
+        }
         case Expr::Kind::BoolLit: return static_cast<const BoolLitExpr&>(key).value ? "true" : "false";
         case Expr::Kind::CharLit: {
             const uint8_t c = static_cast<const CharLitExpr&>(key).value;
@@ -2378,6 +2392,7 @@ bool Sema::evaluate(const Expr& e, ConstValue& out, const std::string& what) {
         auto has = [&](const char* piece) { return m.find(piece) != std::string::npos; };
         const std::string help =
             has("integer overflow") && has("'long'") ? "the result does not fit in a long either: use smaller numbers, or a `double` if a close value will do"
+            : has("integer overflow") && has("'uint") ? "an unsigned value is from 0 to its largest. Leave out `checked(...)` for the value that wraps around, or use a wider type"
             : has("integer overflow") ? "make the value fit: declare it as a `long` and write the numbers as `long`, as in `constexpr long n = 2147483647L + 1;`, or use smaller ones"
             : has("division by zero") ? "change what it divides by to a number that is not 0"
             : has("does not fit in 'char'") ? "use a value from 0 to 255, which is what a char holds"
@@ -2435,6 +2450,9 @@ void Sema::putLiteral(VarDecl& v, const ConstValue& value) {
     switch (value.kind) {
         case ConstValue::Kind::Int: case ConstValue::Kind::Long:
             literal = std::make_unique<IntLitExpr>(loc, value.i, value.kind == ConstValue::Kind::Long);
+            break;
+        case ConstValue::Kind::UInt8: case ConstValue::Kind::UInt16: case ConstValue::Kind::UInt32: case ConstValue::Kind::UInt64:
+            literal = std::make_unique<IntLitExpr>(loc, value.i, value.kind == ConstValue::Kind::UInt64, true);
             break;
         case ConstValue::Kind::Float: case ConstValue::Kind::Double:
             literal = std::make_unique<FloatLitExpr>(loc, value.d, value.kind == ConstValue::Kind::Float);
@@ -3388,7 +3406,7 @@ void Sema::checkSwitch(SwitchStmt& st, Flow& flow) {
     const Type* t = checkExpr(*st.value, flow);
     bool ok = !t->isError();
     if (ok && !t->isInteger() && !t->is(K::Char) && !t->isEnum() && !t->is(K::String)) {
-        diags_.error(st.value->loc, "a switch chooses by an int, a long, a char, an enum or a string, but this is " + q(t), switchHelp(*st.value, t), spec::Switch);
+        diags_.error(st.value->loc, "a switch chooses by an integer, a char, an enum or a string, but this is " + q(t), switchHelp(*st.value, t), spec::Switch);
         ok = false;
     }
     // The labels: values of the switch's type, known while compiling, each in one case only.
@@ -3409,7 +3427,7 @@ void Sema::checkSwitch(SwitchStmt& st, Flow& flow) {
             Flow labelFlow = flow;
             const Type* lt = checkExpr(*label.value, labelFlow);
             if (!ok || lt->isError()) continue;
-            if (!canConvert(lt, t)) {
+            if (!canConvert(lt, t) && !fitsUnsigned(*label.value, t)) {  // `case 200:` on a uint8_t is one it holds
                 requireConvertible(*label.value, t, "as a case of a switch on " + q(t));
                 continue;
             }
@@ -3723,11 +3741,37 @@ void Sema::rejectCopy(const Expr& e) {
     }
 }
 
+const Type* Sema::arithmeticType(const Expr& le, const Type* l, const Expr& re, const Type* r, const std::string& what, Loc at) {
+    if (l->isFloating() || r->isFloating() || (!l->isUnsigned() && !r->isUnsigned())) return commonNumber(l, r);
+    if (l == r || canConvert(r, l) || fitsUnsigned(re, l)) return promoted(l);
+    if (canConvert(l, r) || fitsUnsigned(le, r)) return promoted(r);
+    // One is an int or a long, and the other a uint32_t or a uint64_t, which no type of the two holds all of.
+    const bool leftUnsigned = l->isUnsigned();
+    const Type* u = leftUnsigned ? l : r;
+    const Type* sgn = leftUnsigned ? r : l;
+    const std::string uName = asBase(spelled(leftUnsigned ? le : re, "u"));
+    const std::string sName = spelled(leftUnsigned ? re : le, "n");
+    const bool negativeLiteral = (leftUnsigned ? re : le).kind == Expr::Kind::IntLit;  // a written number that does not fit: below 0
+    const Expr& unsignedSide = leftUnsigned ? le : re;
+    const bool suffixed = unsignedSide.kind == Expr::Kind::IntLit && static_cast<const IntLitExpr&>(unsignedSide).value >= 0;  // `n + 5u`
+    diags_.error(at, what + " mixes a signed " + q(sgn) + " with an unsigned " + q(u),
+                 suffixed ? "write the number without `u`, as `" + std::to_string(static_cast<const IntLitExpr&>(unsignedSide).value) +
+                                "`, which takes the type of " + sName + ", or convert " + sName + ": `" + u->name + "(" + sName + ")`"
+                 : negativeLiteral ? sName + " is below 0, which a " + std::string(u->name) + " cannot hold. Write `" + u->name + "(" + sName +
+                                       ")` for its bits, or `long(" + uName + ")` to work in a signed long"
+                                 : "C+ does not mix them without a cast, since the result could change sign. Write `long(" + uName + ")`, which " +
+                                       (u->bits() < 64 ? "holds every " + std::string(u->name) : std::string("turns one above 9223372036854775807 negative")) +
+                                       ", or `" + u->name + "(" + sName + ")`, which wraps a negative number around",
+                 spec::IntegerTypes);
+    return Type::error();
+}
+
 void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& context) {
     const Type* from = e.type;
     rejectCopy(e);
     if (canConvert(from, to)) return;
     const Type* target = to->isOptional() ? to->elem : to;
+    if (fitsUnsigned(e, target)) return;  // `uint32_t x = 5;`
     if (target->is(K::Float) && isDoubleConstant(e)) {  // `float f = 1.5;`
         if (std::fabs(static_cast<const FloatLitExpr&>(e).value) > FLT_MAX)
             diags_.error(e.loc, "this number is too large for a float",
@@ -3766,10 +3810,27 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
                "it, e.g. `static_cast<" + std::string(leads->name) + ">(x)`";
     } else if (from->isPointer() || to->isPointer()) {
         help = pointerHelp(e, from, to, freshName(spelled(e, ""), {"x", "copy", "item", "value"}));
+    } else if (target->isUnsigned() && e.kind == Expr::Kind::IntLit) {
+        const auto& lit = static_cast<const IntLitExpr&>(e);
+        help = !lit.isUnsigned && lit.value < 0
+                   ? "a " + std::string(target->name) + " cannot be below 0. Write `" + target->name + "(" + std::to_string(lit.value) +
+                         ")` for the " + target->name + " with the same bits"
+                   : std::string("this number is larger than a ") + target->name + " can hold, which is up to " +
+                         std::to_string(((uint64_t)1 << target->bits()) - 1) + ". Use a wider type";
+    } else if (target->isUnsigned() && target->promotesToInt() && from->is(K::Int) && e.kind == Expr::Kind::Binary) {
+        help = std::string("arithmetic on a ") + target->name + " is done in an int, as in C++. Write `" + target->name + "(" + spelled(e, "x") +
+               ")`, which keeps its lowest bits, or use `+=` and the like, which stay a " + target->name;
+    } else if (from->isInteger() && target->isInteger() && (from->isUnsigned() || target->isUnsigned())) {
+        const std::string n = spelled(e, "x");
+        help = from->isSigned() && target->isUnsigned()
+                   ? "a signed " + q(from) + " does not become an unsigned " + q(target) + " by itself, as it may be below 0. Write `" + target->name + "(" + n +
+                         ")`, which wraps a negative number around"
+                   : "a " + q(from) + " may not fit in " + (target->is(K::Int) ? "an " : "a ") + q(target) + ". Write `" + target->name + "(" + n + ")`, which keeps its lowest bits, or `checked(" +
+                         target->name + "(" + n + "))`, which stops the program if it does not fit";
     } else if (from->is(K::Long) && to->is(K::Int)) {
         help = e.kind == Expr::Kind::IntLit ? "this number is larger than an int can hold; use long instead"
-                                            : "a long may not fit in an int. Use long here, or write `int(x)`, which "
-                                              "stops the program if the value does not fit";
+                                            : "a long may not fit in an int. Use long here, or write `int(x)`, which keeps "
+                                              "its lowest 32 bits, or `checked(int(x))`, which stops the program if the value does not fit";
     } else if (target->is(K::Char) && (from->isInteger() || from->is(K::String) || from->isFloating())) {
         if (e.kind == Expr::Kind::StringLit && static_cast<const StringLitExpr&>(e).value.size() == 1)
             help = [&] {
@@ -3779,9 +3840,8 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         else if (from->is(K::String))
             help = "a string does not convert to a char; `s[i]` is the char at position i";
         else
-            help = "a number does not convert to a char by itself. Write a character such as 'A', or `char(n)`, "
-                   "which stops the program unless n is from 0 to 255. To step to the next character, write "
-                   "`c++` or `c += 1`";
+            help = "a number does not convert to a char by itself. Write a character such as 'A', or `char(n)` for "
+                   "the char whose code is n. To step to the next character, write `c++` or `c += 1`";
     } else if (from->is(K::Char) && target->is(K::String)) {
         help = "write `string(1, c)` for a string holding the char";
     } else if (from->is(K::Char) && target->is(K::Bool)) {
@@ -4158,7 +4218,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
                 return e.type;
             }
             if (!indexType->isError() && !indexType->isInteger())
-                diags_.error(ix.index->loc, "an index into a pointer must be an int or long, but this is " + q(indexType),
+                diags_.error(ix.index->loc, "an index into a pointer must be an integer, but this is " + q(indexType),
                              indexType->is(K::Char)       ? "convert the char to its code first: `int(c)`"
                              : indexType->isFloating() ? "convert it first: `int(x)`"
                                                        : "write an int or a long, such as `p[0]`",
@@ -4185,7 +4245,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         const char* what = str ? "a string" : arr ? "an array" : "a vector";
         const char* anchor = str ? spec::Strings : arr ? spec::Arrays : spec::Vectors;
         if (!indexType->isError() && !indexType->isInteger())
-            diags_.error(ix.index->loc, std::string("an index into ") + what + " must be an int or long, but this is " +
+            diags_.error(ix.index->loc, std::string("an index into ") + what + " must be an integer, but this is " +
                                             q(indexType),
                          indexType->is(K::Char) ? "convert the char to its code first: `int(c)`"
                          : indexType->isFloating() ? "convert it first: `int(x)`"
@@ -4661,8 +4721,9 @@ struct Layout {
 Layout layoutOf(const Type* t, std::unordered_map<const StructDecl*, Layout>& seen) {
     auto capped = [](uint64_t n) { return std::min(n, kSizeCap); };
     switch (t->kind) {
-        case K::Bool: case K::Char: return {1, 1};
-        case K::Int: case K::Float: return {4, 4};
+        case K::Bool: case K::Char: case K::UInt8: return {1, 1};
+        case K::UInt16: return {2, 2};
+        case K::Int: case K::Float: case K::UInt32: return {4, 4};
         case K::Enum: return t->decl->underlying && t->decl->underlying->is(K::Long) ? Layout{8, 8} : Layout{4, 4};
         case K::String: return {24, 8};
         case K::Array: {
@@ -4825,7 +4886,7 @@ const Type* Sema::checkPointerBinary(BinaryExpr& b, const Type* l, const Type* r
     if (b.op == BinOp::Sub && !leftPtr && other->isInteger())
         diags_.error(b.loc, "a number cannot have a pointer subtracted from it", "write `p - n`, or `n - *" + asBase(spelled(ptrSide, "p")) + "` for the value it points to", spec::Pointers);
     else if ((b.op == BinOp::Add || b.op == BinOp::Sub) && !other->isPointer())
-        diags_.error(otherSide.loc, "'" + sym + "' moves a pointer by an int or a long, but this is " + q(other), help,
+        diags_.error(otherSide.loc, "'" + sym + "' moves a pointer by an integer, but this is " + q(other), help,
                      spec::Pointers);
     else
         diags_.error(b.loc, "'" + sym + "' cannot be used with " + q(ptr), help, spec::Pointers);
@@ -4883,7 +4944,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
     switch (e.kind) {
         case Expr::Kind::IntLit: {
             auto& lit = static_cast<IntLitExpr&>(e);
-            result = (!lit.isLong && lit.value >= INT32_MIN && lit.value <= INT32_MAX) ? Type::intTy() : Type::longTy();
+            result = lit.type && lit.type->isInteger() ? lit.type : lit.writtenType();  // a constant's value, put in its place, keeps its type
             break;
         }
         case Expr::Kind::FloatLit:
@@ -4965,7 +5026,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 t = promoted(t);  // `-c` and `+c` are ints, as in C++
                 if (u.op == UnOp::BitNot ? !t->isInteger() : !t->isNumber()) {
                     diags_.error(u.operand->loc,
-                                 std::string("'") + sym + "' needs " + (u.op == UnOp::BitNot ? "an int or a long" : "a number") +
+                                 std::string("'") + sym + "' needs " + (u.op == UnOp::BitNot ? "an integer" : "a number") +
                                      ", but this is " + q(t),
                                  u.op == UnOp::BitNot && t->isFloating() ? std::string("use it on an integer, as it flips bits. Convert first: `~long(x)`")
                                  : t->is(K::Bool) ? std::string("convert it first: `") + sym + "int(b)`"
@@ -5030,7 +5091,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (equality && (l->isOptional() || r->isOptional())) {
                 const Type* opt = l->isOptional() ? l : r;
                 const Type* other = opt == l ? r : l;
-                if (other->isNull() || canConvert(other, opt->elem)) {
+                if (other->isNull() || canConvert(other, opt->elem) || fitsUnsigned(opt == l ? *b.rhs : *b.lhs, opt->elem)) {
                     b.operandType = opt;
                     result = Type::boolTy();
                     break;
@@ -5099,7 +5160,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (integerOnly && l->isArithmetic() && r->isArithmetic() && (l->isFloating() || r->isFloating())) {
                 const Expr* side = l->isFloating() ? b.lhs.get() : b.rhs.get();
                 diags_.error(side->loc,
-                             std::string("'") + sym + "' needs an int or a long, but this is " +
+                             std::string("'") + sym + "' needs an integer, but this is " +
                                  q(l->isFloating() ? l : r),
                              b.op == BinOp::Rem ? "for the remainder of a division of floating-point numbers, write "
                                                   "`fmod(a, b)`, as in C++"
@@ -5136,7 +5197,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 result = b.operandType;
                 checkShiftAmount(b.operandType, b.lhs.get(), *b.rhs, b.checked);
             } else {
-                b.operandType = commonNumber(l, r);
+                b.operandType = arithmeticType(*b.lhs, l, *b.rhs, r, std::string("'") + sym + "'", b.loc);
                 result = comparison ? Type::boolTy() : b.operandType;
             }
             break;
@@ -5175,7 +5236,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                                      "code first: `int(c)`",
                                      spec::Char);
                     else if (!vt->isError() && !vt->isInteger() && !vt->is(K::Char))
-                        diags_.error(a.value->loc, opName + " on a char needs an int or a long, but this is " + q(vt),
+                        diags_.error(a.value->loc, opName + " on a char needs an integer, but this is " + q(vt),
                                      vt->isFloating() ? "convert it first: `int(x)`" : "use an int or a long", spec::Char);
                 } else if (t->isPointer()) {
                     // `p += n` and `p -= n` move the pointer by n elements.
@@ -5185,7 +5246,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                     else if (!pointsToKnownType(t))
                         reportUnknownPointee(a.loc, t, opName);
                     else if (!vt->isError() && !vt->isInteger() && !vt->is(K::Char))
-                        diags_.error(a.value->loc, opName + " on a pointer needs an int or a long, but this is " + q(vt), "a pointer moves by a whole number of elements, such as `p += 2`", spec::Pointers);
+                        diags_.error(a.value->loc, opName + " on a pointer needs an integer, but this is " + q(vt), "a pointer moves by a whole number of elements, such as `p += 2`", spec::Pointers);
                 } else if (t->is(K::String))
                     diags_.error(a.target->loc, opName + " cannot be used with 'string'",
                                  "use +=, which appends, and is the only compound assignment on strings", spec::Strings);
@@ -5202,11 +5263,22 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                           *a.op == BinOp::BitOr || *a.op == BinOp::BitXor) &&
                          (t->isFloating() || a.value->type->isFloating()))
                     diags_.error(t->isFloating() ? a.target->loc : a.value->loc,
-                                 opName + " needs an int or a long, but this is " +
+                                 opName + " needs an integer, but this is " +
                                      q(t->isFloating() ? t : a.value->type),
                                  *a.op == BinOp::Rem ? (t->isInteger() || t->is(K::Float) ? "for floating-point numbers, write `x = " + std::string(t->name) + "(fmod(x, y))`" : std::string("for floating-point numbers, write `x = fmod(x, y)`")) : "use an int or a long",
                                  spec::Operators);
-                else if (*a.op != BinOp::Shl && *a.op != BinOp::Shr)
+                else if (t->isUnsigned() && t->promotesToInt()) {
+                    // `b += n` on a uint8_t or a uint16_t works in an int, or a wider type, and wraps back into the target, as `c += n`
+                    // does on a char.
+                    if (!vt->isError() && !vt->isInteger() && !vt->is(K::Char))
+                        diags_.error(a.value->loc, opName + " on a " + q(t) + " needs an integer, but this is " + q(vt),
+                                     vt->isFloating() ? "convert it first: `int(x)`" : "give it an integer", spec::IntegerTypes);
+                    else if (*a.op == BinOp::Shl || *a.op == BinOp::Shr) {
+                        a.opType = Type::intTy();
+                        checkShiftAmount(a.opType, nullptr, *a.value, a.checked);
+                    } else
+                        a.opType = vt->isError() || vt->promotesToInt() ? Type::intTy() : vt;  // which the target converts to
+                } else if (*a.op != BinOp::Shl && *a.op != BinOp::Shr)
                     requireConvertible(*a.value, t, "on the right of " + opName);
                 else
                     checkShiftAmount(t, nullptr, *a.value, a.checked);
@@ -5229,7 +5301,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             flow = merge(a, b);
             if (x->isError() || y->isError()) break;
             if (x == y) result = x;
-            else if (x->isArithmetic() && y->isArithmetic()) result = commonNumber(x, y);
+            else if (x->isArithmetic() && y->isArithmetic()) result = arithmeticType(*t.thenExpr, x, *t.elseExpr, y, "'?:'", t.loc);
             else if (const Type* ptr = commonPointer(x, y)) result = ptr;  // `c ? p : null` is a pointer
             else if (const Type* ref = commonReference(x, y)) result = ref;  // `c ? dog : animal` is an Animal
             else if (x->isWeak() && y->isNull()) result = x;  // `c ? w : null` is an empty weak reference or `w`
@@ -5517,7 +5589,13 @@ const Type* Sema::checkMath(CallExpr& call, Flow& flow) {
         }
         allFloat = allFloat && t->is(K::Float);
         allChar = allChar && t->is(K::Char);
-        common = common ? commonNumber(common, t) : promoted(t);
+        common = common ? arithmeticType(*call.args[0], common, *a, t, "'" + call.callee + "()'", call.loc) : promoted(t);
+        if (common->isError()) return Type::error();
+        if (m.fn == MathFn::Abs && t->isUnsigned() && !t->promotesToInt()) {
+            diags_.error(a->loc, "abs() of a " + q(t) + " does nothing, since an unsigned number is never below 0",
+                         "remove the abs(). For the distance between two of them, write `a > b ? a - b : b - a`", spec::Math);
+            return Type::error();
+        }
     }
     if (m.kind == MathKind::Test) return Type::boolTy();
     if (!ok) return Type::error();
@@ -5666,8 +5744,8 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             return Type::error();
         }
         if (name == "stoul" || name == "stoull") {
-            diags_.error(nameLoc, "this compiler does not support `" + name + "` yet, as it has no unsigned types",
-                         "write `try stol(s)`, which reads a `long`, of 64 bits", spec::ParsingNumbers);
+            diags_.error(nameLoc, "this compiler does not support `" + name + "` yet",
+                         "write `try stol(s)`, which reads a `long`, of 64 bits, and `uint64_t(n)` for the unsigned number with its bits", spec::ParsingNumbers);
             return Type::error();
         }
         bool importsFs = false;
@@ -5879,7 +5957,7 @@ FuncDecl* Sema::chooseOverload(const std::string& name, const std::string& calle
             return Fit{1, 0};
         if (from->is(K::Char) && to->is(K::Long)) return Fit{1, 1};
         if (to->is(K::Float) && isDoubleConstant(arg)) return Fit{2, 0};  // `f(1.5)`, as `float f = 1.5;`
-        if (!canConvert(from, to)) return std::nullopt;
+        if (!canConvert(from, to) && !fitsUnsigned(arg, to->isOptional() ? to->elem : to)) return std::nullopt;  // `f(5)` fits a uint32_t
         const Type* target = to->isOptional() ? to->elem : to;
         const Type* source = from->isOptional() ? from->elem : from;
         int depth = source->isClass() && target->isClass() ? std::max(0, baseDistance(source->decl, target->decl)) : 0;
@@ -6400,8 +6478,8 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
         return t->isArithmetic() || t->is(K::String) || t->isPointer() || t->isEnum()
                    ? ""
                    : q(t) + " has no `<`. Only numbers, chars, strings, enums and pointers do, until operators can be overloaded. Compare a field instead: `a.x < b.x`";
-    if (constraint == "Number") return t->isNumber() ? "" : q(t) + " is not int, long, float or double. Pass one of those, or change the constraint";
-    if (constraint == "Integer") return t->isInteger() ? "" : q(t) + " is not int or long. Use one of those, or convert it with `long(x)`";
+    if (constraint == "Number") return t->isNumber() ? "" : q(t) + " is not a number: an integer type, float or double. Pass one of those, or change the constraint";
+    if (constraint == "Integer") return t->isInteger() ? "" : q(t) + " is not an integer type, such as int, long or uint32_t. Use one of those, or convert it with `long(x)`";
     if (constraint == "Floating") return t->isFloating() ? "" : q(t) + " is not float or double. Use one of those, or convert it with `double(x)`";
     if (constraint == "__JsonWritable" || constraint == "__JsonReadable") {
         std::vector<const StructDecl*> seen;
@@ -7888,7 +7966,8 @@ const Type* Sema::checkCoalesce(CoalesceExpr& c, Flow& flow) {
                      "write `" + spelled(*c.rhs, "w") + ".lock()`, which gives a `" + std::string(r->elem->name) + "?`", spec::Weak);
         return inner;
     }
-    if (r->isInteger() && inner->isInteger()) return commonInteger(r, inner);
+    if (fitsUnsigned(*c.rhs, inner)) return inner;  // `count ?? 0`
+    if (r->isInteger() && inner->isInteger()) return arithmeticType(*c.lhs, inner, *c.rhs, r, "'\?\?'", c.loc);
     diags_.error(c.rhs->loc, "the fallback after '\?\?' must be " + q(inner) + ", but this is " + q(r),
                  "write a fallback of type " + q(inner) + ", which is what the optional holds", spec::Optionals);
     return inner;
@@ -8048,7 +8127,7 @@ const Type* Sema::checkEnumCast(CastExpr& c, const Type* from, const Type* to) {
     }
     if (from->isEnum()) {
         if (to->isInteger()) return to;
-        diags_.error(c.loc, "an enum converts to its number, an int or a long, but this converts it to " + q(to),
+        diags_.error(c.loc, "an enum converts to its number, an integer, but this converts it to " + q(to),
                      to->is(K::String) ? "write `format(\"{}\", " + n + ")` for the name of its enumerator"
                      : to->is(K::Bool) ? "compare it instead, e.g. `" + n + " != " + enumSample(from) + "`"
                      : to->isNumber() || to->is(K::Char) ? "convert its number: `" + std::string(to->name) + "(int(" + n + "))`"

@@ -1,6 +1,0 @@
-int main() {
-    unsigned n = 1;
-    return 0;
-}
-// error: this compiler does not support unsigned integer types yet
-// error: use int (32-bit) or long (64-bit)

@@ -543,9 +543,25 @@ void Translator::function(const std::string& n, CXCursor c) {
         return;
     }
     std::string why;
-    const std::string result = type(clang_getResultType(fn), Use::Result, why);
+    // The result as the header writes it. For a function clang knows, such as strlen, the function's type has the
+    // `unsigned long` of the compiler's own declaration, and not the header's `size_t`.
+    std::pair<CXType, CXType> written{clang_getResultType(fn), clang_getResultType(fn)};
+    clang_visitChildren(
+        c,
+        [](CXCursor child, CXCursor, CXClientData data) {
+            auto& [result, canonical] = *static_cast<std::pair<CXType, CXType>*>(data);
+            if (clang_isAttribute(child.kind)) return CXChildVisit_Continue;  // glibc's `__THROW` and the like
+            if (child.kind != CXCursor_TypeRef) return CXChildVisit_Break;
+            CXCursor named = clang_getCursorReferenced(child);
+            if (named.kind == CXCursor_TypedefDecl && clang_equalTypes(clang_getCanonicalType(clang_getCursorType(named)), clang_getCanonicalType(canonical)))
+                result = clang_getCursorType(named);
+            return CXChildVisit_Break;
+        },
+        &written);
+    const CXType resultType = written.first;
+    const std::string result = type(resultType, Use::Result, why);
     if (result.empty()) {
-        notImported(n, cannot + "its result is " + aType(clang_getResultType(fn)) + why, generic);
+        notImported(n, cannot + "its result is " + aType(resultType) + why, generic);
         return;
     }
     const int count = fn.kind == CXType_FunctionNoProto ? 0 : clang_getNumArgTypes(fn);
@@ -554,7 +570,7 @@ void Translator::function(const std::string& n, CXCursor c) {
     for (int i = 0; i < count; ++i) {
         CXCursor p = clang_Cursor_getArgument(c, (unsigned)i);
         const std::string written = clang_Cursor_isNull(p) ? "" : spelling(p);
-        CXType pt = clang_getArgType(fn, (unsigned)i);
+        CXType pt = clang_Cursor_isNull(p) ? clang_getArgType(fn, (unsigned)i) : clang_getCursorType(p);  // a size_t, as the header writes it
         const std::string t = type(pt, Use::Param, why);
         if (t.empty()) {
             notImported(n, cannot + "its parameter " + (written.empty() ? "number " + std::to_string(i + 1) : "`" + written + "`") + " is " + aType(pt) + why,
@@ -593,7 +609,10 @@ bool Translator::macroConstant(const std::string& n) {
             return true;
         case Value::Kind::Whole:
             if (v.type == CXType_Bool) constants_.push_back("const bool " + n + " = " + (v.whole ? "true" : "false") + ";");
-            else constants_.push_back(wholeConstant(n, v.whole, v.size));
+            else if (v.type == CXType_UInt || v.type == CXType_ULong || v.type == CXType_ULongLong) {
+                const unsigned long long bits = v.size <= 4 ? (unsigned long long)v.whole & 0xFFFFFFFFull : (unsigned long long)v.whole;
+                constants_.push_back(std::string(v.size <= 4 ? "const uint32_t " : "const uint64_t ") + n + " = " + std::to_string(bits) + "u;");
+            } else constants_.push_back(wholeConstant(n, v.whole, v.size));
             return true;
         case Value::Kind::Real: {
             const bool single = v.type == CXType_Float;
@@ -609,6 +628,18 @@ bool Translator::macroConstant(const std::string& n) {
 
 // What a C type is written as in C+, or nothing, with why after the type's name: ", a 16-bit number, ...".
 std::string Translator::type(CXType written, Use use, std::string& why) {
+    // A size is a long in C+, as `size()` gives one, though C's size_t is unsigned. A uint8_t that is a value, and not
+    // what a pointer leads to, is one in C+ too, though C's is an `unsigned char`.
+    for (CXType w = written; w.kind == CXType_Typedef || w.kind == CXType_Elaborated;) {
+        if (w.kind == CXType_Elaborated) {
+            w = clang_Type_getNamedType(w);
+            continue;
+        }
+        const std::string name = text(clang_getTypedefName(w));
+        if (name == "size_t" || name == "uintptr_t") return "long";
+        if (name == "uint8_t" && use != Use::Pointee) return "uint8_t";
+        w = clang_getTypedefDeclUnderlyingType(clang_getTypeDeclaration(w));
+    }
     CXType t = clang_getCanonicalType(written);
     const long long size = clang_Type_getSizeOf(t);
     switch (t.kind) {
@@ -618,15 +649,20 @@ std::string Translator::type(CXType written, Use use, std::string& why) {
         case CXType_Char_U:
         case CXType_SChar:
         case CXType_UChar: return "char";
-        case CXType_Short:
+        case CXType_Short: why = ", a 16-bit number, which C+ has no type for yet"; return "";
         case CXType_UShort:
-        case CXType_Char16: why = ", a 16-bit number, which C+ has no type for yet"; return "";
-        case CXType_Int:
+        case CXType_Char16:
         case CXType_UInt:
-        case CXType_Long:
         case CXType_ULong:
-        case CXType_LongLong:
         case CXType_ULongLong:
+            if (size == 2) return "uint16_t";
+            if (size == 4) return "uint32_t";
+            if (size == 8) return "uint64_t";
+            why = ", which C+ has no type for yet";
+            return "";
+        case CXType_Int:
+        case CXType_Long:
+        case CXType_LongLong:
         case CXType_WChar:
         case CXType_Char32:
         case CXType_Enum:

@@ -95,7 +95,7 @@ int main() {
 // error: but this is part of a temporary value
 // error: '*' cannot be used with 'int*'
 // error: The value a pointer points to is `*p`
-// error: '+' moves a pointer by an int or a long, but this is 'double'
+// error: '+' moves a pointer by an integer, but this is 'double'
 // error: '-' between two pointers needs them to point to the same type, but they are 'int*' and 'char*'
 // error: null can only be compared with == and !=
 // error: '*=' cannot be used with a pointer
@@ -117,7 +117,7 @@ int main() {
 // error: cannot call 'move' through a 'const Point*', because it may change fields
 // error: sizeof needs a type with a size, but this is 'void'
 // error: '++' cannot be used on a 'void*'
-// error: an index into a pointer must be an int or long, but this is 'double'
+// error: an index into a pointer must be an integer, but this is 'double'
 // error: '-' needs a number, but this is 'int*'
 // error: the address of 'this' cannot be taken
 // error: spec: docs/SPEC.md#pointers

@@ -60,4 +60,9 @@ int header_strings(const char* const* texts, int count) {
 }
 const unsigned char* header_bytes(void) { return (const unsigned char*)"\x01\x02"; }
 int header_first_byte(const unsigned char* bytes) { return bytes[0]; }
+header_port header_port_of(int n) { return (header_port)(n * 1000); }
+unsigned int header_unsigned_add(unsigned int a, unsigned int b) { return a + b; }
+unsigned long long header_all_bits(void) { return ~0ull; }
+size_t header_size_of(const char* text) { return strlen(text); }
+uint8_t header_low_byte(uint8_t b) { return (uint8_t)(b + 1); }
 int header_count_items(const struct header_flexible* f) { return f ? f->count : -1; }

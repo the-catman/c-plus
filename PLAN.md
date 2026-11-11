@@ -140,6 +140,15 @@ The default path:
     - Unsigned integers: signed and unsigned never mix without a cast, and literals adapt. `char`, `uint8_t`, `uint16_t`
       and `uint32_t` widen by themselves to a wider unsigned type, and `uint32_t` and smaller to `long`. `size()` stays
       `long`. A C `unsigned` from a header becomes the unsigned type.
+      - Built on 2026-11-12, with these choices made while building it: a `uint8_t` and a `uint16_t` are worked out in
+        an `int`, as a `char` and C++ do, and `b += n` wraps back into the type, or in `checked` stops when it does not
+        fit. `u` gives a `uint32_t`, or a `uint64_t` when larger, and `ul` a `uint64_t`; a hexadecimal, octal or binary
+        literal above the largest `long` is a `uint64_t`, and a decimal one is an error that says to write `u`. `-5u`
+        is the minus of `5u`, which wraps. `abs` of a `uint32_t` or `uint64_t` is an error. From C, `size_t` and
+        `uintptr_t` stay `long`, `unsigned char` stays `char`, and a `uint8_t` behind a pointer is a `char*`; `uid_t`
+        is a `uint32_t`. A `uint8_t` prints as a number. JSON writes and reads them, checking the range; a
+        `json::Value` holds a `uint64_t` above the largest `long` only as a fraction. Not yet: `int8_t`, `int16_t`,
+        `short`, enums held in an unsigned type, `stoul`.
 
 Always available, no `unsafe` block:
 - Raw pointers `T*`, address-of, pointer arithmetic, casts, `new`/`delete`, `malloc`/`free`.
@@ -319,7 +328,7 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
 - `<` and the other orderings compare bytes, as C++ does (code point order for UTF-8).
 - C++ names and meanings: `size`, `length`, `empty`, `substr`, `find`, `contains`,
   `starts_with`, `ends_with`, `clear`. Where C++ throws `out_of_range`, the program stops.
-  With no unsigned types, `string::npos` is `-1`, a `long`; a `substr` count of
+  As positions are `long`s, `string::npos` is `-1`; a `substr` count of
   `string::npos` takes the rest as in C++, and other negative counts stop the program.
 - `format(...)`, C++20's `std::format`, returns what `print` would print. `to_string(n)`
   takes a number; `to_string(true)`, which is `"1"` in C++, is an error that
@@ -408,7 +417,7 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
   vectors is cheap without references.
 - C++ names: `push_back`, `pop_back`, `size`, `empty`, `front`, `back`, `clear`, `v[i]`.
   `vector<int> v;` is an empty vector, as in C++.
-- `size()` returns `long`, since there are no unsigned types.
+- `size()` returns `long`, as every size and count does, unsigned types being for bits.
 - An index out of range, and `pop_back`, `front` or `back` on an empty vector, stop the
   program with the file and line.
 - `front()` and `back()` give copies, as there are no references yet. Changing what they give or a field of it, `v.back().x = 1`, `v.back().p.set()` or a method that
@@ -773,8 +782,8 @@ what holds real programs back most:
 6. Function overloading, more than one constructor and default arguments, then operator overloading. Overloading also
    ends the pairs that stand in for it, such as `http::fetch` and `http::fetchWith`, before more of them are made.
 7. The rest of what everyday programs need: writing files and the rest of `fs` (§2.15), `split`, `trim`, `join` and
-   `replace` on strings, `insert` and `erase` on vectors, width, alignment and hex in `format`, unsigned integers,
-   variables outside functions, and `int main(vector<string> args)`.
+   `replace` on strings, `insert` and `erase` on vectors, width, alignment and hex in `format`, unsigned integers
+   (built 2026-11-12, see §2.7), variables outside functions, and `int main(vector<string> args)`.
 
    Variables outside functions (2026-11-11): each is worked out before `main`, in the order written and each module
    after those it imports. One with a value known only while the program runs has a state, so that one used sooner

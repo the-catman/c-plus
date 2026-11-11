@@ -1,0 +1,15 @@
+// In checked code, a constexpr constant whose unsigned arithmetic does not fit is an error while compiling.
+constexpr uint32_t BELOW = checked(0u - 1u);
+// error: integer overflow: the result of '-' does not fit in 'uint32_t'
+// error: an unsigned value is from 0 to its largest. Leave out `checked(...)` for the value that wraps around, or use a wider type
+constexpr uint64_t ABOVE = checked(0xFFFFFFFFFFFFFFFF + 1u);
+// error: integer overflow: the result of '+' does not fit in 'uint64_t'
+constexpr uint8_t NARROW = checked(uint8_t(300));
+// error: the value 300 does not fit in 'uint8_t'
+constexpr uint32_t NEGATIVE = checked(uint32_t(-1));
+// error: the value -1 does not fit in 'uint32_t'
+constexpr int SIGNED = checked(int(4000000000u));
+// error: the value 4000000000 does not fit in 'int'
+constexpr long LONG = checked(long(0xFFFFFFFFFFFFFFFF));
+// error: the value 18446744073709551615 does not fit in 'long'
+int main() { return 0; }

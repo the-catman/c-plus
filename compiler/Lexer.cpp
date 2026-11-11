@@ -368,7 +368,7 @@ Token Lexer::lexNumber() {
                      spec::IntegerLiterals);
     } else if (overflow) {
         diags_.error(loc, "the number " + text + " is too large for any integer type",
-                     "write a smaller number: the largest integer type is long, which holds up to 9223372036854775807",
+                     "write a smaller number: the largest integer type is uint64_t, which holds up to 18446744073709551615",
                      spec::IntegerLiterals);
     }
 
@@ -409,23 +409,22 @@ Token Lexer::lexNumber() {
         suffixLoc.len = (uint32_t)suffix.size();
         std::string upper;
         for (char c : suffix) upper += (char)std::toupper((unsigned char)c);
-        if (upper == "L" || upper == "LL") {
+        const bool isUnsigned = upper == "U" || upper == "UL" || upper == "ULL" || upper == "LU" || upper == "LLU";
+        if (upper == "L" || upper == "LL" || isUnsigned) {  // `1L`, a long, and `1u` and `1ul`, unsigned, as in C++
             Token t{Tok::IntLit, loc, src_.substr(start, pos_ - start), value};
             t.loc.len = (uint32_t)t.text.size();
-            t.longSuffix = true;
+            t.longSuffix = upper != "U";
+            t.unsignedSuffix = isUnsigned;
             return t;
         }
-        if (upper == "U" || upper == "UL" || upper == "ULL" || upper == "LU" || upper == "LLU")
-            diags_.error(suffixLoc, "this compiler does not support unsigned integer types yet",
-                         "use a plain number, or L for a long", spec::Status);
-        else if (upper == "F")
+        if (upper == "F")
             diags_.error(suffixLoc, "a float needs a decimal point or an exponent, as in C++",
                          base == 10 ? "write `" + text + ".0f`, or leave out the f, since an int converts to a float"
                                     : "leave out the f, since an int converts to a float",
                          spec::FloatingPointTypes);
         else
             diags_.error(suffixLoc, "'" + suffix + "' is not a number suffix",
-                         "the only suffix is L, which makes a number a long, e.g. `1L << 40`",
+                         "the suffixes are L, which makes a number a long, e.g. `1L << 40`, u for a uint32_t, and ul for a uint64_t",
                          spec::IntegerLiterals);
     }
     return Token{Tok::IntLit, loc, text, value};

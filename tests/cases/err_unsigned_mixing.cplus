@@ -1,0 +1,37 @@
+// A signed and an unsigned integer do not mix without a cast, unless one of them is a written number that fits.
+int mixes(int n, uint32_t u) {
+    uint32_t fine = u + 5;
+    bool also = u > 0;
+    println("{}", n + u);
+    // error: '+' mixes a signed 'int' with an unsigned 'uint32_t'
+    // error: C+ does not mix them without a cast, since the result could change sign. Write `long(u)`, which holds every uint32_t, or `uint32_t(n)`, which wraps a negative number around
+    return 0;
+}
+void suffixed(int n) {
+    println("{}", n + 5u);
+    // error: write the number without `u`, as `5`, which takes the type of n, or convert n: `uint32_t(n)`
+}
+void comparesLong(uint64_t a, long b) {
+    println("{}", a < b);
+    // error: '<' mixes a signed 'long' with an unsigned 'uint64_t'
+    // error: Write `long(a)`, which turns one above 9223372036854775807 negative, or `uint64_t(b)`, which wraps a negative number around
+}
+void negativeLiteral(uint64_t a) {
+    println("{}", a < -1);
+    // error: '<' mixes a signed 'int' with an unsigned 'uint64_t'
+    // error: -1 is below 0, which a uint64_t cannot hold. Write `uint64_t(-1)` for its bits, or `long(a)` to work in a signed long
+}
+void inTernary(bool c, int n, uint32_t u) {
+    auto x = c ? n : u;
+    // error: '?:' mixes a signed 'int' with an unsigned 'uint32_t'
+}
+void inMath(int n, uint32_t u) {
+    println("{}", max(n, u));
+    // error: 'max()' mixes a signed 'int' with an unsigned 'uint32_t'
+}
+void absOfUnsigned(uint32_t u) {
+    println("{}", abs(u));
+    // error: abs() of a 'uint32_t' does nothing, since an unsigned number is never below 0
+    // error: remove the abs(). For the distance between two of them, write `a > b ? a - b : b - a`
+}
+int main() { return 0; }

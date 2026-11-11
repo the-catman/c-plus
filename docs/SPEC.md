@@ -48,9 +48,16 @@ template this throw throws true try typename virtual void weak while
   bug when numbers are padded to line up. Write `0o10` for octal or `10` for decimal.
   JavaScript, Python, Rust and Swift use the same `0o` prefix.
 - A literal is an `int` if it fits in 32 bits, otherwise a `long`. `-2147483648` is an `int`.
+  A hexadecimal, octal or binary literal above the largest `long` is a `uint64_t`, as in C++:
+  `0xFFFFFFFFFFFFFFFF`. A decimal one is an error, which says to write `u`.
 - The suffix `L` (or `LL`) makes a literal a `long`: `1L << 40`. Both mean the same thing,
-  because `long` is always 64 bits. `u` for unsigned arrives with unsigned types. No other
-  suffixes exist.
+  because `long` is always 64 bits. `u` (or `U`) makes it unsigned: a `uint32_t` if it fits in
+  32 bits, otherwise a `uint64_t`. `ul`, `ull`, `lu` and `llu`, in either case, make it a
+  `uint64_t`. No other suffixes exist. `-1u` is the minus of `1u`, which wraps around to
+  4294967295, as in C++.
+- A literal without a suffix takes the [unsigned type](#integer-types) it is used as, when it
+  fits: `uint8_t b = 255;`, and `x + 1` or `x > 0` for a `uint32_t x`. A negative one does not:
+  `uint32_t x = -1;` is an error, and `uint32_t(-1)` is the value with every bit set.
 - A number with a decimal point or an exponent, such as `1.5` or `1e9`, is a floating-point
   literal instead (see [Floating-point types](#floating-point-types)).
 
@@ -83,9 +90,42 @@ UTF-8 already.
 |------|------|-------|
 | `int` | 32-bit signed | same on every platform |
 | `long` | 64-bit signed | same on every platform; there is no `long long` |
+| `uint8_t` | 8-bit unsigned | from 0 to 255 |
+| `uint16_t` | 16-bit unsigned | from 0 to 65535 |
+| `uint32_t` | 32-bit unsigned | from 0 to 4294967295 |
+| `uint64_t` | 64-bit unsigned | from 0 to 18446744073709551615 |
 
-There are no unsigned types yet and no `size_t`, `int32_t` and so on. Use `int` or `long`.
+The unsigned types are for bits, hashes, and what a file format or a C library holds in one.
+Counts, sizes and positions are `long`: `size()` gives a `long`, and so does C's `size_t`.
+There is no `unsigned` keyword, no `size_t`, no `int32_t`, and no signed 8-bit or 16-bit
+type yet (`int8_t`, `int16_t`, `short`).
 Arithmetic wraps around on overflow, unless it is checked; see [Integer overflow](#integer-overflow).
+
+```cpp
+uint32_t fnv(string s) {
+    uint32_t h = 2166136261u;
+    for (char c : s) h = (h ^ c) * 16777619u;   // wraps at 32 bits
+    return h;
+}
+```
+
+- **A `uint8_t` and a `uint16_t` are worked out in an `int`**, as a `char` is, and as in C++:
+  `b * 2` for a `uint8_t` 200 is the `int` 400. `b += n`, `b++` and the like keep it a
+  `uint8_t`, wrapping at 256.
+- **A `uint32_t` and a `uint64_t` are worked out in their own type** and wrap at its size:
+  `0u - 1u` is 4294967295. Division, `%`, `>>`, `min`, `max` and comparisons are unsigned:
+  `>>` shifts in zeros.
+- **A signed and an unsigned integer do not mix** in an operator, `?:`, `min()` or `max()`,
+  since C++ turns the signed one unsigned there: `-1 < 1u` is false in C++. Cast one of them:
+  `long(u)`, which holds every `uint32_t`, or `uint32_t(n)`, which wraps a negative number
+  around. A written number that fits is the exception: `u + 1` and `u > 0` work.
+- A narrower type mixes with a wider one that holds all its values: `l + u` for a `long l`
+  and a `uint32_t u` is a `long`, and `h * 31 + s[i]` for a `uint64_t h` is a `uint64_t`,
+  as a `char` widens to any number type.
+- `abs()` of a `uint32_t` or a `uint64_t` is an error, as it would do nothing.
+- `println("{}", b)` prints a `uint8_t` as a number. In C++ a `uint8_t` is a character type,
+  which `std::cout` prints as a character.
+- An `enum` cannot be based on an unsigned type yet.
 
 ### Floating-point types
 
@@ -216,8 +256,8 @@ name[0] = 'E';                              // "Eda"; other copies keep "Ada"
   end, which throws in C++, stops the program; so does a negative `pos`, or a negative
   `count` other than `string::npos`.
 - `find(text)` and `find(text, pos)` return the position of the first match at or after
-  `pos`, or `string::npos` when there is none. With no unsigned types, `string::npos` is
-  `-1`, a `long`, so both `pos != string::npos` and `pos >= 0` work. A `pos` past the end
+  `pos`, or `string::npos` when there is none. As a position is a `long`, `string::npos` is
+  `-1`, so both `pos != string::npos` and `pos >= 0` work. A `pos` past the end
   finds nothing, as in C++; a negative `pos` stops the program.
 - `contains(text)`, `starts_with(text)` and `ends_with(text)` return a `bool`. These and
   `find` also take a `char`: `s.find('/')`.
@@ -328,13 +368,19 @@ try {
 - A zero byte in the text is one more character that is not part of the number, so it is an error like the others.
 - There is no second argument, for where the number ended or for another base, which waits for default arguments. C's
   `strtol` and `strtod` do that, declared with [`extern "C"`](#c-functions).
-- `stoll` is `stol`, as a `long` is 64 bits. `stoul` and `stoull` wait for unsigned types.
+- `stoll` is `stol`, as a `long` is 64 bits. `stoul` and `stoull` are planned: until then,
+  `uint64_t(try stol(s))` gives an unsigned number with the bits of the `long`.
 - A function of the program's own with one of these names is used instead.
 
 ### Implicit conversions
 
 These are the only implicit conversions:
 - **`int` to `long`**, which never loses information.
+- **an unsigned integer to a wider integer type**, which holds all its values: a `uint32_t`
+  to a `long` or a `uint64_t`, and a `uint8_t` to an `int` or any wider type. A signed type
+  never becomes an unsigned one by itself, as it may be below 0.
+- **a written integer to an unsigned type that holds it**: `uint8_t b = 255;` (see
+  [Integer literals](#integer-literals)).
 - **an integer to a floating-point type, and `float` to `double`**, as in C++. A `long`
   above 2^53 rounds to the nearest `double`.
 - **a `double` written as a number to `float`**: `float x = 0.1;`.
@@ -345,7 +391,7 @@ These are the only implicit conversions:
 - **pointers**: `null` to any pointer, `T*` to `const T*`, and any pointer to `void*`
   (see [Pointers](#pointers)).
 
-Everything else is an error, including `long` to `int`, a floating-point value to an
+Everything else is an error, including `long` to `int`, `int` to `uint32_t`, `uint32_t` to `int`, a floating-point value to an
 integer, any other `double` to `float`, a number to `char`, `char` to `string` or `bool`,
 `bool` to a number, `T?` to `T`, one optional type to another, a pointer to `bool`, a
 number to a pointer, and one pointer type to another. A [cast](#casts) converts between
@@ -362,7 +408,8 @@ int n = true;       // error: bool does not convert to a number; write int(true)
 ```
 
 In arithmetic with mixed types, the narrower side is converted, as in C++: `int + long` is
-a `long`, `long + float` is a `float`, and `float + double` is a `double`.
+a `long`, `long + float` is a `float`, and `float + double` is a `double`. A signed and an
+unsigned integer do not mix (see [Integer types](#integer-types)).
 
 ### Casts
 
@@ -378,10 +425,11 @@ double share = double(n) / total;   // without the cast, n / total divides integ
 
 - Converting to an integer drops the fraction, rounding toward zero, as in C++:
   `int(-2.7)` is `-2`. For the nearest integer, write `int(round(x))`.
-- **A smaller integer type keeps the lowest bits**, as in C++: `int(3000000000L)` is
-  `-1294967296`, and `char(300)` is `char(44)`.
+- **An integer type keeps the lowest bits** of another, as in C++: `int(3000000000L)` is
+  `-1294967296`, `char(300)` is `char(44)`, `uint8_t(300)` is 44, `uint32_t(-1)` is
+  4294967295, and `int(4000000000u)` is `-294967296`.
 - **A floating-point value out of range gives the nearest integer**, and NaN gives 0:
-  `int(1e10)` is `2147483647`. C++ leaves both undefined.
+  `int(1e10)` is `2147483647`, and `uint32_t(-2.5)` is 0. C++ leaves both undefined.
 - In [checked](#checked) code, a value the new type cannot hold stops the program instead,
   with file:line.
 - `double(x)` and `float(x)` take any number; `float(x)` rounds to the nearest `float`.
@@ -870,10 +918,10 @@ Building a vector:
 | `v.front()`, `v.back()` | a copy of the first or the last element |
 | `v.clear()` | removes every element |
 
-- `size()` returns a `long`, because C+ has no unsigned types. `i < v.size()` works with an
-  `int i`, since `int` widens to `long`, but `int n = v.size();` is an error; write
-  `long n` or `auto n`.
-- `v[i]` takes an `int` or a `long`. An element can be read, assigned (`v[i] = x`,
+- `size()` returns a `long`, as every count and size in C+ is, where C++ gives an unsigned
+  `size_t`. `i < v.size()` works with an `int i`, since `int` widens to `long`, but
+  `int n = v.size();` is an error; write `long n` or `auto n`.
+- `v[i]` takes an integer of any [integer type](#integer-types). An element can be read, assigned (`v[i] = x`,
   `v[i] += 1`, `v[i]++`) and used in place: `points[i].x = 1`, `grid[i].push_back(x)`,
   `points[i].move(1)`.
 - **Every index is checked.** An index below 0 or at least `size()`, and `pop_back()`,
@@ -1076,7 +1124,7 @@ User back = try json::parse<User>(text);   // fails with a json::Error if the te
 
 | C+ | JSON |
 |----|------|
-| `int`, `long`, `float`, `double` | a number. NaN and the infinities are `null`, as in JavaScript |
+| `int`, `long`, `uint8_t` to `uint64_t`, `float`, `double` | a number. NaN and the infinities are `null`, as in JavaScript |
 | `bool` | `true` or `false` |
 | `string` | a string. A byte that is not UTF-8 is written as U+FFFD |
 | `char` | a string of one char |
@@ -1106,7 +1154,7 @@ line 4, column 11: in points[1].x: expected a number, but found a string
 - A key that is not a public field is left out, since what sends the JSON may know of more than this program.
 - A field that is missing keeps its default value. Without one, an optional is null, and a vector, hashmap or
   `json::Value` is empty. Anything else that is missing is an error, as the program could not read that field either.
-- A number must fit: `3000000000` is no `int`, and neither is `1.5`, while `1e3` and `1.0` are whole. If a key comes twice, the last one counts,
+- A number must fit: `3000000000` is no `int`, `-1` is no `uint32_t`, and neither is `1.5`, while `1e3` and `1.0` are whole. If a key comes twice, the last one counts,
   as in JavaScript. Text must be UTF-8, and nesting past 512 levels is an error.
 - An object is made as the program would make it, with the constructor without parameters, or with its fields' defaults, and then
   it is filled. A class whose constructor needs arguments, or with methods that have no body, cannot be read: the
@@ -1124,7 +1172,7 @@ long first = doc.get("ids")?.at(0)?.whole() ?? -1;
 | Method | Does |
 |--------|------|
 | `isNull()`, `isBool()`, `isNumber()`, `isString()`, `isArray()`, `isObject()` | which kind it is |
-| `boolean()`, `number()`, `whole()`, `text()` | the value as a `bool?`, `double?`, `long?` or `string?`. `whole()` is exact, for a whole number that fits |
+| `boolean()`, `number()`, `whole()`, `text()` | the value as a `bool?`, `double?`, `long?` or `string?`. `whole()` is exact, for a whole number that fits in a `long`, so a `uint64_t` above the largest `long` has only its `number()` |
 | `get(key)`, `at(index)` | a `json::Value?`, from an object or an array |
 | `size()`, `keys()`, `items()` | how many it holds, the keys of an object, and the values of an array |
 | `set(key, value)`, `push(value)` | adds to an object or an array. On another kind, what it held goes, and it becomes one |
@@ -1252,7 +1300,7 @@ for (auto f : t.fields()) println("{} at {}: {}", f.name, f.offset, f.type.name(
 ```
 
 - `reflect::type<T>()` is the type `T`, and `reflect::of(x)` the type of a value: for a class reference, what the object really is.
-- A `reflect::Type` has `name()`, `kind()`, which is `"int"`, `"struct"`, `"class"`, `"unique"`, `"local"`, `"vector"`, `"optional"` and so on, `size()`, which for a class is
+- A `reflect::Type` has `name()`, `kind()`, which is `"int"`, `"uint32_t"`, `"struct"`, `"class"`, `"unique"`, `"local"`, `"vector"`, `"optional"` and so on, `size()`, which for a class is
   that of a reference, `length()` for an array, `elem()`, a `reflect::Type?` for what a vector, array, optional or unique reference
   holds, and `fields()`. Two are `==` when they are the same type.
 - A `reflect::Field` has `name`, `offset`, from the start of the struct or object, `type` and `isPublic`. Private fields are there too.
@@ -1915,8 +1963,12 @@ int main() {
 
 | In the C header | In the `extern "C"` declaration |
 |-----------------|---------------------------------|
-| `int`, `int32_t`, `pid_t`, `unsigned`, `uint32_t` | `int` |
-| `long`, `long long`, `int64_t`, `size_t`, `ssize_t`, `time_t`, `uint64_t` | `long` |
+| `int`, `int32_t`, `pid_t` | `int` |
+| `long`, `long long`, `int64_t`, `size_t`, `ssize_t`, `time_t`, `uintptr_t` | `long` |
+| `unsigned`, `unsigned int`, `uint32_t`, `uid_t`, `gid_t` | `uint32_t` |
+| `unsigned long`, `unsigned long long`, `uint64_t` | `uint64_t` |
+| `unsigned short`, `uint16_t` | `uint16_t` |
+| `uint8_t` | `uint8_t`, or `char` |
 | `double`, `float` | `double`, `float` |
 | `char`, `signed char`, `unsigned char` | `char`, which passes the same byte |
 | `bool` | `bool` |
@@ -1945,9 +1997,9 @@ int main() {
   parameter takes the address of a variable, `frexp(x, &exponent)`, and memory from
   `malloc` is cast to the type it holds: `(int*)malloc(n * sizeof(int))`. A C array
   parameter, `int values[]`, is written as the pointer C passes: `int* values`.
-- **Unsigned types** are declared with the C+ type of the same size. The same bits are
-  passed, so a value above the largest `int` or `long` comes out negative. C's `long` is
-  64 bits on Linux and macOS, like C+'s.
+- **Unsigned types** are declared with C+'s [unsigned types](#integer-types), except for
+  a size, which is a `long`, as sizes are in C+: `size_t` passes the same bits. C's `long`
+  is 64 bits on Linux and macOS, like C+'s.
 - **Libraries.** C's standard library is always linked. Other libraries are named on the
   command line, as with a C compiler: `cplus build app.cplus -lsqlite3`, adding
   `-L <directory>` for a library outside the usual places. `cplus run` takes the same
@@ -2011,7 +2063,7 @@ int main() {
   its own copy, and changing it does not change the caller's struct.
 - **As in C++, the type is written without the word `struct`**: `tm t;`, `tm* p`. C's
   `typedef struct { ... } name;` is written `struct name { ... };`.
-- Not supported yet: 16-bit fields, such as `short` and `uint16_t`; unions and bit fields. A struct that has them can still be used
+- Not supported yet: signed 16-bit fields, such as `short`; unions and bit fields. A struct that has them can still be used
   through pointers if C+ does not need its fields, by declaring it
   [by name](#c-types-known-by-name).
 
@@ -2067,13 +2119,14 @@ int main() {
   does. Folders listed in the environment variable `CPATH` are searched too, as C compilers
   do, which is how `cplus lsp` finds them, as an editor gives it no `-I`. Linking is as for
   any C function: `-lsqlite3`.
-- **Types** are those of the table above: `size_t` is `long`, and `unsigned` is `int`. A
+- **Types** are those of the table above: `size_t` is `long`, `unsigned int` is `uint32_t`,
+  and a `uint8_t` that a pointer leads to is a `char`, so a `uint8_t*` is a `char*`. A
   `const char*` parameter is a `string?`, which takes a `string` or `null`, and a
   `const char*` result is a `string`, which stops the program if C returns NULL. A `char*`
   stays a `char*`, and a `const unsigned char*`, which is bytes rather than text, is one too.
   Other pointers stay as they are. A pointer to a function is a `void*`, as C+ has no
   callbacks yet, so `null` can be passed for one. An enum is an `int`. C's names for types,
-  such as `size_t` and `uint32_t`, are not names in C+: using one is an error that says what
+  such as `size_t` and `pid_t`, are not names in C+: using one is an error that says what
   to write instead.
 - **Structs.** A struct whose fields are all C types that C+ has is declared with them, as in
   [C structs](#c-structs), and C+ checks that its layout is the one the C compiler gives it.
@@ -2083,9 +2136,10 @@ int main() {
   such as `class` or `new`, has a `_` after it: `class_`.
 - **Constants.** A macro whose value is a number, a string or a pointer is a constant:
   `#define SQLITE_OK 0` is `const int SQLITE_OK = 0;`, and SQLite's `SQLITE_TRANSIENT`,
-  which is `-1` as a pointer, is a `void* const`. So is each constant of an enum. An
-  unsigned value above the largest `int` or `long` has the same bits, so it comes out
-  negative, as unsigned values from C do.
+  which is `-1` as a pointer, is a `void* const`. A macro of an unsigned type is a `uint32_t`
+  or a `uint64_t`: `#define MASK 0xFFFFFFFFu` is `const uint32_t MASK = 4294967295u;`. Each
+  constant of an enum is one too, an `int` or a `long`, so one above the largest `int` has
+  its bits, and comes out negative.
 - **Only what the program uses** is declared, with the types that needs, so a big header
   costs little, and the rest of its names cannot clash with the program's.
 - **The program's own declarations come first.** A function, constant or type of the
@@ -2266,7 +2320,7 @@ int main() {
 }
 ```
 
-- **The value** is an `int`, a `long`, a `char`, an [enum](#enums) or a `string`. It is
+- **The value** is an integer of any [integer type](#integer-types), a `char`, an [enum](#enums) or a `string`. It is
   worked out once. A string is compared with each case in turn. A `bool`, a floating-point
   number, an optional, a struct or a class is an error, whose help says what to write.
 - **Labels** are written directly in the braces: `case value:` and `default:`, which may
@@ -2335,8 +2389,9 @@ after function overloading. `&&`, `||` and the comma operator will not be overlo
 ### Integer overflow
 
 Integer arithmetic wraps around, as two's complement, when a result does not fit its type:
-`2147483647 + 1` is `-2147483648`. Every integer type wraps the same way, `char` included,
-so hash and checksum code works as written:
+`2147483647 + 1` is `-2147483648`, and `0u - 1u` is 4294967295. Every integer type wraps the
+same way, `char` and the [unsigned types](#integer-types) included, so hash and checksum code
+works as written:
 
 ```cpp
 int hash(string s) {
@@ -2349,8 +2404,8 @@ int hash(string s) {
 - `+`, `-`, `*`, unary `-`, `++`, `--` and the compound assignments all wrap. The smallest
   number divided by -1 is itself, `MIN % -1` is 0, and `abs` of the smallest number is itself.
 - **Division or remainder by zero stops the program**, always.
-- A shift uses only the lowest bits of its amount, 5 for an `int` and 6 for a `long`, as in
-  Java, C# and JavaScript: `1 << 33` is 2. Bits shifted off the top are lost. A written amount
+- A shift uses only the lowest bits of its amount, 5 for an `int` or a `uint32_t` and 6 for
+  a `long` or a `uint64_t`, as in Java, C# and JavaScript: `1 << 33` is 2. Bits shifted off the top are lost. A written amount
   out of range, such as `1 << 40`, is a warning; write `1L << 40` to shift a `long`.
 - A cast to a smaller integer type keeps the lowest bits, and a floating-point value out of
   range gives the nearest integer (see [Casts](#casts)).
@@ -2389,7 +2444,9 @@ fatal error: integer overflow: the result of '+' does not fit in 'int'
   wherever they are used, and so is a default argument, wherever the call is.
 - In checked code, a shift amount that is not from 0 to the width minus 1 stops the program,
   and a written one is a compile error. A cast that loses the value stops it too:
-  `int(3000000000L)`, `int(1e10)`, `char(300)`, and NaN or an infinity converted to an integer.
+  `int(3000000000L)`, `int(1e10)`, `char(300)`, `uint32_t(-1)`, `uint8_t(300)`, and NaN or an
+  infinity converted to an integer. Unsigned arithmetic stops below 0 and above the largest
+  value of its type, and `b += n` on a `uint8_t` or a `uint16_t` when the result does not fit.
 - An overflow in a checked `constexpr` value is a compile error. In a checked `const`, it
   stops the program where the constant is used, as `1 / 0` does.
 - `checked` and `unchecked` cannot name a function. `[[checked]]` is written before a
@@ -2413,7 +2470,8 @@ int* squares = (int*)malloc(5 * sizeof(int));
 
 - An empty struct takes one byte, as in C++, so `sizeof` gives 1, and each element of
   `new E[3]` has its own address. Inside `extern "C"` it takes none, as in C.
-- `sizeof(char)` is 1, `sizeof(int)` and `sizeof(float)` are 4, and `sizeof(long)`,
+- `sizeof(char)` and `sizeof(uint8_t)` are 1, `sizeof(uint16_t)` is 2, `sizeof(int)`,
+  `sizeof(uint32_t)` and `sizeof(float)` are 4, and `sizeof(long)`, `sizeof(uint64_t)`,
   `sizeof(double)` and a pointer are 8 on 64-bit systems. A struct includes padding, as in
   C: a struct with an `int` field and then a `long` field is 16.
 - For a string, a vector or a class, `sizeof` gives the size of the variable, not of the
@@ -2446,9 +2504,12 @@ long biggest = max(total, 0L);
   `float`, as with C++'s overloads: `sqrt(2)` is a `double` and `sqrt(2.0f)` a `float`.
 - `abs`, `min` and `max` also take integers, and give the type that arithmetic on their
   arguments would: `abs(-5)` is the `int` 5, `max(n, 5L)` is a `long`, `min(1, 2.5)` is a
-  `double`. `abs` of the smallest `int` or `long` stops the program, as negating it does.
+  `double`. `abs` of the smallest `int` or `long` is itself, as negating it is, and in
+  [checked](#checked) code it stops the program.
 - A `char` counts as its code, as in other arithmetic: `abs(c)` is an `int`. `min` and
   `max` of chars only give a `char`: `max('a', c)`.
+- `min` and `max` of unsigned values compare them as unsigned, and a signed and an unsigned
+  one do not mix. `abs` of a `uint32_t` or a `uint64_t` is an error, as it would do nothing.
 - The others never stop the program: `sqrt(-1)` is NaN and `log(0)` is `-inf`.
 - A function of the program, or an `extern "C"` function, with the same name takes the
   place of the built-in one.
@@ -2944,8 +3005,8 @@ error: 'Point' cannot be used for 'T' of 'largest', which must be 'Comparable'
 
 The name is one of:
 
-- **Built in.** `Comparable` has `<`: numbers, `char`, strings, enums and pointers. `Number` is `int`, `long`, `float` or
-  `double`. `Integer` is `int` or `long`, and `Floating` is `float` or `double`. `Hashable` can be a key of a
+- **Built in.** `Comparable` has `<`: numbers, `char`, strings, enums and pointers. `Number` is an integer type, `float` or
+  `double`. `Integer` is `int`, `long`, `uint8_t`, `uint16_t`, `uint32_t` or `uint64_t`, and `Floating` is `float` or `double`. `Hashable` can be a key of a
   [hashmap](#hash-maps).
 - **An interface or a class.** The type must derive from it, holding it once:
   `template<Speaker T> string talk(T s) { return s.speak(); }`.
@@ -3296,13 +3357,14 @@ init         = name "(" [ args ] ")" | name "{" [ args ] "}" ;
 generic      = "template" "<" tparam { "," tparam } ">" ( function | record )
              | "template" "<" "typename" name ">" "concept" name "=" "requires" "(" params ")" "{" { expr ";" } "}" ";" ;
 tparam       = ( "typename" | "class" | name ) name           (* the third is a constraint, or the type of a value *)
-             | ( "int" | "long" | "bool" | "char" ) name ;
+             | ( "int" | "long" | "bool" | "char" | "uint8_t" | "uint16_t" | "uint32_t" | "uint64_t" ) name ;
 
 extern       = "extern" '"C"' ( cItem | "{" { cItem } "}" ) ;
 cItem        = type name "(" [ params ] ")" ";" | "struct" name ";" | record ;
 
 type         = [ "const" ] baseType { "*" [ "const" ] } [ "?" ] ;
 baseType     = "int" | "long" | "double" | "float" | "bool" | "char" | "string" | "void" | "auto"
+             | "uint8_t" | "uint16_t" | "uint32_t" | "uint64_t"
              | "vector" "<" type ">"
              | "array" "<" type "," expr ">"
              | "hashmap" "<" type "," type ">"
@@ -3369,6 +3431,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Feature | Status |
 |---------|--------|
 | `int`, `long`, `bool`, string literals and variables | implemented |
+| `uint8_t`, `uint16_t`, `uint32_t` and `uint64_t`, the `u` suffix, and C's unsigned types from headers | implemented |
 | Variables, `auto`, `const`, several per declaration, block scoping, shadowing | implemented |
 | Literals: decimal, hex, octal `0o`, binary, `'` separators, `L` suffix | implemented |
 | Definite assignment checking | implemented |
@@ -3417,16 +3480,16 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Default arguments in generics, `auto` parameters and return types | planned |
 | `const` fields, nested types, types defined inside a function | planned |
 | `int x{5}`, `int x(5)`, brace initializers for fields | planned |
-| `short`, and 8-bit and 16-bit integer types | planned |
+| `short`, `int8_t` and `int16_t`: signed 8-bit and 16-bit integer types; enums held in an unsigned type | planned |
 | Arrays of arrays from `new[]`, initial values for `new T[n]` | planned |
 | Numbered format placeholders, like `{0}` | planned |
 | C functions with variable arguments; vectors passed to or from C | planned |
-| Unsigned types | planned |
 | Format options for width, alignment and `{:x}`; math constants | planned |
 | Overloading functions, methods and constructors; constructors that hand their work to another | implemented |
 | A template beside a function of its name, a `const` and a non-const method that take the same parameters | planned |
 | Strings: `append`, `insert`, `erase`, `replace`, `rfind`, `compare`, `split`, `trim`, `join`, `replace_all` | implemented |
 | Reading numbers from strings: `stoi`, `stol`, `stod`, `stof` | implemented |
+| `stoul` and `stoull` | planned |
 | `hashmap<K, V>` | implemented |
 | Vector `insert(i, x)` and `erase(i)` | implemented |
 | Vector iterators and erasing a range; `find` on a hashmap, sorted maps, sets | planned |
@@ -3449,7 +3512,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Pointers into vectors and strings | planned |
 | `unique<T>` references and `move(x)` | implemented |
 | `local<T>` references | implemented |
-| C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; C's macros with arguments and inline functions | planned |
+| C callbacks and variables in `extern "C"`; signed 16-bit integers and unions in C structs; C's macros with arguments and inline functions | planned |
 | Modules `http`, `json` and `reflect`, and raw strings | implemented |
 | `http::fetch` | implemented |
 | `import fs;` and `fs::read`; `readLine()` | implemented |

@@ -66,13 +66,13 @@ class Point { public: int x = 0; };
 Point operator+(Point a, Point b) { return a; }
 // error: this compiler does not support operator overloading yet
 extern "C" { struct WithShort { unsigned short d; }; }
-// error: `int` would change its layout. Declare the struct by name, `extern "C" struct name;`, and use it through pointers
+// error: write `uint16_t`, which has the same size
 void pointersOfSmallTypes() {
-    uint8_t* p = null;
-    // error: write `char* p`, as a char is one byte
+    int8_t* p = null;
+    // error: write `uint8_t* p` or `char* p`, as this compiler has no int8_t yet
 }
 void pointersOfWideTypes() {
     short* p = null;
-    // error: write `void* p`, as this compiler has no 16-bit integers yet
+    // error: write `uint16_t* p` if its numbers are never negative, or `void* p`, as this compiler has no int16_t yet
 }
 int main() { return 0; }

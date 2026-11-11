@@ -34,7 +34,7 @@ int main() {
 // error: 'k' is const, so its chars cannot be assigned to
 // error: only a variable or one of its fields can be assigned to
 // error: expected 'char' to initialize 'c', but this is 'int'
-// error: Write a character such as 'A', or `char(n)`, which stops the program unless n is from 0 to 255
+// error: Write a character such as 'A', or `char(n)` for the char whose code is n
 // error: expected 'char' to initialize 'd', but this is 'string'
 // error: write 'a', in single quotes, for a char. "a" is a string
 // error: a string does not convert to a char; `s[i]` is the char at position i
@@ -45,7 +45,7 @@ int main() {
 // error: '!' needs a bool, a number, a pointer or an optional, but this is 'char'
 // error: '*=' cannot be used with 'char'
 // error: a char steps with `c += n` and `c -= n`
-// error: '+=' on a char needs an int or a long, but this is 'double'
+// error: '+=' on a char needs an integer, but this is 'double'
 // error: expected 'char' when assigning to 'c', but this is 'int'
 // error: To step to the next character, write `c++` or `c += 1`
 // error: '==' compares two strings, but this is 'char'
@@ -60,10 +60,10 @@ int main() {
 // error: a cast cannot turn a value into a string
 // error: string(count, c) repeats one char, but this is 'string'
 // error: 'string' is built from no arguments or two, but 3 were given
-// error: an index into a string must be an int or long, but this is 'char'
+// error: an index into a string must be an integer, but this is 'char'
 // error: convert the char to its code first: `int(c)`
 // error: push_back() adds one char, but this is 'string'
 // error: write `s += text` to add a string
 // error: 'string' has no method named 'at'
 // error: write `s[i]`, which always checks that i is a position in the string
-// error: '%' needs an int or a long, but this is 'double'
+// error: '%' needs an integer, but this is 'double'

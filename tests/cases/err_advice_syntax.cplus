@@ -12,12 +12,10 @@ extern "C" void arrayOfText(string v[]);
 // error: write `char** v`: C passes an array of text as a pointer to its first `char*`
 extern "C" void arrayOfConstText(const char* v[]);
 // error: write `char** v`: C passes an array of text as a pointer to its first `char*`
-extern "C" void bytes(uint8_t b);
-// error: write `char`, one byte from 0 to 255, or `char*` for a buffer of bytes
 extern "C" void unsignedByte(unsigned char b);
 // error: 'unsigned char' is a C type; write `char` here
-extern "C" void wide(uint16_t b);
-// error: write a small wrapper in C that takes an `int`, and declare that. A pointer to them can be a `void*`
+extern "C" void wide(int16_t b);
+// error: write `uint16_t` if its values are never negative, or write a small wrapper in C that takes an `int`, and declare that
 int32_t* pointerToInt = null;
 // error: write `int* pointerToInt`, which has the same size
 Nod* misspelled = null;

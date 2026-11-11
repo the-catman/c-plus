@@ -28,6 +28,7 @@
 #include <llvm/Transforms/Instrumentation/ThreadSanitizer.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <map>
@@ -49,7 +50,7 @@ struct Codegen::Impl {
     // A string is { ptr data, i64 length, ptr owner }, as the runtime's cplus_string.
     // `owner` is the reference-counted buffer holding the bytes, or null for a literal.
     llvm::StructType* stringTy = nullptr;
-    llvm::FunctionCallee rtPrintStr, rtPrintQuoted, rtPrintI32, rtPrintI64, rtPrintBool, rtPrintNewline, rtTrap;
+    llvm::FunctionCallee rtPrintStr, rtPrintQuoted, rtPrintI32, rtPrintI64, rtPrintU64, rtPrintBool, rtPrintNewline, rtTrap;
     llvm::FunctionCallee rtThreadStart, rtThreadsFinish, rtPrintLock, rtPrintUnlock;
     llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq, rtHashBytes, rtTrapText;
     llvm::GlobalVariable* hashSeed = nullptr;
@@ -331,6 +332,7 @@ struct Codegen::Impl {
         rtPrintQuoted = decl("cplus_print_quoted", voidTy, {ptrTy, ptrTy, i64});
         rtPrintI32 = decl("cplus_print_i32", voidTy, {ptrTy, i32});
         rtPrintI64 = decl("cplus_print_i64", voidTy, {ptrTy, i64});
+        rtPrintU64 = decl("cplus_print_u64", voidTy, {ptrTy, i64});
         rtPrintBool = decl("cplus_print_bool", voidTy, {ptrTy, i32});
         rtPrintNewline = decl("cplus_print_newline", voidTy, {});
         rtTrap = decl("cplus_trap", voidTy, {ptrTy, ptrTy, i32, i32});
@@ -366,7 +368,7 @@ struct Codegen::Impl {
         rtPrintF32 = decl("cplus_print_f32", voidTy, {ptrTy, b.getFloatTy()});
         rtPrintF64 = decl("cplus_print_f64", voidTy, {ptrTy, b.getDoubleTy()});
         rtPrintFloatSpec = decl("cplus_print_float_spec", voidTy, {ptrTy, b.getDoubleTy(), i32, i32});
-        rtTrapNarrow = decl("cplus_trap_narrow", voidTy, {i64, ptrTy, i32, i32});
+        rtTrapNarrow = decl("cplus_trap_narrow", voidTy, {i64, i32, ptrTy, ptrTy, ptrTy, ptrTy, i32, i32});
         rtTrapFloatCast = decl("cplus_trap_float_cast", voidTy, {b.getDoubleTy(), ptrTy, ptrTy, i32, i32});
         rtCString = decl("cplus_c_string", ptrTy, {ptrTy, i64, i32, ptrTy, ptrTy, i32, i32});
         rtCFree = decl("cplus_c_free", voidTy, {ptrTy});
@@ -426,7 +428,10 @@ struct Codegen::Impl {
             case K::Long: return b.getInt64Ty();
             case K::Float: return b.getFloatTy();
             case K::Double: return b.getDoubleTy();
-            case K::Char: return b.getInt8Ty();
+            case K::Char: case K::UInt8: return b.getInt8Ty();
+            case K::UInt16: return b.getInt16Ty();
+            case K::UInt32: return b.getInt32Ty();
+            case K::UInt64: return b.getInt64Ty();
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
             case K::Array: return llvm::ArrayType::get(llvmType(t->elem), (uint64_t)t->length);
@@ -637,6 +642,7 @@ struct Codegen::Impl {
     }
 
     // `+`, `-` or `*`, which wraps around as two's complement, or in checked code stops the program on overflow.
+    // `id` is the signed intrinsic; for an unsigned `ty` its unsigned twin is used.
     llvm::Value* checkedArith(llvm::Intrinsic::ID id, llvm::Value* l, llvm::Value* r, const char* sym,
                               const Type* ty, Loc loc) {
         if (!checkedNow) {
@@ -644,6 +650,10 @@ struct Codegen::Impl {
             if (id == llvm::Intrinsic::ssub_with_overflow) return b.CreateSub(l, r);
             return b.CreateMul(l, r);
         }
+        if (ty->isUnsigned())
+            id = id == llvm::Intrinsic::sadd_with_overflow   ? llvm::Intrinsic::uadd_with_overflow
+                 : id == llvm::Intrinsic::ssub_with_overflow ? llvm::Intrinsic::usub_with_overflow
+                                                             : llvm::Intrinsic::umul_with_overflow;
         llvm::Function* f = llvm::Intrinsic::getDeclaration(mod.get(), id, {l->getType()});
         llvm::Value* pair = b.CreateCall(f, {l, r});
         trapIf(b.CreateExtractValue(pair, 1),
@@ -663,6 +673,7 @@ struct Codegen::Impl {
                 llvm::Type* t = l->getType();
                 trapIf(b.CreateICmpEQ(r, llvm::ConstantInt::get(t, 0)),
                        std::string("division by zero in '") + sym + "'", loc);
+                if (ty->isUnsigned()) return op == BinOp::Div ? b.CreateUDiv(l, r) : b.CreateURem(l, r);
                 llvm::Value* minusOne = b.CreateICmpEQ(r, llvm::ConstantInt::getSigned(t, -1));
                 if (op == BinOp::Div) {
                     llvm::Value* isMin = b.CreateICmpEQ(l, llvm::ConstantInt::get(t, llvm::APInt::getSignedMinValue(t->getIntegerBitWidth())));
@@ -681,25 +692,25 @@ struct Codegen::Impl {
                 unsigned width = ty->bits();
                 if (!checkedNow) {  // only the lowest bits of the amount count, as in Java, C# and JavaScript
                     llvm::Value* amount = b.CreateAnd(b.CreateSExtOrTrunc(r, l->getType()), llvm::ConstantInt::get(l->getType(), width - 1));
-                    return op == BinOp::Shl ? b.CreateShl(l, amount) : b.CreateAShr(l, amount);
+                    return op == BinOp::Shl ? b.CreateShl(l, amount) : ty->isUnsigned() ? b.CreateLShr(l, amount) : b.CreateAShr(l, amount);
                 }
                 llvm::Value* limit = llvm::ConstantInt::get(r->getType(), width);
                 trapIf(b.CreateICmpUGE(r, limit),  // unsigned compare also catches negative amounts
                        std::string("shift amount out of range: shifting '") + ty->name + "' needs an amount from 0 to " +
                            std::to_string(width - 1),
                        loc);
-                llvm::Value* amount = b.CreateSExtOrTrunc(r, l->getType());
-                return op == BinOp::Shl ? b.CreateShl(l, amount) : b.CreateAShr(l, amount);
+                llvm::Value* amount = b.CreateZExtOrTrunc(r, l->getType());  // from 0 to width - 1 here
+                return op == BinOp::Shl ? b.CreateShl(l, amount) : ty->isUnsigned() ? b.CreateLShr(l, amount) : b.CreateAShr(l, amount);
             }
             case BinOp::BitAnd: return b.CreateAnd(l, r);
             case BinOp::BitOr: return b.CreateOr(l, r);
             case BinOp::BitXor: return b.CreateXor(l, r);
             case BinOp::Eq: return b.CreateICmpEQ(l, r);
             case BinOp::Ne: return b.CreateICmpNE(l, r);
-            case BinOp::Lt: return b.CreateICmpSLT(l, r);
-            case BinOp::Le: return b.CreateICmpSLE(l, r);
-            case BinOp::Gt: return b.CreateICmpSGT(l, r);
-            case BinOp::Ge: return b.CreateICmpSGE(l, r);
+            case BinOp::Lt: return ty->isUnsigned() ? b.CreateICmpULT(l, r) : b.CreateICmpSLT(l, r);
+            case BinOp::Le: return ty->isUnsigned() ? b.CreateICmpULE(l, r) : b.CreateICmpSLE(l, r);
+            case BinOp::Gt: return ty->isUnsigned() ? b.CreateICmpUGT(l, r) : b.CreateICmpSGT(l, r);
+            case BinOp::Ge: return ty->isUnsigned() ? b.CreateICmpUGE(l, r) : b.CreateICmpSGE(l, r);
             case BinOp::LogAnd:
             case BinOp::LogOr: break;
         }
@@ -1260,7 +1271,7 @@ struct Codegen::Impl {
     // `v[i]` takes an int or a long.
     llvm::Value* genIndex(const Expr& index) {
         llvm::Value* v = gen(index);
-        return index.type->is(K::Int) ? b.CreateSExt(v, b.getInt64Ty()) : v;
+        return index.type->isSigned() ? b.CreateSExtOrTrunc(v, b.getInt64Ty()) : b.CreateZExtOrTrunc(v, b.getInt64Ty());
     }
 
     // The buffer of a vector that is only read right away.
@@ -1592,9 +1603,11 @@ struct Codegen::Impl {
         }
         if (to->isOptional()) return wrapOptional(convert(v, from, to->elem), to);
         if (from->isObjectRef() && to->isObjectRef()) return atOffset(v, pathOffset(from->decl->pathTo(to->decl)));  // to a base class
-        if (from->is(K::Int) && to->is(K::Long)) return b.CreateSExt(v, b.getInt64Ty());
-        if (from->is(K::Char) && to->isInteger()) return b.CreateZExt(v, llvmType(to));  // its code, 0 to 255
-        if (from->is(K::Char) && to->isFloating()) return b.CreateUIToFP(v, llvmType(to));
+        if ((from->isInteger() || from->is(K::Char)) && to->isInteger()) {  // a wider type, or a written number that fits
+            llvm::Type* t = llvmType(to);
+            return from->isSigned() ? b.CreateSExtOrTrunc(v, t) : b.CreateZExtOrTrunc(v, t);  // a char is its code, 0 to 255
+        }
+        if ((from->is(K::Char) || from->isUnsigned()) && to->isFloating()) return b.CreateUIToFP(v, llvmType(to));
         if (from->isNumber() && to->is(K::Bool)) return condValue(v, from);
         if (from->isInteger() && to->isFloating()) return b.CreateSIToFP(v, llvmType(to));
         if (from->is(K::Float) && to->is(K::Double)) return b.CreateFPExt(v, b.getDoubleTy());
@@ -1846,7 +1859,8 @@ struct Codegen::Impl {
         }
         switch (t->kind) {
             case K::Bool: return b.getInt1(false);
-            case K::Int: case K::Long: case K::Char: return llvm::ConstantInt::get(llvmType(t), 0);
+            case K::Int: case K::Long: case K::Char: case K::UInt8: case K::UInt16: case K::UInt32: case K::UInt64:
+                return llvm::ConstantInt::get(llvmType(t), 0);
             case K::Float: case K::Double: return llvm::ConstantFP::get(llvmType(t), 0.0);
             case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct:
@@ -2446,8 +2460,8 @@ struct Codegen::Impl {
         } checking{checkedNow, checkedNow};
         checkedNow = e.checked;
         switch (e.kind) {
-            case Expr::Kind::IntLit:
-                return llvm::ConstantInt::getSigned(llvmType(e.type), static_cast<const IntLitExpr&>(e).value);
+            case Expr::Kind::IntLit:  // a uint64_t is held as its bits
+                return llvm::ConstantInt::get(llvmType(e.type), (uint64_t)static_cast<const IntLitExpr&>(e).value);
             case Expr::Kind::FloatLit:
                 return llvm::ConstantFP::get(llvmType(e.type), static_cast<const FloatLitExpr&>(e).value);
             case Expr::Kind::Cast: return genCast(static_cast<const CastExpr&>(e));
@@ -2584,6 +2598,19 @@ struct Codegen::Impl {
                     if (*a.op == BinOp::Sub) n = b.CreateNeg(n);
                     llvm::Value* slot = addressOf(*a.target, false, true);
                     llvm::Value* v = b.CreateGEP(llvmType(ty->elem), b.CreateLoad(b.getPtrTy(), slot), n, "ptr");
+                    b.CreateStore(v, slot);
+                    return v;
+                }
+                if (a.op && a.opType && a.opType != ty) {  // `b += n` on a uint8_t or a uint16_t, worked out in a wider type
+                    bool shift = *a.op == BinOp::Shl || *a.op == BinOp::Shr;
+                    llvm::Value* rhs = shift ? gen(*a.value) : genConverted(*a.value, a.opType);
+                    llvm::Value* slot = addressOf(*a.target, false, true);
+                    llvm::Value* old = convert(b.CreateLoad(llvmType(ty), slot), ty, a.opType);
+                    llvm::Value* wide = arith(*a.op, old, rhs, a.opType, a.loc);
+                    llvm::Value* v = b.CreateTrunc(wide, llvmType(ty));  // the lowest bits, as `c += n` on a char
+                    if (checkedNow)
+                        trapIf(b.CreateICmpNE(b.CreateZExt(v, wide->getType()), wide),
+                               std::string("integer overflow: the result of '") + binOpSpelling(*a.op) + "=' does not fit in '" + ty->name + "'", a.loc);
                     b.CreateStore(v, slot);
                     return v;
                 }
@@ -2798,7 +2825,8 @@ struct Codegen::Impl {
     // vector and an array get a function each, as a struct can lead back to itself through a vector.
     llvm::Value* hashValue(llvm::Value* v, const Type* t) {
         switch (t->kind) {
-            case K::Bool: case K::Char: return hashWord(b.CreateZExt(v, b.getInt64Ty()));
+            case K::Bool: case K::Char: case K::UInt8: case K::UInt16: case K::UInt32: case K::UInt64:
+                return hashWord(b.CreateZExtOrBitCast(v, b.getInt64Ty()));
             case K::Int: return hashWord(b.CreateSExt(v, b.getInt64Ty()));
             case K::Long: return hashWord(v);
             case K::Enum: return hashWord(b.CreateSExt(v, b.getInt64Ty()));  // its number
@@ -2845,6 +2873,7 @@ struct Codegen::Impl {
     llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
         switch (t->kind) {
             case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer: case K::Unique: case K::Local:
+            case K::UInt8: case K::UInt16: case K::UInt32: case K::UInt64:
                 return b.CreateICmpEQ(l, r);
             case K::Float: case K::Double: return b.CreateFCmpOEQ(l, r);
             case K::Enum: return b.CreateICmpEQ(l, r);
@@ -2904,6 +2933,8 @@ struct Codegen::Impl {
         switch (t->kind) {
             case K::Int: b.CreateCall(rtPrintI32, {out, v}); break;
             case K::Long: b.CreateCall(rtPrintI64, {out, v}); break;
+            case K::UInt8: case K::UInt16: case K::UInt32: b.CreateCall(rtPrintI64, {out, b.CreateZExt(v, b.getInt64Ty())}); break;
+            case K::UInt64: b.CreateCall(rtPrintU64, {out, v}); break;
             case K::Float: b.CreateCall(rtPrintF32, {out, v}); break;
             case K::Double: b.CreateCall(rtPrintF64, {out, v}); break;
             case K::Bool: b.CreateCall(rtPrintBool, {out, b.CreateZExt(v, b.getInt32Ty())}); break;
@@ -3039,7 +3070,7 @@ struct Codegen::Impl {
         if (to->isClass() || to->isOptional() || to->isWeak()) return convert(v, from, to);  // to a base class, or a weak reference
         Loc loc = c.loc;
         if (to->isPointer()) {
-            if (from->isInteger()) return b.CreateIntToPtr(b.CreateSExt(v, b.getInt64Ty()), b.getPtrTy());  // reinterpret_cast
+            if (from->isInteger()) return b.CreateIntToPtr(convert(v, from, Type::longTy()), b.getPtrTy());  // reinterpret_cast
             return v;  // from another pointer, or null: the same address
         }
         if (from->isPointer()) {
@@ -3083,35 +3114,26 @@ struct Codegen::Impl {
                 b.SetInsertPoint(okBB);
                 return b.CreateFPToUI(v, target);
             }
-            return checkedChar(b.CreateSExt(v, b.getInt64Ty()), "char(x) was given", loc);
+            return checkedChar(from->isSigned() ? b.CreateSExt(v, b.getInt64Ty()) : b.CreateZExt(v, b.getInt64Ty()), "char(x) was given", loc);
         }
         if (to->is(K::Bool)) return condValue(v, from);
         if (from->is(K::Bool)) return to->isFloating() ? b.CreateUIToFP(v, target) : b.CreateZExt(v, target);
-        if (from->isInteger() && to->isInteger()) {
-            if (to->is(K::Long)) return b.CreateSExt(v, target);
-            llvm::Value* narrow = b.CreateTrunc(v, target);  // the lowest bits
-            if (!checkedNow) return narrow;
-            auto* trapBB = llvm::BasicBlock::Create(ctx, "narrow.trap", fn);
-            auto* okBB = llvm::BasicBlock::Create(ctx, "narrow.ok", fn);
-            b.CreateCondBr(b.CreateICmpNE(b.CreateSExt(narrow, v->getType()), v), trapBB, okBB,
-                           llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
-            b.SetInsertPoint(trapBB);
-            b.CreateCall(rtTrapNarrow, {v, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
-            b.CreateUnreachable();
-            b.SetInsertPoint(okBB);
-            return narrow;
-        }
-        if (from->isInteger()) return b.CreateSIToFP(v, target);
+        if (from->isInteger() && to->isInteger()) return castInteger(v, from, to, to->name + std::string("(x) was given"), loc);
+        if (from->isInteger()) return from->isUnsigned() ? b.CreateUIToFP(v, target) : b.CreateSIToFP(v, target);
         if (to->isFloating()) return from->is(K::Float) ? b.CreateFPExt(v, target) : b.CreateFPTrunc(v, target);
         // A floating-point value becomes an integer by dropping its fraction. One too large or too small gives the
         // integer nearest to it, and NaN gives 0. In checked code it must be a number, and the result must fit: from
         // -2^31 to 2^31 - 1 for an int.
-        if (!checkedNow) return b.CreateIntrinsic(llvm::Intrinsic::fptosi_sat, {target, v->getType()}, {v});
+        const bool toUnsigned = to->isUnsigned();
+        if (!checkedNow)
+            return b.CreateIntrinsic(toUnsigned ? llvm::Intrinsic::fptoui_sat : llvm::Intrinsic::fptosi_sat, {target, v->getType()}, {v});
         llvm::Value* x = convert(v, from, Type::doubleTy());
-        double lo = to->is(K::Int) ? -2147483649.0 : -9223372036854775808.0;
-        double hi = to->is(K::Int) ? 2147483648.0 : 9223372036854775808.0;
-        llvm::Value* above = to->is(K::Int) ? b.CreateFCmpOGT(x, llvm::ConstantFP::get(b.getDoubleTy(), lo))
-                                            : b.CreateFCmpOGE(x, llvm::ConstantFP::get(b.getDoubleTy(), lo));
+        const int bits = (int)to->bits();
+        // A value above `lo` and below `hi` loses only its fraction. -2^63 is a double, but -2^63 - 1 is not.
+        double lo = toUnsigned ? -1.0 : bits < 64 ? -std::ldexp(1.0, bits - 1) - 1 : -std::ldexp(1.0, 63);
+        double hi = std::ldexp(1.0, toUnsigned ? bits : bits - 1);
+        llvm::Value* above = toUnsigned || bits < 64 ? b.CreateFCmpOGT(x, llvm::ConstantFP::get(b.getDoubleTy(), lo))
+                                                     : b.CreateFCmpOGE(x, llvm::ConstantFP::get(b.getDoubleTy(), lo));
         llvm::Value* fits = b.CreateAnd(above, b.CreateFCmpOLT(x, llvm::ConstantFP::get(b.getDoubleTy(), hi)));
         auto* trapBB = llvm::BasicBlock::Create(ctx, "cast.trap", fn);
         auto* okBB = llvm::BasicBlock::Create(ctx, "cast.ok", fn);
@@ -3120,7 +3142,49 @@ struct Codegen::Impl {
         b.CreateCall(rtTrapFloatCast, {x, cstring(to->name), fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
         b.CreateUnreachable();
         b.SetInsertPoint(okBB);
-        return b.CreateFPToSI(v, target);
+        return toUnsigned ? b.CreateFPToUI(v, target) : b.CreateFPToSI(v, target);
+    }
+
+    // The values an integer type holds, as a trap names them.
+    static std::string rangeOf(const Type* t) {
+        switch (t->kind) {
+            case K::Int: return "from -2147483648 to 2147483647";
+            case K::Long: return "from -9223372036854775808 to 9223372036854775807";
+            case K::UInt8: return "from 0 to 255";
+            case K::UInt16: return "from 0 to 65535";
+            case K::UInt32: return "from 0 to 4294967295";
+            default: return "from 0 to 18446744073709551615";
+        }
+    }
+
+    // An integer as another integer type: its lowest bits, which keep its value when the type holds it. In checked
+    // code, a value the type does not hold stops the program, saying `what` gave it.
+    llvm::Value* castInteger(llvm::Value* v, const Type* from, const Type* to, const std::string& what, Loc loc) {
+        llvm::Type* target = llvmType(to);
+        llvm::Value* out = from->isSigned() ? b.CreateSExtOrTrunc(v, target) : b.CreateZExtOrTrunc(v, target);
+        const unsigned fromBits = from->bits(), toBits = to->bits();
+        if (!checkedNow) return out;
+        llvm::Value* fits = nullptr;  // null when every value of `from` fits
+        if (from->isSigned() == to->isSigned()) {
+            if (toBits < fromBits)
+                fits = b.CreateICmpEQ(from->isSigned() ? b.CreateSExt(out, v->getType()) : b.CreateZExt(out, v->getType()), v);
+        } else if (from->isSigned()) {  // to an unsigned type: not below 0, and not above its largest
+            fits = b.CreateICmpSGE(v, llvm::ConstantInt::get(v->getType(), 0));
+            if (toBits < fromBits) fits = b.CreateAnd(fits, b.CreateICmpEQ(b.CreateZExt(out, v->getType()), v));
+        } else if (toBits <= fromBits) {  // from an unsigned type to a signed one, which holds half as much
+            fits = b.CreateICmpULE(v, llvm::ConstantInt::get(v->getType(), llvm::APInt::getSignedMaxValue(toBits).zextOrTrunc(fromBits)));
+        }
+        if (!fits) return out;
+        auto* trapBB = llvm::BasicBlock::Create(ctx, "narrow.trap", fn);
+        auto* okBB = llvm::BasicBlock::Create(ctx, "narrow.ok", fn);
+        b.CreateCondBr(fits, okBB, trapBB, llvm::MDBuilder(ctx).createBranchWeights(1u << 20, 1));
+        b.SetInsertPoint(trapBB);
+        llvm::Value* wide = from->isSigned() ? b.CreateSExtOrTrunc(v, b.getInt64Ty()) : b.CreateZExtOrTrunc(v, b.getInt64Ty());
+        b.CreateCall(rtTrapNarrow, {wide, b.getInt32(from->isUnsigned()), cstring(what), cstring(to->name), cstring(rangeOf(to)), fileName,
+                                    b.getInt32(loc.line), b.getInt32(loc.col)});
+        b.CreateUnreachable();
+        b.SetInsertPoint(okBB);
+        return out;
     }
 
     // ---- Enums and switch --------------------------------------------------
@@ -3132,21 +3196,9 @@ struct Codegen::Impl {
         const Type* to = c.target;
         const Loc loc = c.loc;
         auto weights = llvm::MDBuilder(ctx).createBranchWeights(1u << 20, 1);
-        if (from->isEnum()) {
-            if (to->is(K::Long) || from->decl->underlying->is(K::Int)) return b.CreateSExt(v, llvmType(to));
-            llvm::Value* narrow = b.CreateTrunc(v, b.getInt32Ty());  // a long enum's number, as an int
-            if (!checkedNow) return narrow;
-            auto* trapBB = llvm::BasicBlock::Create(ctx, "narrow.trap", fn);
-            auto* okBB = llvm::BasicBlock::Create(ctx, "narrow.ok", fn);
-            b.CreateCondBr(b.CreateICmpEQ(b.CreateSExt(narrow, b.getInt64Ty()), v), okBB, trapBB, weights);
-            b.SetInsertPoint(trapBB);
-            b.CreateCall(rtTrapNarrow, {v, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
-            b.CreateUnreachable();
-            b.SetInsertPoint(okBB);
-            return narrow;
-        }
+        if (from->isEnum()) return castInteger(v, from->decl->underlying, to, to->name + std::string("(x) was given"), loc);
         const StructDecl& en = *to->decl;
-        llvm::Value* n = from->is(K::Char) ? b.CreateZExt(v, b.getInt64Ty()) : b.CreateSExt(v, b.getInt64Ty());
+        llvm::Value* n = from->isSigned() ? b.CreateSExt(v, b.getInt64Ty()) : b.CreateZExt(v, b.getInt64Ty());
         std::set<int64_t> values;
         for (auto& one : en.enumerators) values.insert(one.value);
         auto* trapBB = llvm::BasicBlock::Create(ctx, "enum.trap", fn);
@@ -3309,7 +3361,7 @@ struct Codegen::Impl {
             }
             llvm::Value* a0 = f == MathFn::Min ? args[1] : args[0];
             llvm::Value* a1 = f == MathFn::Min ? args[0] : args[1];
-            llvm::Value* less = t->is(K::Char) ? b.CreateICmpULT(a0, a1) : b.CreateICmpSLT(a0, a1);
+            llvm::Value* less = t->isSigned() ? b.CreateICmpSLT(a0, a1) : b.CreateICmpULT(a0, a1);
             return b.CreateSelect(less, args[1], args[0]);
         }
         auto unary = [&](llvm::Intrinsic::ID id) { return b.CreateUnaryIntrinsic(id, x); };
@@ -5021,6 +5073,7 @@ struct Codegen::Impl {
             case K::Long: kind = CPLUS_KIND_LONG; break;
             case K::Float: kind = CPLUS_KIND_FLOAT; break;
             case K::Double: kind = CPLUS_KIND_DOUBLE; break;
+            case K::UInt8: case K::UInt16: case K::UInt32: case K::UInt64: kind = CPLUS_KIND_UNSIGNED; break;
             case K::Char: kind = CPLUS_KIND_CHAR; break;
             case K::String: kind = CPLUS_KIND_STRING; break;
             case K::Weak: kind = CPLUS_KIND_WEAK; break;

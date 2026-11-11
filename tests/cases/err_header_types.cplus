@@ -2,7 +2,6 @@
 import "../c/header.h";
 
 int main() {
-    header_port_of(1);
     header_take_short(1);
     header_take_bits({});
     header_take_union({});
@@ -16,7 +15,6 @@ int main() {
     header_wide();
     return 0;
 }
-// error: C+ cannot call `header_port_of` from "../c/header.h", as its result is a `header_port`, a 16-bit number, which C+ has no type for yet
 // error: a declaration of the program's own, in `extern "C" { ... }`, is used instead of the header's
 // error: C+ cannot call `header_take_short` from "../c/header.h", as its parameter `s` is a `short`, a 16-bit number
 // error: as its parameter `b` is a `struct header_bits`, a struct that C+ cannot hold, as its field `flag` is a bit field, which C+ cannot hold yet

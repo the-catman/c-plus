@@ -118,8 +118,8 @@ int main() {
 // error: index 3 is past the end of 'array<int, 3>'
 // error: use an index from 0 to 2
 // error: an index into an array cannot be negative
-// error: an index into an array must be an int or long, but this is 'double'
-// error: an index into an array must be an int or long, but this is 'char'
+// error: an index into an array must be an integer, but this is 'double'
+// error: an index into an array must be an integer, but this is 'char'
 // error: index 0 is past the end of 'array<int, 0>'
 // error: make the array larger: this one has no elements
 // error: spec: docs/SPEC.md#arrays

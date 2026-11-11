@@ -12,7 +12,7 @@ extern "C" {
     extern "C" int abs(int);
     static int helper();
     int sum(int values[], int count);
-    uint64_t hash(string s);
+    uint64_t hash(string s);  // fine: a type of C+
 }
 
 int main() {
@@ -31,11 +31,10 @@ int main() {
 // error: print with `println("{}", x)`
 // error: this compiler does not support C variables, such as errno, yet
 // error: a function declared extern "C" is defined in C, so it has no body here
-// error: 'unsigned' is a C type; write `int` here
+// error: 'unsigned' is a C type; write `uint32_t` here
 // error: extern "C" blocks cannot be nested
 // error: 'static' does not belong in an extern "C" declaration
 // error: a C array parameter is written as a pointer
 // error: write `int* values`: C passes an array as a pointer to its first element
-// error: 'uint64_t' is a C type; write `long` here
 // error: C functions are declared outside of functions
 // error: spec: docs/SPEC.md#c-functions

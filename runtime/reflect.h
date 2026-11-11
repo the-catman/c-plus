@@ -28,6 +28,7 @@ enum {
     CPLUS_KIND_JSON_VALUE,  // a json::Value, whose fields json.c knows by position: see compiler/Builtins.h
     CPLUS_KIND_ENUM,      // `fields` are its enumerators, in order, each with its value as the offset. `size` is 4 for an
                           // int and 8 for a long
+    CPLUS_KIND_UNSIGNED,  // a uint8_t, uint16_t, uint32_t or uint64_t, whose `size` says which
     CPLUS_KIND_OTHER      // a pointer, which only this program can make sense of
 };
 
