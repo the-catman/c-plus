@@ -55,7 +55,8 @@ long square(long n) { return n * n; }
 | Numbers from text | `int n = try stoi(text);`, `try stol(text)`, `try stod(text)`, `try stof(text)`. All of the text must be the number, in decimal, with only spaces around it: `"12abc"` and `"0x1F"` throw an `Error`, as does a number that does not fit |
 | Reflection | `import reflect;`. `auto t = reflect::type<User>();` or `reflect::of(x)`, then `t.name()`, `t.kind()`, `t.size()`, `t.elem()`, and `for (auto f : t.fields())` with `f.name`, `f.offset`, `f.type`, `f.isPublic` |
 | Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` a number or a constant. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
-| Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>` |
+| Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>`. As in C++, changing `s`: `s.append(t)`, `s.insert(pos, t)`, `s.erase(pos, n)`, `s.replace(pos, n, t)`; and `s.rfind(t)`, `s.compare(t)` (-1, 0 or 1) |
+| Splitting | each gives a new value and leaves `s` as it is: `vector<string> parts = s.split(",");` (`"a,,b"` gives `["a", "", "b"]`), `s.split(',')`, `s = s.trim();`, `s.trim_start()`, `s.trim_end()`, `string csv = parts.join(", ");`, `s.replace_all("a", "b")` (every match) |
 | String chars | `s[i]` and `s[i] = 'x'` (checked), `for (char c : s)`, `s + '!'`, `s += c`, `s.push_back(c)`, `s.pop_back()`, `s.front()`, `s.back()`, `string(3, '-')`, `s.find('/')` |
 | Raw strings | `R"(no "escapes" here, and any number of lines)"`, or `R"end(has )" inside)end"`, as in C++ |
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them |
@@ -149,6 +150,8 @@ long square(long n) { return n * n; }
 | `printf("%.2f", x)`, `std::setprecision(2)` | `println("{:.2f}", x)` |
 | `std::stod(s)`, `std::stoi(s)`, `std::stoll(s)` | `try stod(s)`, `try stoi(s)`, `try stol(s)`, with no `std::`. All of the text must be the number, or it throws an `Error`, where C's `atoi` gives 0 |
 | `stoi(s, &pos)` | `try stoi(s)` reads all of `s`, in decimal. For a base, or a number at the start of other text, declare C's `strtol` with `extern "C"` |
+| `s.replace("a", "b")`, `s.replaceAll("a", "b")`, `", ".join(parts)`, `s.strip()` | `s.replace_all("a", "b")`, `parts.join(", ")`, `s.trim()`. C++'s `s.replace(pos, n, t)` works |
+| `s.trim();` on its own line | error: it changes nothing. Write `s = s.trim();` |
 | `std::getline(std::cin, line)`, `std::cin >> n` | `while (auto line = readLine()) { ... }`, and `int n = try stoi(line);` for a number |
 | `std::ifstream file(path)`, `fs.readFileSync(path)`, `fs::readFile("notes.txt")` | `import fs;`, then `string text = try fs::read(path);`, which waits for all of the file. The async form is planned |
 | `long double`, `1.5L` | no `long double`; `double` is 64 bits |
@@ -216,7 +219,7 @@ long square(long n) { return n * n; }
 | `std::stringstream`, `sprintf`, `snprintf` | `format("{}: {}", name, n)` returns the string |
 | `size_t pos = s.find(t)` | `long pos = s.find(t)` or `auto pos`. `string::npos` is `-1`, so `pos != string::npos` and `pos >= 0` both work |
 | `s.substr(pos)` past the end throws | it **stops the program** with file:line, as do a negative position and `s.find(t, -1)` |
-| `s.at(i)`, `s.append(t)` | `s[i]` (always checked), `s += t` |
+| `s.at(i)` | `s[i]` (always checked) |
 | overloaded functions | planned; one function per name for now: rename one |
 
 ## Planned. Where there is something to write for them, the compiler rejects it with "does not support ... yet"
@@ -239,7 +242,6 @@ long square(long n) { return n * n; }
 | References | `T&` to elements of vectors, strings and hashmaps, `for (auto& x : v)`, `T& f()` |
 | Structured bindings | `for (auto [k, v] : m)`, `auto [a, b] = f();` |
 | Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
-| More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare` |
 | Files | writing and appending, `fs::exists`, `fs::remove`, `fs::list`, `fs::open`, and the async `fs::readFile` and `fs::writeFile` |
 | More C | variable arguments, vectors, C variables like `errno`, callbacks |
 | Concurrency | waiting with a time limit, stopping a task, atomic values, condition variables, channels |

@@ -542,12 +542,6 @@ PLANNED_FEATURES = [
     ("unsigned types", M % "unsigned x = 10;"),
     ("unsigned literals", M % "int x = 10u;"),
     ("overloading", 'int f(int a) { return a; }\nint f(long a) { return 1; }\n' + M % ""),
-    ("string append", M % 'string s; s.append("x");'),
-    ("string insert", M % 'string s; s.insert(0, "x");'),
-    ("string erase", M % 'string s; s.erase(0, 1);'),
-    ("string replace", M % 'string s; s.replace(0, 1, "x");'),
-    ("string rfind", M % 'string s; auto n = s.rfind("x");'),
-    ("string compare", M % 'string s; auto n = s.compare("x");'),
     ("stoul", M % 'long n = stoul("1");'),
     ("writing files", 'import fs;\n' + M % 'fs::write("a.txt", "x");'),
     ("appending to files", 'import fs;\n' + M % 'fs::append("a.txt", "x");'),
@@ -814,7 +808,7 @@ SPEC_REJECTED = {
     "[[nodiscard]]": "^[[nodiscard]] int f2() { return 1; }", "int x{5}": "int x{5};", "int x(5)": "int x(5);", "int f(int x);": "^int f2(int x);", "int values[]": '^extern "C" void f2(int values[]);',
     "fs::exists": 'bool b = fs::exists("a.txt");', "fs::remove": 'fs::remove("a.txt");', "fs::list": 'auto names = fs::list(".");',
     "fs::open": 'auto f = fs::open("a.txt");', "fs::readFile": 'auto t = fs::readFile("a.txt");', "fs::writeFile": 'auto t = fs::writeFile("a.txt", "x");',
-    "std::getline(std::cin, line)": "string line; std::getline(std::cin, line);", "std::cin >> n": "int n = 0; std::cin >> n;",
+    "std::getline(std::cin, line)": "string line; std::getline(std::cin, line);", 's.replace("a", "b")': 'string s = "a"; s.replace("a", "b");', "std::cin >> n": "int n = 0; std::cin >> n;",
     "char name[64];": '^extern "C" { struct S2 { char name[64]; }; }', "typedef struct { ... } name;": "^typedef struct { int a; } name;", "struct FILE*": "struct FILE* f = null;",
     "typedef struct _IO_FILE FILE;": "^typedef struct _IO_FILE FILE;", "#define SQLITE_OK 0": "^#define SQLITE_OK 0",
     "f[i]": "FILE* f = null; int i = 0; auto x = f[i];", "f + 1": "FILE* f = null; auto x = f + 1;", "sizeof(FILE)": "long x = sizeof(FILE);", "typedef struct x x;": "^typedef struct x x;",
@@ -1424,13 +1418,17 @@ def check_reflect_alone(cplus, workdir):
 
 
 def check_library_alone(cplus, workdir):
-    """What fs, readLine() and stoi are written on is only in a program that uses them, and each only for itself."""
+    """What fs, readLine(), stoi and the string methods of runtime/strings.c are written on is only in a program that uses them, and
+    each only for itself."""
     source = workdir / "library_alone.cplus"
-    names = ["cplus_fs_read", "cplus_read_line", "cplus_parse_int", "cplus_parse_long", "cplus_parse_double", "cplus_parse_float"]
+    names = ["cplus_fs_read", "cplus_read_line", "cplus_parse_int", "cplus_parse_long", "cplus_parse_double", "cplus_parse_float", "cplus_str_split",
+             "cplus_str_join", "cplus_str_trim", "cplus_str_splice"]
     cases = [("int main() { return 0; }\n", []),
              ('import fs;\nint main() throws { println("{}", try fs::read("a")); return 0; }\n', ["cplus_fs_read"]),
              ('int main() { println("{}", readLine() ?? ""); return 0; }\n', ["cplus_read_line"]),
-             ('int main() throws { println("{}", try stoi("1")); return 0; }\n', ["cplus_parse_int"])]
+             ('int main() throws { println("{}", try stoi("1")); return 0; }\n', ["cplus_parse_int"]),
+             ('int main() { println("{}", "a,b".split(",")); return 0; }\n', ["cplus_str_split"]),
+             ('int main() { string s = "ab"; s.erase(0, 1); println("{}", s); return 0; }\n', ["cplus_str_splice"])]
     ok = True
     for text, wanted in cases:
         source.write_text(text)

@@ -22,9 +22,7 @@ int main() {
     println("{}", s < n);
     println("{}", s[true]);
     for (string ch : s) println("{}", ch);
-    s.append("x");
     s.push_back("x");
-    s.insert(0, "x");
     s.lenght();
     long z = s.size;
     s.substr(1, 2, 3);
@@ -66,11 +64,8 @@ int main() {
 // error: an index into a string must be an int or long, but this is 'bool'
 // error: the elements of 'string' are 'char', which cannot be stored in 'string' 'ch'
 // error: write `for (auto ch : ...)` or `for (char ch : ...)`
-// error: this compiler does not support append() on strings yet
-// error: write `s += text`
 // error: expected 'char' for push_back(), but this is 'string'
 // error: write 'x', in single quotes, for a char. "x" is a string
-// error: this compiler does not support insert() on strings yet
 // error: 'string' has no method named 'lenght'
 // error: did you mean 'length'?
 // error: 'string' has no fields, so '.size' cannot be used

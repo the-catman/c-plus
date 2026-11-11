@@ -1,0 +1,32 @@
+// `split`, `trim`, `join` and `replace_all` give a new string, or a vector of them, and leave the string as it was.
+int main() {
+    string line = " name=Ada , born=1815 ";
+    for (string field : line.split(",")) {
+        vector<string> pair = field.trim().split('=');
+        println("{}: {}", pair[0], pair[1]);
+    }
+    // expect: name: Ada
+    // expect: born: 1815
+
+    println("{} {}", "a,,b".split(","), "".split(","));
+    // expect: ["a", "", "b"] [""]
+
+    vector<string> words = {"a", "b", "c"};
+    println("{}", words.join(", "));
+    // expect: a, b, c
+
+    string path = "a/b/c";
+    path = path.replace_all("/", "::");
+    println("{} [{}] [{}]", path, "  x  ".trim_start(), "  x  ".trim_end());
+    // expect: a::b::c [x  ] [  x]
+
+    // C++'s own methods change the string itself.
+    string s = "hello";
+    s.insert(0, "<");
+    s.append(">");
+    s.replace(1, 5, "HELLO");
+    s.erase(0, 1);
+    println("{} {} {}", s, s.rfind('L'), s.compare("HELLO>"));
+    // expect: HELLO> 3 0
+    return 0;
+}

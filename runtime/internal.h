@@ -35,6 +35,12 @@ void cplus_print_f64(cplus_string* out, double value);
 void cplus_print_f32(cplus_string* out, float value);
 void cplus_print_quoted(cplus_string* out, const char* data, int64_t length);
 void cplus_print_quoted_start(cplus_string* out, const char* data, int64_t length, int64_t most);  // `out` is a string, not stdout
+void cplus_retain(void* object);
+void cplus_str_concat(cplus_string* out, const cplus_string* parts, int64_t count);
+void cplus_str_substr(cplus_string* out, const cplus_string* s, int64_t pos, int64_t count, const char* file, int32_t line, int32_t column);
+int64_t cplus_str_find(const char* s, int64_t length, const char* needle, int64_t needle_length, int64_t from);
+void* cplus_vec_new(int64_t elem_size, int64_t size);
+_Noreturn void cplus_trap(const char* message, const char* file, int32_t line, int32_t column);
 void cplus_fatal_begin(void);                   // first, for every report that ends the program
 _Noreturn void cplus_stop(const char* message, const char* help);
 void* cplus_malloc(size_t size);                // stops the program when there is no more

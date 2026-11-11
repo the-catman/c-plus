@@ -1,0 +1,7 @@
+// An empty separator would be between every two bytes, so split() stops the program.
+int main() {
+    string sep = "";
+    println("{}", "abc".split(sep));
+    return 0;
+}
+// trap: split() was given an empty separator, which is between every two bytes

@@ -57,6 +57,8 @@ constexpr Alias kAliases[] = {
     {"getline", "reading-input"},    {"cin", "reading-input"},       {"stoi", "parsing-numbers"},
     {"stol", "parsing-numbers"},     {"stod", "parsing-numbers"},    {"stof", "parsing-numbers"},
     {"atoi", "parsing-numbers"},     {"number", "parsing-numbers"},
+    {"split", "splitting-and-joining"}, {"trim", "splitting-and-joining"}, {"join", "splitting-and-joining"},
+    {"replace_all", "splitting-and-joining"},
 };
 
 std::string slug(std::string_view heading) {

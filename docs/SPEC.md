@@ -224,6 +224,16 @@ name[0] = 'E';                              // "Eda"; other copies keep "Ada"
   and `back()` return the first and last. On an empty string, `pop_back()`, `front()`
   and `back()` stop the program; in C++ they are undefined.
 - `clear()` empties the string.
+- `append(t)`, `insert(pos, t)`, `erase(pos, count)` and `replace(pos, count, t)` change the string, as in C++.
+  `append` adds `t` at the end, as `+=` does, `insert` puts `t` before position `pos`, `erase` removes `count` bytes
+  from `pos`, and `replace` puts `t` in their place. `erase(pos)`, a `count` of `string::npos`, and a `count` that runs
+  past the end take the rest, and `erase()` empties the string. A `pos` past the end, which throws in C++, stops the
+  program, and so does a negative `pos`, or a negative `count` other than `string::npos`.
+- `rfind(text)` and `rfind(text, pos)` return the position of the last match that starts at or before `pos`, or
+  `string::npos` when there is none. `text` can be a `char`. A `pos` of `string::npos`, or past the end, looks at the
+  whole string, and another negative `pos` stops the program.
+- `compare(t)` returns `-1`, `0` or `1`, as the string comes before `t`, is the same, or comes after it, in the order of
+  `<`.
 - `string(count, c)` is `count` copies of the char `c`, as in C++: `string(3, '-')` is
   `"---"`. `string()` is empty, and `string(s)` is a copy of the string `s`. `string(p)`
   copies the text a C `char*` points to (see [Pointers](#pointers)).
@@ -236,8 +246,46 @@ Copies of a string, and large substrings, share their bytes instead of copying t
 `+=` adds to a string in place when no other string shares it, so building a string in a
 loop takes linear time. See [Memory model](#memory-model).
 
-`s.at(i)` does not exist, since `s[i]` is always checked. Planned: `append`, `insert`,
-`erase`, `replace`, `rfind` and `compare`. A number is read from a string with `stoi` and the functions like it:
+`s.at(i)` does not exist, since `s[i]` is always checked. A string is split, trimmed and joined with the methods below,
+and a number is read from it with `stoi` and the functions like it.
+
+#### Splitting and joining
+
+`split`, `trim`, `join` and `replace_all` give a new string, or a vector of them, and leave the string as it was. A
+call whose result goes nowhere, such as `s.trim();`, would change nothing, so it is an error: write `s = s.trim();`.
+
+```cpp
+string line = " name=Ada , born=1815 ";
+for (string field : line.split(",")) {
+    vector<string> pair = field.trim().split('=');   // ["name", "Ada"], then ["born", "1815"]
+    println("{}: {}", pair[0], pair[1]);
+}
+vector<string> words = {"a", "b", "c"};
+string csv = words.join(",");                         // "a,b,c"
+string path = "a/b/c".replace_all("/", "::");         // "a::b::c"
+```
+
+| Method | Gives |
+|--------|-------|
+| `s.split(sep)` | a `vector<string>` of the parts between each `sep` and the next |
+| `s.trim()` | `s` without the spaces at its start and its end |
+| `s.trim_start()`, `s.trim_end()` | `s` without the spaces at its start, or at its end |
+| `parts.join(sep)` | the strings of a `vector<string>`, with `sep` between each two |
+| `s.replace_all(from, to)` | `s` with every `from` made `to` |
+
+- `split(sep)` goes from left to right, and a separator next to another, or at an end, gives an empty part:
+  `"a,,b".split(",")` is `["a", "", "b"]`, `"a,".split(",")` is `["a", ""]`, and `"".split(",")` is `[""]`, as in
+  Python and JavaScript. `sep` can be a `char`. An empty `sep`, which would be between every two bytes, stops the
+  program. There is no limit on the parts: for the text before the first separator, use `find` and `substr`.
+- The spaces of `trim` are those of C's `isspace`: `' '`, `'\t'`, `'\n'`, `'\r'`, and the bytes 11 and 12, a vertical tab and a form feed.
+- `join(sep)` is a method of the vector, and not of the separator as in Python. An empty vector gives `""`. It is only
+  for a `vector<string>`: a vector of numbers is made into strings first, with `to_string`.
+- `replace_all(from, to)` looks for each `from` after the one before it, so `"aaa".replace_all("aa", "b")` is `"ba"`.
+  `from` and `to` can be chars. An empty `from` stops the program. C++'s `replace(pos, count, t)` replaces one part, at a
+  position, so `s.replace("a", "b")` is an error: Python and Rust replace every match with that name, and JavaScript only
+  the first.
+- The names are in snake case, as the other methods of a string are, and none of them is a free function, as they are in
+  Boost.
 
 #### Parsing numbers
 
@@ -2868,7 +2916,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Unsigned types | planned |
 | Format options for width, alignment and `{:x}`; math constants | planned |
 | Function overloading | planned |
-| Strings: `append`, `insert`, `erase`, `replace` | planned |
+| Strings: `append`, `insert`, `erase`, `replace`, `rfind`, `compare`, `split`, `trim`, `join`, `replace_all` | implemented |
 | Reading numbers from strings: `stoi`, `stol`, `stod`, `stof` | implemented |
 | `hashmap<K, V>` | implemented |
 | Vector `insert`, `erase`, iterators; `find` on a hashmap, sorted maps, sets | planned |

@@ -1,0 +1,18 @@
+// The forms of the string methods that the cheat sheet shows, written as it writes them.
+// check_cheat_sheet in tests/run_tests.py looks for each one here or in the other cheatsheet_forms files.
+int main() {
+    string s = "a,,b";
+    vector<string> parts = s.split(",");
+    println("{} {}", parts, s.split(','));
+    // expect: ["a", "", "b"] ["a", "", "b"]
+    string csv = parts.join(", ");
+    println("{} {}", csv, parts.join(", "));
+    // expect: a, , b a, , b
+    s = " a ";
+    println("[{}] [{}] [{}]", s.trim(), s.trim_start(), s.trim_end());
+    // expect: [a] [a ] [ a]
+    s = s.trim();
+    println("{}", s.replace_all("a", "b"));
+    // expect: b
+    return 0;
+}

@@ -820,7 +820,98 @@ struct Codegen::Impl {
         return b.CreateLoad(stringTy, out, "joined");
     }
 
+    // A function of runtime/strings.c, declared where it is first used, so a program that uses none of them links none.
+    llvm::FunctionCallee stringRuntime(const char* name, llvm::Type* result, std::vector<llvm::Type*> params) {
+        return mod->getOrInsertFunction(name, llvm::FunctionType::get(result, params, false));
+    }
+
+    // A string value, in memory, for a runtime function that takes its address.
+    llvm::Value* stringInMemory(llvm::Value* s, const char* name) {
+        llvm::AllocaInst* slot = entryAlloca(stringTy, name);
+        b.CreateStore(s, slot);
+        return slot;
+    }
+
+    static bool isStringEdit(StrMethod m) {
+        switch (m) {
+            case StrMethod::Append: case StrMethod::Insert: case StrMethod::Erase: case StrMethod::Replace: case StrMethod::Rfind:
+            case StrMethod::Compare: case StrMethod::Split: case StrMethod::Trim: case StrMethod::TrimStart: case StrMethod::TrimEnd:
+            case StrMethod::ReplaceAll: return true;
+            default: return false;
+        }
+    }
+
+    // The string methods that Sema's kStringEdits lists.
+    llvm::Value* genStringEdit(const MethodCallExpr& call) {
+        const Expr& recv = *call.receiver;
+        auto* ptrTy = b.getPtrTy();
+        auto* i64 = b.getInt64Ty();
+        auto* i32 = b.getInt32Ty();
+        llvm::Value* line = b.getInt32(call.loc.line);
+        llvm::Value* column = b.getInt32(call.loc.col);
+        const StrMethod m = call.strMethod;
+        if (m == StrMethod::Append || m == StrMethod::Insert || m == StrMethod::Erase || m == StrMethod::Replace) {
+            // The string is found after the arguments, so code they run cannot move it from under the change.
+            const size_t textAt = m == StrMethod::Append ? 0 : m == StrMethod::Insert ? 1 : m == StrMethod::Replace ? 2 : 3;
+            std::vector<llvm::Value*> args;
+            llvm::Value* slot = placeAfter(recv, [&] {
+                for (size_t i = 0; i < call.args.size(); ++i)
+                    args.push_back(i == textAt ? textValue(gen(*call.args[i]), call.args[i]->type) : genConverted(*call.args[i], Type::longTy()));
+            });
+            if (m == StrMethod::Append) {  // as `s += text`
+                b.CreateCall(rtStrAppend, {slot, strData(args[0]), strLength(args[0])});
+                return nullptr;
+            }
+            llvm::Value* pos = args.size() > 0 && textAt != 0 ? args[0] : b.getInt64(0);
+            llvm::Value* count = m == StrMethod::Insert ? b.getInt64(0) : args.size() > 1 ? args[1] : b.getInt64(-1);  // string::npos: the rest
+            llvm::Value* text = textAt < args.size() ? stringInMemory(args[textAt], "text") : llvm::ConstantPointerNull::get(ptrTy);
+            b.CreateCall(stringRuntime("cplus_str_splice", b.getVoidTy(), {ptrTy, i64, i64, ptrTy, ptrTy, ptrTy, i32, i32}),
+                         {slot, pos, count, text, cstring(call.name), fileName, line, column});
+            return nullptr;
+        }
+        // The receiver is evaluated before the arguments, and read in place unless an argument runs code that could change it.
+        bool argsRunCode = false;
+        for (auto& a : call.args) argsRunCode = argsRunCode || mayRunCode(*a);
+        llvm::Value* s = argsRunCode ? gen(recv) : stringForRead(recv);
+        std::vector<llvm::Value*> args;
+        for (size_t i = 0; i < call.args.size(); ++i) {
+            const Expr& a = *call.args[i];
+            if (m == StrMethod::Rfind && i == 1) args.push_back(genConverted(a, Type::longTy()));
+            else if (a.type->is(K::Char)) args.push_back(charString(gen(a)));  // `s.split(',')`
+            else args.push_back(argsRunCode ? gen(a) : stringForRead(a));
+        }
+        switch (m) {
+            case StrMethod::Rfind: {
+                llvm::Value* from = args.size() > 1 ? args[1] : b.getInt64(-1);
+                if (args.size() > 1) trapIf(b.CreateICmpSLT(from, b.getInt64(-1)), "rfind() was given a negative position", call.loc);
+                return b.CreateCall(stringRuntime("cplus_str_rfind", i64, {ptrTy, i64, ptrTy, i64, i64}),
+                                    {strData(s), strLength(s), strData(args[0]), strLength(args[0]), from}, "pos");
+            }
+            case StrMethod::Compare: return b.CreateCall(rtStrCompare, {strData(s), strLength(s), strData(args[0]), strLength(args[0])}, "order");
+            case StrMethod::Split:
+                return b.CreateCall(stringRuntime("cplus_str_split", ptrTy, {ptrTy, ptrTy, ptrTy, i32, i32}),
+                                    {stringInMemory(s, "str"), stringInMemory(args[0], "sep"), fileName, line, column}, "parts");
+            case StrMethod::Trim:
+            case StrMethod::TrimStart:
+            case StrMethod::TrimEnd: {
+                llvm::AllocaInst* out = entryAlloca(stringTy, "trimmed");
+                const int sides = m == StrMethod::TrimStart ? 1 : m == StrMethod::TrimEnd ? 2 : 3;
+                b.CreateCall(stringRuntime("cplus_str_trim", b.getVoidTy(), {ptrTy, ptrTy, i32}), {out, stringInMemory(s, "str"), b.getInt32(sides)});
+                return b.CreateLoad(stringTy, out, "trimmed");  // shares the bytes of `s`, with its own reference
+            }
+            case StrMethod::ReplaceAll: {
+                llvm::AllocaInst* out = entryAlloca(stringTy, "replaced");
+                b.CreateCall(stringRuntime("cplus_str_replace_all", b.getVoidTy(), {ptrTy, ptrTy, ptrTy, ptrTy, ptrTy, i32, i32}),
+                             {out, stringInMemory(s, "str"), stringInMemory(args[0], "from"), stringInMemory(args[1], "to"), fileName, line, column});
+                return b.CreateLoad(stringTy, out, "replaced");
+            }
+            default: break;
+        }
+        llvm_unreachable("unknown string method");
+    }
+
     llvm::Value* genStringMethod(const MethodCallExpr& call) {
+        if (isStringEdit(call.strMethod)) return genStringEdit(call);
         const Expr& recv = *call.receiver;
         if (call.strMethod == StrMethod::Clear) {
             llvm::Value* slot = addressOf(recv, false, true);
@@ -893,6 +984,7 @@ struct Codegen::Impl {
             case StrMethod::PushBack:
             case StrMethod::PopBack:
             case StrMethod::None: break;
+            default: break;  // genStringEdit
         }
         llvm_unreachable("unknown string method");
     }
@@ -1182,6 +1274,15 @@ struct Codegen::Impl {
                 b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), slot);
                 releaseValue(old, vt);
                 return nullptr;
+            }
+            case VecMethod::Join: {  // `parts.join(sep)`
+                const Expr& sep = *call.args[0];
+                llvm::Value* buf = mayRunCode(sep) ? gen(recv) : vectorForRead(recv);
+                llvm::Value* text = textValue(gen(sep), sep.type);
+                llvm::AllocaInst* out = entryAlloca(stringTy, "joined");
+                b.CreateCall(stringRuntime("cplus_str_join", b.getVoidTy(), {b.getPtrTy(), b.getPtrTy(), b.getPtrTy()}),
+                             {out, buf, stringInMemory(text, "sep")});
+                return b.CreateLoad(stringTy, out, "joined");
             }
             case VecMethod::Fill: case VecMethod::Data:
             case VecMethod::None: break;

@@ -1,0 +1,8 @@
+// A position past the end of the string stops the program, where C++ throws out_of_range.
+int main() {
+    string s = "abc";
+    s.insert(s.size() + 1, "x");
+    println("{}", s);
+    return 0;
+}
+// trap: insert() position 4 is out of range for a string of size 3

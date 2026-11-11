@@ -1,0 +1,9 @@
+// A negative position stops the program.
+int main() {
+    string s = "abc";
+    long pos = -1;
+    s.replace(pos, 1, "x");
+    println("{}", s);
+    return 0;
+}
+// trap: replace() position -1 is out of range for a string of size 3

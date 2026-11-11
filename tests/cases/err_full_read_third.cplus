@@ -1,4 +1,4 @@
-// The third reading: `->` on what holds pointers, optionals and weak references, `rfind` of a char, a call on the string side,
+// The third reading: `->` on what holds pointers, optionals and weak references, a call on the string side,
 // and a generic whose constraint is the program's own.
 struct P { int x = 0; };
 class Node { public: string name = "n"; };
@@ -20,8 +20,6 @@ void f(vector<P*> vp, vector<P?> vo, vector<weak<Node>> vw, hashmap<string, Node
     // error: only a pointer is followed with '->', and 'vw' holds 'weak<Node>': write `vw[i].lock()?.name`
     string e = mn->name;
     // error: only a pointer is followed with '->', and 'mn' holds 'Node?': write `mn[key]?.name`
-    long a = path.rfind('/');
-    // error: go back from the end: `for (long i = s.size() - 1; i >= 0; i--) if (s[i] == '/') { ...; break; }`
     string s = name.substr(0, 1) + count;
     // error: turn the number into a string first: `to_string(count)` in place of `count`
     auto ad = Ad;

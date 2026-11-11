@@ -72,12 +72,6 @@ void containers() {
     string s = "a";
     println("{}", s.c_str());
     // error: pass `s` itself: a `string` parameter of a C function converts at each call
-    s.erase(0, 1);
-    // error: build it from what stays: `s = s.substr(0, pos) + s.substr(pos + n);`
-    s.insert(0, "x");
-    // error: build it: `s = s.substr(0, pos) + t + s.substr(pos);`
-    println("{}", s.compare("x"));
-    // error: compare with `a < b` and `a == b`
     println("{}", s.begin());
     // error: go over it with `for (char c : s)`
     vector<int> v;

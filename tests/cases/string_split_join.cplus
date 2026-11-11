@@ -1,0 +1,92 @@
+// split, trim, join and replace_all: what each gives at the edges, and that the string they are called on stays as it was.
+struct Row {
+    string line;
+    vector<string> cells() const { return line.split(','); }
+};
+
+string named(string s) { return s; }
+
+int main() {
+    // split: empty parts are kept, at either end and between two separators
+    println("{}", "a,,b".split(","));
+    // expect: ["a", "", "b"]
+    println("{} {} {}", "".split(","), ",".split(","), "a,".split(","));
+    // expect: [""] ["", ""] ["a", ""]
+    println("{} {}", "abc".split(","), "abc".split("abc"));
+    // expect: ["abc"] ["", ""]
+    println("{}", "one--two----three".split("--"));
+    // expect: ["one", "two", "", "three"]
+    println("{}", "aaa".split("aa"));
+    // expect: ["", "a"]
+    println("{}", "x y\tz".split(' '));
+    // expect: ["x", "y\tz"]
+    string withZero = "a";
+    withZero += '\0';
+    withZero += "b";
+    println("{}", withZero.split('\0'));
+    // expect: ["a", "b"]
+    println("{}", "é,ü".split(","));
+    // expect: ["é", "ü"]
+    string csv = "1,2,3";
+    vector<string> parts = csv.split(",");
+    parts[0] = "one";
+    println("{} {}", csv, parts);
+    // expect: 1,2,3 ["one", "2", "3"]
+    println("{}", Row{"x,y"}.cells());
+    // expect: ["x", "y"]
+    println("{}", named("p/q").split("/").size());
+    // expect: 2
+
+    // a long string, split into many parts and joined back
+    string big;
+    for (int i = 0; i < 2000; i++) big += to_string(i) + ";";
+    vector<string> numbers = big.split(";");
+    println("{} {} {}", numbers.size(), numbers[1999], numbers[2000] == "");
+    // expect: 2001 1999 true
+    println("{}", numbers.join(";") == big);
+    // expect: true
+
+    // trim: the six spaces of isspace, and nothing else
+    string spaced = " \t\n\x0b\x0c\r a b \r\n";
+    println("[{}] [{}] [{}]", spaced.trim(), "  x ".trim_start(), "  x ".trim_end());
+    // expect: [a b] [x ] [  x]
+    println("[{}] [{}] {}", "".trim(), "   ".trim(), "\xc2\xa0x".trim().size());  // a space of Unicode is not one of them
+    // expect: [] [] 3
+    string kept = "  same  ";
+    string trimmed = kept.trim();
+    println("[{}] [{}]", kept, trimmed);
+    // expect: [  same  ] [same]
+    kept = kept.trim();
+    println("[{}]", kept);
+    // expect: [same]
+
+    // join
+    vector<string> none;
+    vector<string> one = {"only"};
+    vector<string> three = {"a", "", "c"};
+    println("[{}] [{}] [{}] [{}]", none.join(","), one.join(","), three.join(", "), three.join(""));
+    // expect: [] [only] [a, , c] [ac]
+    println("{}", three.join('-'));
+    // expect: a--c
+    println("{}", "k=v;k2=v2".split(";").join(" & "));
+    // expect: k=v & k2=v2
+
+    // replace_all: left to right, each match after the one before
+    println("{} {} {}", "a.b.c".replace_all(".", "::"), "aaa".replace_all("aa", "b"), "aaaa".replace_all("aa", "b"));
+    // expect: a::b::c ba bb
+    println("[{}] [{}] [{}]", "abc".replace_all("x", "y"), "abc".replace_all("abc", ""), "xax".replace_all("x", ""));
+    // expect: [abc] [] [a]
+    println("{} {}", "a-b".replace_all('-', '+'), "ab".replace_all("b", "bb"));
+    // expect: a+b abb
+    string original = "1 2 3";
+    string replaced = original.replace_all(" ", ", ");
+    println("{} | {}", original, replaced);
+    // expect: 1 2 3 | 1, 2, 3
+
+    // the receiver is read before the argument, which may change it
+    string changing = "a,b";
+    vector<string> before = changing.split(named(changing = "c;d") == "" ? "," : ",");
+    println("{} {}", before, changing);
+    // expect: ["a", "b"] c;d
+    return 0;
+}

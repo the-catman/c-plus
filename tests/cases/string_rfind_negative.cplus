@@ -1,0 +1,7 @@
+// A negative position for rfind() other than string::npos stops the program.
+int main() {
+    string s = "abc";
+    println("{}", s.rfind("a", -2));
+    return 0;
+}
+// trap: rfind() was given a negative position

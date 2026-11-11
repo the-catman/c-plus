@@ -27,8 +27,8 @@ message(STATUS "Using LLVM ${LLVM_PACKAGE_VERSION}")
 find_path(CPLUS_CURL_INCLUDE curl/curl.h)
 find_library(CPLUS_CURL_LIBRARY curl)
 set(CPLUS_RUNTIME_SOURCES runtime/runtime.c runtime/json.c runtime/reflect.c runtime/thread.c)
-# What `import fs;`, `readLine()` and `stoi` need, which a program links only when it uses them, as the runtime is an archive.
-list(APPEND CPLUS_RUNTIME_SOURCES runtime/fs.c runtime/input.c runtime/parse.c)
+# What `import fs;`, `readLine()`, `stoi` and the string methods that make or change strings need, which a program links only when it uses them, as the runtime is an archive.
+list(APPEND CPLUS_RUNTIME_SOURCES runtime/fs.c runtime/input.c runtime/parse.c runtime/strings.c)
 set(CPLUS_CURL_DEFINITION "")
 if(CPLUS_CURL_INCLUDE AND CPLUS_CURL_LIBRARY)
   list(APPEND CPLUS_RUNTIME_SOURCES runtime/http.c)

@@ -1,0 +1,130 @@
+// C++'s append, insert, erase, replace, rfind and compare, with C++'s meanings: the first four change the string.
+struct Doc {
+    string text;
+    void add(string t) { text.append(t); }
+};
+
+void wrap(string& s) {
+    s.insert(0, "<");
+    s.append(">");
+}
+
+string named(string s) { return s; }
+
+// The forms the spec writes, with its names.
+void forms() {
+    string s = "a-b-c";
+    string t = "x";
+    string text = "-";
+    string sep = "-";
+    string from = "-";
+    string to = "+";
+    long pos = 1;
+    long count = 1;
+    s.insert(pos, t);
+    s.erase(pos, count);
+    s.replace(pos, count, t);
+    long last = s.rfind(text) + s.rfind(text, pos);
+    int order = s.compare(t);
+    vector<string> parts = s.split(sep);
+    string joined = parts.join(sep);
+    string replaced = s.replace_all(from, to);
+    s.erase(pos);
+    println("{} {} {} {} {} {}", s, last, order, parts, joined, replaced);
+}
+
+int main() {
+    string s = "world";
+    string copy = s;
+    s.append("!");
+    s.insert(0, "hello ");
+    println("{} | {}", s, copy);
+    // expect: hello world! | world
+    s.insert(s.size(), "?");
+    s.insert(5, ",");
+    println("{}", s);
+    // expect: hello, world!?
+    s.erase(5, 1);
+    println("{}", s);
+    // expect: hello world!?
+    s.erase(s.size() - 2);
+    println("{}", s);
+    // expect: hello world
+    s.erase(0, 6);
+    println("{}", s);
+    // expect: world
+    s.replace(0, 1, "W");
+    s.replace(1, 100, "ORLD");
+    println("{}", s);
+    // expect: WORLD
+    s.replace(2, 0, "-");
+    s.replace(2, string::npos, "");
+    println("{}", s);
+    // expect: WO
+    s.erase(1, string::npos);
+    s.erase(1, 0);
+    println("{}", s);
+    // expect: W
+    s.erase();
+    println("[{}] {}", s, s.empty());
+    // expect: [] true
+    s.append("");
+    s.insert(0, "");
+    s.replace(0, 0, "");
+    println("[{}]", s);
+    // expect: []
+
+    // a string given itself
+    string self = "abc";
+    self.insert(1, self);
+    println("{}", self);
+    // expect: aabcbc
+    self.replace(0, 2, self);
+    println("{}", self);
+    // expect: aabcbcbcbc
+    self.append(self);
+    println("{}", self.size());
+    // expect: 20
+
+    // appending in a loop, which grows the string in place
+    string built;
+    for (int i = 0; i < 10000; i++) built.append("ab");
+    println("{} {}", built.size(), built.substr(19996));
+    // expect: 20000 abab
+
+    // in a vector, a field, and through a reference
+    vector<string> v = {"a", "b"};
+    vector<string> before = v;
+    v[0].append("x");
+    v[1].insert(0, v[0]);
+    v[1].erase(0, 1);
+    println("{} {}", v, before);
+    // expect: ["ax", "xb"] ["a", "b"]
+    Doc d;
+    d.add("hi");
+    d.text.replace(0, 1, "H");
+    wrap(d.text);
+    println("{}", d.text);
+    // expect: <Hi>
+
+    // rfind
+    string path = "a/b/c.txt";
+    println("{} {} {} {}", path.rfind("/"), path.rfind('/'), path.rfind("z"), path.rfind("a/b/c.txt"));
+    // expect: 3 3 -1 0
+    println("{} {} {}", path.rfind("/", 2), path.rfind("/", 0), path.rfind("/", string::npos));
+    // expect: 1 -1 3
+    println("{} {} {}", path.rfind(""), path.rfind("", 4), "".rfind("a"));
+    // expect: 9 4 -1
+    println("{}", path.substr(path.rfind('.') + 1));
+    // expect: txt
+
+    // compare
+    println("{} {} {} {}", string("b").compare("a"), string("a").compare("b"), string("a").compare("a"), string("ab").compare("a"));
+    // expect: 1 -1 0 1
+    int order = named("x").compare("x");
+    println("{}", order);
+    // expect: 0
+    forms();
+    // expect: a 2 -1 ["axb", "c"] axb-c axb+c
+    return 0;
+}
