@@ -1007,6 +1007,20 @@ void cplus_print_quoted(cplus_string* out, const char* data, int64_t length) {
     out_write(out, "\"", 1);
 }
 
+// As cplus_print_quoted, for the text an error message quotes, which can come from outside and be of any length: no more
+// than its first `most` bytes, and then `...` inside the quotes. A character of UTF-8 is not cut in two.
+void cplus_print_quoted_start(cplus_string* out, const char* data, int64_t length, int64_t most) {
+    if (length <= most) {
+        cplus_print_quoted(out, data, length);
+        return;
+    }
+    int64_t cut = most;
+    while (cut > 0 && ((unsigned char)data[cut] & 0xC0) == 0x80) --cut;
+    cplus_print_quoted(out, data, cut);
+    out->length -= 1;  // its closing quote, which comes after the dots
+    out_write(out, "...\"", 4);
+}
+
 // Prints a char in single quotes, escaped as it would be written in source: 'a', '\n',
 // '\''. Used for chars inside printed structs and vectors. A byte that is not ASCII
 // is written as \xHH, since alone it is not UTF-8 text.

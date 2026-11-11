@@ -403,13 +403,6 @@ inline std::string cNumberReader(const std::string& name) {
     return "";
 }
 
-// The name in that declaration.
-inline std::string cReaderName(const std::string& name) {
-    const std::string declared = cNumberReader(name);
-    size_t start = declared.find(' ') + 1;
-    return declared.substr(start, declared.find('(') - start);
-}
-
 // The options of one placeholder, `{:.2f}`: a precision, and f, e or g. Both are for
 // floating-point values only.
 struct FormatSpec {
@@ -925,7 +918,7 @@ inline bool holdsUnique(const Type* t) {
 }
 
 // The modules that come with the language, which an import adds to the program. See Builtins.h.
-inline constexpr const char* kBuiltinModules[] = {"http", "json", "reflect"};
+inline constexpr const char* kBuiltinModules[] = {"http", "json", "reflect", "fs"};
 
 inline bool isBuiltinModule(const std::string& name) {
     for (const char* module : kBuiltinModules)

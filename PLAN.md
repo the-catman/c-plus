@@ -334,6 +334,10 @@ programs that import `json` or `reflect`, and for debug builds, whose leak repor
   libcurl built for it, with few features and its TLS library linked in too. One setting, `CPLUS_CURL_LIBRARY`, chooses which is used.
 - Threads and `spawn`.
 - Later, after async exists: `fs`, `net` on libuv.
+- Chosen 2026-11-11, waiting for the owner's word since it changes the line above: `fs::read` and the rest of `fs` that
+  waits are written on C's stdio, so a small program needs neither async nor libuv. The async forms, such as `fs::readFile`,
+  take Node's names and use libuv. `readLine()` is built in, like `println`, and `stoi`, `stol`, `stod` and `stof` throw on
+  text that is not wholly a number, where C++'s take what they can and leave the rest.
 
 ### 2.16 Syntax — DECIDED
 Rule: where C+ and C++ mean the same thing, the syntax is identical.
@@ -651,7 +655,8 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, the core
-language, is next, then servers, then platforms. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+language, is under way, then servers, then platforms. Of Phase 7, item 1 is done, and so are references except those into
+vectors, strings and hashmaps and the functions that return them. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error

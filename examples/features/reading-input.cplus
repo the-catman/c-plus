@@ -1,0 +1,19 @@
+// `readLine()` gives the next line of standard input without its line ending, and null once there is no more.
+// stdin: Ada\n3\n4\n\n5\n
+int main() throws {
+    print("Your name: ");
+    string name = readLine() ?? "stranger";
+    println("Hello, {}!", name);
+    // expect: Your name: Hello, Ada!
+
+    // An empty line is "", which is a value, so the loop goes on until the end of the input.
+    long total = 0;
+    int lines = 0;
+    while (auto line = readLine()) {
+        lines++;
+        if (!line.empty()) total += try stol(line);
+    }
+    println("{} lines, {} in all", lines, total);
+    // expect: 4 lines, 12 in all
+    return 0;
+}

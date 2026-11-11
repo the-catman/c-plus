@@ -1,0 +1,79 @@
+// Each way fs::read can fail is an fs::Error of its own kind, with the path as it was given. None stops the program.
+import fs;
+
+extern "C" {
+    struct FILE;
+    FILE* fopen(string path, string mode);
+    int fputs(string text, FILE* f);
+    int fclose(FILE* f);
+    int chmod(string path, int mode);
+    int geteuid();
+    int symlink(string target, string path);
+    int remove(string path);
+    int socket(int domain, int type, int protocol);
+    int bind(int fd, void* address, int size);
+    int close(int fd);
+}
+
+void tryRead(string path) {
+    try {
+        string text = try fs::read(path);
+        println("read {} bytes", text.size());
+    } catch (fs::Error e) {
+        println("{} [{}]: {}", e.kind, e.path.size(), e.what());
+    } catch (Error e) {
+        println("not an fs::Error: {}", e.what());
+    }
+}
+
+int main() {
+    tryRead("missing.txt");
+    // expect: not-found [11]: could not read "missing.txt": there is no such file
+    tryRead("no/such/folder.txt");
+    // expect: not-found [18]: could not read "no/such/folder.txt": there is no such file
+
+    FILE* f = fopen("plain.txt", "w");
+    fputs("text", f);
+    fclose(f);
+    tryRead("plain.txt/inside");
+    // expect: not-found [16]: could not read "plain.txt/inside": a part of the path before its end is a file, not a folder
+
+    tryRead(".");
+    // expect: is-directory [1]: could not read ".": it is a folder, not a file
+
+    tryRead("");
+    // expect: bad-path [0]: could not read "": the path is empty
+    tryRead("plain.txt" + string(1, '\0') + ".png");
+    // expect: bad-path [14]: could not read "plain.txt\x00.png": the path has a zero byte at position 9, which no name of a file can have
+    tryRead(string(300, 'n'));
+    // expect: bad-path [300]: could not read "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn...": the path is too long
+    remove("loop");
+    symlink("loop", "loop");
+    tryRead("loop");
+    // expect: bad-path [4]: could not read "loop": the path goes through too many symbolic links, which may lead in a circle
+
+    // Only a file that can be read is not one of these. Anyone may read anything as root, which is then said as it would be.
+    remove("secret.txt");  // from a run before, which could not be written again
+    FILE* g = fopen("secret.txt", "w");
+    fputs("secret", g);
+    fclose(g);
+    chmod("secret.txt", 0);
+    if (geteuid() == 0) println("permission [10]: could not read \"secret.txt\": this program is not allowed to read it");
+    else tryRead("secret.txt");
+    // expect: permission [10]: could not read "secret.txt": this program is not allowed to read it
+
+    // A socket is a file that cannot be opened, which is none of the others. Its address is a sockaddr_un of Linux: the
+    // family, 1, in two bytes, then the path.
+    remove("socket");
+    int fd = socket(1, 1, 0);
+    array<char, 110> address;
+    address[0] = char(1);
+    string name = "socket";
+    for (int i = 0; i < name.size(); i++) address[2 + i] = name[i];
+    if (bind(fd, (void*)address.data(), 110) != 0) println("could not make a socket");
+    tryRead("socket");
+    // expect: io [6]: could not read "socket": No such device or address
+    close(fd);
+    remove("socket");
+    return 0;
+}

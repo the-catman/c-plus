@@ -33,6 +33,8 @@ void cplus_vec_release(void* vec, int64_t elem_size, cplus_elem_fn release_elem)
 void* cplus_object_start(void* object);
 void cplus_print_f64(cplus_string* out, double value);
 void cplus_print_f32(cplus_string* out, float value);
+void cplus_print_quoted(cplus_string* out, const char* data, int64_t length);
+void cplus_print_quoted_start(cplus_string* out, const char* data, int64_t length, int64_t most);  // `out` is a string, not stdout
 void cplus_fatal_begin(void);                   // first, for every report that ends the program
 _Noreturn void cplus_stop(const char* message, const char* help);
 void* cplus_malloc(size_t size);                // stops the program when there is no more

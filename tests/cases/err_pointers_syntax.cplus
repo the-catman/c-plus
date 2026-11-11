@@ -24,5 +24,5 @@ int main() {
 // error: 'auto' finds out by itself that a value is a pointer
 // error: 'const' cannot be used here
 // error: unknown type 'FILE'
-// error: check the spelling, or define it. If 'FILE' is a C type used through pointers, declare it first, at the top level: `extern "C" struct FILE;`
+// error: to read all of a file, write `import fs;` at the top of the file, then `string text = try fs::read(path);`. To use C's, declare the type first, at the top level: `extern "C" struct FILE;`
 // error: 'fixed' is const and cannot be assigned to

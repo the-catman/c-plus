@@ -82,6 +82,8 @@ private:
     void joinThrowingTasks();
     void joinModuleNames(const std::set<std::string>& modules);
     void addBuiltinSource(const SourceFile& source);
+    // What a program uses of `import fs;`, `readLine()`, `stoi` and its kind. `thrower` is the first of them that throws an Error.
+    std::vector<const SourceFile*> librarySources(const std::set<std::string>& modules, bool canThrow, std::string& thrower, Loc& throwerLoc) const;
     void addHeaders();  // what the program uses from the C headers it imports. See CHeaders.h
     void rejectNotImported(const Token& name);  // a name a header has, which C+ cannot take
     HeaderSearch headerSearch_;
@@ -174,7 +176,7 @@ private:
     StmtPtr parseDeclaration();  // one or more variables, without the trailing ';'
     StmtPtr parseDeclarators(bool isConst, const Type* ty, Loc typeLoc);  // the part after the type
     enum class ReferencePlace { Parameter, Local, Loop, Catch, Constant };
-    bool parseReferenceMark(const Type* ty, bool isConst, ReferencePlace place);
+    bool parseReferenceMark(const Type* ty, ReferencePlace place);
     bool parseReturnReference(const Type* ret, bool isConst, bool member);
     StmtPtr parseFor();
     bool isValueOfType() const;

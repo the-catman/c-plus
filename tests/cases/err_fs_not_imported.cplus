@@ -1,0 +1,23 @@
+// fs, like the other modules, comes with an import. Without one, the compiler says to write it.
+int main() throws {
+    string text = try fs::read("notes.txt");
+    return 0;
+}
+void node() { auto text = fs.readFileSync("notes.txt"); }
+void other() { auto text = readFileSync("notes.txt"); }
+void cFile() { auto f = fopen("notes.txt", "r"); }
+void useJson() { auto text = json.stringify(1); }
+void useHttp() { auto r = http.get("http://example.com"); }
+void useReflect() { auto t = reflect.type(1); }
+// error: 'fs::read' is in the module 'fs', which this program does not import
+// error: write `import fs;` at the top of the file
+// error: 'fs' is a module, not a value
+// error: write `import fs;` at the top of the file, then use its names with `::`, as in `try fs::read(path)`
+// error: to read all of a file, write `import fs;` at the top of the file, then `string text = try fs::read(path);`
+// error: To use C's, declare it: `extern "C" { struct FILE; FILE* fopen(string path, string mode); }`
+// error: 'json' is a module, not a value
+// error: write `import json;` at the top of the file, then use its names with `::`, as in `json::stringify(x)`
+// error: 'http' is a module, not a value
+// error: as in `try http::get(url)`
+// error: 'reflect' is a module, not a value
+// error: as in `reflect::type<T>()`

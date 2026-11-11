@@ -1,0 +1,8 @@
+// With no input at all, the first readLine() is already null, and the loop does not run.
+int main() {
+    int count = 0;
+    while (auto line = readLine()) count++;
+    println("{} {}", count, readLine() == null);
+    // expect: 0 true
+    return 0;
+}

@@ -21,6 +21,9 @@ in the file:
   // link-c: <file>     a C file under tests/c, built with the C compiler ($CC or cc)
                        and linked into the program
   // args: <arguments>  the command-line arguments the program runs with
+  // stdin: <text>      what the program reads from standard input, after what the directives before it
+                       give. `\\n`, `\\r`, `\\t`, `\\0` and `\\\\` stand for those characters, and a line
+                       ends only where `\\n` is written. Without one, the program's input is empty
   // race: <text>       the program has a race on purpose: it is only built with --race, and
                        must stop, with this in its report
   // no-race: <why>     the program has `spawn`, but is not built with --race
@@ -35,6 +38,8 @@ libuv.
 A test that has `import http;` gets a local server, tests/http_server.py, whose addresses
 come as environment variables, so no test needs the network. These tests are left out,
 with a note, if the compiler was built without libcurl.
+
+A program runs in a folder of its own, where it can make files, which is its working directory.
 
 A program that runs is built four ways, plain and as a debug build, each without and
 with -O, and must behave the same every time. It runs with CPLUS_CHECK_LEAKS=1, so a
@@ -54,7 +59,8 @@ of the spec has an example in examples/features, that `cplus explain` finds ever
 every program in examples/ compiles without warnings, that very deeply nested code is an
 error instead of a crash, that no way of copying a unique reference compiles, that a
 crash whose report cannot flush the program's output still says what happened, that lines
-printed by threads stay together, that a program links what it uses and no more, that mistakes in
+printed by threads stay together, that a program links what it uses and no more, and has only the parts of
+the library it uses, that mistakes in
 the command line are reported as other errors are, and that the code in the spec compiles, and that `cplus fmt` does what tests/fmt says, keeps every test the same program and finds
 examples/ in its style (`fmt` as the name filter runs this alone), that `cplus lsp` answers an editor as it should (`lsp`
 runs that alone), and that the VS Code extension colors every keyword. The check of
@@ -542,7 +548,16 @@ PLANNED_FEATURES = [
     ("string replace", M % 'string s; s.replace(0, 1, "x");'),
     ("string rfind", M % 'string s; auto n = s.rfind("x");'),
     ("string compare", M % 'string s; auto n = s.compare("x");'),
-    ("parsing numbers", M % 'int n = stoi("1");'),
+    ("stoul", M % 'long n = stoul("1");'),
+    ("writing files", 'import fs;\n' + M % 'fs::write("a.txt", "x");'),
+    ("appending to files", 'import fs;\n' + M % 'fs::append("a.txt", "x");'),
+    ("whether a file exists", 'import fs;\n' + M % 'bool b = fs::exists("a.txt");'),
+    ("removing files", 'import fs;\n' + M % 'fs::remove("a.txt");'),
+    ("listing a folder", 'import fs;\n' + M % 'auto names = fs::list(".");'),
+    ("opening a file", 'import fs;\n' + M % 'auto f = fs::open("a.txt");'),
+    ("reading a file in an async function", 'import fs;\n' + M % 'auto t = fs::readFile("a.txt");'),
+    ("writing a file in an async function", 'import fs;\n' + M % 'auto t = fs::writeFile("a.txt", "x");'),
+    ("ofstream", M % 'ofstream out("a.txt");'),
     ("vector insert", M % "vector<int> v; v.insert(v.begin(), 1);"),
     ("vector erase", M % "vector<int> v; v.erase(0);"),
     ("vector iterators", M % "vector<int> v; auto b = v.begin();"),
@@ -607,6 +622,7 @@ def check_planned_features(cplus, workdir):
 SHEET_PRELUDE = """import json;
 import http;
 import reflect;
+import fs;
 struct Point { int x = 0; int y = 0; };
 struct Settable { int x = 0; void set() { x = 1; } };
 struct P { int x = 0; int y = 0; };
@@ -796,6 +812,9 @@ SPEC_REJECTED = {
     "(int*)0x1000": "int* p = (int*)0x1000;", "int* p = 0;": "int* p = 0;", "T&": "^template<typename T> void f2(T& x) {}", "int* a, b;": "int* a, b;",
     "new int[3]{1, 2, 3}": "auto p = new int[3]{1, 2, 3};", "new (buffer) T": "int buffer = 0; auto p = new (buffer) int;", "new auto(x)": "int x = 1; auto p = new auto(x);",
     "[[nodiscard]]": "^[[nodiscard]] int f2() { return 1; }", "int x{5}": "int x{5};", "int x(5)": "int x(5);", "int f(int x);": "^int f2(int x);", "int values[]": '^extern "C" void f2(int values[]);',
+    "fs::exists": 'bool b = fs::exists("a.txt");', "fs::remove": 'fs::remove("a.txt");', "fs::list": 'auto names = fs::list(".");',
+    "fs::open": 'auto f = fs::open("a.txt");', "fs::readFile": 'auto t = fs::readFile("a.txt");', "fs::writeFile": 'auto t = fs::writeFile("a.txt", "x");',
+    "std::getline(std::cin, line)": "string line; std::getline(std::cin, line);", "std::cin >> n": "int n = 0; std::cin >> n;",
     "char name[64];": '^extern "C" { struct S2 { char name[64]; }; }', "typedef struct { ... } name;": "^typedef struct { int a; } name;", "struct FILE*": "struct FILE* f = null;",
     "typedef struct _IO_FILE FILE;": "^typedef struct _IO_FILE FILE;", "#define SQLITE_OK 0": "^#define SQLITE_OK 0",
     "f[i]": "FILE* f = null; int i = 0; auto x = f[i];", "f + 1": "FILE* f = null; auto x = f + 1;", "sizeof(FILE)": "long x = sizeof(FILE);", "typedef struct x x;": "^typedef struct x x;",
@@ -1404,6 +1423,25 @@ def check_reflect_alone(cplus, workdir):
     return True
 
 
+def check_library_alone(cplus, workdir):
+    """What fs, readLine() and stoi are written on is only in a program that uses them, and each only for itself."""
+    source = workdir / "library_alone.cplus"
+    names = ["cplus_fs_read", "cplus_read_line", "cplus_parse_int", "cplus_parse_long", "cplus_parse_double", "cplus_parse_float"]
+    cases = [("int main() { return 0; }\n", []),
+             ('import fs;\nint main() throws { println("{}", try fs::read("a")); return 0; }\n', ["cplus_fs_read"]),
+             ('int main() { println("{}", readLine() ?? ""); return 0; }\n', ["cplus_read_line"]),
+             ('int main() throws { println("{}", try stoi("1")); return 0; }\n', ["cplus_parse_int"])]
+    ok = True
+    for text, wanted in cases:
+        source.write_text(text)
+        run = subprocess.run([cplus, "build", str(source), "--emit-llvm"], capture_output=True, text=True)
+        found = [name for name in names if name in run.stdout]
+        if run.returncode != 0 or found != wanted:
+            print(f"FAIL a program has {found} of the library, and not {wanted}:\n  {text.strip()}\n  " + run.stderr[:300])
+            ok = False
+    return ok
+
+
 def check_json_of_direct(cplus, workdir):
     """json::of makes its value directly, as text between the two would cost twice as much."""
     source = workdir / "json_of.cplus"
@@ -1536,6 +1574,11 @@ def start_http_server():
     return server
 
 
+def unescape(text):
+    """What a directive writes as `\\n` and the rest, as the characters they stand for."""
+    return re.sub(r"\\(.)", lambda m: {"n": "\n", "r": "\r", "t": "\t", "0": "\0", "\\": "\\"}.get(m.group(1), m.group(0)), text)
+
+
 def run_case(cplus, path, workdir):
     text = path.read_text()
     expect = re.findall(r"//[ \t]*expect:[ \t]?(.*)$", text, re.M)
@@ -1552,6 +1595,8 @@ def run_case(cplus, path, workdir):
         extra += ["-L", str(workdir), "-l" + (ROOT / c_file).stem]
     args_m = re.search(r"//[ \t]*args:[ \t]*(.*?)[ \t]*$", text, re.M)
     args = args_m.group(1).split() if args_m else []
+    given = re.findall(r"//[ \t]*stdin:[ \t]?(.*)$", text, re.M)
+    stdin = "".join(unescape(line) for line in given) if given else None
     exit_m = re.search(r"//[ \t]*exit:[ \t]*(-?\d+)", text)
     want_exit = int(exit_m.group(1)) if exit_m else 0
     rel = path.relative_to(ROOT)
@@ -1585,13 +1630,13 @@ def run_case(cplus, path, workdir):
         builds += [["--race"], ["--race", "-O"]]
     for flags in builds:
         problem = run_program(cplus, rel, workdir / path.stem, [*extra, *flags], expect, traps, want_exit, warnings,
-                              stderr, args)
+                              stderr, args, stdin)
         if problem:
             return (f"with {' '.join(flags)}: " if flags else "") + problem
     return None
 
 
-def run_program(cplus, rel, exe, flags, expect, traps, want_exit, warnings, stderr, args):
+def run_program(cplus, rel, exe, flags, expect, traps, want_exit, warnings, stderr, args, stdin=None):
     build = subprocess.run([cplus, "build", str(rel), "-o", str(exe), *flags], cwd=ROOT, capture_output=True,
                            text=True)
     if build.returncode != 0:
@@ -1607,7 +1652,8 @@ def run_program(cplus, rel, exe, flags, expect, traps, want_exit, warnings, stde
     # A build with --race runs many times slower.
     limit = 60 if "--race" in flags else 10
     try:
-        run = subprocess.run([str(exe), *args], capture_output=True, text=True, timeout=limit, env=env)
+        given = {"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}
+        run = subprocess.run([str(exe), *args], capture_output=True, text=True, timeout=limit, env=env, cwd=exe.parent, **given)
     except subprocess.TimeoutExpired:
         return f"timed out after {limit} seconds"
     if traps:
@@ -1678,6 +1724,7 @@ def main():
             ok = check_threads_linked(cplus, pathlib.Path(tmp)) and ok
             ok = check_reflect_alone(cplus, pathlib.Path(tmp)) and ok
             ok = check_json_of_direct(cplus, pathlib.Path(tmp)) and ok
+            ok = check_library_alone(cplus, pathlib.Path(tmp)) and ok
             ok = check_advice_grid(cplus, pathlib.Path(tmp)) and ok
             ok = check_source_rules() and ok
             for name in tracked_binaries():

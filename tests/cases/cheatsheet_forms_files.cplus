@@ -1,0 +1,73 @@
+// The forms of files, input and numbers that the cheat sheet and the spec show, written as they write them.
+// check_cheat_sheet in tests/run_tests.py looks for each one here or in the other cheatsheet_forms files.
+// stdin: 21\n
+import fs;
+
+extern "C" {
+    struct FILE;
+    FILE* fopen(string path, string mode);
+    int fputs(string text, FILE* f);
+    int fclose(FILE* f);
+}
+
+void make() {
+    FILE* f = fopen("notes.txt", "w");
+    fputs("a note", f);
+    fclose(f);
+}
+
+string readIt(string path) throws {
+    string text = try fs::read(path);
+    return text;
+}
+
+int doubled() throws {
+    string text = "21";
+    int n = try stoi(text);
+    return n * 2;
+}
+
+int fromInput() throws {
+    while (auto line = readLine()) {
+        int n = try stoi(line);
+        return n;
+    }
+    return 0;
+}
+
+int main() throws {
+    make();
+    try {
+        string text = try fs::read("notes.txt");
+        println("{}", text);
+    } catch (fs::Error e) {
+        println("{} {} {}", e.kind, e.path, e.what());
+    }
+    // expect: a note
+    println("{} {}", try readIt("notes.txt"), try doubled());
+    // expect: a note 42
+    println("{}", try fromInput());
+    // expect: 21
+    try {
+        string text = try fs::read("gone.txt");
+    } catch (fs::Error e) {
+        println("{} {}", e.kind == "not-found", e.path);
+    }
+    // expect: true gone.txt
+    vector<string> kinds = {"not-found", "permission", "is-directory", "bad-path", "io"};
+    println("{}", kinds);
+    // expect: ["not-found", "permission", "is-directory", "bad-path", "io"]
+    try {
+        println("{}", try stoi("3000000000"));
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // expect: "3000000000" does not fit in an int
+    try {
+        println("{}", try stod("1e999"));
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    // expect: "1e999" does not fit in a double
+    return 0;
+}

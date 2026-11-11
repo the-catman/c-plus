@@ -52,6 +52,11 @@ constexpr Alias kAliases[] = {
     {"lsp", "the-language-server"},  {"editor", "the-language-server"}, {"vscode", "the-language-server"},
     {"include", "c-headers"},        {"header", "c-headers"},        {"headers", "c-headers"},
     {"libclang", "c-headers"},       {"macro", "c-headers"},         {"define", "c-headers"},
+    {"fs", "files"},                 {"file", "files"},              {"read", "files"},
+    {"readline", "reading-input"},   {"input", "reading-input"},     {"stdin", "reading-input"},
+    {"getline", "reading-input"},    {"cin", "reading-input"},       {"stoi", "parsing-numbers"},
+    {"stol", "parsing-numbers"},     {"stod", "parsing-numbers"},    {"stof", "parsing-numbers"},
+    {"atoi", "parsing-numbers"},     {"number", "parsing-numbers"},
 };
 
 std::string slug(std::string_view heading) {

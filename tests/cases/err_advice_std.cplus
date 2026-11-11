@@ -27,7 +27,7 @@ void aSwap() {
 }
 void aLine() {
     std::getline(1);
-    // error: declare C's: `extern "C" int getchar();`, as there are no input functions yet
+    // error: write `while (auto line = readLine()) { ... }`: `readLine()` gives the next line of standard input, and null at its end
 }
 void moduleInAList() {
     vector<json::Value> v;

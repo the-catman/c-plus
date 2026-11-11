@@ -50,7 +50,7 @@ void Parser::notYet(Loc loc, const std::string& feature, const std::string& help
 }
 
 // The `&` or `&&` after the type of a parameter, a variable or a catch. Returns whether this is a reference.
-bool Parser::parseReferenceMark(const Type* ty, bool isConst, ReferencePlace place) {
+bool Parser::parseReferenceMark(const Type* ty, ReferencePlace place) {
     const std::string name = ty->name;
     Loc at = peek().loc;
     if (check(Tok::AmpAmp))
@@ -331,6 +331,17 @@ void Parser::addBuiltins() {
     usesError = usesError || builtinTask;  // what a task that fails holds
     usesMutex = usesMutex || usesGuard;
     prog_->linksThreads = usesSpawn || builtinTask || (usesMutex && !definesMutex);
+    std::string libraryThrower;
+    Loc libraryThrowerLoc;
+    const std::vector<const SourceFile*> library = librarySources(modules, !definesError, libraryThrower, libraryThrowerLoc);
+    if (!libraryThrower.empty()) {
+        usesError = true;
+        if (definesError) {
+            gaveUp_ = true;
+            diags_.error(libraryThrowerLoc, "'" + libraryThrower + "' uses the built-in class 'Error', but this program has its own",
+                         "rename your class. One of your own for errors can derive from the built-in one: `class AppError : public Error { ... };`", spec::Errors);
+        }
+    }
     if (usesError && !definesError) {
         static const SourceFile builtin("<built-in>",
                                         "class Error {\n"
@@ -378,7 +389,59 @@ void Parser::addBuiltins() {
         static const SourceFile builtin("<built-in>", kReflectSource);
         addBuiltinSource(builtin);
     }
+    for (const SourceFile* source : library) addBuiltinSource(*source);
     if (!modules.empty()) joinModuleNames(modules);
+}
+
+// `import fs;`, and the functions that need no import, each when the program uses it, as `readLine()`, and has no function or
+// variable of that name at the top level, which then takes its place, as for `delay`. A method of that name is the type's own.
+// Without `canThrow` what throws is left out, as the program has an `Error` of its own, which is reported.
+std::vector<const SourceFile*> Parser::librarySources(const std::set<std::string>& modules, bool canThrow, std::string& thrower, Loc& throwerLoc) const {
+    static const SourceFile fs("<built-in>", kFsSource), readLine("<built-in>", kReadLineSource), stoi("<built-in>", kStoiSource),
+        stol("<built-in>", kStolSource), stod("<built-in>", kStodSource), stof("<built-in>", kStofSource);
+    struct Named {
+        const char* name;
+        const SourceFile* source;
+        bool throws;
+    };
+    static const Named named[] = {{"readLine", &readLine, false}, {"stoi", &stoi, true}, {"stol", &stol, true}, {"stod", &stod, true}, {"stof", &stof, true}};
+    std::vector<const SourceFile*> out;
+    if (modules.count("fs")) {
+        thrower = "fs";
+        for (size_t i = 0; i + 1 < toks_.size(); ++i)
+            if (toks_[i].kind == Tok::KwImport && toks_[i + 1].kind == Tok::Ident && toks_[i + 1].text == "fs") throwerLoc = toks_[i + 1].loc;
+        if (canThrow) out.push_back(&fs);
+    }
+    std::vector<bool> braces;  // for each `{` that is open, whether it is that of `extern "C" {`
+    std::set<std::string> used, defined;
+    std::map<std::string, Loc> firstUse;
+    for (size_t i = 0; i + 1 < toks_.size() && toks_[i].loc.line != 0; ++i) {
+        const Token& t = toks_[i];
+        if (t.kind == Tok::LBrace) braces.push_back(i >= 2 && toks_[i - 1].kind == Tok::StringLit && toks_[i - 2].kind == Tok::KwExtern);
+        if (t.kind == Tok::RBrace && !braces.empty()) braces.pop_back();
+        if (t.kind != Tok::Ident || std::none_of(std::begin(named), std::end(named), [&](const Named& n) { return t.text == n.name; })) continue;
+        const Tok before = i ? toks_[i - 1].kind : Tok::Eof, after = toks_[i + 1].kind;
+        if (before == Tok::Dot || before == Tok::Arrow || before == Tok::QuestionDot || before == Tok::ColonColon) continue;  // a member
+        const bool typeBefore = before == Tok::KwInt || before == Tok::KwLong || before == Tok::KwBool || before == Tok::KwString || before == Tok::KwVoid ||
+                                before == Tok::KwAuto || before == Tok::KwDouble || before == Tok::KwFloat || before == Tok::KwChar || before == Tok::Ident ||
+                                before == Tok::Star || before == Tok::Greater || before == Tok::Shr || before == Tok::Question;
+        if (typeBefore && (after == Tok::LParen || after == Tok::Assign || after == Tok::Semi)) {  // declared: `int stoi(`
+            bool topLevel = true;
+            for (bool inC : braces) topLevel = topLevel && inC;
+            if (topLevel) defined.insert(t.text);
+            continue;
+        }
+        if (used.insert(t.text).second) firstUse[t.text] = t.loc;
+    }
+    for (const Named& n : named) {
+        if (!used.count(n.name) || defined.count(n.name)) continue;
+        if (n.throws && thrower.empty()) {
+            thrower = n.name;
+            throwerLoc = firstUse[n.name];
+        }
+        if (canThrow || !n.throws) out.push_back(n.source);
+    }
+    return out;
 }
 
 // `import <sqlite3.h>;`: the header's declarations that the program uses, written in C+, are read after the program, as what
@@ -1803,11 +1866,15 @@ void Parser::failStd(Loc loc, const Token& name) {
     if (isMathFunction(n) || isCharFunction(n))
         fail(loc, "C+ has no std:: namespace", "it is built in: write `" + n + "(...)` instead of `std::" + n + "(...)`",
              isMathFunction(n) ? spec::Math : spec::Char);
-    if (std::string reader = cNumberReader(n); !reader.empty())
+    if (std::string reader = cNumberReader(n); !reader.empty() && n != "strtol" && n != "strtod") {
+        const std::string use = n == "stoi" || n == "atoi" ? "stoi" : n == "stod" || n == "atof" ? "stod" : n == "stof" ? "stof" : "stol";
         fail(loc, "C+ has no std:: namespace",
-             "this compiler cannot read a number from a string yet. Until then, declare the C function: `extern \"C\" " +
-                 reader + ";`",
-             spec::Status);
+             "write `try " + use + "(s)`, which is built in" + (n == "stoll" ? ", as a `long` is 64 bits" : n == "stoul" || n == "stoull" ? ", as there are no unsigned types yet" : "") +
+                 ". It throws an Error if the text is not a number",
+             spec::ParsingNumbers);
+    }
+    if (n == "strtol" || n == "strtod")
+        fail(loc, "C+ has no std:: namespace", "a C function must be declared: `extern \"C\" " + cNumberReader(n) + ";`", spec::CFunctions);
     if (n == "numbers")
         fail(loc, "C+ has no std:: namespace", "math constants are planned. Until then, `acos(-1)` is pi", spec::Math);
     if (n == "optional" || n == "nullopt")
@@ -1844,8 +1911,18 @@ void Parser::failStd(Loc loc, const Token& name) {
         fail(loc, "C+ has no std:: namespace", "write the loop: this compiler has no sorting yet, nor the other algorithms of C++", spec::Status);
     if (n == "swap")
         fail(loc, "C+ has no std:: namespace", "write it with a third variable: `auto t = a; a = b; b = t;`", spec::Variables);
-    if (n == "getline" || n == "cin")
-        fail(loc, "C+ has no std:: namespace", "declare C's: `extern \"C\" int getchar();`, as there are no input functions yet", spec::CFunctions);
+    if (n == "getline")
+        fail(loc, "C+ has no std:: namespace", "write `while (auto line = readLine()) { ... }`: `readLine()` gives the next line of standard input, and null at its end",
+             spec::ReadingInput);
+    if (n == "cin")
+        fail(loc, "C+ has no std:: namespace", "read a line with `readLine()`, which is null at the end of the input, and a number from it with `try stoi(line)`",
+             spec::ReadingInput);
+    if (n == "ifstream" || n == "fstream" || n == "fs" || n == "filesystem")
+        fail(loc, "C+ has no std:: namespace", "to read all of a file, write `import fs;` at the top of the file, then `string text = try fs::read(path);`", spec::Files);
+    if (n == "ofstream")
+        fail(loc, "C+ has no std:: namespace",
+             "writing files is planned. Until then, declare C's: `extern \"C\" { struct FILE; FILE* fopen(string path, string mode); int fputs(string text, FILE* f); int fclose(FILE* f); }`",
+             spec::Files);
     if (n == "weak_ptr")
         fail(loc, "C+ has no std:: namespace", "write `weak<Node>`, which works like std::weak_ptr", spec::Weak);
     if (n == "unique_ptr")
@@ -1961,6 +2038,11 @@ void Parser::checkUnknownPointerType() {
         t.text == "uint64_t" || t.text == "unsigned")
         fail(t.loc, "unknown type '" + t.text + "'",
              "write `" + std::string(t.text == "unsigned" || t.text == "int32_t" || t.text == "uint32_t" ? "int" : "long") + "* " + peek(i).text + "`, which has the same size", spec::IntegerTypes);
+    if (t.text == "FILE")
+        fail(t.loc, "unknown type 'FILE'",
+             "to read all of a file, write `import fs;` at the top of the file, then `string text = try fs::read(path);`. To use C's, declare the type first, at the "
+             "top level: `extern \"C\" struct FILE;`",
+             spec::CTypes);
     fail(t.loc, "unknown type '" + t.text + "'",
          "check the spelling, or define it. If '" + t.text + "' is a C type used through pointers, declare it first, at the top level: `extern \"C\" "
          "struct " + t.text + ";`",
@@ -2179,6 +2261,10 @@ void Parser::checkUnknownType() {
         help = "write `" + std::string(use) + "`, which has the same size as '" + t.text + "'";
     else if (t.text == "unsigned")
         notYet(t.loc, "unsigned integer types", "use int (32-bit) or long (64-bit); both are signed and the same size on every platform");
+    else if (t.text == "ifstream" || t.text == "fstream")
+        fail(t.loc, "unknown type '" + t.text + "'", "to read all of a file, write `import fs;` at the top of the file, then `string text = try fs::read(path);`", spec::Files);
+    else if (t.text == "ofstream")
+        notYet(t.loc, "writing files", "declare C's for now: `extern \"C\" { struct FILE; FILE* fopen(string path, string mode); int fputs(string text, FILE* f); int fclose(FILE* f); }`");
     else
         help = "write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the "
                "structs and classes of the program";
@@ -2567,7 +2653,7 @@ void Parser::parseParams(FuncDecl& fn) {
             bool isConst = false;
             const Type* ty = parseType(typeLoc, &isConst);
             if (ty->is(Type::Kind::Auto)) notYet(typeLoc, "'auto' parameters", "write the parameter type");
-            bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) && parseReferenceMark(ty, isConst, ReferencePlace::Parameter);
+            bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) && parseReferenceMark(ty, ReferencePlace::Parameter);
             const Token& pname = expectNewName("for the parameter name");
             rejectTemplateParamName(pname);
             if (check(Tok::LBracket) && fn.name == "main" && fn.role == FuncDecl::Role::Free) {
@@ -3061,7 +3147,7 @@ StmtPtr Parser::parseTry() {
                 fail(peek().loc, "a catch says the type of error it takes", "write `catch (Error " + peek().text + ")`", spec::Errors);
             bool isConst = false;
             clause.type = parseType(clause.typeLoc, &isConst);
-            if (check(Tok::AmpAmp)) parseReferenceMark(clause.type, isConst, ReferencePlace::Catch);
+            if (check(Tok::AmpAmp)) parseReferenceMark(clause.type, ReferencePlace::Catch);
             match(Tok::Amp);  // `catch (const Error& e)` means `catch (Error e)`: an error is a class object, already a reference
             if (check(Tok::Ident)) {
                 const Token& name = expectNewName("for the name of the error");
@@ -3169,7 +3255,7 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
                    "name the whole value, and reach into it: `for (auto e : m) ... e.first ... e.second`, or `auto p = f(); ... p.x`");
         Loc refLoc = peek().loc;
         bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) &&
-                     parseReferenceMark(ty, isConst, localScopes_.empty() ? ReferencePlace::Constant : ReferencePlace::Local);
+                     parseReferenceMark(ty, localScopes_.empty() ? ReferencePlace::Constant : ReferencePlace::Local);
         const Token& name =
             expectNewName(decls.empty() ? "for the variable name" : "for the next variable name after ','");
         rejectTemplateParamName(name);
@@ -3357,7 +3443,7 @@ StmtPtr Parser::parseFor() {
         bool ref = check(Tok::Amp) || check(Tok::AmpAmp);
         if ((ref && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Colon) ||
             (check(Tok::Ident) && peek(1).kind == Tok::Colon)) {
-            if (check(Tok::AmpAmp)) parseReferenceMark(ty, isConst, ReferencePlace::Loop);
+            if (check(Tok::AmpAmp)) parseReferenceMark(ty, ReferencePlace::Loop);
             bool constRef = ref && isConst;
             if (constRef) advance();
             if (ref && !constRef) {
@@ -3935,7 +4021,7 @@ ExprPtr Parser::parsePrimary() {
                 if (isBuiltinModule(t.text))
                     fail(t.loc, "'" + t.text + "::" + peek(1).text + "' is in the module '" + t.text + "', which this program does not import",
                          "write `import " + t.text + ";` at the top of the file", spec::Modules);
-                notYet(t.loc, "module members like '" + t.text + "::" + peek(1).text + "'", "write the name without `" + t.text + "::`. The modules today are `http`, `json` and `reflect`, each with its `import`. Built-ins need no prefix");
+                notYet(t.loc, "module members like '" + t.text + "::" + peek(1).text + "'", "write the name without `" + t.text + "::`. The modules today are `fs`, `http`, `json` and `reflect`, each with its `import`. Built-ins need no prefix");
             }
             if (t.loc.line == 0 && (t.text == "__zero" || t.text == "__type_of")) {  // see Builtins.h
                 expect(Tok::LParen, "after " + t.text);

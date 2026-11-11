@@ -117,7 +117,8 @@ bool isCPlusKeyword(const std::string& w) {
 // What C+ has itself, under the same name, which a header's would only hide.
 bool isLanguageName(const std::string& n) {
     static const std::set<std::string> names = {"print",  "println", "format", "to_string", "move",  "min",       "max",   "delay", "vector", "array",
-                                                "hashmap", "Task",   "unique", "local",     "Mutex", "LockGuard", "Error", "main",  "NULL"};
+                                                "hashmap", "Task",   "unique", "local",     "Mutex", "LockGuard", "Error", "main",  "NULL",
+                                                "readLine", "stoi", "stol", "stod", "stof"};
     return names.count(n) || isMathFunction(n) || isCharFunction(n);
 }
 

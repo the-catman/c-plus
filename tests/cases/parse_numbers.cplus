@@ -1,0 +1,199 @@
+// stoi, stol, stod and stof take all of the text as the number, in decimal, with only spaces around it, and throw an
+// Error for anything else. None of them stops the program.
+string asInt(string text) {
+    try {
+        return to_string(try stoi(text));
+    } catch (Error e) {
+        return e.what();
+    }
+}
+
+string asLong(string text) {
+    try {
+        return to_string(try stol(text));
+    } catch (Error e) {
+        return e.what();
+    }
+}
+
+string asDouble(string text) {
+    try {
+        return format("{}", try stod(text));
+    } catch (Error e) {
+        return e.what();
+    }
+}
+
+string asFloat(string text) {
+    try {
+        return format("{}", try stof(text));
+    } catch (Error e) {
+        return e.what();
+    }
+}
+
+int main() throws {
+    // Spaces, as isspace finds them, on both sides.
+    for (string text : vector<string>{"42", " 42", "42 ", "\t\n\x0b\x0c\r 42 \r\n", "+42", "-42", "007", "-0", "0"})
+        println("{}", asInt(text));
+    // expect: 42
+    // expect: 42
+    // expect: 42
+    // expect: 42
+    // expect: 42
+    // expect: -42
+    // expect: 7
+    // expect: 0
+    // expect: 0
+
+    // The rest of the text must be the number too.
+    for (string text : vector<string>{"", "   ", "12abc", "12 3", "abc", "+-5", "-+5", "- 5", "--5", "+", "-", "4-", "0x1F", "0b1", "1'000", "5L", "1,000"})
+        println("{}", asInt(text));
+    // expect: "" is not a whole number
+    // expect: "   " is not a whole number
+    // expect: "12abc" is not a whole number
+    // expect: "12 3" is not a whole number
+    // expect: "abc" is not a whole number
+    // expect: "+-5" is not a whole number
+    // expect: "-+5" is not a whole number
+    // expect: "- 5" is not a whole number
+    // expect: "--5" is not a whole number
+    // expect: "+" is not a whole number
+    // expect: "-" is not a whole number
+    // expect: "4-" is not a whole number
+    // expect: "0x1F" is not a whole number
+    // expect: "0b1" is not a whole number
+    // expect: "1'000" is not a whole number
+    // expect: "5L" is not a whole number
+    // expect: "1,000" is not a whole number
+
+    // A number with a fraction or an exponent is one for stod, which the error says. "inf" is not one of those.
+    for (string text : vector<string>{"1.5", "1e3", ".5", "1.", "-2.5E-3", "inf", "nan"})
+        println("{}", asInt(text));
+    // expect: "1.5" is not a whole number: stod reads one with a fraction or an exponent
+    // expect: "1e3" is not a whole number: stod reads one with a fraction or an exponent
+    // expect: ".5" is not a whole number: stod reads one with a fraction or an exponent
+    // expect: "1." is not a whole number: stod reads one with a fraction or an exponent
+    // expect: "-2.5E-3" is not a whole number: stod reads one with a fraction or an exponent
+    // expect: "inf" is not a whole number
+    // expect: "nan" is not a whole number
+
+    // What does not fit is an error, but the smallest of each type fits.
+    for (string text : vector<string>{"2147483647", "-2147483648", "2147483648", "-2147483649", "3000000000", "99999999999999999999999"})
+        println("{}", asInt(text));
+    // expect: 2147483647
+    // expect: -2147483648
+    // expect: "2147483648" does not fit in an int
+    // expect: "-2147483649" does not fit in an int
+    // expect: "3000000000" does not fit in an int
+    // expect: "99999999999999999999999" does not fit in an int
+    for (string text : vector<string>{"9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "18446744073709551616", "3000000000", " -12 "})
+        println("{}", asLong(text));
+    // expect: 9223372036854775807
+    // expect: -9223372036854775808
+    // expect: "9223372036854775808" does not fit in a long
+    // expect: "-9223372036854775809" does not fit in a long
+    // expect: "18446744073709551616" does not fit in a long
+    // expect: 3000000000
+    // expect: -12
+    println("{}", asLong("12.0"));
+    // expect: "12.0" is not a whole number: stod reads one with a fraction or an exponent
+
+    // Doubles as C++ writes them, and the names of the values that are not numbers, in any case and with a sign.
+    for (string text : vector<string>{"1e5", "1.", ".5", "5", " -2.5e-3 ", "+1E+2", "0.1", "007.50", "inf", "-inf", "INF", "Infinity", "-infinity", "nan", "NaN", "-nan", "+NAN"})
+        println("{}", asDouble(text));
+    // expect: 1e+05
+    // expect: 1
+    // expect: 0.5
+    // expect: 5
+    // expect: -0.0025
+    // expect: 100
+    // expect: 0.1
+    // expect: 7.5
+    // expect: inf
+    // expect: -inf
+    // expect: inf
+    // expect: inf
+    // expect: -inf
+    // expect: nan
+    // expect: nan
+    // expect: nan
+    // expect: nan
+    for (string text : vector<string>{"", " ", ".", "e5", "1e", "1e+", "1.5.2", "1e5x", "0x10", "0x1p3", "nan(1)", "nan()", "in", "infinit", "1f", "1.5d", "1 5", "--1"})
+        println("{}", asDouble(text));
+    // expect: "" is not a number
+    // expect: " " is not a number
+    // expect: "." is not a number
+    // expect: "e5" is not a number
+    // expect: "1e" is not a number
+    // expect: "1e+" is not a number
+    // expect: "1.5.2" is not a number
+    // expect: "1e5x" is not a number
+    // expect: "0x10" is not a number
+    // expect: "0x1p3" is not a number
+    // expect: "nan(1)" is not a number
+    // expect: "nan()" is not a number
+    // expect: "in" is not a number
+    // expect: "infinit" is not a number
+    // expect: "1f" is not a number
+    // expect: "1.5d" is not a number
+    // expect: "1 5" is not a number
+    // expect: "--1" is not a number
+
+    // Too large is an error, as in C++. Too small is rounded, to zero at last.
+    for (string text : vector<string>{"1e308", "1e999", "-1e999", "1e-400", "4.9e-324", "1" + string(400, '0')})
+        println("{}", asDouble(text));
+    // expect: 1e+308
+    // expect: "1e999" does not fit in a double
+    // expect: "-1e999" does not fit in a double
+    // expect: 0
+    // expect: 5e-324
+    // expect: "1000000000000000000000000000000000000000..." does not fit in a double
+    for (string text : vector<string>{"0.5", "3.4e38", "1e39", "-1e39", "1e-50", "inf", "x"})
+        println("{}", asFloat(text));
+    // expect: 0.5
+    // expect: 3.4e+38
+    // expect: "1e39" does not fit in a float
+    // expect: "-1e39" does not fit in a float
+    // expect: 0
+    // expect: inf
+    // expect: "x" is not a number
+
+    // What to_string writes, stod reads back as the same value.
+    double nan = 0.0 / 0;
+    for (double x : vector<double>{0.1, -2.5, 1e300, 5e-324, 1.0 / 3, 1.0 / 0, -1.0 / 0, -0.0, 123456789.125}) {
+        double back = try stod(to_string(x));
+        print("{} ", back == x && (x != 0 || 1 / back == 1 / x));
+    }
+    println("{} {}", isnan(try stod(to_string(nan))), isnan(try stod(to_string(-nan))));
+    // expect: true true true true true true true true true true true
+
+    // A zero byte is one more character that is not a digit, and the text an error quotes is escaped, and cut short.
+    println("{}", asInt("1" + string(1, '\0')));
+    // expect: "1\x00" is not a whole number
+    println("{}", asDouble("2.5" + string(1, '\0') + "1"));
+    // expect: "2.5\x001" is not a number
+    println("{}", asInt("say \"hi\"\n\ttwice"));
+    // expect: "say \"hi\"\n\ttwice" is not a whole number
+    println("{}", asInt(string(39, 'a') + "é and more"));
+    // expect: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa..." is not a whole number
+    println("{}", asInt(string(40, '7')));
+    // expect: "7777777777777777777777777777777777777777" does not fit in an int
+    println("{}", asInt(string(41, '7')));
+    // expect: "7777777777777777777777777777777777777777..." does not fit in an int
+
+    // In a try block, as a value passed on with try, and from a vector of lines.
+    vector<string> lines = {"3", "4", "5"};
+    long total = 0;
+    for (string line : lines) total += try stol(line);
+    println("{}", total);
+    // expect: 12
+    try {
+        int bad = try stoi("seven");
+        println("not here {}", bad);
+    } catch (Error e) {
+        println("caught: {}", e.what());
+    }
+    // expect: caught: "seven" is not a whole number
+    return 0;
+}

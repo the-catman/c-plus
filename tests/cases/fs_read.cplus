@@ -1,0 +1,84 @@
+// fs::read gives the bytes of a file as they are, however long it is. The test runs in a folder of its own, where C's
+// functions make the files to read, as fs cannot write yet.
+import fs;
+
+extern "C" {
+    struct FILE;
+    FILE* fopen(string path, string mode);
+    int fputs(string text, FILE* f);
+    int fputc(int c, FILE* f);
+    int fclose(FILE* f);
+    int mkdir(string path, int mode);
+    int symlink(string target, string path);
+    int mkfifo(string path, int mode);
+    int remove(string path);
+}
+
+void write(string path, string text) {
+    FILE* f = fopen(path, "w");
+    fputs(text, f);
+    fclose(f);
+}
+
+string load(string path) throws { return try fs::read(path); }
+
+// What a pipe gives only once something writes to it, which waits for the reader to open it.
+void writePipe(string path) {
+    FILE* f = fopen(path, "w");
+    for (int i = 0; i < 1000; i++) fputs("through a pipe\n", f);
+    fclose(f);
+}
+
+int main() throws {
+    write("empty.txt", "");
+    string empty = try fs::read("empty.txt");
+    println("{} {}", empty.size(), empty == "");
+    // expect: 0 true
+
+    // Line endings stay as they are, and so does a lone \r.
+    write("lines.txt", "one\r\ntwo\nthree\rfour");
+    println("{}", vector<string>{try load("lines.txt")});
+    // expect: ["one\r\ntwo\nthree\rfour"]
+
+    // A byte order mark, bytes that are not UTF-8, and zero bytes are kept.
+    FILE* f = fopen("bytes.bin", "w");
+    for (int c : vector<int>{0xEF, 0xBB, 0xBF, 'a', 0, 'b', 0xFF, 0, 0})
+        fputc(c, f);
+    fclose(f);
+    string bytes = try fs::read("bytes.bin");
+    vector<int> codes;
+    for (char c : bytes) codes.push_back(int(c));
+    println("{} {}", bytes.size(), codes);
+    // expect: 9 [239, 187, 191, 97, 0, 98, 255, 0, 0]
+
+    // More than is read at a time, and more than a buffer of C's.
+    string line = string(999, 'x') + "\n";
+    FILE* big = fopen("big.txt", "w");
+    for (int i = 0; i < 300; i++) fputs(line, big);
+    fclose(big);
+    string all = try fs::read("big.txt");
+    println("{} {} {}", all.size(), all.substr(0, 3), all.ends_with("x\n"));
+    // expect: 300000 xxx true
+
+    // A path is relative to the working directory, and can go through folders and links.
+    mkdir("sub", 448);
+    write("sub/inner.txt", "inside");
+    println("{}", try fs::read("sub/inner.txt"));
+    // expect: inside
+    println("{}", try fs::read("./sub/../sub/inner.txt"));
+    // expect: inside
+    remove("link.txt");
+    symlink("sub/inner.txt", "link.txt");
+    println("{}", try fs::read("link.txt"));
+    // expect: inside
+
+    // A pipe says it has no size, and is read to its end all the same.
+    remove("pipe");
+    mkfifo("pipe", 384);
+    Task<void> writer = spawn writePipe("pipe");
+    string piped = try fs::read("pipe");
+    writer.wait();
+    println("{} {}", piped.size(), piped.substr(0, 14));
+    // expect: 15000 through a pipe
+    return 0;
+}

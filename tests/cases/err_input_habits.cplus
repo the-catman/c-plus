@@ -1,0 +1,26 @@
+// Reading input as C and C++ do, and what the compiler says to write instead.
+void lines() {
+    string line;
+    std::getline(std::cin, line);
+}
+void number() {
+    int n = 0;
+    std::cin >> n;
+}
+void bareGetline() {
+    string line;
+    getline(cin, line);
+}
+void scanning() {
+    int n = 0;
+    scanf("%d", &n);
+}
+int main() { return 0; }
+// error: C+ has no std:: namespace
+// error: write `while (auto line = readLine()) { ... }`: `readLine()` gives the next line of standard input, and null at its end
+// error: spec: docs/SPEC.md#reading-input
+// error: read a line with `readLine()`, which is null at the end of the input, and a number from it with `try stoi(line)`
+// error: 'cin' is not declared
+// error: there is no function named 'getline'
+// error: there is no function named 'scanf'
+// error: read a line with `readLine()`, and a number from it with `try stoi(line)`

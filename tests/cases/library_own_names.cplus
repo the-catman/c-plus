@@ -1,0 +1,25 @@
+// A program's own readLine, stoi or stod takes the place of the built-in one, as a program's own delay does. One that
+// it does not define is still built in, and a method of the same name is a type's own.
+// stdin: from the input\n
+string? readLine() { return "my own line"; }
+int stoi(string text) { return 42; }
+double stod(string text, double fallback) { return fallback; }
+
+class Reader {
+public:
+    string? readLine() { return "a method"; }
+    long stol(string s) { return 7; }
+};
+
+int main() throws {
+    println("{}", readLine() ?? "none");
+    // expect: my own line
+    println("{} {}", stoi("1"), stod("x", 2.5));
+    // expect: 42 2.5
+    Reader r = Reader();
+    println("{} {}", r.readLine() ?? "none", r.stol("1"));
+    // expect: a method 7
+    println("{} {}", try stol("99"), try stof("0.25"));
+    // expect: 99 0.25
+    return 0;
+}

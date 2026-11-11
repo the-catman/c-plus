@@ -1,0 +1,12 @@
+// fs::Error derives from the built-in Error, which a class of the program's own by that name would take the place of.
+import fs;
+class Error {
+public:
+    string message;
+    Error(string m) : message(m) {}
+};
+int main() {
+    return 0;
+}
+// error: 'fs' uses the built-in class 'Error', but this program has its own
+// error: spec: docs/SPEC.md#errors

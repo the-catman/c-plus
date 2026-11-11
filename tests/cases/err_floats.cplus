@@ -68,14 +68,13 @@ int main() {
 // error: this compiler does not support the format option {:.f} yet
 // error: a cast cannot turn a value into a string
 // error: write `to_string(x)`, or `format("{}", x)`
-// error: this compiler does not support reading a number from a string yet
-// error: declare `extern "C" int atoi(string text);`, then call `atoi(s)`
-// error: declare `extern "C" double atof(string text);`, then call `atof(s)`
+// error: a cast cannot read a number from a string
+// error: read the number in the text with `try stoi(s)`, which throws an Error if it is not a whole number
+// error: read the number in the text with `try stod(s)`, which throws an Error if it is not a number
 // error: 'int(x)' converts a number, a char or a bool, but this is 'int?'
 // error: 'long(x)' converts a number, a char or a bool, but this is 'vector<int>'
 // error: convert one of its elements instead, e.g. `long(v[0])`
 // error: sqrt() takes a number, but this is 'string'
-// error: Declare C's: `extern "C" double atof(string text);`, and call `atof(s)`
 // error: pow() takes two arguments but 1 was given
 // error: write `pow(base, exponent)`
 // error: min() takes two arguments but 3 were given
