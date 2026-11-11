@@ -1049,6 +1049,8 @@ Sema::Flow Sema::merge(const Flow& a, const Flow& b) const {
         if (isAssigned(b, v, typeAtPath(v, p), p)) out.assigned.insert({v, p});
     for (auto& [v, p] : b.assigned)
         if (isAssigned(a, v, typeAtPath(v, p), p)) out.assigned.insert({v, p});
+    out.pointsToLocal = a.pointsToLocal;
+    out.pointsToLocal.insert(b.pointsToLocal.begin(), b.pointsToLocal.end());
     return out;
 }
 
@@ -2657,8 +2659,12 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
     }
     if (v.isConstexpr) foldConstexpr(v);
     declare(v);  // after the initializer: `int x = x;` refers to an outer x, as in C++
-    if (v.init) markAssigned(flow, &v, "");
-    else markDefaults(flow, &v, v.type, "");
+    if (v.init) {
+        markAssigned(flow, &v, "");
+        notePointer(flow, &v, *v.init);
+    } else {
+        markDefaults(flow, &v, v.type, "");
+    }
 }
 
 // As in C++, a number used as a condition is true when it is not zero, and an optional
@@ -2882,6 +2888,19 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
                         }
                     }
                     checkValue(*st.value, flow, ret, "as the return value of " + q(fn_->name));
+                    if (const VarDecl* local = flow.reachable ? localPointee(*st.value, flow) : nullptr) {
+                        std::string what = (local->isParam ? "the parameter " : "the local variable ") + q(local->name);
+                        const Expr& v = *st.value;
+                        bool direct = v.kind == Expr::Kind::Unary && static_cast<const UnaryExpr&>(v).operand->kind == Expr::Kind::Name;
+                        diags_.error(v.loc,
+                                     (v.kind == Expr::Kind::Name ? q(static_cast<const NameExpr&>(v).name) + " may point to " : q(fn_->name) + " returns a pointer to ") +
+                                         what + ", which goes away when " + q(fn_->name) + " returns",
+                                     std::string("return the value itself") +
+                                         (direct ? ": make the return type " + q(ret->elem) + " and write `return " + local->name + ";`" : ", with the return type " + q(ret->elem)) +
+                                         ". A pointer that is returned must point to something that outlives the call, such as what a "
+                                         "pointer parameter points to, a field of a class object, or memory from `new`",
+                                     spec::Pointers);
+                    }
                 }
             } else if (!ret->is(K::Void)) {
                 diags_.error(s.loc, "function " + q(fn_->name) + " must return " + q(ret) + " here",
@@ -3759,6 +3778,55 @@ const VarDecl* Sema::rootVariable(const Expr& root) {
     return n.implicitField >= 0 ? thisVar() : n.decl;
 }
 
+const VarDecl* Sema::localPointee(const Expr& e, const Flow& flow) {
+    if (!e.type || !e.type->isPointer()) return nullptr;
+    switch (e.kind) {
+        case Expr::Kind::Unary: {
+            auto& u = static_cast<const UnaryExpr&>(e);
+            if (u.op != UnOp::AddrOf) return nullptr;
+            const Expr* root = nullptr;
+            if (storageOf(*u.operand, root) != Storage::Variable || root->kind == Expr::Kind::This) return nullptr;
+            auto& n = static_cast<const NameExpr&>(*root);
+            if (n.implicitField >= 0) return nullptr;  // a field of the object the method was called on, which outlives the call
+            return n.decl && !n.decl->isTopLevel ? n.decl : nullptr;
+        }
+        case Expr::Kind::Name: {
+            auto found = flow.pointsToLocal.find(static_cast<const NameExpr&>(e).decl);
+            return found == flow.pointsToLocal.end() ? nullptr : found->second;
+        }
+        case Expr::Kind::Binary: {  // `p + n`, `n + p` and `p - n`
+            auto& b = static_cast<const BinaryExpr&>(e);
+            if (b.op != BinOp::Add && b.op != BinOp::Sub) return nullptr;
+            const VarDecl* left = localPointee(*b.lhs, flow);
+            return left ? left : localPointee(*b.rhs, flow);
+        }
+        case Expr::Kind::Ternary: {
+            auto& t = static_cast<const TernaryExpr&>(e);
+            const VarDecl* then = localPointee(*t.thenExpr, flow);
+            return then ? then : localPointee(*t.elseExpr, flow);
+        }
+        case Expr::Kind::Cast: {
+            auto& c = static_cast<const CastExpr&>(e);
+            return c.operand ? localPointee(*c.operand, flow) : nullptr;
+        }
+        case Expr::Kind::MethodCall: {  // `a.data()` of an array that is a local
+            auto& m = static_cast<const MethodCallExpr&>(e);
+            if (m.name != "data" || !m.receiver->type || !m.receiver->type->isArray() || !isPlaceKind(*m.receiver)) return nullptr;
+            const Expr* root = nullptr;
+            if (storageOf(*m.receiver, root) != Storage::Variable || root->kind == Expr::Kind::This) return nullptr;
+            auto& n = static_cast<const NameExpr&>(*root);
+            return n.implicitField < 0 && n.decl && !n.decl->isTopLevel ? n.decl : nullptr;
+        }
+        default: return nullptr;
+    }
+}
+
+void Sema::notePointer(Flow& flow, const VarDecl* var, const Expr& value) {
+    if (!var || var->isTopLevel || !var->type || !var->type->isPointer()) return;
+    if (const VarDecl* local = localPointee(value, flow)) flow.pointsToLocal[var] = local;
+    else flow.pointsToLocal.erase(var);
+}
+
 // `m[key]`. It finds the entry, as `v[i]` finds an element, so it can be read, assigned to and changed in place.
 // As in C++, a key that is missing gets an entry with a default value, unless this is the target of `=`, which
 // gives the value itself. A type with no default value has nothing to put there, so then the program stops.
@@ -4504,6 +4572,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             } else {
                 checkValue(*a.value, flow, t, "when assigning to " + name);
                 if (ok && var) markAssigned(flow, var, path);
+                if (ok && var && path.empty()) notePointer(flow, var, *a.value);
             }
             result = t;
             break;

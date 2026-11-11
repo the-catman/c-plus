@@ -1163,7 +1163,10 @@ if (p) println("{}", *p);       // a pointer is true when it is not null
 - **A pointer is not checked for lifetime.** It does not keep alive what it points to, so
   following a pointer to a local variable whose function has returned, or to memory that
   has been freed, is undefined, as in C++. A [debug build](#debug-builds) catches most of
-  these. A pointer to a class variable does not count as a reference to the object.
+  these. The compiler catches the plainest case: a function that returns the address of its
+  own local variable or parameter is an error, whether as `return &x;`, `return a.data();`
+  or a pointer variable that may hold one. A pointer to a class variable does not count as
+  a reference to the object.
 - **Memory from `malloc` holds no values yet.** Numbers, chars, bools and pointers can
   be stored into it. A string, vector, class reference or optional, or a struct holding
   one, cannot: assigning releases the old value first, and there is none, so this is

@@ -33,6 +33,9 @@ private:
     struct Flow {
         std::set<Place> assigned;
         bool reachable = true;
+        // Pointer variables that may hold the address of a local of this function, and the local, so
+        // that returning one is caught. A path that may have made it so is enough.
+        std::map<const VarDecl*, const VarDecl*> pointsToLocal;
     };
     struct LoopContext {
         std::vector<Flow> breaks;     // state at each `break`
@@ -206,6 +209,10 @@ private:
     // a field of `this` in a const method, or part of a temporary value.
     bool checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path, const std::string& change = " = ...", const std::string& before = "");
     const VarDecl* rootVariable(const Expr& root);
+    // The local variable or parameter of this function that the pointer `e` may point into, or null.
+    const VarDecl* localPointee(const Expr& e, const Flow& flow);
+    // Keeps track of what the pointer variable `var` holds once it is given `value`.
+    void notePointer(Flow& flow, const VarDecl* var, const Expr& value);
     void reportUnknownName(const NameExpr& n);
 
     VarDecl* lookup(const std::string& name);

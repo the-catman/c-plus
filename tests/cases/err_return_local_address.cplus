@@ -1,0 +1,40 @@
+// A function cannot return the address of its own local variable or parameter, which goes away when it returns.
+int* local() {
+    int x = 5;
+    return &x;
+}
+int* parameter(int n) { return &n; }
+int* moved() {
+    int x = 1;
+    int* p = &x;
+    return p + 1;
+}
+int* first() {
+    array<int, 3> a = {1, 2, 3};
+    return a.data();
+}
+int* element() {
+    array<int, 3> a = {1, 2, 3};
+    return &a[1];
+}
+int* onePath(bool c, int* out) {
+    int x = 1;
+    int* p = out;
+    if (c) p = &x;
+    return p;
+}
+const int* cast() {
+    int x = 1;
+    return (const int*)&x;
+}
+int main() {
+    return 0;
+}
+// error: 'local' returns a pointer to the local variable 'x', which goes away when 'local' returns
+// error: make the return type 'int' and write `return x;`
+// error: 'parameter' returns a pointer to the parameter 'n', which goes away when 'parameter' returns
+// error: 'moved' returns a pointer to the local variable 'x'
+// error: 'first' returns a pointer to the local variable 'a'
+// error: 'element' returns a pointer to the local variable 'a'
+// error: 'p' may point to the local variable 'x', which goes away when 'onePath' returns
+// error: 'cast' returns a pointer to the local variable 'x'

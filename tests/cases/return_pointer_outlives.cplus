@@ -1,0 +1,39 @@
+// A returned pointer may point to what outlives the call: what a pointer parameter points to, a field of the
+// object a method was called on, or a class object's field.
+struct Point {
+    int x = 1;
+    int y = 2;
+    int* px() { return &x; }
+};
+class Counter {
+public:
+    int count = 7;
+};
+int* same(int* p) { return p; }
+int* larger(int* a, int* b) { return *a > *b ? a : b; }
+int* reassigned(int* out) {
+    int x = 1;
+    int* p = &x;
+    *p = 2;
+    p = out;
+    return p;
+}
+int* inside(Counter c) {
+    return &c.count;
+}
+int main() {
+    Point pt;
+    *pt.px() = 10;
+    println("{}", pt.x);
+    int a = 3, b = 4;
+    println("{}", *larger(&a, same(&b)));
+    println("{}", *reassigned(&a));
+    Counter c = Counter();
+    *inside(c) += 1;
+    println("{}", c.count);
+    return 0;
+}
+// expect: 10
+// expect: 4
+// expect: 3
+// expect: 8
