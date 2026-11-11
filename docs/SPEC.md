@@ -1818,23 +1818,27 @@ println("{}", greet("cy", "hey", 2));   // hey cy;hey cy;
 
 Every program has exactly one `main`, which returns an `int`, the process exit code. Falling
 off the end of it returns 0, as in C++. It takes no parameters, or the command-line arguments
-as in C++:
+as a vector of strings:
 
 ```cpp
-int main(int argc, char** argv) {
-    if (argc < 2) {
+int main(vector<string> args) {
+    if (args.size() < 2) {
         println("usage: greet <name>");
         return 1;
     }
-    println("hello {}", string(argv[1]));
+    println("hello {}", args[1]);
     return 0;
 }
 ```
 
-`argc` counts the arguments, and `argv[0]` is how the program was started, so the first real
-argument is `argv[1]`. `argv` is a raw [pointer](#pointers), so an index past the end is not
-checked. To pass arguments through `cplus run`, write them after `--`:
-`cplus run greet.cplus -- Ada`.
+`args[0]` is how the program was started, so the first real argument is `args[1]`. It can
+also be `const vector<string>& args`. To pass arguments through `cplus run`, write them after
+`--`: `cplus run greet.cplus -- Ada`, where `args[0]` is then `greet`, the name of the
+program, rather than where `cplus run` built it.
+
+C++'s form works too: `int main(int argc, char** argv)`, where `argc` counts the arguments and
+`string(argv[1])` is the first. `argv` is a raw [pointer](#pointers), so an index past the end
+is not checked.
 
 ### C functions
 

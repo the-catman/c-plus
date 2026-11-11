@@ -1,0 +1,17 @@
+// main can take the command-line arguments as a vector of strings: args[0] is how the program was started.
+// args: one two 3
+int main(vector<string> args) {
+    println("{}", args.size());
+    println("{}", args[1]);
+    for (long i = 2; i < args.size(); ++i) println("{}", args[i]);
+    println("{}", args[0].empty());
+    args.push_back("mine");  // main owns it
+    println("{}", args.back());
+    return 0;
+}
+// expect: 4
+// expect: one
+// expect: two
+// expect: 3
+// expect: false
+// expect: mine

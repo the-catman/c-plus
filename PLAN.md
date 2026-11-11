@@ -801,8 +801,8 @@ will confidently write C++ wherever the two differ.
 - What a module has is one token with `::` in it, not a scope, which is what `joinModuleNames` makes, and a program's own
   modules are named the same way: their names get the module's path in front before parsing (`Modules::qualify`). A program
   cannot tell, since it cannot declare such a name (`err_module_add`). Real scopes would come with nested namespaces.
-- `main` takes its arguments as in C++, through raw pointers. A checked form,
-  `int main(vector<string> args)`, comes in Phase 7.
+- `main` takes its arguments as a `vector<string>` (built 2026-11-11), or as in C++, through raw pointers. `args[0]` is
+  how the program was started; under `cplus run` it is the program's name, not the temporary path it is built at.
 - References (`T&`), in Phase 7. The direction was decided on 2026-11-11: C++'s syntax and meaning, for references that
   are used but not kept, as in Swift and Hylo.
   - In: parameters (`Point& p`, `const T&`), `for (auto& x : v)`, a result used where it is made (`v.back().x = 1`,

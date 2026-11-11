@@ -76,14 +76,16 @@ static int usageError(const std::string& message) {
 
 // Runs a program and waits for it. Returns its exit code, or 128 + signal number. If it cannot be started, this says so, with
 // `help` as what to do about it, and returns -1.
-static int runProcess(const std::vector<std::string>& argv, const std::string& help) {
+// Runs `argv`, from the program at `path`, or else the one `argv[0]` names.
+static int runProcess(const std::vector<std::string>& argv, const std::string& help, const std::string& path = "") {
     std::vector<char*> args;
     for (auto& a : argv) args.push_back(const_cast<char*>(a.c_str()));
     args.push_back(nullptr);
     std::fflush(nullptr);
     pid_t pid;
-    if (int error = posix_spawnp(&pid, args[0], nullptr, nullptr, args.data(), environ)) {
-        toolError(std::string("could not run ") + args[0] + ": " + std::strerror(error), help);
+    const char* program = path.empty() ? args[0] : path.c_str();
+    if (int error = posix_spawnp(&pid, program, nullptr, nullptr, args.data(), environ)) {
+        toolError(std::string("could not run ") + program + ": " + std::strerror(error), help);
         return -1;
     }
     int status = 0;
@@ -439,9 +441,11 @@ static int compilerMain(int argc, char** argv) {
     fs::path exe = fs::path(tmpl) / fs::path(opts.input).stem();
     int rc = build(opts, exe.string());
     if (rc == 0) {
-        std::vector<std::string> argvRun{exe.string()};
+        // The program's first argument is its name, as if it were built and run here, rather than where it is built.
+        std::vector<std::string> argvRun{exe.stem().string()};
         argvRun.insert(argvRun.end(), opts.programArgs.begin(), opts.programArgs.end());
-        rc = runProcess(argvRun, "it is built in the folder for temporary files, which may not allow programs to run. Set the environment variable TMPDIR to a folder that does");
+        rc = runProcess(argvRun, "it is built in the folder for temporary files, which may not allow programs to run. Set the environment variable TMPDIR to a folder that does",
+                        exe.string());
         if (rc < 0) rc = 1;
     }
     std::error_code ec;

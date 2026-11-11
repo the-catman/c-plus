@@ -1484,11 +1484,12 @@ void Sema::check(Program& program) {
             diags_.error(m->retTypeLoc, "main must return int, not " + q(m->bodyRet()),
                          std::string("write `") + (m->isAsync ? "async " : "") + "int main()`; the returned number becomes the exit code", spec::MainFunction);
         auto isArgv = [](const Type* t) { return t->isPointer() && t->elem->isPointer() && t->elem->elem->is(K::Char); };
-        if (!m->params.empty() &&
+        auto isArgs = [](const VarDecl& p) { return p.declType->isVector() && p.declType->elem->is(K::String) && (!p.isRef || p.isConst); };
+        if (!m->params.empty() && !(m->params.size() == 1 && isArgs(*m->params[0])) &&
             !(m->params.size() == 2 && m->params[0]->declType->is(K::Int) && isArgv(m->params[1]->declType) && !m->params[0]->isRef && !m->params[1]->isRef))
-            diags_.error(m->params[0]->loc, "main takes no parameters, or the command-line arguments as in C++",
-                         "write `int main()`, or `int main(int argc, char** argv)`, where `string(argv[1])` is the "
-                         "first argument",
+            diags_.error(m->params[0]->loc, "main takes no parameters, or the command-line arguments",
+                         "write `int main()`, or `int main(vector<string> args)`, where `args[1]` is the first argument. "
+                         "C++'s `int main(int argc, char** argv)` works too",
                          spec::MainFunction);
     }
 

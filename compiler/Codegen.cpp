@@ -58,7 +58,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
-    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtDynamicCast, rtRetainObject, rtObjectStart;
+    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtArgs, rtDynamicCast, rtRetainObject, rtObjectStart;
     llvm::FunctionCallee rtRetainClass, rtReleaseClass, rtFreeClass, rtDestructorHold, rtReferences;
     llvm::FunctionCallee rtWeakRetain, rtWeakRelease, rtWeakLock, rtWeakAlive, rtUncaught;
     llvm::FunctionCallee rtTrapEnum;
@@ -388,6 +388,7 @@ struct Codegen::Impl {
         rtDeleteCheck = decl("cplus_delete_check", i64, {ptrTy, i32, ptrTy, i32, i32});
         rtDeleteFree = decl("cplus_delete_free", voidTy, {ptrTy});
         rtStart = decl("cplus_start", voidTy, {});
+        rtArgs = decl("cplus_args", ptrTy, {i32, ptrTy});
         rtDynamicCast = decl("cplus_dynamic_cast", ptrTy, {ptrTy, ptrTy});
         rtRetainObject = decl("cplus_retain_object", voidTy, {ptrTy});
         rtRetainClass = decl("cplus_retain_class", voidTy, {ptrTy});
@@ -4648,7 +4649,21 @@ struct Codegen::Impl {
         startLineTable(userMain.nameLoc);
         b.CreateCall(rtStart, {});
         std::vector<llvm::Value*> args;
-        if (!userMain.params.empty()) args = {fn->getArg(0), fn->getArg(1)};  // argc and argv
+        llvm::Value* argList = nullptr;  // `int main(vector<string> args)`, or `const vector<string>& args`
+        if (userMain.params.size() == 2) {
+            args = {fn->getArg(0), fn->getArg(1)};  // argc and argv
+        } else if (userMain.params.size() == 1) {
+            const VarDecl& p = *userMain.params[0];
+            argList = b.CreateCall(rtArgs, {fn->getArg(0), fn->getArg(1)}, "args");
+            if (passedByRef(p)) {
+                llvm::AllocaInst* slot = entryAlloca(b.getPtrTy(), "args");
+                b.CreateStore(argList, slot);
+                args = {slot};
+            } else {
+                args = {argList};  // main owns it
+                argList = nullptr;
+            }
+        }
         // The program does not end while anything is pending on the event loop, or a thread is running.
         auto finish = [&](llvm::Value* code) {
             if (usesAsync) b.CreateCall(rtLoopFinish, {});
@@ -4670,6 +4685,7 @@ struct Codegen::Impl {
             if (place) args.push_back(place);
             code = b.CreateCall(funcs.at(&userMain), args);
         }
+        if (argList) releaseValue(argList, userMain.params[0]->type);
         if (!place) {
             finish(code);
             endLineTable();

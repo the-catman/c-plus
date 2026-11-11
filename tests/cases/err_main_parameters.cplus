@@ -1,5 +1,5 @@
 int main(string args) {
     return 0;
 }
-// error: main takes no parameters, or the command-line arguments as in C++
-// error: write `int main()`, or `int main(int argc, char** argv)`
+// error: main takes no parameters, or the command-line arguments
+// error: write `int main()`, or `int main(vector<string> args)`

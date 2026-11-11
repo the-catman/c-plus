@@ -251,6 +251,17 @@ int64_t cplus_hash_bytes(const char* data, int64_t size) {
 
 static int leak_checking(void);
 
+// `int main(vector<string> args)`: the command line as a vector of strings, the first being how the program was started.
+void* cplus_args(int argc, char** argv) {
+    void* vec = cplus_vec_new((int64_t)sizeof(cplus_string), argc);
+    cplus_string* items = (cplus_string*)((cplus_vec*)vec + 1);
+    for (int i = 0; i < argc; ++i) {
+        items[i] = (cplus_string){NULL, 0, NULL};
+        cplus_str_append(&items[i], argv[i], (int64_t)strlen(argv[i]));
+    }
+    return vec;
+}
+
 // Called as the program starts.
 void cplus_start(void) {
     leak_checking();  // it keeps what it finds out, which must not happen in two threads at once

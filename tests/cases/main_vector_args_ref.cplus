@@ -1,0 +1,8 @@
+// main can read its arguments in place, and fail.
+// args: a b
+int main(const vector<string>& args) throws {
+    println("{}", args.size());
+    if (args.size() > 5) throw Error("too many");
+    return 0;
+}
+// expect: 3

@@ -1,0 +1,6 @@
+// main takes a vector<string> by value or by `const&`, not one it could change in place, or of anything else.
+int main(vector<string>& args) {
+    return 0;
+}
+// error: main takes no parameters, or the command-line arguments
+// error: write `int main()`, or `int main(vector<string> args)`, where `args[1]` is the first argument
