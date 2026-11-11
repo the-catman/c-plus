@@ -24,6 +24,7 @@ inline constexpr const char* Variables = "variables";
 inline constexpr const char* Constants = "constants";
 inline constexpr const char* DefiniteAssignment = "definite-assignment";
 inline constexpr const char* Functions = "functions";
+inline constexpr const char* Overloading = "overloading";
 inline constexpr const char* MainFunction = "the-main-function";
 inline constexpr const char* CFunctions = "c-functions";
 inline constexpr const char* Conditions = "conditions";

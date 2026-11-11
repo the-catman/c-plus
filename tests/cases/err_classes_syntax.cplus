@@ -30,12 +30,12 @@ int main() {
     println("{}", q->x);
     return 0;
 }
-// error: 'Point' already has a constructor
-// error: several constructors need overloading, which is planned
+// error: this compiler does not support more than one constructor yet
+// error: keep one, and give the fields default values for what it does not set
 // error: write the method body here
 // error: 'Point' already has a field named 'x'
 // error: 'Point' already has a method named 'area'
-// error: overloading is planned but not supported yet
+// error: rename one of them, or remove it
 // error: a destructor is named after its type: '~Point'
 // error: this compiler does not support struct destructors yet
 // error: methods are defined inside their class

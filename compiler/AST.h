@@ -758,6 +758,7 @@ struct FuncDecl {
     const FuncDecl* taskFail = nullptr;
     const FuncDecl* taskBind = nullptr;
     const FuncDecl* taskWait = nullptr;
+    bool overloaded = false;      // set by Sema: another function, or another method of its type, has its name
     bool checked = false;         // set by Sema once its body has been checked
     bool requested = false;       // it will be checked and generated; a generic class's methods wait for their first use
     Loc usedAt;                   // for a function made from a generic: where it was first needed

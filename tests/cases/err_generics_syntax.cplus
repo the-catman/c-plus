@@ -38,7 +38,7 @@ int main() { return 0; }
 // error: this compiler does not support requirements other than an expression yet
 // error: the name 'Duplicate' is already used by another generic
 // error: the name 'TakenByClass' is already used by a class
-// error: a function named 'takenByFunction' is already defined
+// error: this compiler does not support a template function and another function of the same name yet
 // error: 'println' is a built-in function and cannot be redefined
 // error: there is no constraint named 'Unknown'
 // error: For any type, write `typename T`

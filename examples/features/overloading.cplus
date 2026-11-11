@@ -1,0 +1,25 @@
+// Functions can share a name when they take different parameters, as in C++. A call goes to the one its arguments fit best.
+string describe(int n) { return "a whole number"; }
+string describe(double d) { return "a number with a fraction"; }
+string describe(const string& s) { return "text"; }
+
+void grow(int& n) { n += 1; }  // a variable that can change comes here
+void grow(const int& n) { println("{} is not a variable, so it stays", n); }
+
+int main() {
+    println("{}", describe(7));
+    // expect: a whole number
+    println("{}", describe(2.5));
+    // expect: a number with a fraction
+    println("{}", describe("hi"));
+    // expect: text
+    println("{}", describe('a'));  // a char widens to an int
+    // expect: a whole number
+    int count = 1;
+    grow(count);
+    println("{}", count);
+    // expect: 2
+    grow(5);
+    // expect: 5 is not a variable, so it stays
+    return 0;
+}

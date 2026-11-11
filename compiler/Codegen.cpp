@@ -4148,6 +4148,11 @@ struct Codegen::Impl {
             case FuncDecl::Role::Constructor: name += f.owner->name + "#init"; break;
             case FuncDecl::Role::Destructor: name += f.owner->name + "#deinit"; break;
         }
+        if (f.overloaded) {  // `cplus.f(int,long)`: what it takes tells it from the others of its name
+            name += "(";
+            for (size_t i = 0; i < f.params.size(); ++i) name += (i ? "," : "") + std::string(f.params[i]->type->name);
+            name += ")";
+        }
         auto* func = llvm::Function::Create(type, llvm::Function::InternalLinkage, name, mod.get());
         unsigned first = (result ? 1 : 0) + (f.owner ? 1 : 0);
         if (result) func->getArg(0)->setName("result");

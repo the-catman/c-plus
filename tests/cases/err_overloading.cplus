@@ -1,0 +1,55 @@
+// Functions of one name that cannot be told apart, and calls that fit none of them or more than one as well.
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+
+string show(int a, long b) { return "a"; }
+string show(long a, int b) { return "b"; }
+string show(Point p) { return "point"; }
+string show(vector<int> v) { return "vector"; }
+
+void take(string s) {}
+void take(const string& s) {}
+
+int same(int n) { return n; }
+long same(int m) { return 1; }
+
+void twice(int n) {}
+void twice(int m) {}
+
+extern "C" int abs(int n);
+int abs(long n) { return 0; }
+
+void bump(int& n) { n += 1; }
+void bump(long& n) { n += 1; }
+
+int main() {
+    println("{}", show(1, 2));
+    println("{}", show({1, 2}));
+    println("{}", show("text"));
+    println("{}", show(1, 2, 3));
+    println("{}", show(undefinedName));
+    bump(5);
+    return 0;
+}
+
+int main(int argc, char** argv) { return 0; }
+// error: `take(const string& s)` and `take(string s)` would fit every call as well as each other
+// error: keep one of them: a `const T&` parameter takes all that a `T` does
+// error: a function named 'same' is already defined
+// error: rename one of them, or give them different parameters: what a function returns does not choose it
+// error: a function named 'twice' is already defined
+// error: a C function cannot share its name with another function
+// error: rename the C+ one: C has one function of each name
+// error: a program has one 'main'
+// error: this call to 'show' fits `show(int a, long b)` and `show(long a, int b)` as well as each other
+// error: convert an argument so that one fits better, as in `show(1, long(2))`
+// error: this call to 'show' fits `show(Point p)` and `show(vector<int> v)` as well as each other
+// error: convert an argument so that one fits better, as in `show(Point{...})`
+// error: no function named 'show' takes (string)
+// error: there are 4: `show(int a, long b)`, `show(long a, int b)`, `show(Point p)` and `show(vector<int> v)`
+// error: no function named 'show' takes (int, int, int)
+// error: 'undefinedName' is not declared
+// not-error: no function named 'show' takes (error)
+// error: no function named 'bump' takes (int)

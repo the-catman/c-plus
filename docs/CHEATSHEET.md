@@ -231,7 +231,7 @@ long square(long n) { return n * n; }
 | `size_t pos = s.find(t)` | `long pos = s.find(t)` or `auto pos`. `string::npos` is `-1`, so `pos != string::npos` and `pos >= 0` both work |
 | `s.substr(pos)` past the end throws | it **stops the program** with file:line, as do a negative position and `s.find(t, -1)` |
 | `s.at(i)` | `s[i]` (always checked) |
-| overloaded functions | planned; one function per name for now: rename one |
+| overloaded functions | as in C++, but a call that two fit as well is an error, whose help gives the conversion that chooses. An `int` fits a `long` better than a `double` |
 
 ## Planned. Where there is something to write for them, the compiler rejects it with "does not support ... yet"
 
@@ -246,7 +246,7 @@ long square(long n) { return n * n; }
 | Reflection | reading a field through its `reflect::Field`, methods |
 | Memory | pointers into vectors and strings |
 | Types | unions, unsigned integers, `const` fields, types nested in a type or a function, `short` and other small integers, enums held in them |
-| Functions | overloading, default arguments, `auto` parameters and return types, lambdas |
+| Functions | overloading methods and constructors, default arguments, `auto` parameters and return types, lambdas |
 | Statements | a declaration before a switch's value: `switch (auto k = f(); k)` |
 | Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
 | Containers | iterators, and erasing a range, on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |

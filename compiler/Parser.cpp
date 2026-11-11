@@ -3240,9 +3240,8 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
             fail(peek().loc, "C+ has no noexcept", "remove it: a constructor cannot fail", spec::Errors);
         ctor->body = parseBlock(ctor.get());
         if (sd.constructor) {
-            diags_.error(ctor->nameLoc, "'" + sd.name + "' already has a constructor",
-                         "several constructors need overloading, which is planned. For now, keep one, and give fields default values for what it does not set",
-                         spec::Classes);
+            diags_.error(ctor->nameLoc, "this compiler does not support more than one constructor yet",
+                         "keep one, and give the fields default values for what it does not set", spec::Overloading);
             return;
         }
         sd.constructor = ctor.get();

@@ -1415,12 +1415,39 @@ void Sema::check(Program& program) {
             }
             continue;
         }
-        if (!inserted) {
-            bool sameParams = it->second->params.size() == fn->params.size();
-            for (size_t i = 0; sameParams && i < fn->params.size(); ++i) sameParams = it->second->params[i]->declType == fn->params[i]->declType;
-            diags_.error(fn->nameLoc, sameParams ? "a function named " + q(fn->name) + " is already defined" : std::string("this compiler does not support overloaded functions yet"),
-                         sameParams ? "rename one of them, or remove it" : "rename one of them, so that each name is one function", spec::Functions);
-            diags_.note(it->second->nameLoc, "the first definition is here");
+        if (!inserted) {  // overloading: another function of that name, which must take other parameters
+            std::vector<FuncDecl*>& all = overloads_[fn->name];
+            if (all.empty()) all.push_back(it->second);
+            bool clash = false;
+            for (FuncDecl* other : all) {
+                bool same = false;
+                checkOverloadPair(*other, *fn, same);
+                if (same) {
+                    diags_.error(fn->nameLoc, "a function named " + q(fn->name) + " is already defined",
+                                 other->retType != fn->retType ? "rename one of them, or give them different parameters: what a function returns does not choose it"
+                                                               : "rename one of them, or remove it",
+                                 other->retType != fn->retType ? spec::Overloading : spec::Functions);
+                    diags_.note(other->nameLoc, "the first definition is here");
+                    clash = true;
+                    break;
+                }
+            }
+            if (!clash && (fn->isExtern || all[0]->isExtern)) {
+                diags_.error(fn->nameLoc, "a C function cannot share its name with another function", "rename the C+ one: C has one function of each name", spec::Overloading);
+                diags_.note(all[0]->nameLoc, "the other one is here");
+                clash = true;
+            }
+            if (!clash && fn->name == "main") {
+                diags_.error(fn->nameLoc, "a program has one 'main'", "rename or remove one of them: the program starts at its one `main`", spec::MainFunction);
+                diags_.note(all[0]->nameLoc, "the first one is here");
+                clash = true;
+            }
+            if (clash) {
+                if (all.size() == 1) overloads_.erase(fn->name);
+                continue;
+            }
+            all.push_back(fn.get());
+            for (FuncDecl* f : all) f->overloaded = true;
         }
     }
 
@@ -1524,8 +1551,8 @@ void Sema::checkTemplateNames(Program& program) {
             diags_.error(t->nameLoc, q(t->name) + " is a built-in function and cannot be redefined",
                          "give your function a different name", spec::Printing);
         if (auto f = funcs_.find(t->name); f != funcs_.end()) {
-            diags_.error(t->nameLoc, "a function named " + q(t->name) + " is already defined",
-                         "rename one of them; overloading is planned but not supported yet", spec::Functions);
+            diags_.error(t->nameLoc, "this compiler does not support a template function and another function of the same name yet",
+                         "rename one of them. Functions that are not templates can share a name, when they take different parameters", spec::Overloading);
             diags_.note(f->second->nameLoc, "it is defined here");
         }
         if (auto s = structs_.find(t->name); s != structs_.end()) {
@@ -1666,8 +1693,13 @@ void Sema::checkMembers(StructDecl& sd) {
         }
         auto [it, inserted] = seen.emplace(m->name, m.get());
         if (!inserted) {
-            diags_.error(m->nameLoc, q(sd.name) + " already has a method named " + q(m->name),
-                         "rename one of them; overloading is planned but not supported yet", spec::Methods);
+            bool same = it->second->params.size() == m->params.size();
+            for (size_t i = 0; same && i < m->params.size(); ++i) same = it->second->params[i]->declType == m->params[i]->declType;
+            if (same)
+                diags_.error(m->nameLoc, q(sd.name) + " already has a method named " + q(m->name), "rename one of them, or remove it", spec::Methods);
+            else
+                diags_.error(m->nameLoc, "this compiler does not support overloaded methods yet",
+                             "rename one of them. Functions outside a type can share a name, when they take different parameters", spec::Overloading);
             diags_.note(it->second->nameLoc, "the first one is here");
         }
     }
@@ -5469,6 +5501,15 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         return Type::error();
     }
     FuncDecl* fn = it->second;
+    if (fn->overloaded) {
+        fn = chooseOverload(call.callee, overloads_.at(call.callee), call.args, flow, nameLoc);
+        if (!fn) return Type::error();
+        call.target = fn;
+        if (&call != spawned_) checkCanFail(*fn, nameLoc);
+        checkChosenArgs(call.args, *fn, flow);
+        checkTaskKept(*fn, call, nameLoc);
+        return fn->retType;
+    }
     call.target = fn;
     if (&call != spawned_) checkCanFail(*fn, nameLoc);
     checkArgs(call.args, *fn, flow, call.loc, q(fn->name));
@@ -5485,6 +5526,171 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         }
     }
     return fn->retType;
+}
+
+// ---- Overloading -----------------------------------------------------------
+
+namespace {
+// How well an argument fits a parameter, lower being better: the type itself, then widening within a kind, then any other
+// conversion. A `T&` given a place it can change fits better than a `T` or a `const T&` given it, as in C++, and of two base
+// classes the nearer one fits better.
+struct Fit {
+    int rank;
+    int depth;
+};
+bool fitsBetter(Fit a, Fit b) { return a.rank != b.rank ? a.rank < b.rank : a.depth < b.depth; }
+// How many steps from a class to one of its bases, the fewest.
+int baseDistance(const StructDecl* from, const StructDecl* to) {
+    if (from == to) return 0;
+    int best = -1;
+    for (const StructDecl* base : from->bases)
+        if (int d = baseDistance(base, to); d >= 0 && (best < 0 || d + 1 < best)) best = d + 1;
+    return best;
+}
+bool typelessList(const Expr& e) { return e.kind == Expr::Kind::InitList && !static_cast<const InitListExpr&>(e).explicitType; }
+int passing(const VarDecl& p) { return !p.isRef ? 0 : p.isConst ? 1 : 2; }  // by value, `const T&`, `T&`
+}  // namespace
+
+// Two functions of one name: `same` when they take the same parameters, which is an error the caller reports. Otherwise an
+// error here when every call would fit both as well, as `f(string s)` and `f(const string& s)` would.
+void Sema::checkOverloadPair(const FuncDecl& first, const FuncDecl& second, bool& same) {
+    same = false;
+    if (first.params.size() != second.params.size()) return;
+    bool identical = true, alwaysBoth = true;
+    for (size_t i = 0; i < first.params.size(); ++i) {
+        if (first.params[i]->declType != second.params[i]->declType) return;
+        int a = passing(*first.params[i]), b = passing(*second.params[i]);
+        identical = identical && a == b;
+        alwaysBoth = alwaysBoth && (a == b || (a != 2 && b != 2));
+    }
+    if (identical) {
+        same = true;
+        return;
+    }
+    if (!alwaysBoth) return;
+    diags_.error(second.nameLoc, "`" + signature(second) + "` and `" + signature(first) + "` would fit every call as well as each other",
+                 "keep one of them: a `const T&` parameter takes all that a `T` does", spec::Overloading);
+    diags_.note(first.nameLoc, "the other one is here");
+}
+
+// The function of a name that a call's arguments fit best (see Fit), or null after an error that says why there is none.
+FuncDecl* Sema::chooseOverload(const std::string& name, const std::vector<FuncDecl*>& candidates, std::vector<ExprPtr>& args, Flow& flow, Loc loc) {
+    bool broken = false;
+    for (auto& a : args)
+        if (!typelessList(*a)) broken = checkExpr(*a, flow)->isError() || broken;
+    auto fitOf = [&](const Expr& arg, const VarDecl& param) -> std::optional<Fit> {
+        const Type* to = param.declType;
+        const bool changes = param.isRef && !param.isConst;
+        if (typelessList(arg)) {  // `{1, 2}`, which builds what the parameter is
+            const Type* t = to->isOptional() ? to->elem : to;
+            if (changes || !(t->hasFields() || t->isVector() || t->isArray())) return std::nullopt;
+            return Fit{2, 0};
+        }
+        const Type* from = arg.type;
+        if (changes) {
+            if (from != to || !isPlaceKind(arg) || isReadOnlyPlace(arg)) return std::nullopt;
+            return Fit{0, 0};
+        }
+        if (from == to) return Fit{0, 1};
+        // Widening, which loses nothing: a `char` fits an `int` better than a `long`, as in C++.
+        if ((from->is(K::Int) && to->is(K::Long)) || (from->is(K::Char) && to->is(K::Int)) || (from->is(K::Float) && to->is(K::Double)))
+            return Fit{1, 0};
+        if (from->is(K::Char) && to->is(K::Long)) return Fit{1, 1};
+        if (to->is(K::Float) && isDoubleConstant(arg)) return Fit{2, 0};  // `f(1.5)`, as `float f = 1.5;`
+        if (!canConvert(from, to)) return std::nullopt;
+        const Type* target = to->isOptional() ? to->elem : to;
+        const Type* source = from->isOptional() ? from->elem : from;
+        int depth = source->isClass() && target->isClass() ? std::max(0, baseDistance(source->decl, target->decl)) : 0;
+        return Fit{2, depth};
+    };
+    std::vector<std::pair<FuncDecl*, std::vector<Fit>>> fitting;
+    for (FuncDecl* f : candidates) {
+        if (f->params.size() != args.size()) continue;
+        std::vector<Fit> fits;
+        for (size_t i = 0; i < args.size() && fits.size() == i; ++i)
+            if (auto fit = fitOf(*args[i], *f->params[i])) fits.push_back(*fit);
+        if (fits.size() == args.size()) fitting.push_back({f, std::move(fits)});
+    }
+    auto beats = [](const std::vector<Fit>& a, const std::vector<Fit>& b) {
+        bool strictly = false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (fitsBetter(b[i], a[i])) return false;
+            strictly = strictly || fitsBetter(a[i], b[i]);
+        }
+        return strictly;
+    };
+    for (auto& [f, fits] : fitting) {
+        bool best = true;
+        for (auto& [g, other] : fitting) best = best && (g == f || beats(fits, other));
+        if (best) return f;
+    }
+    for (auto& a : args)
+        if (typelessList(*a)) checkLooseValue(*a, flow);
+    if (broken) {  // already said; the first that takes as many arguments keeps what follows quiet
+        for (FuncDecl* f : candidates)
+            if (f->params.size() == args.size()) return f;
+        return nullptr;
+    }
+    std::string given = "(";
+    for (size_t i = 0; i < args.size(); ++i) given += (i ? ", " : "") + std::string(typelessList(*args[i]) ? "{ }" : args[i]->type->name);
+    given += ")";
+    if (fitting.empty()) {
+        std::string list;
+        for (size_t i = 0; i < candidates.size(); ++i)
+            list += (i == 0 ? "" : i + 1 == candidates.size() ? " and " : ", ") + std::string("`") + signature(*candidates[i]) + "`";
+        diags_.error(loc, "no function named " + q(name) + " takes " + given,
+                     "there are " + std::to_string(candidates.size()) + ": " + list + ". Give one of them what it takes, or add one that takes these", spec::Overloading);
+        for (FuncDecl* f : candidates) diags_.note(f->nameLoc, "`" + signature(*f) + "` is here");
+        return nullptr;
+    }
+    // The ones that no other beats: two of them are named, with the argument that would choose between them.
+    std::vector<std::pair<FuncDecl*, std::vector<Fit>>*> top;
+    for (auto& one : fitting) {
+        bool beaten = false;
+        for (auto& other : fitting) beaten = beaten || (&other != &one && beats(other.second, one.second));
+        if (!beaten) top.push_back(&one);
+    }
+    const FuncDecl& a = *top[0]->first;
+    const FuncDecl& b = *top[top.size() > 1 ? 1 : 0]->first;
+    // The argument to convert: one that the two take differently, and that is not already what the first takes.
+    size_t pick = args.size();
+    for (size_t i = 0; i < args.size() && pick == args.size(); ++i)
+        if (a.params[i]->declType != b.params[i]->declType && (typelessList(*args[i]) || args[i]->type != a.params[i]->declType)) pick = i;
+    std::string example = name + "(";
+    bool converted = false;
+    for (size_t i = 0; i < args.size(); ++i) {
+        const bool list = typelessList(*args[i]);
+        std::string text = list ? "{...}" : spelled(*args[i], "x");
+        if (i == pick) {  // `long(x)`, or `Point{...}` for a list
+            const Type* t = a.params[i]->declType;
+            text = std::string(list && t->isOptional() ? t->elem->name : t->name) + (list ? text : "(" + text + ")");
+            converted = true;
+        }
+        example += (i ? ", " : "") + text;
+    }
+    example += ")";
+    diags_.error(loc, "this call to " + q(name) + " fits `" + signature(a) + "` and `" + signature(b) + "` as well as each other",
+                 converted ? "convert an argument so that one fits better, as in `" + example + "`" : "rename one of them",
+                 spec::Overloading);
+    for (auto* one : top) diags_.note(one->first->nameLoc, "`" + signature(*one->first) + "` is here");
+    return nullptr;
+}
+
+// The arguments of a call to an overloaded function, already checked while choosing it, against what it takes.
+void Sema::checkChosenArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow) {
+    for (size_t i = 0; i < args.size(); ++i) {
+        const VarDecl& p = *fn.params[i];
+        Expr& a = *args[i];
+        if (typelessList(a)) {
+            checkInitList(static_cast<InitListExpr&>(a), flow, p.declType->isOptional() ? p.declType->elem : p.declType);
+            continue;
+        }
+        const Expr* bound = boundByRef_;
+        if (p.isRef) boundByRef_ = &a;
+        requireConvertible(a, p.declType, "for parameter " + q(p.name) + " of " + q(fn.name));
+        boundByRef_ = bound;
+        if (p.isRef && !p.isConst) checkRefBinding(a, p.declType, "parameter " + q(p.name) + " of " + q(fn.name));
+    }
 }
 
 namespace {

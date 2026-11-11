@@ -192,6 +192,10 @@ private:
     void checkChangingReceiver(const Expr& recv, const char* method, const char* what, const char* anchor);
     // Checks arguments against parameters; `what` names the callee in messages.
     void checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow, Loc loc, const std::string& what);
+    // Overloading: the function a call means, of those with its name, and its arguments checked against it.
+    FuncDecl* chooseOverload(const std::string& name, const std::vector<FuncDecl*>& candidates, std::vector<ExprPtr>& args, Flow& flow, Loc loc);
+    void checkChosenArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow);
+    void checkOverloadPair(const FuncDecl& first, const FuncDecl& second, bool& sameParams);
     // One value given when building a struct or class: `Type(args)` or a `{ }` list.
     struct ConstructArg {
         std::string designator;  // field name for `.x = value`, empty for positional
@@ -257,7 +261,8 @@ private:
     int failPoints_ = 0;    // how many places that can fail have been seen, to tell if a try block has any
     std::vector<const CatchClause*> catches_;  // the catches around the code being checked
     std::map<std::pair<std::string, const Type*>, std::pair<std::string, Loc>> constraintResults_;
-    std::unordered_map<std::string, FuncDecl*> funcs_;
+    std::unordered_map<std::string, FuncDecl*> funcs_;  // by name: the first, if there are more (see overloads_)
+    std::unordered_map<std::string, std::vector<FuncDecl*>> overloads_;  // the functions of a name that has more than one
     std::unordered_map<std::string, StructDecl*> structs_;
     std::vector<std::unordered_map<std::string, VarDecl*>> scopes_;
     std::vector<LoopContext> loops_;

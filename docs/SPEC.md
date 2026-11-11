@@ -554,7 +554,7 @@ println("{}", a);              // User {name: "Alice", age: 31}
   still change, as with `const` in JavaScript.
 - Members are private by default in a class and public in a struct, as in C++. `public:`,
   `private:` and `protected:` work as in C++; see [Inheritance](#inheritance).
-- A class has at most one constructor until overloading arrives. To let a caller leave
+- A class has at most one constructor until constructors can be overloaded. To let a caller leave
   out values, leave out the constructor and give the fields defaults.
 - `a == b` is true when `a` and `b` refer to the same object, like `===` on objects in
   JavaScript or `==` on `shared_ptr` in C++. Two objects with equal fields are still two
@@ -738,7 +738,7 @@ println("{}", r.area());    // 24
 - A struct method works on the struct in place: `r.scale(2)` changes `r`. Called on a
   temporary, as in `makeRect().scale(2)`, it changes a copy that is then dropped.
 - A method cannot share its name with a field. Two methods cannot share a name until
-  overloading arrives.
+  methods can be [overloaded](#overloading).
 
 A **constructor** is written as in C++: the type's name, the parameters, an optional
 initializer list, and a body.
@@ -1720,9 +1720,52 @@ long square(long n) {
 - A `const` parameter cannot be changed in the function, as in C++.
 - Arguments are converted to parameter types under the
   [implicit conversion](#implicit-conversions) rules.
-- Overloading (several functions with one name) is planned. Until then, each name is
-  defined once.
+- Several functions can have one name when they take different parameters: see
+  [overloading](#overloading).
 - User functions never collide with C library symbols.
+
+### Overloading
+
+Functions can share a name when they take different parameters, as in C++. A call goes to
+the one that its arguments fit best:
+
+```cpp
+string describe(int n) { return "a whole number"; }
+string describe(double d) { return "a number with a fraction"; }
+string describe(const string& s) { return "text"; }
+
+void grow(int& n) { n += 1; }
+void grow(const int& n) { println("{} is not a variable, so it stays", n); }
+
+println("{}", describe(7));      // a whole number
+println("{}", describe(2.5));    // a number with a fraction
+println("{}", describe("hi"));   // text
+int count = 1;
+grow(count);                     // count is 2
+grow(5);                         // 5 is not a variable, so it stays
+```
+
+- **Each argument is ranked** by how well it fits its parameter, best first:
+  1. Its own type. A `T&` parameter given a variable it can change fits better than a `T` or
+     a `const T&` given the same variable.
+  2. Widening, which loses nothing: `char` to `int`, `int` to `long`, `float` to `double`.
+     A `char` fits an `int` better than a `long`.
+  3. Any other [implicit conversion](#implicit-conversions), such as `int` to `double`, a
+     `{ }` list to a struct or a vector, or a class object to a base class. Of two base
+     classes, the nearer one fits better.
+- **The function chosen fits every argument** at least as well as each of the others, and
+  at least one argument better. If no function does, the call is an error that names the
+  functions, and its help shows a conversion that chooses one, as in `show(1, long(2))`.
+  Unlike C++, `int` to `long` is widening, so an `int` chooses `f(long n)` over
+  `f(double d)`, where C++ finds the call ambiguous.
+- **What a function returns does not choose it**, and neither does `throws`. Two functions of
+  one name that take the same parameters are an error, whatever they return.
+- **A `T` beside a `const T&` is an error** where they are declared, since every call
+  would fit both as well: keep one of them. A `T&` beside a `T` is not. A variable that
+  can change goes to the `T&`, and any other value to the `T`.
+- **A [C function](#c-functions) has its name alone**, as C has one function of each name.
+  So does `main`.
+- Templates, methods and constructors do not share names with others yet.
 
 ### The main function
 
@@ -3197,7 +3240,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | C functions with variable arguments; vectors passed to or from C | planned |
 | Unsigned types | planned |
 | Format options for width, alignment and `{:x}`; math constants | planned |
-| Function overloading | planned |
+| Overloading functions | implemented |
+| Overloading methods and constructors, a template beside a function of its name | planned |
 | Strings: `append`, `insert`, `erase`, `replace`, `rfind`, `compare`, `split`, `trim`, `join`, `replace_all` | implemented |
 | Reading numbers from strings: `stoi`, `stol`, `stod`, `stof` | implemented |
 | `hashmap<K, V>` | implemented |

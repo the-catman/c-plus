@@ -1,0 +1,111 @@
+// Functions that share a name, and which one each call goes to.
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+
+class Shape {
+public:
+    virtual string name() const { return "shape"; }
+};
+class Circle : public Shape {
+public:
+    string name() const override { return "circle"; }
+};
+class Dot : public Circle {};
+
+string describe(int n) { return "int"; }
+string describe(long n) { return "long"; }
+string describe(double d) { return "double"; }
+string describe(const string& s) { return "string " + s; }
+string describe(Point p) { return "point"; }
+string describe(int a, int b) { return "two ints"; }
+
+string kind(const Shape& s) { return "shape"; }
+string kind(const Circle& c) { return "circle"; }
+
+void grow(int& n) { n += 1; }
+void grow(const int& n) { println("cannot grow {}", n); }
+
+void keep(int& n) { n = 0; }
+void keep(int n) { println("a copy of {}", n); }
+
+double area(float r) { return 1.0; }
+double area(double r) { return 2.0; }
+
+string f(long n) { return "long"; }
+string f(double d) { return "double"; }
+
+string show(int a, long b) { return "int, long"; }
+string show(long a, int b) { return "long, int"; }
+
+string maybe(int? n) { return "optional"; }
+string maybe(long n) { return "long"; }
+
+long count(const vector<int>& v) { return v.size(); }
+long count(const string& s) { return s.size() * 10; }
+
+long fails(int n) throws {
+    if (n < 0) throw Error("negative");
+    return n;
+}
+long fails(string s) { return 7; }
+
+int main() throws {
+    int i = 1;
+    long l = 2;
+    char c = 'a';
+    println("{}", describe(i));
+    // expect: int
+    println("{}", describe(l));
+    // expect: long
+    println("{}", describe(1.5));
+    // expect: double
+    println("{}", describe("hi"));
+    // expect: string hi
+    println("{}", describe(Point{1, 2}));
+    // expect: point
+    println("{}", describe({1, 2}));
+    // expect: point
+    println("{}", describe(1, 2));
+    // expect: two ints
+    println("{}", describe(c));
+    // expect: int
+    Dot d = Dot();
+    println("{}", kind(d));
+    // expect: circle
+    Shape s = Shape();
+    println("{}", kind(s));
+    // expect: shape
+    grow(i);
+    println("{}", i);
+    // expect: 2
+    grow(3);
+    // expect: cannot grow 3
+    const int k = 4;
+    grow(k);
+    // expect: cannot grow 4
+    keep(i);
+    println("{}", i);
+    // expect: 0
+    keep(i + 5);
+    // expect: a copy of 5
+    float r = 1.0;
+    println("{} {}", area(r), area(1.0));
+    // expect: 1 2
+    println("{}", f(5));
+    // expect: long
+    println("{}", show(1, long(2)));
+    // expect: int, long
+    println("{}", show(long(1), 2));
+    // expect: long, int
+    println("{}", maybe(5));
+    // expect: long
+    println("{}", maybe(null));
+    // expect: optional
+    println("{} {}", count({1, 2, 3}), count("ab"));
+    // expect: 3 20
+    println("{} {}", try fails(4), fails("x"));
+    // expect: 4 7
+    return 0;
+}
