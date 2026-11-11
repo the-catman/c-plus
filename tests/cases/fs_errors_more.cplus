@@ -1,0 +1,186 @@
+// How writing, listing, removing, making folders, renaming and sizes fail: each is an fs::Error of its own kind, with the
+// path as it was given. None stops the program. The program runs more than once in its folder, so it first takes away what
+// a run before left.
+import fs;
+
+extern "C" {
+    int chmod(string path, int mode);
+    int geteuid();
+}
+
+void clear(string path) throws {
+    if (fs::is_directory(path)) {
+        for (auto name : try fs::list(path)) try clear(path + "/" + name);
+    }
+    try fs::remove(path);
+}
+
+void show(fs::Error e) {
+    println("{} [{}]: {}", e.kind, e.path, e.what());
+}
+
+void tryWrite(string path) {
+    try {
+        try fs::write(path, "x");
+        println("wrote {}", path);
+    } catch (fs::Error e) {
+        show(e);
+    } catch (Error e) {
+        println("not an fs::Error: {}", e.what());
+    }
+}
+
+void tryAppend(string path) {
+    try {
+        try fs::append(path, "x");
+        println("appended to {}", path);
+    } catch (fs::Error e) {
+        show(e);
+    } catch (Error e) {
+        println("not an fs::Error: {}", e.what());
+    }
+}
+
+void tryList(string path) {
+    try {
+        println("{}", try fs::list(path));
+    } catch (fs::Error e) {
+        show(e);
+    } catch (Error e) {
+        println("not an fs::Error: {}", e.what());
+    }
+}
+
+void tryRemove(string path) {
+    try {
+        println("{}", try fs::remove(path));
+    } catch (fs::Error e) {
+        show(e);
+    } catch (Error e) {
+        println("not an fs::Error: {}", e.what());
+    }
+}
+
+void tryMake(string path, bool all) {
+    try {
+        println("{}", all ? try fs::create_directories(path) : try fs::create_directory(path));
+    } catch (fs::Error e) {
+        show(e);
+    } catch (Error e) {
+        println("not an fs::Error: {}", e.what());
+    }
+}
+
+void tryRename(string from, string to) {
+    try {
+        try fs::rename(from, to);
+        println("renamed {}", from);
+    } catch (fs::Error e) {
+        show(e);
+    } catch (Error e) {
+        println("not an fs::Error: {}", e.what());
+    }
+}
+
+void trySize(string path) {
+    try {
+        println("{}", try fs::file_size(path));
+    } catch (fs::Error e) {
+        show(e);
+    } catch (Error e) {
+        println("not an fs::Error: {}", e.what());
+    }
+}
+
+int main() throws {
+    if (fs::exists("locked")) chmod("locked", 448);  // 0700, from a run before
+    try clear("place");
+    try clear("locked");
+    try fs::create_directory("place");
+    try fs::write("place/plain.txt", "text");
+    try fs::create_directories("place/full/inner");
+
+    tryWrite("place/no/such.txt");
+    // expect: not-found [place/no/such.txt]: could not write "place/no/such.txt": a folder on the path is not there
+    tryAppend("place/no/such.txt");
+    // expect: not-found [place/no/such.txt]: could not append to "place/no/such.txt": a folder on the path is not there
+    tryWrite("place/plain.txt/inside");
+    // expect: not-found [place/plain.txt/inside]: could not write "place/plain.txt/inside": a part of the path before its end is a file, not a folder
+    tryWrite("place/full");
+    // expect: is-directory [place/full]: could not write "place/full": it is a folder, not a file
+    tryAppend("place/full");
+    // expect: is-directory [place/full]: could not append to "place/full": it is a folder, not a file
+    tryWrite("");
+    // expect: bad-path []: could not write "": the path is empty
+
+    tryList("place/plain.txt");
+    // expect: not-directory [place/plain.txt]: could not list "place/plain.txt": it is a file, not a folder
+    tryList("place/gone");
+    // expect: not-found [place/gone]: could not list "place/gone": there is no such folder
+    tryList("");
+    // expect: bad-path []: could not list "": the path is empty
+
+    tryRemove("place/full");
+    // expect: not-empty [place/full]: could not remove "place/full": it is a folder with something in it
+    tryRemove("");
+    // expect: bad-path []: could not remove "": the path is empty
+
+    tryMake("place/plain.txt", false);
+    // expect: exists [place/plain.txt]: could not make the folder "place/plain.txt": there is a file of that name, which is not a folder
+    tryMake("place/plain.txt", true);
+    // expect: exists [place/plain.txt]: could not make the folder "place/plain.txt": there is a file of that name, which is not a folder
+    tryMake("place/plain.txt/inner", false);
+    // expect: not-directory [place/plain.txt/inner]: could not make the folder "place/plain.txt/inner": a part of the path before its end is a file, not a folder
+    tryMake("place/plain.txt/inner/more", true);
+    // expect: not-directory [place/plain.txt/inner/more]: could not make the folder "place/plain.txt/inner/more": a part of the path before its end is a file, not a folder
+    tryMake("place/no/such", false);
+    // expect: not-found [place/no/such]: could not make the folder "place/no/such": a folder before its end is not there
+    tryMake("place/full", false);
+    // expect: false
+    tryMake("", true);
+    // expect: bad-path []: could not make the folder "": the path is empty
+
+    tryRename("place/gone.txt", "place/other.txt");
+    // expect: not-found [place/gone.txt]: could not rename "place/gone.txt" to "place/other.txt": it is not there, or a folder of the new name is not
+    tryRename("place/plain.txt", "place/no/such.txt");
+    // expect: not-found [place/plain.txt]: could not rename "place/plain.txt" to "place/no/such.txt": it is not there, or a folder of the new name is not
+    try fs::create_directory("place/empty");
+    tryRename("place/empty", "place/full");
+    // expect: not-empty [place/empty]: could not rename "place/empty" to "place/full": the new name is a folder with something in it
+    tryRename("place/plain.txt", "place/empty");
+    // expect: is-directory [place/plain.txt]: could not rename "place/plain.txt" to "place/empty": the new name is a folder, and the old one is a file
+    tryRename("place/empty", "place/plain.txt");
+    // expect: not-directory [place/empty]: could not rename "place/empty" to "place/plain.txt": the old name is a folder, and the new one is not, or a part of a path is a file
+    tryRename("", "place/x");
+    // expect: bad-path []: could not rename "" to "place/x": the path is empty
+
+    trySize("place/gone.txt");
+    // expect: not-found [place/gone.txt]: could not find the size of "place/gone.txt": there is no such file
+    trySize("place/full");
+    // expect: is-directory [place/full]: could not find the size of "place/full": it is a folder, not a file
+    trySize("place/plain.txt");
+    // expect: 4
+
+    // A folder that may not be changed. Anyone may change anything as root, which is then said as it would be.
+    try fs::create_directory("locked");
+    try fs::write("locked/kept.txt", "kept");
+    chmod("locked", 320);  // 0500: it can be read and gone into, but not changed
+    if (geteuid() == 0) {
+        println("permission [locked/new.txt]: could not write \"locked/new.txt\": this program is not allowed to write it");
+        println("permission [locked/kept.txt]: could not remove \"locked/kept.txt\": this program is not allowed to remove it");
+        println("permission [locked/sub]: could not make the folder \"locked/sub\": this program is not allowed to make it");
+    } else {
+        tryWrite("locked/new.txt");
+        tryRemove("locked/kept.txt");
+        tryMake("locked/sub", false);
+    }
+    // expect: permission [locked/new.txt]: could not write "locked/new.txt": this program is not allowed to write it
+    // expect: permission [locked/kept.txt]: could not remove "locked/kept.txt": this program is not allowed to remove it
+    // expect: permission [locked/sub]: could not make the folder "locked/sub": this program is not allowed to make it
+    tryList("locked");
+    // expect: ["kept.txt"]
+    chmod("locked", 448);
+    try clear("locked");
+    try clear("place");
+    return 0;
+}

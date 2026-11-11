@@ -1,0 +1,191 @@
+// fs::open and the methods of an fs::File: a line or a part at a time, written from the start or at the end.
+import fs;
+
+struct Holder {
+    fs::File file;
+};
+
+void forms(string path, string mode, long n, string text) throws {
+    fs::File f = try fs::open(path, mode);
+    string? line = try f.readLine();
+    string part = try f.read(n);
+    string rest = try f.readAll();
+    try f.write(text);
+    try f.flush();
+    try f.close();
+}
+
+void tryAgain(fs::File f, string what) {
+    try {
+        if (what == "write") try f.write("x");
+        else if (what == "readLine") println("{}", try f.readLine());
+        else if (what == "read") println("{}", try f.read(1));
+        else if (what == "readAll") println("{}", try f.readAll());
+        else if (what == "flush") try f.flush();
+        else try f.close();
+        println("{} worked", what);
+    } catch (fs::Error e) {
+        println("{} {}: {}", what, e.kind, e.what());
+    } catch (Error e) {
+        println("not an fs::Error: {}", e.what());
+    }
+}
+
+// The file is closed when the last reference to it goes, which writes out what it held
+void writeAndDrop() throws {
+    fs::File f = try fs::open("dropped.txt", "w");
+    try f.write("held, then written");
+}
+
+int main() throws {
+    fs::File out = try fs::open("lines.txt", "w");
+    try out.write("first\r\n");
+    try out.write("second\n\n");
+    try out.write("last, with no newline");
+    try out.close();
+
+    fs::File in = try fs::open("lines.txt", "r");
+    while (auto line = try in.readLine()) println("[{}]", line);
+    // expect: [first]
+    // expect: [second]
+    // expect: []
+    // expect: [last, with no newline]
+    println("{}", try in.readLine());
+    // expect: null
+    try in.close();
+
+    // read(n) gives n bytes, fewer at the end, and "" after it
+    fs::File parts = try fs::open("lines.txt", "r");
+    println("[{}] [{}]", try parts.read(5), try parts.read(0));
+    // expect: [first] []
+    println("{}", try parts.readLine());
+    // expect:
+    println("{}", try parts.readLine());
+    // expect: second
+    string rest = try parts.readAll();
+    println("{} {}", rest.size(), rest.starts_with("\nlast"));
+    // expect: 22 true
+    println("[{}] [{}] [{}]", try parts.read(10), try parts.readAll(), try parts.readLine());
+    // expect: [] [] [null]
+    try parts.close();
+
+    fs::File big = try fs::open("lines.txt", "r");
+    println("{}", (try big.read(1000)).size());
+    // expect: 36
+    try big.close();
+
+    // "a" adds at the end, and "w" starts again
+    fs::File log = try fs::open("log.txt", "w");
+    try log.write("one\n");
+    try log.flush();
+    println("{}", try fs::read("log.txt"));
+    // expect: one
+    // expect:
+    try log.close();
+    fs::File more = try fs::open("log.txt", "a");
+    try more.write("two\n");
+    try more.close();
+    println("{}", (try fs::read("log.txt")).split("\n"));
+    // expect: ["one", "two", ""]
+    fs::File again = try fs::open("log.txt", "w");
+    try again.close();
+    println("{}", (try fs::read("log.txt")).size());
+    // expect: 0
+
+    // A copy is the same file, and prints as its name
+    fs::File first = try fs::open("log.txt", "a");
+    fs::File second = first;
+    try first.write("from the first, ");
+    try second.write("from the second");
+    try second.close();
+    println("{}", try fs::read("log.txt"));
+    // expect: from the first, from the second
+    println("{}", first);
+    // expect: fs::File {...}
+    Holder h = Holder{first};
+    println("{}", h);
+    // expect: {file: fs::File {...}}
+
+    // After close(), each method throws "closed"
+    tryAgain(first, "write");
+    // expect: write closed: could not write "log.txt": the file was closed, with close()
+    tryAgain(first, "readLine");
+    // expect: readLine closed: could not read "log.txt": the file was closed, with close()
+    tryAgain(first, "read");
+    // expect: read closed: could not read "log.txt": the file was closed, with close()
+    tryAgain(first, "readAll");
+    // expect: readAll closed: could not read "log.txt": the file was closed, with close()
+    tryAgain(first, "flush");
+    // expect: flush closed: could not write "log.txt": the file was closed, with close()
+    tryAgain(first, "close");
+    // expect: close closed: could not close "log.txt": the file was closed already, with close()
+
+    // One the program builds itself, with no file, is as one that was closed
+    fs::File made = fs::File(null, "made.txt");
+    tryAgain(made, "write");
+    // expect: write closed: could not write "made.txt": the file was closed, with close()
+    tryAgain(made, "readAll");
+    // expect: readAll closed: could not read "made.txt": the file was closed, with close()
+    tryAgain(made, "flush");
+    // expect: flush closed: could not write "made.txt": the file was closed, with close()
+    tryAgain(made, "close");
+    // expect: close closed: could not close "made.txt": the file was closed already, with close()
+
+    // Reading what was opened to write, or writing what was opened to read, throws "io". flush() has nothing to do then
+    fs::File reading = try fs::open("log.txt", "r");
+    tryAgain(reading, "write");
+    // expect: write io: could not write "log.txt": it was opened with "r", which is for reading
+    tryAgain(reading, "flush");
+    // expect: flush worked
+    tryAgain(reading, "close");
+    // expect: close worked
+    fs::File writing = try fs::open("other.txt", "w");
+    tryAgain(writing, "readLine");
+    // expect: readLine io: could not read "other.txt": it was opened with "w", which is for writing
+    tryAgain(writing, "read");
+    // expect: read io: could not read "other.txt": it was opened with "w", which is for writing
+    tryAgain(writing, "readAll");
+    // expect: readAll io: could not read "other.txt": it was opened with "w", which is for writing
+    fs::File adding = try fs::open("other.txt", "a");
+    tryAgain(adding, "read");
+    // expect: read io: could not read "other.txt": it was opened with "a", which is for writing
+
+    try writeAndDrop();
+    println("{}", try fs::read("dropped.txt"));
+    // expect: held, then written
+
+    // A mode that is not a literal is checked when the program runs
+    string mode = "a";
+    fs::File chosen = try fs::open("other.txt", mode);
+    try chosen.write("chosen");
+    try chosen.close();
+    println("{}", try fs::read("other.txt"));
+    // expect: chosen
+
+    // Opening fails as fs::read does
+    try {
+        fs::File none = try fs::open("missing.txt", "r");
+    } catch (fs::Error e) {
+        println("{} {}: {}", e.kind, e.path, e.what());
+    }
+    // expect: not-found missing.txt: could not open "missing.txt": there is no such file
+    try {
+        fs::File folder = try fs::open(".", "r");
+    } catch (fs::Error e) {
+        println("{}: {}", e.kind, e.what());
+    }
+    // expect: is-directory: could not open ".": it is a folder, not a file
+    try {
+        fs::File folder = try fs::open(".", "w");
+    } catch (fs::Error e) {
+        println("{}: {}", e.kind, e.what());
+    }
+    // expect: is-directory: could not open ".": it is a folder, not a file
+    try {
+        fs::File nowhere = try fs::open("no/such/folder.txt", "a");
+    } catch (fs::Error e) {
+        println("{}: {}", e.kind, e.what());
+    }
+    // expect: not-found: could not open "no/such/folder.txt": a folder on the path is not there
+    return 0;
+}

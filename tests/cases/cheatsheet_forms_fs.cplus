@@ -1,0 +1,57 @@
+// The forms of writing files and folders that the cheat sheet and the spec show, written as they write them.
+// check_cheat_sheet in tests/run_tests.py looks for each one here or in the other cheatsheet_forms files.
+import fs;
+
+void sheet(string path, string text, string from, string to, long n) throws {
+    try fs::write("notes.txt", text);
+    try fs::append("log.txt", text);
+    fs::File out = try fs::open(path, "w");
+    try out.close();
+    try fs::write(path, text);
+    fs::File f = try fs::open(path, "r");
+    while (auto line = try f.readLine()) println("{}", line);
+    try f.close();
+    f = try fs::open(path, "r");
+    string part = try f.read(n);
+    string rest = try f.readAll();
+    println("[{}] [{}]", part, rest.size());
+    try f.close();
+    f = try fs::open(path, "a");
+    try f.write(text);
+    try f.close();
+    println("{} {}", fs::exists(path), try fs::file_size(path));
+    try fs::rename(from, to);
+    println("{}", try fs::list("sheet"));
+    try fs::remove(to);
+    try fs::create_directories(path);
+    vector<string> names = try fs::list(".");
+    bool listed = false;
+    for (auto name : names) listed = listed || name == "notes.txt";
+    println("{} {} {}", listed, try fs::list("sheet"), fs::is_directory(path));
+    try fs::remove(path);
+    try fs::write(path, text);
+    try fs::remove(path);
+}
+
+int main() throws {
+    try fs::remove("sheet/a.txt");
+    try fs::remove("sheet/b.txt");
+    try fs::remove("sheet");
+    try fs::create_directory("sheet");
+    try sheet("sheet/a.txt", "one\ntwo\n", "sheet/a.txt", "sheet/b.txt", 2);
+    // expect: one
+    // expect: two
+    // expect: [on] [6]
+    // expect: true 16
+    // expect: ["b.txt"]
+    // expect: true ["a.txt"] true
+    println("{}", try fs::read("notes.txt") == "one\ntwo\n");
+    // expect: true
+    vector<string> kinds = {"not-found", "permission", "is-directory", "not-directory", "not-empty", "exists", "no-space", "closed", "bad-path", "io"};
+    println("{}", kinds.size());
+    // expect: 10
+    try fs::remove("notes.txt");
+    try fs::remove("log.txt");
+    try fs::remove("sheet");
+    return 0;
+}

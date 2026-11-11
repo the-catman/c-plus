@@ -1,0 +1,67 @@
+// Splitting, trimming and replacing as Python, JavaScript, Rust and Boost write them, and what the compiler says instead.
+int main() {
+    string s = " a,b ";
+    vector<string> v = {"a"};
+    vector<int> numbers = {1, 2};
+    s.replace("a", "b");
+    string a = ", ".join(v);
+    string b = s.strip();
+    string c = s.lstrip();
+    string d = s.rstrip();
+    string e = s.trimStart();
+    string f = s.trimEnd();
+    string g = s.replaceAll("a", "b");
+    auto h = s.split(",", 2);
+    auto i = s.split();
+    string j = numbers.join(",");
+    string k = v.join();
+    string l = s.trim(1);
+    auto m = split(s, ",");
+    auto n = trim(s);
+    auto o = join(v, ", ");
+    auto p = replace_all(s, "a", "b");
+    auto q = strip(s);
+    s.insert(5, ',');
+    s.append('x');
+    s.erase("a");
+    s.insert(0);
+    const string fixed = "x";
+    fixed.append("y");
+    long r = s.rfind();
+    string t = s.splt(",");
+    return 0;
+}
+// error: replace() is C++'s, which replaces the part at a position: `s.replace(pos, count, text)`
+// error: to replace every match of a text, write `s = s.replace_all("a", "b");`
+// error: spec: docs/SPEC.md#string
+// error: 'string' has no method named 'join'
+// error: join() is a method of the vector of strings, and takes the separator: write `v.join(", ")`
+// error: 'string' has no method named 'strip'
+// error: write `s.trim()`, which gives a new string
+// error: write `s.trim_start()`, which gives a new string
+// error: write `s.trim_end()`, which gives a new string
+// error: 'string' has no method named 'trimStart'
+// error: 'string' has no method named 'trimEnd'
+// error: write `s.replace_all(from, to)`, which gives a new string
+// error: split() takes one argument but 2 were given
+// error: split() has no limit. For the text before the first separator and the rest, write `long at = s.find(sep);`, then `s.substr(0, at)` and `s.substr(at + sep.size())`
+// error: split() takes one argument but 0 were given
+// error: write `s.split(sep)`
+// error: join() joins a vector<string>, but this is 'vector<int>'
+// error: To print the vector as it is, write `println("{}", numbers)`
+// error: join() takes one argument, the separator, but 0 were given
+// error: write `v.join(", ")`, or `v.join("")` for nothing between them
+// error: trim() takes no arguments but 1 was given
+// error: there is no function named 'split'
+// error: it is a method: write `s.split(",")`
+// error: it is a method: write `s.trim()`
+// error: it is a method: write `v.join(", ")`
+// error: it is a method: write `s.replace_all("a", "b")`
+// error: expected 'string' for insert(), but this is 'char'
+// error: expected 'string' for append(), but this is 'char'
+// error: expected 'long' as the position for erase(), but this is 'string'
+// error: insert() takes 2 arguments but 1 was given
+// error: write `s.insert(pos, text)`
+// error: 'fixed' is const and cannot be changed
+// error: rfind() takes 1 or 2 arguments but 0 were given
+// error: did you mean 'split'?

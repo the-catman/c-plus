@@ -39,8 +39,6 @@ void copies() {
 }
 void strings() {
     string s = "hello";
-    s.insert(1, "x");
-    // error: build it: `s = s.substr(0, pos) + t + s.substr(pos);`
     vector<int> v = {1};
     v.resize(5);
     // error: grow it with `while (v.size() < n) v.push_back(value);`, and shrink it with `pop_back`

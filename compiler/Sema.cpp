@@ -4302,7 +4302,8 @@ void Sema::reportNotPointer(const UnaryExpr& u, const Type* t) {
         else if (t->isVector() || t->isArray() || t->is(K::String) || isHashmap(t)) {
             // A method of the container, or a field of what it holds
             static const char* const listMethods[] = {"size", "empty", "push_back", "pop_back", "front", "back", "clear", "data", "fill", "length",
-                                                      "substr", "find", "contains", "starts_with", "ends_with"};
+                                                      "substr", "find", "contains", "starts_with", "ends_with", "rfind", "compare", "append", "insert",
+                                                      "erase", "replace", "split", "trim", "trim_start", "trim_end", "join", "replace_all"};
             const bool isMethod = isHashmap(t) ? t->decl->findMethod(u.arrowMember) != nullptr || u.arrowMember == "at"
                                                : std::find_if(std::begin(listMethods), std::end(listMethods), [&](const char* m) { return u.arrowMember == m; }) != std::end(listMethods);
             const bool takesNothing = u.arrowMember == "size" || u.arrowMember == "empty" || u.arrowMember == "clear" || u.arrowMember == "pop_back" ||
@@ -5385,23 +5386,31 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         bool importsFs = false;
         for (auto& imp : program_->imports) importsFs = importsFs || imp.path == "fs";
         const std::string readingFile = std::string(importsFs ? "write " : "write `import fs;` at the top of the file, then ") + "`string text = try fs::read(path);`";
-        if (name == "fs::readFile" || name == "fs::writeFile" || name == "fs::write" || name == "fs::append" || name == "fs::exists" || name == "fs::remove" ||
-            name == "fs::list" || name == "fs::open") {
-            const std::string what = name.substr(4);
-            const std::string writing = "declare C's for now: `extern \"C\" { struct FILE; FILE* fopen(string path, string mode); int fputs(string text, FILE* f); int fclose(FILE* f); }`, then `fopen(path, \"";
+        if (name == "fs::readFile" || name == "fs::writeFile") {  // Node's names for the async forms, which wait for libuv
             diags_.error(nameLoc, "this compiler does not support `" + name + "` yet",
-                         what == "readFile"                             ? "write `try fs::read(path)`, which waits for all of the file. The async `fs::readFile`, for `await`, comes later"
-                         : what == "writeFile" || what == "write"       ? writing + "w\")`"
-                         : what == "append"                             ? writing + "a\")`"
-                         : what == "exists"                             ? "declare C's for now: `extern \"C\" int access(string path, int mode);`, then `access(path, 0) == 0`"
-                         : what == "remove"                             ? "declare C's for now: `extern \"C\" int remove(string path);`, then `remove(path) == 0`"
-                         : what == "list"                               ? "pass the names of the files to the program as arguments: `cplus run app.cplus -- a.txt b.txt`"
-                                                                        : "read all of the file with `try fs::read(path)`, then go through the text",
+                         name == "fs::readFile" ? "write `try fs::read(path)`, which waits for all of the file. The async `fs::readFile`, for `await`, comes later"
+                                                : "write `try fs::write(path, text)`, which waits until it is written. The async `fs::writeFile`, for `await`, comes later",
                          spec::Files);
             return Type::error();
         }
-        if (name.starts_with("fs::") && (name.find("read") != std::string::npos || name.find("Read") != std::string::npos)) {
-            help = "to read all of a file, write `try fs::read(path)`";
+        // What Node, Python and std::filesystem call what fs has
+        static const std::pair<const char*, const char*> kFsNames[] = {
+            {"fs::writeFileSync", "try fs::write(path, text)"}, {"fs::appendFile", "try fs::append(path, text)"}, {"fs::appendFileSync", "try fs::append(path, text)"},
+            {"fs::existsSync", "fs::exists(path)"}, {"fs::mkdir", "try fs::create_directory(path)"}, {"fs::mkdirSync", "try fs::create_directory(path)"},
+            {"fs::makedirs", "try fs::create_directories(path)"}, {"fs::create_dir", "try fs::create_directory(path)"}, {"fs::create_dir_all", "try fs::create_directories(path)"},
+            {"fs::readdir", "try fs::list(dir)"}, {"fs::readdirSync", "try fs::list(dir)"}, {"fs::listdir", "try fs::list(dir)"}, {"fs::read_dir", "try fs::list(dir)"},
+            {"fs::directory_iterator", "try fs::list(dir)"}, {"fs::unlink", "try fs::remove(path)"}, {"fs::unlinkSync", "try fs::remove(path)"},
+            {"fs::rm", "try fs::remove(path)"}, {"fs::rmdir", "try fs::remove(path)"}, {"fs::remove_file", "try fs::remove(path)"}, {"fs::renameSync", "try fs::rename(from, to)"},
+            {"fs::isDirectory", "fs::is_directory(path)"}, {"fs::isdir", "fs::is_directory(path)"}, {"fs::stat", "try fs::file_size(path)"}, {"fs::getsize", "try fs::file_size(path)"},
+            {"fs::openSync", "try fs::open(path, mode)"}, {"fs::write_all", "try fs::write(path, text)"},
+        };
+        const char* fsName = nullptr;
+        for (auto& [habit, instead] : kFsNames)
+            if (name == habit) fsName = instead;
+        if (fsName) {
+            help = "write `" + std::string(fsName) + "`";
+        } else if (name.starts_with("fs::") && (name.find("read") != std::string::npos || name.find("Read") != std::string::npos)) {
+            help = "to read all of a file, write `try fs::read(path)`. For one line at a time, `fs::File f = try fs::open(path, \"r\");`, then `try f.readLine()`";
         } else if (name.find("::") != std::string::npos) {
             const std::string module = name.substr(0, name.find("::"));
             help = "`cplus explain " + module + "` says what the module '" + module + "' has";
@@ -5427,6 +5436,14 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         else if (name == "atoi" || name == "atol" || name == "atof")
             help = std::string("write `try ") + (name == "atoi" ? "stoi" : name == "atol" ? "stol" : "stod") + "(s)`, which throws an Error if the text is not a number, where C's `" +
                    name + "` gives 0. C's can be declared instead: `extern \"C\" " + cNumberReader(name) + ";`";
+        else if (name == "split" || name == "trim" || name == "join" || name == "replace_all" || name == "strip") {  // as Python's and Boost's are
+            const std::string first = call.args.empty() ? "" : plainKey(*call.args[0]);
+            const std::string on = first.empty() ? (name == "join" ? "parts" : "s") : asBase(first);
+            std::string rest;
+            for (size_t i = 1; i < call.args.size(); ++i) rest += (i > 1 ? ", " : "") + (plainKey(*call.args[i]).empty() ? "..." : plainKey(*call.args[i]));
+            help = "it is a method: write `" + on + "." + (name == "strip" ? "trim" : name) + "(" +
+                   (rest.empty() ? name == "split" || name == "join" ? "sep" : name == "replace_all" ? "from, to" : "" : rest) + ")`";
+        }
         else if (!cDeclarationOf(name).empty())
             help = "a C function must be declared: `extern \"C\" " + cDeclarationOf(name) + ";`";
         else if (name == "sort" || name == "stable_sort" || name == "reverse" || name == "accumulate" || name == "min_element" || name == "max_element")
@@ -5456,6 +5473,17 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (&call != spawned_) checkCanFail(*fn, nameLoc);
     checkArgs(call.args, *fn, flow, call.loc, q(fn->name));
     checkTaskKept(*fn, call, nameLoc);
+    if (fn->name == "fs::open" && fn->nameLoc.line == 0 && call.args.size() == 2 && call.args[1]->kind == Expr::Kind::StringLit) {
+        const std::string& mode = static_cast<const StringLitExpr&>(*call.args[1]).value;
+        if (mode != "r" && mode != "w" && mode != "a") {  // as C's fopen and Python's open take them
+            const char* instead = mode.find('+') != std::string::npos ? nullptr : mode.find('r') != std::string::npos ? "r" : mode.find('w') != std::string::npos ? "w" : mode.find('a') != std::string::npos ? "a" : nullptr;
+            diags_.error(call.args[1]->loc, "fs::open() opens a file with the mode \"r\", \"w\" or \"a\", but this is " + (plainKey(*call.args[1]).empty() ? std::string("another") : plainKey(*call.args[1])),
+                         instead ? "write \"" + std::string(instead) + "\": a file is always read and written as the bytes it has, so there is no \"b\" or \"t\""
+                         : mode.find('+') != std::string::npos ? std::string("read it with one `fs::open(path, \"r\")`, and write it with another, with \"w\" or \"a\": a file is not open for both")
+                                                               : std::string("write \"r\" to read it, \"w\" to write it from its start, or \"a\" to add to its end"),
+                         spec::Files);
+        }
+    }
     return fn->retType;
 }
 
@@ -6163,7 +6191,84 @@ void Sema::checkChangingReceiver(const Expr& recv, const char* method, const cha
     checkChangeable(recv, "changed", var, path, change);
 }
 
+// `v.begin() + i`, `v.end() - 1` or `v.begin()`, as C++ gives insert() and erase() a position: the index it stands for, as
+// it would be written, or "" if it is none of them. `atEnd` is set for `v.end()` itself.
+static std::string iteratorIndex(const Expr& e, bool& atEnd) {
+    atEnd = false;
+    auto ends = [](const Expr& x, const char* name) {
+        return x.kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr&>(x).name == name && static_cast<const MethodCallExpr&>(x).args.empty();
+    };
+    auto sizeOf = [](const Expr& x) {
+        const auto& call = static_cast<const MethodCallExpr&>(x);
+        return asBase(call.receiver ? spelled(*call.receiver, "v") : "v") + ".size()";
+    };
+    if (ends(e, "begin") || ends(e, "cbegin")) return "0";
+    if (ends(e, "end") || ends(e, "cend")) {
+        atEnd = true;
+        return sizeOf(e);
+    }
+    if (e.kind != Expr::Kind::Binary) return "";
+    auto& bin = static_cast<const BinaryExpr&>(e);
+    const std::string offset = spelled(*bin.rhs, "i");
+    if (bin.op == BinOp::Add && (ends(*bin.lhs, "begin") || ends(*bin.lhs, "cbegin"))) return offset;
+    if (bin.op == BinOp::Sub && (ends(*bin.lhs, "end") || ends(*bin.lhs, "cend"))) return sizeOf(*bin.lhs) + " - " + offset;
+    return "";
+}
+
+// `v.insert(i, x)` and `v.erase(i)`, which take an index, as there are no iterators.
+const Type* Sema::checkVectorInsertErase(MethodCallExpr& call, Flow& flow, const Type* vecType) {
+    const bool insert = call.name == "insert";
+    const std::string v = asBase(spelled(*call.receiver, "v"));
+    bool atEnd = false;
+    const std::string index = call.args.empty() ? "" : iteratorIndex(*call.args[0], atEnd);
+    if (!index.empty()) {  // `v.erase(v.begin() + i)`
+        for (size_t i = 1; i < call.args.size(); ++i) {
+            bool past = false;
+            if (iteratorIndex(*call.args[i], past).empty()) checkLooseValue(*call.args[i], flow);  // an iterator here would only say the same again
+        }
+        const std::string value = insert && call.args.size() == 2 && !plainKey(*call.args[1]).empty() ? plainKey(*call.args[1]) : "x";
+        const bool range = !insert && call.args.size() == 2;
+        bool lastAtEnd = false;
+        const std::string last = range ? iteratorIndex(*call.args[1], lastAtEnd) : "";
+        diags_.error(call.args[0]->loc, std::string(insert ? "insert()" : "erase()") + " takes the index of an element, as there are no iterators",
+                     range ? "erase them one at a time, from the last: `for (long k = " + (last.empty() ? std::string("last") : last) + " - 1; k >= " + index + "; k--) " +
+                                 v + ".erase(k);`"
+                     : insert && call.args.size() != 2 ? "insert them one at a time, each with `" + v + (atEnd ? ".push_back(x)`" : ".insert(" + index + ", x)`")
+                     : insert && atEnd    ? "write `" + v + ".push_back(" + value + ")`, which adds it at the end"
+                     : atEnd              ? "`" + v + ".end()` is past the last element. To remove the last one, write `" + v + ".pop_back()`"
+                     : insert             ? "write `" + v + ".insert(" + index + ", " + value + ")`, which puts it before the element at that index"
+                                          : "write `" + v + ".erase(" + index + ")`",
+                     spec::Vectors);
+        return Type::error();
+    }
+    call.vecMethod = insert ? VecMethod::Insert : VecMethod::Erase;
+    checkChangingReceiver(*call.receiver, call.name.c_str(), "vector", spec::Vectors);
+    const size_t want = insert ? 2 : 1;
+    if (!insert && call.args.size() == 2) {  // `v.erase(first, last)`
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, "this compiler does not support erase() of a range of a vector yet",
+                     "erase them one at a time, from the last: `for (long k = last - 1; k >= first; k--) " + v + ".erase(k);`", spec::Status);
+        return Type::error();
+    }
+    if (call.args.size() != want) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc,
+                     call.name + "() takes " + (insert ? "2 arguments, an index and a value," : "one argument, an index,") + " but " +
+                         std::to_string(call.args.size()) + (call.args.size() == 1 ? " was" : " were") + " given",
+                     insert ? "write `" + v + ".insert(i, value)`, which puts the value before the element at index i, or at the end when i is `" + v +
+                                  ".size()`. For more than one, insert each"
+                            : "write `" + v + ".erase(i)`, which removes the element at index i",
+                     spec::Vectors);
+        return Type::error();
+    }
+    checkValue(*call.args[0], flow, Type::longTy(), "as the index for " + call.name + "()");
+    if (insert) checkValue(*call.args[1], flow, vecType->elem, "for insert() on " + q(vecType));
+    return Type::voidTy();
+}
+
 const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type* vecType) {
+    if (call.name == "join") return checkJoin(call, flow, vecType);
+    if (call.name == "insert" || call.name == "erase") return checkVectorInsertErase(call, flow, vecType);
     const VectorMethodInfo* info = nullptr;
     for (auto& m : kVectorMethods)
         if (call.name == m.name) info = &m;
@@ -6180,13 +6285,11 @@ const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type
         if (call.name == "emplace_back") help = "write `push_back(value)`";
         else if (call.name == "at") help = "write `v[i]`; indexing is always checked in C+";
         else if (call.name == "length" || call.name == "count") help = "did you mean 'size'?";
-        else if (call.name == "insert" || call.name == "erase" || call.name == "resize" || call.name == "reserve" ||
-                 call.name == "begin" || call.name == "end") {
+        else if (call.name == "resize" || call.name == "reserve" || call.name == "begin" || call.name == "end") {
             diags_.error(call.loc, "this compiler does not support " + call.name + "() on vectors yet",
-                         call.name == "begin" || call.name == "end" ? "go over it with `for (auto x : v)`"
+                         call.name == "begin" || call.name == "end" ? "go over it with `for (auto x : v)`, or with an index: `v.insert(i, x)` and `v.erase(i)` take one"
                          : call.name == "reserve" ? "remove the call: a vector grows by itself"
-                         : call.name == "resize" ? "grow it with `while (v.size() < n) v.push_back(value);`, and shrink it with `pop_back`"
-                                                 : "build a new vector with a loop and `push_back`",
+                                                 : "grow it with `while (v.size() < n) v.push_back(value);`, and shrink it with `pop_back`",
                          spec::Status);
             return Type::error();
         } else {
@@ -6198,7 +6301,7 @@ const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type
             std::vector<std::string> names;
             for (auto& m : kVectorMethods) names.push_back(m.name);
             std::string guess = closest(call.name, names);
-            help = guess.empty() ? "use one of the vector methods: size, empty, push_back, pop_back, front, back and clear"
+            help = guess.empty() ? "use one of the vector methods: size, empty, push_back, pop_back, insert, erase, front, back and clear, and join for a vector<string>"
                                  : "did you mean " + q(guess) + "?";
             if (call.receiver && call.receiver->kind == Expr::Kind::Member && static_cast<const MemberExpr&>(*call.receiver).field == "headers") {
                 const Expr& response = *static_cast<const MemberExpr&>(*call.receiver).base;
@@ -6843,8 +6946,8 @@ const StringMethodInfo kStringMethods[] = {
     {"back", StrMethod::Back, "back()", 0, 0, false, false},
 };
 const char* kStringMethodList =
-    "use one of the string methods today: size, length, empty, substr, find, contains, starts_with, ends_with, clear, "
-    "push_back, pop_back, front and back";
+    "use one of the string methods today: size, length, empty, substr, find, rfind, contains, starts_with, ends_with, compare, clear, "
+    "push_back, pop_back, front, back, append, insert, erase, replace, split, trim, trim_start, trim_end and replace_all";
 
 std::string argumentCount(size_t min, size_t max) {
     if (max == 0) return "no arguments";
@@ -6854,7 +6957,160 @@ std::string argumentCount(size_t min, size_t max) {
 }
 }  // namespace
 
+namespace {
+// The string methods that make a new string or a vector of them, and those of C++ that change the string. Each letter of
+// `args` is an argument: `t` is text, a string or a char, `s` a string, and `p` a position or a length.
+struct StringEditInfo {
+    const char* name;
+    StrMethod method;
+    const char* usage;  // how it is called, for messages
+    const char* args;
+    size_t minArgs;
+    bool changes;  // changes the string, as in C++
+    bool makes;    // changes nothing, and gives what it made, which must go somewhere
+};
+const StringEditInfo kStringEdits[] = {
+    {"append", StrMethod::Append, "append(text)", "s", 1, true, false},
+    {"insert", StrMethod::Insert, "insert(pos, text)", "ps", 2, true, false},
+    {"erase", StrMethod::Erase, "erase(pos, count)", "pp", 0, true, false},
+    {"replace", StrMethod::Replace, "replace(pos, count, text)", "pps", 3, true, false},
+    {"rfind", StrMethod::Rfind, "rfind(text)` or `s.rfind(text, pos)", "tp", 1, false, false},
+    {"compare", StrMethod::Compare, "compare(text)", "s", 1, false, false},
+    {"split", StrMethod::Split, "split(sep)", "t", 1, false, true},
+    {"trim", StrMethod::Trim, "trim()", "", 0, false, true},
+    {"trim_start", StrMethod::TrimStart, "trim_start()", "", 0, false, true},
+    {"trim_end", StrMethod::TrimEnd, "trim_end()", "", 0, false, true},
+    {"replace_all", StrMethod::ReplaceAll, "replace_all(from, to)", "tt", 2, false, true},
+};
+
+// The arguments of a call as written, or `fallback` when one of them is more than a name or a literal.
+std::string spelledArgs(const std::vector<ExprPtr>& args, const std::string& fallback) {
+    std::string out;
+    for (auto& a : args) {
+        const std::string one = plainKey(*a);
+        if (one.empty()) return fallback;
+        out += (out.empty() ? "" : ", ") + one;
+    }
+    return out;
+}
+}  // namespace
+
+// What other languages call these methods, written as they write them. Null for any other method.
+const Type* Sema::checkStringHabit(MethodCallExpr& call, Flow& flow) {
+    const std::string& n = call.name;
+    const std::string s = asBase(spelled(*call.receiver, "s"));
+    const char* instead = n == "strip"                                                                        ? "trim()"
+                          : n == "lstrip" || n == "trimStart" || n == "trimLeft" || n == "trim_left"  ? "trim_start()"
+                          : n == "rstrip" || n == "trimEnd" || n == "trimRight" || n == "trim_right"  ? "trim_end()"
+                          : n == "replaceAll"                                                         ? "replace_all(from, to)"
+                                                                                                      : nullptr;
+    if (!instead && n != "join") return nullptr;
+    if (n == "join") {  // `", ".join(parts)`, as in Python
+        const std::string parts = call.args.size() == 1 && !plainKey(*call.args[0]).empty() ? plainKey(*call.args[0]) : "parts";
+        const std::string sep = plainKey(*call.receiver).empty() ? "sep" : plainKey(*call.receiver);
+        diags_.error(call.loc, "'string' has no method named 'join'",
+                     "join() is a method of the vector of strings, and takes the separator: write `" + parts + ".join(" + sep + ")`",
+                     spec::SplittingAndJoining);
+    } else {
+        diags_.error(call.loc, "'string' has no method named " + q(n), "write `" + s + "." + instead + "`, which gives a new string",
+                     spec::SplittingAndJoining);
+    }
+    for (auto& a : call.args) checkLooseValue(*a, flow);  // after, so that a name it does not know is not what is said first
+    return Type::error();
+}
+
+// The methods of kStringEdits, and the habits of checkStringHabit. Null for any other method.
+const Type* Sema::checkStringEdit(MethodCallExpr& call, Flow& flow) {
+    const StringEditInfo* info = nullptr;
+    for (auto& m : kStringEdits)
+        if (call.name == m.name) info = &m;
+    if (!info) return checkStringHabit(call, flow);
+    const std::string s = asBase(spelled(*call.receiver, "s"));
+    const size_t most = std::strlen(info->args);
+    call.strMethod = info->method;
+    if (info->method == StrMethod::Replace && call.args.size() == 2) {  // `s.replace("a", "b")`, as in Python, Rust and JavaScript
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, "replace() is C++'s, which replaces the part at a position: `" + s + ".replace(pos, count, text)`",
+                     "to replace every match of a text, write `" + s + " = " + s + ".replace_all(" + spelledArgs(call.args, "from, to") + ");`",
+                     spec::Strings);
+        return Type::error();
+    }
+    if (info->changes) checkChangingReceiver(*call.receiver, info->name, "string", spec::Strings);
+    if (call.args.size() < info->minArgs || call.args.size() > most) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc,
+                     std::string(info->name) + "() takes " + argumentCount(info->minArgs, most) + " but " + std::to_string(call.args.size()) +
+                         (call.args.size() == 1 ? " was" : " were") + " given",
+                     info->method == StrMethod::Split && call.args.size() > 1
+                         ? "split() has no limit. For the text before the first separator and the rest, write `long at = " + s +
+                               ".find(sep);`, then `" + s + ".substr(0, at)` and `" + s + ".substr(at + sep.size())`"
+                         : "write `" + s + "." + info->usage + "`",
+                     info->makes ? spec::SplittingAndJoining : spec::Strings);
+    } else {
+        for (size_t i = 0; i < call.args.size(); ++i) {
+            Expr& arg = *call.args[i];
+            const char kind = info->args[i];
+            const std::string what = kind != 'p'                        ? std::string("for ") + info->name + "()"
+                                     : i == 1 && info->args[0] == 'p' ? std::string("as the length for ") + info->name + "()"
+                                                                      : std::string("as the position for ") + info->name + "()";
+            if (kind == 't') {
+                if (!checkExpr(arg, flow)->is(K::Char)) requireConvertible(arg, Type::stringTy(), what);
+            } else {
+                checkValue(arg, flow, kind == 's' ? Type::stringTy() : Type::longTy(), what);
+            }
+        }
+    }
+    if (info->makes && std::find(discarded_.begin(), discarded_.end(), &call) != discarded_.end()) {
+        const std::string written = s + "." + info->name + "(" + spelledArgs(call.args, "...") + ")";
+        diags_.error(call.loc, "`" + written + ";` changes nothing",
+                     info->method == StrMethod::Split ? "keep the parts it gives: `vector<string> parts = " + written + ";`"
+                     : isPlaceKind(*call.receiver)    ? "write `" + s + " = " + written + ";`, as it gives a new string and leaves " + q(s) + " as it is"
+                                                      : "keep the string it gives: `string text = " + written + ";`",
+                     spec::SplittingAndJoining);
+    }
+    switch (info->method) {
+        case StrMethod::Rfind: return Type::longTy();
+        case StrMethod::Compare: return Type::intTy();
+        case StrMethod::Split: return Type::vectorOf(Type::stringTy());
+        case StrMethod::Trim:
+        case StrMethod::TrimStart:
+        case StrMethod::TrimEnd:
+        case StrMethod::ReplaceAll: return Type::stringTy();
+        default: return Type::voidTy();
+    }
+}
+
+// `parts.join(sep)`, on a vector<string> only.
+const Type* Sema::checkJoin(MethodCallExpr& call, Flow& flow, const Type* vecType) {
+    const std::string v = asBase(spelled(*call.receiver, "parts"));
+    if (!vecType->elem->is(K::String)) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, "join() joins a vector<string>, but this is " + q(vecType),
+                     "make a string of each element first, with `to_string(x)` or `format(\"{}\", x)`, and push it to a `vector<string>`. To print "
+                     "the vector as it is, write `println(\"{}\", " + v + ")`",
+                     spec::SplittingAndJoining);
+        return Type::error();
+    }
+    call.vecMethod = VecMethod::Join;
+    if (call.args.size() != 1) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc,
+                     "join() takes one argument, the separator, but " + std::to_string(call.args.size()) + (call.args.size() == 1 ? " was" : " were") +
+                         " given",
+                     "write `" + v + ".join(\", \")`, or `" + v + ".join(\"\")` for nothing between them", spec::SplittingAndJoining);
+    } else if (!checkExpr(*call.args[0], flow)->is(K::Char)) {
+        requireConvertible(*call.args[0], Type::stringTy(), "for join()");
+    }
+    if (std::find(discarded_.begin(), discarded_.end(), &call) != discarded_.end()) {
+        const std::string written = v + ".join(" + spelledArgs(call.args, "...") + ")";
+        diags_.error(call.loc, "`" + written + ";` changes nothing", "keep the string it gives: `string text = " + written + ";`",
+                     spec::SplittingAndJoining);
+    }
+    return Type::stringTy();
+}
+
 const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
+    if (const Type* edited = checkStringEdit(call, flow)) return edited;
     const StringMethodInfo* info = nullptr;
     for (auto& m : kStringMethods)
         if (call.name == m.name) info = &m;
@@ -6865,26 +7121,16 @@ const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
         if (n == "at")
             diags_.error(call.loc, "'string' has no method named 'at'",
                          "write `s[i]`, which always checks that i is a position in the string", spec::Strings);
-        else if (n == "append")
-            diags_.error(call.loc, notYet, "write `s += text`", spec::Status);
-        else if (n == "insert" || n == "erase" || n == "replace" || n == "rfind" || n == "compare" ||
-                 n == "find_first_of" || n == "find_last_of" || n == "find_first_not_of" ||
+        else if (n == "find_first_of" || n == "find_last_of" || n == "find_first_not_of" ||
                  n == "find_last_not_of" || n == "resize" || n == "reserve" || n == "c_str" || n == "data" ||
                  n == "begin" || n == "end")
             diags_.error(call.loc, notYet,
                          n == "c_str" || n == "data" ? "pass `s` itself: a `string` parameter of a C function converts at each call"
-                         : n == "erase" ? "build it from what stays: `s = s.substr(0, pos) + s.substr(pos + n);`"
-                         : n == "insert" ? "build it: `s = s.substr(0, pos) + t + s.substr(pos);`"
-                         : n == "replace" ? "build it: `s = s.substr(0, pos) + t + s.substr(pos + n);`"
                          : n == "resize" ? "build it: `s = s.substr(0, n);` to shorten it, or `s += string(k, ' ');` to add k spaces"
-                         : n == "rfind" && !call.args.empty() && call.args[0]->kind == Expr::Kind::CharLit
-                             ? "go back from the end: `for (long i = s.size() - 1; i >= 0; i--) if (s[i] == " + charLiteral(static_cast<const CharLitExpr&>(*call.args[0]).value) + ") { ...; break; }`"
-                         : n == "rfind" ? "go back from the end: `for (long i = s.size() - t.size(); i >= 0; i--) if (s.substr(i, t.size()) == t) { ...; break; }`, with `t` what is looked for"
                          : n == "find_first_of" ? "go over it and test each char: `for (long i = 0; i < s.size(); i++) if (chars.contains(string(1, s[i]))) { ...; break; }`"
                          : n == "find_last_of" ? "go back from the end and test each char: `for (long i = s.size() - 1; i >= 0; i--) if (chars.contains(string(1, s[i]))) { ...; break; }`"
                          : n == "find_first_not_of" ? "go over it and test each char: `for (long i = 0; i < s.size(); i++) if (!chars.contains(string(1, s[i]))) { ...; break; }`"
                          : n == "find_last_not_of" ? "go back from the end and test each char: `for (long i = s.size() - 1; i >= 0; i--) if (!chars.contains(string(1, s[i]))) { ...; break; }`"
-                         : n == "compare" ? "compare with `a < b` and `a == b`"
                          : n == "begin" || n == "end" ? "go over it with `for (char c : s)`"
                          : n == "reserve" ? "remove the call: a string grows by itself"
                                           : kStringMethodList,
@@ -6892,6 +7138,7 @@ const Type* Sema::checkStringMethod(MethodCallExpr& call, Flow& flow) {
         else {
             std::vector<std::string> names;
             for (auto& m : kStringMethods) names.push_back(m.name);
+            for (auto& m : kStringEdits) names.push_back(m.name);
             std::string guess = closest(n, names);
             diags_.error(call.loc, "'string' has no method named " + q(n),
                          guess.empty() ? kStringMethodList : "did you mean " + q(guess) + "?", spec::Strings);
@@ -7124,7 +7371,7 @@ const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Ty
         bool fails = false;
         const StructDecl* owner = inner->isUnique() || inner->isLocal() ? (inner->elem ? inner->elem->decl : nullptr) : inner->decl;
         if (inner->isVector() || inner->isArray() || inner->is(K::String)) {
-            static const char* const changing[] = {"push_back", "pop_back", "clear", "insert", "erase", "fill", "resize", "append", "swap"};
+            static const char* const changing[] = {"push_back", "pop_back", "clear", "insert", "erase", "fill", "resize", "append", "swap", "replace"};
             changes = std::find_if(std::begin(changing), std::end(changing), [&](const char* m) { return call.name == m; }) != std::end(changing);
         } else if (owner) {
             if (const FuncDecl* method = owner->findMethod(call.name)) changes = !method->isConst, fails = method->callFails();
@@ -7134,7 +7381,8 @@ const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Ty
         bool exists = true;  // what is inside has a method of that name
         if (inner->isVector() || inner->isArray() || inner->is(K::String)) {
             static const char* const known[] = {"size", "empty", "push_back", "pop_back", "front", "back", "clear", "data", "fill", "length", "substr", "find",
-                                                "contains", "starts_with", "ends_with", "at", "insert", "erase", "resize", "append", "swap", "rfind"};
+                                                "contains", "starts_with", "ends_with", "at", "insert", "erase", "resize", "append", "swap", "rfind",
+                                                "compare", "replace", "split", "trim", "trim_start", "trim_end", "join", "replace_all"};
             exists = std::find_if(std::begin(known), std::end(known), [&](const char* m) { return call.name == m; }) != std::end(known);
         } else if (owner) {
             exists = (isHashmap(inner) && call.name == "at") || ((inner->isUnique() || inner->isLocal()) && call.name == "get");

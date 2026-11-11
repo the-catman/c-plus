@@ -1,0 +1,8 @@
+// insert() takes an index from 0 to size(), and any other stops the program.
+int main() {
+    vector<int> v = {1, 2, 3};
+    v.insert(v.size() + 1, 4);
+    println("{}", v);
+    return 0;
+}
+// trap: insert() index 4 is out of range for a vector of size 3

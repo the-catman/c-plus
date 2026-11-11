@@ -43,19 +43,21 @@ long square(long n) { return n * n; }
 | Threads | `Task<long> t = spawn sum(v);` or `auto t = spawn obj.method(x);`, then `t.wait()`, `t.done()`. `Task<void>` for no result. The function `throws`: `Task<long, throws>`, and `try t.wait()`. Arguments are copied, class references are shared. The program waits for its threads when `main` returns. An error that no `wait()` can see fails the program |
 | Locks | `Mutex m = Mutex();`, `m.lock()`, `m.unlock()`, `m.try_lock()`. `LockGuard g = LockGuard(m);` unlocks at the end of the block. Locking twice on one thread **stops the program**. `cplus run app.cplus --race` finds what is not protected |
 | Async | `async string load(string name) { await delay(10); return name; }`. A call starts it, and gives a `Task<string>`: `auto t = load("a");`, then `await t` in an async function, or `t.wait()` in a plain one. `async int main()`. A function that `throws` gives a `Task<string, throws>`, and is waited for with `try await t`. `await` works on `spawn`'s tasks too. `delay(ms)` waits. A task must be kept or waited for, and the program waits for async work when `main` returns. No `LockGuard` or `local` across an `await` |
-| Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
+| Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v.insert(i, x)` (before index `i`), `v.erase(i)`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
 | Hash maps | `hashmap<string, int> m = {{"a", 1}};` is a **value**, copied like a vector, that keeps the order entries were added in. `m["b"] = 2`, `m["b"]++`, `m[k].push_back(x)`. `m[k]` adds a missing key with a default value, as in C++, or **stops the program** if `V` has none. `m.at(k)` (**stops the program** if missing), `m.get(k)` (a `V?`), `m.contains(k)`, `m.count(k)`, `m.insert({k, v})` (keeps what is there), `m.erase(k)`, `m.size()`, `m.empty()`, `m.clear()`, `m.keys()`, `m.values()`. `for (auto e : m)` with `e.first`, `e.second`. Prints as `{"a": 1}`. A key is a number, `char`, `bool`, string, pointer or class reference, or an optional, vector, array or struct of those |
 | JSON | `import json;`. `json::stringify(x)`, `json::pretty(x)`, `User u = try json::parse<User>(text);`, for structs, classes, vectors, arrays, optionals, hashmaps and what they hold. Public fields only. A missing key keeps the field's default, and a key that is not a field is left out. `catch (json::Error e)` has `e.line`, `e.column` and `e.what()` |
 | Any JSON | `json::Value doc = try json::parse<json::Value>(text);`, then `doc.get("a")?.at(0)?.text() ?? "none"`. `isNull()`, `number()`, `whole()`, `boolean()`, `keys()`, `items()`, `size()`. `json::object()`, `json::array()`, `v.set(k, json::of(x))`, `v.push(json::of(x))` |
 | HTTP | `import http;`. `http::Response r = try http::get(url);`, then `r.status`, `r.ok`, `r.body`, `r.header("content-type")`. `try http::post(url, body, "application/json")`, `put`, `patch`, `delete`. `try http::send({.method = "HEAD", .url = url, .headers = {{"Authorization", token}}, .timeout = 5});`. A 404 is an answer, not an error. Other failures: `catch (http::Error e)`, with `e.kind` (`"timeout"`, `"connect"`, `"tls"`, ...) and `e.what()`. `http::encode(text)` for a part of a URL. Async: `try await http::fetch(url)`, `http::fetchWith(request)` |
 | WebSockets | `http::WebSocket ws = try http::connect("wss://...");`, `try ws.send(text);`, `try ws.sendBinary(bytes);`, `while (auto m = try ws.receive())` with `m.data` and `m.isBinary`, null once closed. `ws.close()`, `ws.closeCode()`, `ws.timeout = 5;`. `http::connectWith(request)` for headers |
-| Files | `import fs;`, then `string text = try fs::read("notes.txt");`, all of the file as it is. `catch (fs::Error e)`, with `e.kind` (`"not-found"`, `"permission"`, `"is-directory"`, `"bad-path"`, `"io"`), `e.path` and `e.what()` |
+| Files | `import fs;`, then `string text = try fs::read("notes.txt");`, all of the file as it is, and `try fs::write("notes.txt", text);` or `try fs::append("log.txt", text);`. `fs::exists(path)`, `try fs::remove(path)`, `try fs::list(".")` for the names in a folder, sorted, `try fs::create_directories(path)`, `try fs::rename(from, to)`, `try fs::file_size(path)`. `catch (fs::Error e)`, with `e.kind` (`"not-found"`, `"permission"`, `"is-directory"`, `"not-directory"`, `"not-empty"`, `"exists"`, `"no-space"`, `"closed"`, `"bad-path"`, `"io"`), `e.path` and `e.what()` |
+| A file a part at a time | `fs::File f = try fs::open(path, "r");`, or `"w"` or `"a"` to write it, then `while (auto line = try f.readLine())`, `try f.read(n)`, `try f.readAll()`, `try f.write(text);` and `try f.close();` |
 | Input | `string? line = readLine();` is the next line of standard input, without its line ending, or null at the end. `while (auto line = readLine()) { ... }`. What was printed is written out first, so `print("Name: ")` shows |
 | Numbers from text | `int n = try stoi(text);`, `try stol(text)`, `try stod(text)`, `try stof(text)`. All of the text must be the number, in decimal, with only spaces around it: `"12abc"` and `"0x1F"` throw an `Error`, as does a number that does not fit |
 | Reflection | `import reflect;`. `auto t = reflect::type<User>();` or `reflect::of(x)`, then `t.name()`, `t.kind()`, `t.size()`, `t.elem()`, and `for (auto f : t.fields())` with `f.name`, `f.offset`, `f.type`, `f.isPublic` |
 | Arrays | `array<int, 3> a;` (all 0), `array<int, 3> a = {1, 2};`, `array<int, 3>{1, 2}` are **values**, copied whole, with `N` a number or a constant. `a[i]` (checked), `a.size()` (a `long`), `a.empty()`, `a.front()`, `a.back()`, `a.fill(x)`, `a.data()`, `&a[i]`, `==`, `for (auto x : a)`. Prints as `[1, 2, 3]`. `array<array<int, 3>, 2>` for rows. `string(a)` reads the text in an `array<char, N>` |
-| Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>` |
+| Strings | a **value**, like `std::string`. `a + b`, `s += t`, `s.size()` / `s.length()` (bytes, a `long`), `s.empty()`, `s.substr(pos, n)`, `s.find(t)` (`string::npos` when absent), `s.contains(t)`, `s.starts_with(t)`, `s.ends_with(t)`, `s.clear()`, `==` `<` `>`. As in C++, changing `s`: `s.append(t)`, `s.insert(pos, t)`, `s.erase(pos, n)`, `s.replace(pos, n, t)`; and `s.rfind(t)`, `s.compare(t)` (-1, 0 or 1) |
+| Splitting | each gives a new value and leaves `s` as it is: `vector<string> parts = s.split(",");` (`"a,,b"` gives `["a", "", "b"]`), `s.split(',')`, `s = s.trim();`, `s.trim_start()`, `s.trim_end()`, `string csv = parts.join(", ");`, `s.replace_all("a", "b")` (every match) |
 | String chars | `s[i]` and `s[i] = 'x'` (checked), `for (char c : s)`, `s + '!'`, `s += c`, `s.push_back(c)`, `s.pop_back()`, `s.front()`, `s.back()`, `string(3, '-')`, `s.find('/')` |
 | Raw strings | `R"(no "escapes" here, and any number of lines)"`, or `R"end(has )" inside)end"`, as in C++ |
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them |
@@ -152,8 +154,11 @@ long square(long n) { return n * n; }
 | `printf("%.2f", x)`, `std::setprecision(2)` | `println("{:.2f}", x)` |
 | `std::stod(s)`, `std::stoi(s)`, `std::stoll(s)` | `try stod(s)`, `try stoi(s)`, `try stol(s)`, with no `std::`. All of the text must be the number, or it throws an `Error`, where C's `atoi` gives 0 |
 | `stoi(s, &pos)` | `try stoi(s)` reads all of `s`, in decimal. For a base, or a number at the start of other text, declare C's `strtol` with `extern "C"` |
+| `s.replace("a", "b")`, `s.replaceAll("a", "b")`, `", ".join(parts)`, `s.strip()` | `s.replace_all("a", "b")`, `parts.join(", ")`, `s.trim()`. C++'s `s.replace(pos, n, t)` works |
+| `s.trim();` on its own line | error: it changes nothing. Write `s = s.trim();` |
 | `std::getline(std::cin, line)`, `std::cin >> n` | `while (auto line = readLine()) { ... }`, and `int n = try stoi(line);` for a number |
 | `std::ifstream file(path)`, `fs.readFileSync(path)`, `fs::readFile("notes.txt")` | `import fs;`, then `string text = try fs::read(path);`, which waits for all of the file. The async form is planned |
+| `std::ofstream out(path)`, `fs.writeFileSync(path, text)`, `std::filesystem::exists(path)` | `try fs::write(path, text);`, or `fs::File out = try fs::open(path, "w");` to write it a part at a time. fs names what it has as C++'s filesystem library does: `fs::exists(path)` |
 | `long double`, `1.5L` | no `long double`; `double` is 64 bits |
 | `int n = true;` | error: `bool` does not convert to a number (numbers do convert to `bool`) |
 | `010` (octal) | `0o10`. A leading zero is an error |
@@ -206,6 +211,7 @@ long square(long n) { return n * n; }
 | `obj["a"]["b"]` on JSON | `obj.get("a")?.get("b")`, since any step may not be there |
 | `m.find(k) != m.end()`, `it->second` | `m.contains(k)`, `m.get(k)`, which gives a `V?`. No iterators yet |
 | `m.emplace(k, v)`, `m.insert_or_assign(k, v)` | `m.insert({k, v})`, `m[k] = v` |
+| `v.erase(v.begin() + i)`, `v.insert(v.begin(), x)`, `v.insert(v.end(), x)` | `v.erase(i)`, `v.insert(0, x)`, `v.push_back(x)`: an index, as there are no iterators |
 | `m[k]` on a `const` map | error, as in C++, since it adds a missing key: `m.at(k)` or `m.get(k)` |
 | `std::hash<Point>` for a struct key | not needed: a struct of hashable fields is hashable. Your own hash is planned |
 | `v.emplace_back(x)`, `v.at(i)` | `v.push_back(x)`, `v[i]` (always checked) |
@@ -224,7 +230,7 @@ long square(long n) { return n * n; }
 | `std::stringstream`, `sprintf`, `snprintf` | `format("{}: {}", name, n)` returns the string |
 | `size_t pos = s.find(t)` | `long pos = s.find(t)` or `auto pos`. `string::npos` is `-1`, so `pos != string::npos` and `pos >= 0` both work |
 | `s.substr(pos)` past the end throws | it **stops the program** with file:line, as do a negative position and `s.find(t, -1)` |
-| `s.at(i)`, `s.append(t)` | `s[i]` (always checked), `s += t` |
+| `s.at(i)` | `s[i]` (always checked) |
 | overloaded functions | planned; one function per name for now: rename one |
 
 ## Planned. Where there is something to write for them, the compiler rejects it with "does not support ... yet"
@@ -243,12 +249,11 @@ long square(long n) { return n * n; }
 | Functions | overloading, default arguments, `auto` parameters and return types, lambdas |
 | Statements | a declaration before a switch's value: `switch (auto k = f(); k)` |
 | Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
-| Containers | `insert`, `erase` and iterators on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |
+| Containers | iterators, and erasing a range, on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |
 | References | `T& f()`, and `for (auto& e : m)` over a hashmap |
 | Structured bindings | `for (auto [k, v] : m)`, `auto [a, b] = f();` |
 | Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
-| More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare` |
-| Files | writing and appending, `fs::exists`, `fs::remove`, `fs::list`, `fs::open`, and the async `fs::readFile` and `fs::writeFile` |
+| Files | the async `fs::readFile` and `fs::writeFile`; copying a file, and its times and permissions |
 | More C | variable arguments, vectors, C variables like `errno`, callbacks |
 | Concurrency | waiting with a time limit, stopping a task, atomic values, condition variables, channels |
 

@@ -1,0 +1,8 @@
+// A negative length other than string::npos stops the program.
+int main() {
+    string s = "abc";
+    s.erase(1, -2);
+    println("{}", s);
+    return 0;
+}
+// trap: erase() was given the negative length -2

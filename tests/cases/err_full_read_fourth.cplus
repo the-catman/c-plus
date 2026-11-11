@@ -1,5 +1,5 @@
 // The fourth reading: aliases of C++ types C+ has no form for, or a form with rules of its own, `const` kept,
-// `rfind` of an escaped char, and `->` through a pointer to a container.
+// and `->` through a pointer to a container.
 class Node { };
 struct Pt { int x = 0; };
 using A1 = std::optional<int*>;
@@ -23,7 +23,5 @@ using B3 = std::vector<const int*>;
 void f(vector<Pt*>* pp, string path) {
     int c = (*pp)->x;
     // error: only a pointer is followed with '->', and '*pp' holds 'Pt*': write `(*pp)[i]->x`
-    long a = path.rfind('\n');
-    // error: go back from the end: `for (long i = s.size() - 1; i >= 0; i--) if (s[i] == '\n') { ...; break; }`
 }
 int main() { return 0; }

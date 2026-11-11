@@ -435,11 +435,11 @@ struct CallExpr : Expr {
 };
 
 // The methods of vectors and arrays. `Fill` and `Data` are only on arrays, and `PushBack`,
-// `PopBack` and `Clear` only on vectors.
-enum class VecMethod { None, Size, Empty, PushBack, PopBack, Front, Back, Clear, Fill, Data };
+// `PopBack`, `Clear`, `Insert` and `Erase` only on vectors. `Join` is only on a vector<string>.
+enum class VecMethod { None, Size, Empty, PushBack, PopBack, Front, Back, Clear, Fill, Data, Join, Insert, Erase };
 // The methods every string has. `length()` is `size()`.
 enum class StrMethod { None, Size, Empty, Substr, Find, Contains, StartsWith, EndsWith, Clear, PushBack, PopBack, Front,
-                       Back };
+                       Back, Append, Insert, Erase, Replace, Rfind, Compare, Split, Trim, TrimStart, TrimEnd, ReplaceAll };
 // The methods every optional has, as in std::optional.
 enum class OptMethod { None, HasValue, Value, ValueOr };
 // The methods of a weak reference, as in std::weak_ptr.

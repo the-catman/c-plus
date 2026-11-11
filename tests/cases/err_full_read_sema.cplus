@@ -94,10 +94,6 @@ void formats(double? od, int x, int? o) {
     // error: the call gives nothing to turn into text. Call it on a line of its own, and pass `to_string` a number
 }
 void strings(string s) {
-    s.replace(0, 1, "x");
-    // error: build it: `s = s.substr(0, pos) + t + s.substr(pos + n);`
-    long i = s.rfind("x");
-    // error: go back from the end: `for (long i = s.size() - t.size(); i >= 0; i--) if (s.substr(i, t.size()) == t) { ...; break; }`, with `t` what is looked for
     s.resize(3);
     // error: build it: `s = s.substr(0, n);` to shorten it, or `s += string(k, ' ');` to add k spaces
     long j = s.find_first_of("ab");

@@ -1,0 +1,11 @@
+// A count of bytes below zero is a mistake in the program, so read() stops it.
+import fs;
+
+int main() throws {
+    try fs::write("a.txt", "text");
+    fs::File f = try fs::open("a.txt", "r");
+    long n = -1;
+    println("{}", try f.read(n));
+    return 0;
+}
+// trap: read() on an fs::File was given the negative count -1

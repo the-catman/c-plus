@@ -1,0 +1,34 @@
+// split, trim, join and replace_all give a new value and change nothing, so a call whose value goes nowhere is a mistake.
+string make() { return " x "; }
+
+int main() {
+    string s = " a,b ";
+    vector<string> parts = {"a"};
+    s.trim();
+    s.trim_start();
+    s.trim_end();
+    s.split(",");
+    s.replace_all("a", "b");
+    parts.join(",");
+    make().trim();
+    s.erase(0, 1);  // changes the string, as in C++, so this is fine
+    s.rfind("a");   // C++'s, which the program may call for nothing
+    s.compare("a");
+    return 0;
+}
+// error: `s.trim();` changes nothing
+// error: write `s = s.trim();`, as it gives a new string and leaves 's' as it is
+// error: spec: docs/SPEC.md#splitting-and-joining
+// error: `s.trim_start();` changes nothing
+// error: `s.trim_end();` changes nothing
+// error: `s.split(",");` changes nothing
+// error: keep the parts it gives: `vector<string> parts = s.split(",");`
+// error: `s.replace_all("a", "b");` changes nothing
+// error: write `s = s.replace_all("a", "b");`
+// error: `parts.join(",");` changes nothing
+// error: keep the string it gives: `string text = parts.join(",");`
+// error: `make().trim();` changes nothing
+// error: keep the string it gives: `string text = make().trim();`
+// not-error: `s.erase
+// not-error: `s.rfind
+// not-error: `s.compare

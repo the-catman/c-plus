@@ -224,6 +224,16 @@ name[0] = 'E';                              // "Eda"; other copies keep "Ada"
   and `back()` return the first and last. On an empty string, `pop_back()`, `front()`
   and `back()` stop the program; in C++ they are undefined.
 - `clear()` empties the string.
+- `append(t)`, `insert(pos, t)`, `erase(pos, count)` and `replace(pos, count, t)` change the string, as in C++.
+  `append` adds `t` at the end, as `+=` does, `insert` puts `t` before position `pos`, `erase` removes `count` bytes
+  from `pos`, and `replace` puts `t` in their place. `erase(pos)`, a `count` of `string::npos`, and a `count` that runs
+  past the end take the rest, and `erase()` empties the string. A `pos` past the end, which throws in C++, stops the
+  program, and so does a negative `pos`, or a negative `count` other than `string::npos`.
+- `rfind(text)` and `rfind(text, pos)` return the position of the last match that starts at or before `pos`, or
+  `string::npos` when there is none. `text` can be a `char`. A `pos` of `string::npos`, or past the end, looks at the
+  whole string, and another negative `pos` stops the program.
+- `compare(t)` returns `-1`, `0` or `1`, as the string comes before `t`, is the same, or comes after it, in the order of
+  `<`.
 - `string(count, c)` is `count` copies of the char `c`, as in C++: `string(3, '-')` is
   `"---"`. `string()` is empty, and `string(s)` is a copy of the string `s`. `string(p)`
   copies the text a C `char*` points to (see [Pointers](#pointers)).
@@ -236,8 +246,46 @@ Copies of a string, and large substrings, share their bytes instead of copying t
 `+=` adds to a string in place when no other string shares it, so building a string in a
 loop takes linear time. See [Memory model](#memory-model).
 
-`s.at(i)` does not exist, since `s[i]` is always checked. Planned: `append`, `insert`,
-`erase`, `replace`, `rfind` and `compare`. A number is read from a string with `stoi` and the functions like it:
+`s.at(i)` does not exist, since `s[i]` is always checked. A string is split, trimmed and joined with the methods below,
+and a number is read from it with `stoi` and the functions like it.
+
+#### Splitting and joining
+
+`split`, `trim`, `join` and `replace_all` give a new string, or a vector of them, and leave the string as it was. A
+call whose result goes nowhere, such as `s.trim();`, would change nothing, so it is an error: write `s = s.trim();`.
+
+```cpp
+string line = " name=Ada , born=1815 ";
+for (string field : line.split(",")) {
+    vector<string> pair = field.trim().split('=');   // ["name", "Ada"], then ["born", "1815"]
+    println("{}: {}", pair[0], pair[1]);
+}
+vector<string> words = {"a", "b", "c"};
+string csv = words.join(",");                         // "a,b,c"
+string path = "a/b/c".replace_all("/", "::");         // "a::b::c"
+```
+
+| Method | Gives |
+|--------|-------|
+| `s.split(sep)` | a `vector<string>` of the parts between each `sep` and the next |
+| `s.trim()` | `s` without the spaces at its start and its end |
+| `s.trim_start()`, `s.trim_end()` | `s` without the spaces at its start, or at its end |
+| `parts.join(sep)` | the strings of a `vector<string>`, with `sep` between each two |
+| `s.replace_all(from, to)` | `s` with every `from` made `to` |
+
+- `split(sep)` goes from left to right, and a separator next to another, or at an end, gives an empty part:
+  `"a,,b".split(",")` is `["a", "", "b"]`, `"a,".split(",")` is `["a", ""]`, and `"".split(",")` is `[""]`, as in
+  Python and JavaScript. `sep` can be a `char`. An empty `sep`, which would be between every two bytes, stops the
+  program. There is no limit on the parts: for the text before the first separator, use `find` and `substr`.
+- The spaces of `trim` are those of C's `isspace`: `' '`, `'\t'`, `'\n'`, `'\r'`, and the bytes 11 and 12, a vertical tab and a form feed.
+- `join(sep)` is a method of the vector, and not of the separator as in Python. An empty vector gives `""`. It is only
+  for a `vector<string>`: a vector of numbers is made into strings first, with `to_string`.
+- `replace_all(from, to)` looks for each `from` after the one before it, so `"aaa".replace_all("aa", "b")` is `"ba"`.
+  `from` and `to` can be chars. An empty `from` stops the program. C++'s `replace(pos, count, t)` replaces one part, at a
+  position, so `s.replace("a", "b")` is an error: Python and Rust replace every match with that name, and JavaScript only
+  the first.
+- The names are in snake case, as the other methods of a string are, and none of them is a free function, as they are in
+  Boost.
 
 #### Parsing numbers
 
@@ -811,6 +859,8 @@ Building a vector:
 | `v.empty()` | whether there are no elements |
 | `v.push_back(x)` | adds `x` at the end |
 | `v.pop_back()` | removes the last element |
+| `v.insert(i, x)` | puts `x` before the element at index `i`, or at the end when `i` is `v.size()` |
+| `v.erase(i)` | removes the element at index `i`, and moves those after it down one |
 | `v.front()`, `v.back()` | a copy of the first or the last element |
 | `v.clear()` | removes every element |
 
@@ -824,6 +874,11 @@ Building a vector:
   `front()` or `back()` on an empty vector, stop the program with an error naming the file
   and line. C++ leaves all of these undefined. A negative literal index such as `v[-1]` is
   a compile error.
+- `insert(i, x)` and `erase(i)` take an index, where C++'s take an iterator, as there are no iterators:
+  `v.erase(v.begin() + i)` is an error that says to write `v.erase(i)`. `insert` takes an index from 0 to `size()`, and
+  `erase` one from 0 to `size() - 1`, and any other stops the program. Each moves the elements after the index, so it
+  takes time that grows with them, as in C++. Erasing a range, `v.erase(first, last)`, waits, since C++'s takes two
+  iterators and a string's `erase(pos, count)` a position and a count.
 - `front()` and `back()` return a copy. To change the last element, write
   `v[v.size() - 1] = x`. Changing what they give, `v.back().x = 1` or a method that changes a struct, `v.back().set()` or `v.back().p.set()`, is an
   error, as in C++ it would change the element, and here it would do nothing. So is changing what `?:` gives when both
@@ -836,7 +891,7 @@ Building a vector:
 - A vector prints as `[1, 2, 3]`, with strings in quotes: `["Ada", "Linus"]`.
 - A `const` vector cannot change at all, like a `const` struct: neither its elements nor
   its size.
-- `push_back`, `pop_back` and `clear` cannot be called on a temporary, such as
+- `push_back`, `pop_back`, `insert`, `erase` and `clear` cannot be called on a temporary, such as
   `makeList().push_back(1)`, because the change would be lost.
 - A vector is not a [condition](#conditions); write `!v.empty()`.
 - A method that changes a struct in a vector, `v[0].move(1)`, works on that element in place,
@@ -845,7 +900,7 @@ Building a vector:
   holding it, the program stops when the method returns, since what the method did to the
   element would be lost. C++ leaves this undefined if `v` moves. Call the method on a copy of
   the element and store it back.
-- Not yet: `insert`, `erase`, `resize`, `reserve`, and iterators (`begin()`, `end()`).
+- Not yet: `resize`, `reserve`, erasing a range, and iterators (`begin()`, `end()`).
 
 **Copies are cheap.** The copies of a vector share one buffer of elements until one of them
 changes; that copy first gets a buffer of its own (copy-on-write). Passing or returning a
@@ -1200,12 +1255,15 @@ Not yet: reading or changing a field through its `reflect::Field`, methods, and 
 
 ### Files
 
-`import fs;` reads files. `fs::read(path)` gives all that is in a file as a string, and waits until it has read it.
+`import fs;` reads and writes files, and the folders they are in. `fs::read(path)` gives all that is in a file as a
+string, and `fs::write(path, text)` makes a file of one. Each function waits until it is done.
 
 ```cpp
 import fs;
 
 try {
+    try fs::write("notes.txt", "milk\neggs\n");
+    try fs::append("notes.txt", "bread\n");
     string notes = try fs::read("notes.txt");
     println("{} bytes", notes.size());
 } catch (fs::Error e) {
@@ -1213,26 +1271,82 @@ try {
 }
 ```
 
-- The path is relative to the working directory, as in C, unless it starts with `/`.
-- The string holds the bytes of the file as they are. Line endings are not changed, a byte order mark stays, the text does
-  not have to be UTF-8, and zero bytes are kept. An empty file gives `""`.
+| Function | What it does |
+|----------|--------------|
+| `fs::read(path)` | gives all that is in the file, as a `string` |
+| `fs::write(path, text)` | makes the file, or replaces what it had, with `text` |
+| `fs::append(path, text)` | adds `text` at the end of the file, and makes the file if it is not there |
+| `fs::exists(path)` | whether there is a file or a folder at the path. It never throws, and is false when it cannot tell |
+| `fs::is_directory(path)` | whether there is a folder at the path. It never throws |
+| `fs::remove(path)` | removes a file, or a folder with nothing in it. It gives false if nothing was there, as in C++ |
+| `fs::list(dir)` | the names of what is in the folder, as a `vector<string>` |
+| `fs::create_directory(path)` | makes a folder. It gives false if there was one already, as in C++ |
+| `fs::create_directories(path)` | makes a folder, and the folders before it that are not there |
+| `fs::rename(from, to)` | gives a file or a folder another name, and replaces a file that had that name |
+| `fs::file_size(path)` | the size of the file in bytes, as a `long` |
+| `fs::open(path, mode)` | an `fs::File`, which reads or writes the file a part at a time |
+
+- The names, and what they do, are those of C++'s `std::filesystem` where it has the function.
+- The path is relative to the working directory, as in C, unless it starts with `/`. Symbolic links are followed.
+- The string `fs::read` gives holds the bytes of the file as they are. Line endings are not changed, a byte order mark
+  stays, the text does not have to be UTF-8, and zero bytes are kept. An empty file gives `""`.
 - Reading goes on until the file ends, however long it is, and not only as far as the size the file says it has, so a
   pipe is read whole, and so is a file that the system writes as it is read.
-- `fs::read` is not async: an [async function](#async-functions) that calls it holds up its thread until it returns.
+- `fs::write` and `fs::append` write the bytes of the string as they are. A folder on the path that is not there is an
+  error, of the kind `"not-found"`; `fs::create_directories` makes it.
+- `fs::list(dir)` gives the names only, without the folder before them, and without `"."` and `".."`, in the order of
+  their bytes, so `"B.txt"` comes before `"a.txt"`.
+- None of these is async: an [async function](#async-functions) that calls one holds up its thread until it returns.
 
-What goes wrong is an `fs::Error`, with `what()`, `kind`, which is one of these, and `path`, the path as it was given.
+`fs::open(path, mode)` opens a file to read it a line or a part at a time, with the mode `"r"`, or to write it a part at a
+time, from its start with `"w"` or at its end with `"a"`. Any other mode is an error while compiling when it is written
+as a literal, and stops the program when it is not. There is no `"b"`, as a file is always read and written as the
+bytes it has.
+
+```cpp
+import fs;
+
+fs::File out = try fs::open("log.txt", "a");
+try out.write("started\n");
+try out.close();
+
+fs::File in = try fs::open("log.txt", "r");
+while (auto line = try in.readLine()) println("{}", line);
+```
+
+| Method | What it does |
+|--------|--------------|
+| `f.readLine()` | the next line, as a `string?` that is null at the end of the file, by the rules of [`readLine()`](#reading-input) |
+| `f.read(n)` | the next `n` bytes, or what is left when that is fewer, and `""` at the end |
+| `f.readAll()` | the rest of the file |
+| `f.write(text)` | writes `text` after what was written before |
+| `f.flush()` | gives what was written to the system now, which C's stdio may hold back until then. On a file opened with `"r"` it does nothing |
+| `f.close()` | closes the file, and reports a write that failed |
+
+- Each method can throw an `fs::Error`. One called after `close()` throws one of the kind `"closed"`, and so does a
+  second `close()`. Reading a file opened to write it, or writing one opened to read it, throws one of the kind `"io"`.
+- An `fs::File` is a class object, and the file is closed when the last one that refers to it goes away, without a
+  word if that fails. Call `close()` to know that what was written is there.
+- It [prints](#printing) as `fs::File {...}`, as what holds something of the runtime's does.
+
+What goes wrong is an `fs::Error`, with `what()`, `kind`, which is one of these, and `path`, the path as it was given,
+or the first of the two for `fs::rename`.
 
 | `kind` | What happened |
 |--------|---------------|
-| `"not-found"` | there is no file at that path, or a part of the path before its end is a file and not a folder |
-| `"permission"` | the program is not allowed to read it |
-| `"is-directory"` | it is a folder |
+| `"not-found"` | there is no file at that path, a folder on it is not there, or a part of the path before its end is a file and not a folder |
+| `"permission"` | the program is not allowed to do it, or the disk can only be read |
+| `"is-directory"` | it is a folder, where a file was wanted |
+| `"not-directory"` | it is a file, where a folder was wanted: `fs::list` of a file, a folder made inside one, or `fs::rename` of a folder onto a file |
+| `"not-empty"` | `fs::remove` of a folder with something in it, or `fs::rename` onto one |
+| `"exists"` | `fs::create_directory` or `fs::create_directories` where there is a file of that name |
+| `"no-space"` | the disk is full |
+| `"closed"` | a method of an `fs::File` after its `close()` |
 | `"bad-path"` | the path is empty or too long, goes through too many symbolic links, or has a zero byte in it, which no name of a file can have |
 | `"io"` | anything else, such as a disk that fails while it is read |
 
-Not yet: writing and appending, `fs::exists`, `fs::remove`, `fs::list`, `fs::open` for reading a file in parts, and
-`fs::readFile` and `fs::writeFile`, which an async function waits for with `await`. Until then, C's `fopen`, `fputs` and
-`fclose` write a file, declared with [`extern "C"`](#c-functions).
+Not yet: `fs::readFile` and `fs::writeFile`, which an async function waits for with `await`, copying a file, and
+the times and permissions of a file.
 
 ### Pointers
 
@@ -2190,7 +2304,7 @@ println("{{literal braces}}");
 - An [enum](#enums) prints the name of its enumerator: `Green`.
 - A method named `toString` is an ordinary method for now, which printing does not call.
 - What holds something of the runtime's prints as its name: `Task<int> {...}`, `Mutex {...}`, `LockGuard {...}`,
-  `http::WebSocket {...}`, `reflect::Type {...}`. Its fields would only show addresses that change, or a secret in a URL.
+  `http::WebSocket {...}`, `reflect::Type {...}`, `fs::File {...}`. Its fields would only show addresses that change, or a secret in a URL.
 - There is no `printf`, `cout` or `std::`.
 
 `format` takes the same arguments as `print` and returns the text as a string instead of
@@ -3084,10 +3198,11 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Unsigned types | planned |
 | Format options for width, alignment and `{:x}`; math constants | planned |
 | Function overloading | planned |
-| Strings: `append`, `insert`, `erase`, `replace` | planned |
+| Strings: `append`, `insert`, `erase`, `replace`, `rfind`, `compare`, `split`, `trim`, `join`, `replace_all` | implemented |
 | Reading numbers from strings: `stoi`, `stol`, `stod`, `stof` | implemented |
 | `hashmap<K, V>` | implemented |
-| Vector `insert`, `erase`, iterators; `find` on a hashmap, sorted maps, sets | planned |
+| Vector `insert(i, x)` and `erase(i)` | implemented |
+| Vector iterators and erasing a range; `find` on a hashmap, sorted maps, sets | planned |
 | References: `T&` and `const T&` parameters and local variables, to elements of vectors, strings and hashmaps too, `for (auto& x : v)` | implemented |
 | Returning `T&`, `for (auto& e : m)` over a hashmap | planned |
 | Structured bindings, `for (auto [k, v] : m)` | planned |
@@ -3109,7 +3224,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Modules `http`, `json` and `reflect`, and raw strings | implemented |
 | `http::fetch` | implemented |
 | `import fs;` and `fs::read`; `readLine()` | implemented |
-| Files: writing, `fs::exists`, `fs::remove`, `fs::list`, `fs::open`, `fs::readFile`, `fs::writeFile` | planned |
+| Files: `fs::write`, `fs::append`, `fs::exists`, `fs::remove`, `fs::list`, folders, `fs::rename`, `fs::file_size`, `fs::open` and `fs::File` | implemented |
+| Files: `fs::readFile` and `fs::writeFile`, for `await` | planned |
 | Modules of your own: `import net.server;`, `export`, `net::server::start()` | implemented |
 | `export { ... }`, `export import`, `export extern "C"`, aliases of modules | planned |
 | Threads: `spawn`, `Task`, `Mutex`, `LockGuard`, `--race` | implemented |

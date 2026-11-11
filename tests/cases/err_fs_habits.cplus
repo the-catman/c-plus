@@ -1,5 +1,5 @@
-// Reading a file as C, C++, JavaScript and Rust do, and what the compiler says to write instead. What fs has later is
-// reported as planned.
+// Reading and writing a file as C, C++, JavaScript and Rust do, and what the compiler says to write instead. The async
+// forms are reported as planned.
 import fs;
 
 void streams() { std::ifstream file("notes.txt"); }
@@ -16,10 +16,9 @@ int main() throws {
     auto c = fs::writeFile("notes.txt", "x");
     fs::write("notes.txt", "x");
     fs::append("notes.txt", "x");
-    bool d = fs::exists("notes.txt");
     fs::remove("notes.txt");
     auto e = fs::list(".");
-    auto f = fs::open("notes.txt");
+    auto f = try fs::open("notes.txt");
     string g = fs::read_to_string("notes.txt");
     string h = fs::readAll("notes.txt");
     string i = fs::nothing("notes.txt");
@@ -33,9 +32,10 @@ int main() throws {
 // error: C+ has no std:: namespace
 // error: to read all of a file, write `import fs;` at the top of the file, then `string text = try fs::read(path);`
 // error: spec: docs/SPEC.md#files
-// error: writing files is planned. Until then, declare C's: `extern "C" { struct FILE; FILE* fopen(string path, string mode); int fputs(string text, FILE* f); int fclose(FILE* f); }`
+// error: to write a file, write `import fs;` at the top of the file, then `try fs::write(path, text);`. To write it a part at a time, `fs::File f = try fs::open(path, "w");`, then `try f.write(text);`
 // error: unknown type 'ifstream'
-// error: this compiler does not support writing files yet
+// error: unknown type 'ofstream'
+// error: write `import fs;` at the top of the file, then the same name with `fs::`, as in `fs::exists(path)` or `try fs::create_directories(path)`, as fs names its functions as std::filesystem does
 // error: unknown type 'FILE'
 // error: To use C's, declare the type first, at the top level: `extern "C" struct FILE;`
 // error: 'fs' is a module, not a value
@@ -44,20 +44,14 @@ int main() throws {
 // error: this compiler does not support `fs::readFile` yet
 // error: write `try fs::read(path)`, which waits for all of the file. The async `fs::readFile`, for `await`, comes later
 // error: this compiler does not support `fs::writeFile` yet
-// error: this compiler does not support `fs::write` yet
-// error: then `fopen(path, "w")`
-// error: this compiler does not support `fs::append` yet
-// error: then `fopen(path, "a")`
-// error: this compiler does not support `fs::exists` yet
-// error: declare C's for now: `extern "C" int access(string path, int mode);`, then `access(path, 0) == 0`
-// error: this compiler does not support `fs::remove` yet
-// error: declare C's for now: `extern "C" int remove(string path);`, then `remove(path) == 0`
-// error: this compiler does not support `fs::list` yet
-// error: pass the names of the files to the program as arguments: `cplus run app.cplus -- a.txt b.txt`
-// error: this compiler does not support `fs::open` yet
-// error: read all of the file with `try fs::read(path)`, then go through the text
+// error: write `try fs::write(path, text)`, which waits until it is written. The async `fs::writeFile`, for `await`, comes later
+// error: 'fs::write' can fail, so its call must say what happens then
+// error: 'fs::append' can fail, so its call must say what happens then
+// error: 'fs::remove' can fail, so its call must say what happens then
+// error: 'fs::list' can fail, so its call must say what happens then
+// error: 'fs::open' takes 2 arguments but 1 was given
 // error: there is no function named 'fs::read_to_string'
-// error: to read all of a file, write `try fs::read(path)`
+// error: to read all of a file, write `try fs::read(path)`. For one line at a time, `fs::File f = try fs::open(path, "r");`, then `try f.readLine()`
 // error: there is no function named 'fs::readAll'
 // error: there is no function named 'fs::nothing'
 // error: `cplus explain fs` says what the module 'fs' has

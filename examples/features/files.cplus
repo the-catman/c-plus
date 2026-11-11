@@ -1,23 +1,28 @@
-// `import fs;` reads all of a file with `fs::read`, which can fail with an `fs::Error`. fs cannot write files yet, so C's
-// functions make the one this reads.
+// `import fs;` reads and writes files: all of one with `fs::read` and `fs::write`, or a line at a time with `fs::open`.
+// Each can fail with an `fs::Error`.
 import fs;
 
-extern "C" {
-    struct FILE;
-    FILE* fopen(string path, string mode);
-    int fputs(string text, FILE* f);
-    int fclose(FILE* f);
-}
-
 int main() throws {
-    FILE* f = fopen("notes.txt", "w");
-    fputs("first\r\nsecond\n", f);
-    fclose(f);
+    try fs::write("notes.txt", "first\r\nsecond\n");
+    try fs::append("notes.txt", "third\n");
 
     // The bytes as they are: line endings are not changed.
     string text = try fs::read("notes.txt");
     println("{} bytes, {}", text.size(), text.starts_with("first\r\n"));
-    // expect: 14 bytes, true
+    // expect: 20 bytes, true
+
+    // readLine() takes the "\n" or "\r\n" off, and is null at the end.
+    fs::File in = try fs::open("notes.txt", "r");
+    while (auto line = try in.readLine()) println("[{}]", line);
+    try in.close();
+    // expect: [first]
+    // expect: [second]
+    // expect: [third]
+
+    try fs::create_directories("old/notes");
+    try fs::rename("notes.txt", "old/notes/kept.txt");
+    println("{} {}", fs::exists("notes.txt"), try fs::list("old/notes"));
+    // expect: false ["kept.txt"]
 
     try {
         string missing = try fs::read("missing.txt");
@@ -28,5 +33,9 @@ int main() throws {
     }
     // expect: not-found missing.txt
     // expect: could not read "missing.txt": there is no such file
+
+    try fs::remove("old/notes/kept.txt");
+    try fs::remove("old/notes");
+    try fs::remove("old");
     return 0;
 }

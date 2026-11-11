@@ -1,0 +1,9 @@
+// A negative index stops the program, as v[-1] would.
+int main() {
+    vector<int> v = {1};
+    long i = -1;
+    v.erase(i);
+    println("{}", v);
+    return 0;
+}
+// trap: erase() index -1 is out of range for a vector of size 1

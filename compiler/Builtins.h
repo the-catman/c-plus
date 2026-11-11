@@ -787,11 +787,27 @@ template<typename T> reflect::Type reflect::type() { return reflect::Type(__type
 template<typename T> reflect::Type reflect::of(T value) { return reflect::Type(cplus_type_real(__type_of(T), (void*)&value)); }
 )cplus";
 
-// `import fs;`. The C side is runtime/fs.c, on C's stdio: `fs::read` waits for the whole file, and is not async. The kinds of
-// fs::Error, and which failure is which, are chosen there.
+// `import fs;`. The C side is runtime/fs.c, on C's stdio and POSIX: each function waits until it is done, and none is
+// async. The kinds of fs::Error, and which failure is which, are chosen there.
 inline constexpr const char* kFsSource = R"cplus(
 extern "C" {
     bool cplus_fs_read(void* path, void* out, void* kind, void* problem);
+    bool cplus_fs_write(void* path, void* text, bool append, void* kind, void* problem);
+    bool cplus_fs_exists(void* path);
+    bool cplus_fs_is_directory(void* path);
+    int cplus_fs_remove(void* path, void* kind, void* problem);
+    bool cplus_fs_list(void* path, void* out, void* kind, void* problem);
+    int cplus_fs_create_directory(void* path, bool all, void* kind, void* problem);
+    bool cplus_fs_rename(void* from, void* to, void* kind, void* problem);
+    bool cplus_fs_file_size(void* path, long* out, void* kind, void* problem);
+    void* cplus_fs_open(void* path, void* mode, void* kind, void* problem);
+    int cplus_fs_file_read_line(void* file, void* path, void* out, void* kind, void* problem);
+    bool cplus_fs_file_read(void* file, void* path, long n, void* out, void* kind, void* problem);
+    bool cplus_fs_file_read_all(void* file, void* path, void* out, void* kind, void* problem);
+    bool cplus_fs_file_write(void* file, void* path, void* text, void* kind, void* problem);
+    bool cplus_fs_file_flush(void* file, void* path, void* kind, void* problem);
+    bool cplus_fs_file_close(void* file, void* path, void* kind, void* problem);
+    void cplus_fs_file_free(void* file);
 }
 
 class fs::Error : public Error {
@@ -807,6 +823,126 @@ string fs::read(string path) throws {
     string problem;
     if (!cplus_fs_read((void*)&path, (void*)&text, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, path);
     return text;
+}
+
+void fs::write(string path, string text) throws {
+    string kind;
+    string problem;
+    if (!cplus_fs_write((void*)&path, (void*)&text, false, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, path);
+}
+
+void fs::append(string path, string text) throws {
+    string kind;
+    string problem;
+    if (!cplus_fs_write((void*)&path, (void*)&text, true, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, path);
+}
+
+bool fs::exists(string path) { return cplus_fs_exists((void*)&path); }
+
+bool fs::is_directory(string path) { return cplus_fs_is_directory((void*)&path); }
+
+bool fs::remove(string path) throws {
+    string kind;
+    string problem;
+    int done = cplus_fs_remove((void*)&path, (void*)&kind, (void*)&problem);
+    if (done < 0) throw fs::Error(problem, kind, path);
+    return done == 1;
+}
+
+vector<string> fs::list(string dir) throws {
+    vector<string> names;
+    string kind;
+    string problem;
+    if (!cplus_fs_list((void*)&dir, (void*)&names, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, dir);
+    return names;
+}
+
+bool fs::create_directory(string path) throws {
+    string kind;
+    string problem;
+    int made = cplus_fs_create_directory((void*)&path, false, (void*)&kind, (void*)&problem);
+    if (made < 0) throw fs::Error(problem, kind, path);
+    return made == 1;
+}
+
+bool fs::create_directories(string path) throws {
+    string kind;
+    string problem;
+    int made = cplus_fs_create_directory((void*)&path, true, (void*)&kind, (void*)&problem);
+    if (made < 0) throw fs::Error(problem, kind, path);
+    return made == 1;
+}
+
+void fs::rename(string from, string to) throws {
+    string kind;
+    string problem;
+    if (!cplus_fs_rename((void*)&from, (void*)&to, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, from);
+}
+
+long fs::file_size(string path) throws {
+    long size = 0;
+    string kind;
+    string problem;
+    if (!cplus_fs_file_size((void*)&path, &size, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, path);
+    return size;
+}
+
+// A file that is open, which its destructor closes. What it holds is the runtime's, in runtime/fs.c.
+class fs::File {
+    __role(opaque);
+    void* file_;
+    string path_;
+
+public:
+    fs::File(void* file, string path) : file_(file), path_(path) {}
+    ~fs::File() { cplus_fs_file_free(file_); }
+
+    string? readLine() throws {
+        string line;
+        string kind;
+        string problem;
+        int got = cplus_fs_file_read_line(file_, (void*)&path_, (void*)&line, (void*)&kind, (void*)&problem);
+        if (got < 0) throw fs::Error(problem, kind, path_);
+        if (got == 0) return null;
+        return line;
+    }
+    string read(long n) throws {
+        string text;
+        string kind;
+        string problem;
+        if (!cplus_fs_file_read(file_, (void*)&path_, n, (void*)&text, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, path_);
+        return text;
+    }
+    string readAll() throws {
+        string text;
+        string kind;
+        string problem;
+        if (!cplus_fs_file_read_all(file_, (void*)&path_, (void*)&text, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, path_);
+        return text;
+    }
+    void write(string text) throws {
+        string kind;
+        string problem;
+        if (!cplus_fs_file_write(file_, (void*)&path_, (void*)&text, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, path_);
+    }
+    void flush() throws {
+        string kind;
+        string problem;
+        if (!cplus_fs_file_flush(file_, (void*)&path_, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, path_);
+    }
+    void close() throws {
+        string kind;
+        string problem;
+        if (!cplus_fs_file_close(file_, (void*)&path_, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, path_);
+    }
+};
+
+fs::File fs::open(string path, string mode) throws {
+    string kind;
+    string problem;
+    void* file = cplus_fs_open((void*)&path, (void*)&mode, (void*)&kind, (void*)&problem);
+    if (file == null) throw fs::Error(problem, kind, path);
+    return fs::File(file, path);
 }
 )cplus";
 

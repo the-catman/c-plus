@@ -53,6 +53,8 @@ constexpr Alias kAliases[] = {
     {"include", "c-headers"},        {"header", "c-headers"},        {"headers", "c-headers"},
     {"libclang", "c-headers"},       {"macro", "c-headers"},         {"define", "c-headers"},
     {"fs", "files"},                 {"file", "files"},              {"read", "files"},
+    {"write", "files"},              {"folder", "files"},            {"directory", "files"},
+    {"filesystem", "files"},         {"ifstream", "files"},          {"ofstream", "files"},
     {"readline", "reading-input"},   {"input", "reading-input"},     {"stdin", "reading-input"},
     {"getline", "reading-input"},    {"cin", "reading-input"},       {"stoi", "parsing-numbers"},
     {"stol", "parsing-numbers"},     {"stod", "parsing-numbers"},    {"stof", "parsing-numbers"},
@@ -60,6 +62,8 @@ constexpr Alias kAliases[] = {
     {"export", "modules"},           {"module", "modules"},          {"namespace", "modules"},
     {"enum", "enums"},               {"enumerator", "enums"},        {"case", "switch"},
     {"fallthrough", "switch"},
+    {"split", "splitting-and-joining"}, {"trim", "splitting-and-joining"}, {"join", "splitting-and-joining"},
+    {"replace_all", "splitting-and-joining"},
 };
 
 std::string slug(std::string_view heading) {

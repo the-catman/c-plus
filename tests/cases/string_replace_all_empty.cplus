@@ -1,0 +1,7 @@
+// An empty string to replace would be between every two bytes, so replace_all() stops the program.
+int main() {
+    string from = "";
+    println("{}", "abc".replace_all(from, "x"));
+    return 0;
+}
+// trap: replace_all() was given an empty string to replace
