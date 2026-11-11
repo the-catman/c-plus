@@ -1,11 +1,15 @@
 // The forms the cheat sheet gives for a program's own modules, which the check of the cheat sheet finds here.
 import geometry;
 import net.server;
+import other;
 
 int main() {
     println("{}", geometry::area(2, 3));
     println("{}", net::server::start());
+    other::count++;
+    println("{}", other::count);
     return 0;
 }
 // expect: 6
 // expect: 8080
+// expect: 1

@@ -1,0 +1,13 @@
+// A variable outside functions is never moved from: another function may use it after.
+class Node { public: int n = 0; };
+unique<Node> owned = unique<Node>();
+unique<Node> give() { return owned; }
+unique<Node> take() { return move(owned); }
+vector<unique<Node>> owners;
+unique<Node> first() { return move(owners[0]); }  // an element is, as one of a local vector is
+int main() { return 0; }
+// error: 'owned' cannot be copied, since a 'unique<Node>' has one owner
+// error: 'owned' is outside functions, so it is never moved from. Lend the object with `owned.get()`, as a `Node`
+// error: 'owned' is outside functions, so it cannot be moved from, as other functions may still use it
+// error: copy it, or, for what cannot be copied, keep it in a class object that is passed to the functions that use it
+// not-error: 'owners'

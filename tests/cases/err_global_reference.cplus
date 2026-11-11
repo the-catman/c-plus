@@ -1,0 +1,6 @@
+// A variable outside functions holds a value of its own.
+int count = 0;
+int& alias = count;
+int main() { return 0; }
+// error: a variable outside functions cannot be a reference
+// error: remove the `&`, for a variable of its own, `int alias = ...;`

@@ -1,4 +1,4 @@
-// `static` before a variable at the top of a file, which removing it would not fix.
+// `static` before a variable at the top of a file, which removing leaves as it was.
 static int counter = 0;
-// error: remove it, and make it a constant if it never changes: `const ... = ...;`. A variable that changes is not supported outside functions yet
+// error: remove it, which leaves a variable outside functions as it was. A name is already private to its file unless it is marked `export`
 int main() { return 0; }

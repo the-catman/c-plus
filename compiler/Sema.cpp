@@ -1007,7 +1007,7 @@ static bool isPlaceKind(const Expr& e) {
 // ---- Definite assignment ---------------------------------------------------
 
 bool Sema::isAssigned(const Flow& flow, const VarDecl* var, const Type* type, const std::string& path) const {
-    if (type->isError() || tooDeep(path)) return true;
+    if (type->isError() || tooDeep(path) || var->isGlobal || var->isTopLevel) return true;  // those have their values before main
     // The place itself, or something containing it, was assigned as a whole.
     std::string p = path;
     while (true) {
@@ -1111,7 +1111,7 @@ void Sema::requireAssigned(Flow& flow, const VarDecl* var, const std::string& pa
                      "pass values from the constructor's parameters, and do the rest in its body", spec::Inheritance);
         return;
     }
-    if (var->isTopLevel || !flow.reachable || isAssigned(flow, var, type, path)) return;
+    if (var->isTopLevel || var->isGlobal || !flow.reachable || isAssigned(flow, var, type, path)) return;
     std::string name = placeName(var, path);
     const auto moved = std::find_if(moveLog_.rbegin(), moveLog_.rend(), [&](auto& m) { return m.first == var; });
     if (initField_ && var == thisVar()) {
@@ -1495,6 +1495,7 @@ void Sema::check(Program& program) {
 
     checkTemplateNames(program);
     checkConstants(program);
+    checkGlobals(program);
     // Checking one thing can make new ones, from generics, until nothing new is needed.
     size_t funcsChecked = 0;
     for (bool progress = true; progress;) {
@@ -1642,7 +1643,8 @@ static const Expr* notConstant(const Expr& e) {
 }
 
 // Constants live in the outermost scope, which stays for the whole program, so a function
-// can shadow them. Each can use the others, in any order, so they are all declared first.
+// can shadow them. Each can use the others, in any order, so they are all declared first, with the variables outside
+// functions, which they can use too.
 void Sema::checkConstants(Program& program) {
     scopes_.emplace_back();
     for (auto& c : program.constants) {
@@ -1657,7 +1659,14 @@ void Sema::checkConstants(Program& program) {
         }
         declare(*c);
     }
+    declareGlobals(program);
     for (auto& c : program.constants) checkConstant(*c);
+    // A `const` whose value is only known while the program runs is a variable outside functions that cannot change.
+    for (auto& c : program.constants)
+        if (c->isGlobal) program.globals.push_back(std::move(c));
+    std::erase_if(program.constants, [](const std::unique_ptr<VarDecl>& c) { return !c; });
+    std::stable_sort(program.globals.begin(), program.globals.end(),
+                     [](const std::unique_ptr<VarDecl>& a, const std::unique_ptr<VarDecl>& b) { return a->topOrder < b->topOrder; });
 }
 
 void Sema::checkConstant(VarDecl& c) {
@@ -1676,24 +1685,94 @@ void Sema::checkConstant(VarDecl& c) {
         c.type = c.declType;
         if (c.init) checkValue(*c.init, flow, c.type, "to initialize " + q(c.name));
     }
+    const Type* const t = c.type;
+    const bool constantType = t->is(K::Bool) || t->isNumber() || t->is(K::Char) || t->is(K::String) || t->isPointer() || t->isEnum();
     if (!c.init) {
         diags_.error(c.loc, "the constant " + q(c.name) + " needs a value", "write `const " +
                      std::string(c.declType->name) + " " + c.name + " = <value>;`", spec::Constants);
-    } else if (const Type* t = c.type; !t->isError() && !t->is(K::Bool) && !t->isNumber() && !t->is(K::Char) &&
-                                       !t->is(K::String) && !t->isPointer() && !t->isEnum()) {
-        diags_.error(c.typeLoc, "this compiler does not support constants of type " + q(t) + " yet",
-                     "write a function that returns the value", spec::Status);
+    } else if (!t->isError() && !c.isConstexpr && (!constantType || notConstant(*c.init))) {
+        // Its value is worked out while the program runs, before main, as the other variables outside functions are.
+        c.isTopLevel = false;
+        c.isGlobal = true;
+        checkGlobalRules(c);
+        globalsChecked_.insert(&c);
+    } else if (!t->isError() && !constantType) {
+        diags_.error(c.typeLoc, "this compiler does not support constexpr of type " + q(t) + " yet",
+                     "remove `constexpr`, and write `const`: its value is then worked out as the program starts", spec::Status);
     } else if (c.isConstexpr) {
         foldConstexpr(c);
-    } else if (const Expr* bad = notConstant(*c.init); !bad && !t->isError()) {
+    } else if (!t->isError()) {
         foldConstant(c);
-    } else if (bad && !t->isError()) {
-        diags_.error(bad->loc, "the value of a constant is worked out from literals, other constants and operators",
-                     "only calls to `constexpr` functions work here: mark the function `constexpr` if it can run while compiling. Otherwise write a function that returns the value, or use a local variable",
-                     spec::Constants);
     }
     constantsBeingChecked_.erase(&c);
     constantsChecked_.insert(&c);
+}
+
+// Variables outside functions live in the outermost scope with the constants, so a function can shadow them, and each
+// can use the others, in any order. Their values are worked out before main, as if outside any function.
+void Sema::declareGlobals(Program& program) {
+    for (auto& g : program.globals) {
+        if (!g->declType->is(K::Auto)) g->type = g->declType;
+        if (auto f = funcs_.find(g->name); f != funcs_.end()) {
+            diags_.error(g->loc, q(g->name) + " is already the name of a function", "give the variable a different name", spec::Globals);
+            diags_.note(f->second->nameLoc, "the function is defined here");
+        } else if (auto s = structs_.find(g->name); s != structs_.end()) {
+            diags_.error(g->loc, q(g->name) + " is already the name of a " + s->second->keyword(), "give the variable a different name", spec::Globals);
+            diags_.note(s->second->nameLoc, "it is defined here");
+        } else if (auto c = scopes_[0].find(g->name); c != scopes_[0].end()) {
+            diags_.error(g->loc, q(g->name) + " is already declared outside functions", "give one of them a different name", spec::Globals);
+            diags_.note(c->second->loc, "the other one is here");
+            continue;
+        }
+        declare(*g);
+    }
+}
+
+void Sema::checkGlobals(Program& program) {
+    for (auto& g : program.globals) checkGlobal(*g);
+}
+
+void Sema::checkGlobal(VarDecl& g) {
+    if (globalsChecked_.count(&g)) return;
+    if (!globalsBeingChecked_.insert(&g).second) {
+        // One whose type is written is fine: whether its value leads back to it is only known while the program runs.
+        if (!g.declType->is(K::Auto)) return;
+        diags_.error(g.loc, "the type of " + q(g.name) + " depends on itself", "write its type, such as `int " + g.name + " = ...;`", spec::Globals);
+        if (!g.type) g.type = Type::error();
+        return;
+    }
+    const VarDecl* const outer = globalOf_;
+    globalOf_ = &g;
+    outsideFunctions([&] {
+        Flow flow;
+        if (g.declType->is(K::Auto)) {
+            const Type* t = g.init ? checkExpr(*g.init, flow) : Type::error();
+            if (!g.type) g.type = t;
+        } else {
+            checkStorable(g.declType, g.typeLoc);
+            if (g.init) checkValue(*g.init, flow, g.type, "to initialize " + q(g.name));
+        }
+    });
+    globalOf_ = outer;
+    checkGlobalRules(g);
+    globalsBeingChecked_.erase(&g);
+    globalsChecked_.insert(&g);
+}
+
+// What a variable outside functions cannot be, once its type is known.
+void Sema::checkGlobalRules(const VarDecl& g) {
+    const Type* t = g.type;
+    if (!g.init && g.declType->is(K::Auto)) {
+        diags_.error(g.loc, q(g.name) + " needs a value, which `auto` takes its type from", "give it one: `auto " + g.name + " = ...;`, or write its type", spec::Globals);
+    } else if (t->isLocal() || (t->isOptional() && t->elem->isLocal())) {
+        diags_.error(g.typeLoc, "a variable outside functions cannot hold a " + q(t) + ", as every thread sees it",
+                     "keep it in a local variable, or make it `unique<" + std::string(t->elem->name) + ">`", spec::Globals);
+    } else if (!g.init && !t->isError() && !hasDefault(t)) {
+        diags_.error(g.loc, q(g.name) + " needs a value, as a " + q(t) + " has none until it is given one",
+                     t->isClass() ? "give it one: `" + std::string(t->name) + " " + g.name + " = " + t->name + "(...);`, or make it optional, `" + t->name + "? " + g.name + ";`, which starts out null"
+                                  : "give it one: `" + std::string(t->name) + " " + g.name + " = ...;`",
+                     spec::Globals);
+    }
 }
 
 void Sema::checkMembers(StructDecl& sd) {
@@ -2623,6 +2702,12 @@ void Sema::checkCanFail(const FuncDecl& callee, Loc loc, const Expr* receiver) {
                      spec::DefaultArguments);
         return;
     }
+    if (globalOf_) {
+        diags_.error(loc, "the value of " + q(globalOf_->name) + " calls " + q(callee.name) + ", which can fail, and a variable outside functions cannot",
+                     "nothing before main could say what happens then: give it a value that cannot fail, and set it in main with `try`",
+                     spec::Globals);
+        return;
+    }
     if (tryBlocks_ == 0 && tryPrefixes_ == 0) {
         diags_.error(loc, q(callee.name) + " can fail, so its call must say what happens then",
                      [&] {
@@ -3198,7 +3283,7 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
                     // A local variable about to go away hands over what it holds, as in C++.
                     if (st.value->kind == Expr::Kind::Name) {
                         const VarDecl* local = lookup(static_cast<NameExpr&>(*st.value).name);
-                        if (local && !local->isTopLevel && !local->isConst && !local->isRef && local->type && !isCopyable(local->type)) {
+                        if (local && !local->isTopLevel && !local->isGlobal && !local->isConst && !local->isRef && local->type && !isCopyable(local->type)) {
                             std::vector<ExprPtr> args;
                             Loc loc = st.value->loc;
                             args.push_back(std::move(st.value));
@@ -3608,9 +3693,14 @@ void Sema::rejectCopy(const Expr& e) {
         while (root->kind == Expr::Kind::Member) root = static_cast<const MemberExpr*>(root)->base.get();
         const bool fromACall = root != x && (root->kind == Expr::Kind::Call || root->kind == Expr::Kind::MethodCall);
         const std::string from = fromACall ? spelled(*root, "") : "";
+        const VarDecl* rootVar = root->kind == Expr::Kind::Name ? static_cast<const NameExpr*>(root)->decl : nullptr;
         diags_.error(x->loc, q(n) + " cannot be copied, since a " + q(e.type) +
                                  (e.type->isUnique() ? " has one owner" : " holds what has one owner"),
-                     fromACall && !from.empty()
+                     rootVar && rootVar->isGlobal
+                         ? "'" + rootVar->name + "' is outside functions, so it is never moved from. " +
+                               (e.type->isUnique() ? "Lend the object with `" + asBase(n) + ".get()`, as a `" + e.type->elem->name + "`"
+                                                   : std::string("Leave it where it is, and use it there"))
+                     : fromACall && !from.empty()
                          ? "store `" + from + "` in a variable first, and take the field from it: `auto held = " + from + ";`, then `move(held" + n.substr(from.size()) + ")`"
                          : "write `move(" + n + ")` to hand it over, after which " + n + " has no value" +
                                (e.type->isUnique() ? ", or `" + asBase(n) + ".get()` to lend the object, as a `" + e.type->elem->name + "`" : ""),
@@ -3979,17 +4069,17 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     if (e.kind == Expr::Kind::Name) {
         auto& n = static_cast<NameExpr&>(e);
         n.decl = lookup(n.name);
-        if ((!n.decl || n.decl->isTopLevel) && !fieldHides(n.name) && parser_.modules()) {  // a constant of the file's module
+        if ((!n.decl || n.decl->isTopLevel || n.decl->isGlobal) && !fieldHides(n.name) && parser_.modules()) {  // a constant or variable of the file's module
             const std::string full = resolved(n.name, n.loc);
-            if (VarDecl* own = full != n.name ? lookup(full) : nullptr; own && own->isTopLevel) {
+            if (VarDecl* own = full != n.name ? lookup(full) : nullptr; own && (own->isTopLevel || own->isGlobal)) {
                 n.name = full;
                 n.decl = own;
             } else if (n.decl && hiddenFrom(n.name, n.decl->loc, n.loc)) {
                 n.decl = nullptr;
             }
         }
-        // A member of the type hides a constant of the file, as in C++. A local variable hides both.
-        if (n.decl && n.decl->isTopLevel && fieldHides(n.name)) n.decl = nullptr;
+        // A member of the type hides a constant or a variable of the file, as in C++. A local variable hides both.
+        if (n.decl && (n.decl->isTopLevel || n.decl->isGlobal) && fieldHides(n.name)) n.decl = nullptr;
         if (!n.decl) {
             // Inside a method, a field can be used by its name alone, as in C++.
             if (StructDecl* o = owner()) {
@@ -4009,6 +4099,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
             return e.type = Type::error();
         }
         if (n.decl->isTopLevel) checkConstant(*n.decl);  // another constant may use it first
+        if (n.decl->isGlobal) checkGlobal(*n.decl);      // the type of an `auto` one, from its value
         var = n.decl;
         return e.type = n.decl->type;
     }
@@ -4313,7 +4404,7 @@ const VarDecl* Sema::localPointee(const Expr& e, const Flow& flow) {
             if (storageOf(*u.operand, root) != Storage::Variable || root->kind == Expr::Kind::This) return nullptr;
             auto& n = static_cast<const NameExpr&>(*root);
             if (n.implicitField >= 0) return nullptr;  // a field of the object the method was called on, which outlives the call
-            return n.decl && !n.decl->isTopLevel && !n.decl->isRef ? n.decl : nullptr;  // a reference's place is not its own
+            return n.decl && !n.decl->isTopLevel && !n.decl->isGlobal && !n.decl->isRef ? n.decl : nullptr;  // a reference's place is not its own
         }
         case Expr::Kind::Name: {
             auto found = flow.pointsToLocal.find(static_cast<const NameExpr&>(e).decl);
@@ -4340,7 +4431,7 @@ const VarDecl* Sema::localPointee(const Expr& e, const Flow& flow) {
             const Expr* root = nullptr;
             if (storageOf(*m.receiver, root) != Storage::Variable || root->kind == Expr::Kind::This) return nullptr;
             auto& n = static_cast<const NameExpr&>(*root);
-            return n.implicitField < 0 && n.decl && !n.decl->isTopLevel && !n.decl->isRef ? n.decl : nullptr;
+            return n.implicitField < 0 && n.decl && !n.decl->isTopLevel && !n.decl->isGlobal && !n.decl->isRef ? n.decl : nullptr;
         }
         default: return nullptr;
     }
@@ -5869,23 +5960,30 @@ void Sema::checkChosenArgs(const std::vector<Expr*>& args, const FuncDecl& fn, F
 // A default value is checked as if it were written outside any function: it sees constants and functions, but not the
 // other parameters or `this`, and it cannot fail, as nothing around a call that leaves it out says what happens then.
 void Sema::checkDefaultValue(Expr& e, const VarDecl& p, const FuncDecl& of) {
-    std::vector<std::unordered_map<std::string, VarDecl*>> scopes;
-    scopes.swap(scopes_);
-    if (!scopes.empty()) scopes_.push_back(scopes[0]);  // the constants
-    FuncDecl* const fn = fn_;
-    const int tries = tryBlocks_;
     const VarDecl* const outer = defaultOf_;
     const FuncDecl* const outerFn = defaultFn_;
-    fn_ = nullptr;
-    tryBlocks_ = 0;
     defaultOf_ = &p;
     defaultFn_ = &of;
-    Flow flow;
-    checkValue(e, flow, p.declType, "for the default value of " + q(p.name));
-    fn_ = fn;
-    tryBlocks_ = tries;
+    outsideFunctions([&] {
+        Flow flow;
+        checkValue(e, flow, p.declType, "for the default value of " + q(p.name));
+    });
     defaultOf_ = outer;
     defaultFn_ = outerFn;
+}
+
+void Sema::outsideFunctions(const std::function<void()>& check) {
+    std::vector<std::unordered_map<std::string, VarDecl*>> scopes;
+    scopes.swap(scopes_);
+    if (!scopes.empty()) scopes_.push_back(scopes[0]);  // the constants and the variables outside functions
+    FuncDecl* const fn = fn_;
+    const int tries = tryBlocks_;
+    fn_ = nullptr;
+    tryBlocks_ = 0;
+    check();
+    fn_ = fn;
+    tryBlocks_ = tries;
+    if (!scopes.empty() && !scopes_.empty()) scopes.front() = std::move(scopes_.front());
     scopes_.swap(scopes);
 }
 
@@ -6347,6 +6445,11 @@ const Type* Sema::checkMove(CallExpr& call, Flow& flow) {
     }
     if (var && var->isTopLevel) {
         diags_.error(x.loc, "the constant " + q(var->name) + " cannot be moved", "remove `move`", spec::Unique);
+        return t;
+    }
+    if (var && var->isGlobal) {
+        diags_.error(x.loc, q(var->name) + " is outside functions, so it cannot be moved from, as other functions may still use it",
+                     "copy it, or, for what cannot be copied, keep it in a class object that is passed to the functions that use it", spec::Globals);
         return t;
     }
     if (!checkChangeable(x, "moved", var, path)) return t;

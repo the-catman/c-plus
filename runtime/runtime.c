@@ -262,6 +262,11 @@ void* cplus_args(int argc, char** argv) {
     return vec;
 }
 
+// While the variables outside functions are worked out, before main, no other thread may start.
+int cplus_before_main = 0;
+void cplus_globals_start(void) { cplus_before_main = 1; }
+void cplus_globals_done(void) { cplus_before_main = 0; }
+
 // Called as the program starts.
 void cplus_start(void) {
     leak_checking();  // it keeps what it finds out, which must not happen in two threads at once

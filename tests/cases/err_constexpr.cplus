@@ -90,7 +90,7 @@ int main() {
 // error: the value of 'WIDE' must be known at compile time, but the value 300 does not fit in 'char'
 // error: the value of 'SELF' depends on itself
 // error: the value of 'ONE' depends on itself
-// error: this compiler does not support constants of type 'Point' yet
+// error: this compiler does not support constexpr of type 'Point' yet
 // error: this compiler does not support constexpr values of type 'void*' yet
 // error: the constant 'NO_VALUE' needs a value
 // error: index 5 is out of range for a string of size 3

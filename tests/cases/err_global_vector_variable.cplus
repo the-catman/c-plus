@@ -1,6 +1,0 @@
-// A vector cannot be a constant, so the advice does not suggest one.
-vector<int> numbers;
-
-int main() { return 0; }
-// error: pass the value to the functions that use it
-// not-error: const

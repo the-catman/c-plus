@@ -1,0 +1,34 @@
+// What a variable outside functions cannot be.
+int parse(string s) throws {
+    if (s == "") throw Error("empty");
+    return 1;
+}
+int failing = parse("1");
+async int later() { return 1; }
+int waited = await later();
+class Node { public: int n = 0; };
+local<Node> shared = local<Node>();
+Node bare;
+auto noValue;
+int parse = 2;
+int failing = 3;
+struct Shape { int x = 0; };
+int Shape = 1;
+auto loopA = loopB;
+auto loopB = loopA;
+int main() {
+    return 0;
+}
+// error: the value of 'failing' calls 'parse', which can fail, and a variable outside functions cannot
+// error: nothing before main could say what happens then: give it a value that cannot fail, and set it in main with `try`
+// error: `await` can only be used in an async function
+// error: wait here with `later().wait()`
+// error: a variable outside functions cannot hold a 'local<Node>', as every thread sees it
+// error: 'bare' needs a value, as a 'Node' has none until it is given one
+// error: or make it optional, `Node? bare;`, which starts out null
+// error: 'noValue' needs a value, which `auto` takes its type from
+// error: 'parse' is already the name of a function
+// error: 'failing' is already declared outside functions
+// error: 'Shape' is already the name of a struct
+// error: the type of 'loopA' depends on itself
+// error: write its type, such as `int loopA = ...;`

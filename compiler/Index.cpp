@@ -21,6 +21,7 @@ public:
         for (auto& s : p.structs)
             if (s) record(*s);
         for (auto& c : p.constants) var(c.get());
+        for (auto& g : p.globals) var(g.get());
         for (auto& f : p.funcs)
             if (f) func(*f);
         for (auto& t : p.templates) {  // what could not be made from a generic is null

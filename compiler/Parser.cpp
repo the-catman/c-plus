@@ -82,9 +82,14 @@ bool Parser::parseReturnReference(const Type* ret, bool isConst, bool member) {
              "a field would outlive what it refers to: hold the value, `" + name + " x;`, make the type a `class` to share it, or use a "
              "pointer, `" + name + "* x;`",
              spec::References);
-    if (!function)
+    if (!function && isConst)
         fail(peek().loc, "a constant holds its own value, not a reference",
              "write `const " + name + " " + (peek(1).kind == Tok::Ident ? peek(1).text : "X") + " = ...;`", spec::Constants);
+    if (!function)
+        fail(peek().loc, "a variable outside functions cannot be a reference",
+             "remove the `&`, for a variable of its own, `" + name + " " + (peek(1).kind == Tok::Ident ? peek(1).text : "x") +
+                 " = ...;`. Or write the variable it would refer to, by its own name",
+             spec::Globals);
     if (isConst) {
         advance();
         return true;
@@ -1629,10 +1634,12 @@ void Parser::rejectOtherLanguages() {
     if (w == "explicit") fail(t.loc, "C+ has no 'explicit'", "remove it: a plain value never converts to a class by itself", spec::Classes);
     if (w == "friend") fail(t.loc, "C+ has no 'friend'", "make what it needs public, or give the class a method for it", spec::Classes);
     if (w == "union") notYet(t.loc, "unions", "use a struct with a field for each, or classes that derive from one");
+    if (w == "thread_local")
+        notYet(t.loc, "thread_local", "remove it, which makes one variable that every thread shares, and protect it with a `Mutex`. "
+               "Or keep the value in a local variable of the function the thread runs");
     if (w == "let" || w == "var")
         fail(t.loc, "C+ declares a variable with its type, or `auto`",
-             localScopes_.empty() ? "write `const auto x = 1;`: variables that change are not supported outside functions yet"
-                                  : "write `auto x = 1;`, or the type in place of `auto`",
+             "write `auto x = 1;`, or the type in place of `auto`. For a value that never changes, `const auto x = 1;`",
              spec::Variables);
     if ((w == "function" || w == "fn" || w == "func" || w == "def") && !localScopes_.empty())
         fail(t.loc, "C+ has no functions inside functions", "write `void " + peek(1).text + "() { ... }` at the top level of the file, and pass it what it needs", spec::Functions);
@@ -1757,8 +1764,8 @@ void Parser::parseTopLevel(Program& prog) {
             const bool isFunction = peek(end).kind == Tok::LParen;
             fail(t.loc, "C+ has no 'static' outside a type",
                  isConstant || isFunction ? std::string("remove it, which leaves a constant or a function as it was. A name is already private to its file unless it is marked `export`")
-                                          : "remove it, and make it a constant if it never changes: `const ... = ...;`. A variable that changes is not supported outside functions yet, so pass it to the functions that use it. A name is already private to its file unless it is marked `export`",
-                 spec::Constants);
+                                          : "remove it, which leaves a variable outside functions as it was. A name is already private to its file unless it is marked `export`",
+                 isConstant || isFunction ? spec::Constants : spec::Globals);
         }
         case Tok::KwExtern: parseExtern(prog); return;
         case Tok::KwNamespace:
@@ -1803,25 +1810,20 @@ void Parser::parseTopLevel(Program& prog) {
     asyncPending_ = false;
     if (isAsync && !(check(Tok::Ident) && peek(1).kind == Tok::LParen))
         fail(asyncAt_, "only a function can be async", "remove `async`, or write a function: `async int f() { ... }`", spec::Async);
-    if (isConst && check(Tok::Ident) && peek(1).kind != Tok::LParen) return parseConstants(prog, ret, retLoc, false);
+    if (isConst && check(Tok::Ident) && peek(1).kind != Tok::LParen) {
+        // A constant is a value known while compiling. One of another type, such as a vector, is a variable that cannot change.
+        const bool constantType = ret->isNumber() || ret->is(Type::Kind::Bool) || ret->is(Type::Kind::Char) || ret->is(Type::Kind::String) ||
+                                  ret->isPointer() || ret->isEnum() || ret->is(Type::Kind::Auto) || ret->is(Type::Kind::Error);
+        return constantType ? parseConstants(prog, ret, retLoc, false) : parseGlobals(prog, ret, retLoc, true);
+    }
     if (ret->is(Type::Kind::Auto) && (!check(Tok::Ident) || peek(1).kind == Tok::LParen)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `int`");
     if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && peek(2).kind == Tok::Ident) expectNewName("for the name");  // `int net::server::extra()`
-    if (check(Tok::Ident) && peek(1).kind != Tok::LParen)
-        notYet(peek().loc, "global variables",
-               ret->is(Type::Kind::Auto)
-                   ? "for a value that never changes, write a constant: `const auto " + peek().text + " = ...;`"
-               : peek(1).kind == Tok::LBracket
-                   ? "pass the value to the functions that use it, or keep it in a class object. An array is written `array<" + std::string(ret->name) + ", N>`"
-               : ret->isPointer() && ret->elem->is(Type::Kind::Char) && peek(1).kind == Tok::Assign && peek(2).kind == Tok::StringLit
-                   ? "for text that never changes, write `const string " + peek().text + " = " + "...;`"
-               : ret->isPointer()
-                   ? "for a pointer that never changes, write a constant, with `const` after the '*': `" +
-                         std::string(ret->name) + " const " + peek().text + " = null;`"
-                   : ret->isNumber() || ret->is(Type::Kind::Bool) || ret->is(Type::Kind::Char) || ret->is(Type::Kind::String)
-                       ? "for a value that never changes, write a constant: `const " + std::string(ret->name) + " " + peek().text + " = ..." +
-                             ";`. For one that changes, pass it to the functions that use it, or keep it in a class object"
-                       : "pass the value to the functions that use it, or keep it in a class object. A function that returns it "
-                         "also works, if it never changes");
+    if (check(Tok::Ident) && peek(1).kind != Tok::LParen) {
+        if (ret->isPointer() && ret->elem->is(Type::Kind::Char) && peek(1).kind == Tok::Assign && peek(2).kind == Tok::StringLit)
+            fail(peek().loc, "text is a `string`, not a `char*`", "write `string " + peek().text + " = ...;`, or `const string " + peek().text + " = ...;` for text that never changes",
+                 spec::Strings);
+        return parseGlobals(prog, ret, retLoc, false);
+    }
     prog.funcs.push_back(parseFunction(ret, retLoc));
     if (isAsync) {
         prog.funcs.back()->isAsync = true;
@@ -1836,20 +1838,41 @@ void Parser::parseConstants(Program& prog, const Type* type, Loc typeLoc, bool i
     auto add = [&](std::unique_ptr<VarDecl> constant) {
         constant->isTopLevel = true;
         constant->isConstexpr = isConstexpr;
+        constant->topOrder = prog.topLevelVars++;
         prog.constants.push_back(std::move(constant));
     };
     if (decl->kind == Stmt::Kind::VarDecl) add(std::unique_ptr<VarDecl>(static_cast<VarDecl*>(decl.release())));
     else for (auto& constant : static_cast<DeclGroupStmt&>(*decl).decls) add(std::move(constant));
 }
 
+// `int count = 0;` or `vector<string> names;` outside any function, after the type.
+void Parser::parseGlobals(Program& prog, const Type* type, Loc typeLoc, bool isConst) {
+    StmtPtr decl = parseDeclarators(isConst, type, typeLoc);
+    expect(Tok::Semi, "after the variable");
+    auto add = [&](std::unique_ptr<VarDecl> var) {
+        var->isGlobal = true;
+        var->topOrder = prog.topLevelVars++;
+        prog.globals.push_back(std::move(var));
+    };
+    if (decl->kind == Stmt::Kind::VarDecl) add(std::unique_ptr<VarDecl>(static_cast<VarDecl*>(decl.release())));
+    else for (auto& var : static_cast<DeclGroupStmt&>(*decl).decls) add(std::move(var));
+}
+
 // `extern "C" int abs(int n);` or a block of such declarations: `extern "C" { ... }`.
 void Parser::parseExtern(Program& prog) {
     Loc loc = advance().loc;
-    if (!check(Tok::StringLit))
+    if (!check(Tok::StringLit)) {
+        size_t end = 0;  // `(` for a function, `;` or `=` for a variable
+        while (end < 64 && peek(end).kind != Tok::LParen && peek(end).kind != Tok::Semi && peek(end).kind != Tok::Assign && peek(end).kind != Tok::Eof) ++end;
+        if (peek(end).kind != Tok::LParen)
+            fail(loc, "C+ has no `extern` for variables",
+                 "remove this line. A variable of another file is marked `export` there, and is written `other::name` here, after `import other;`",
+                 spec::Globals);
         fail(loc, "a C function is declared with `extern \"C\"`",
              "write e.g. `extern \"C\" int abs(int n);`; C+ code needs no extern to call C+ functions in the same "
              "file",
              spec::CFunctions);
+    }
     const Token& lang = advance();
     if (lang.text != "C")
         fail(lang.loc, "only C functions can be declared with extern, not \"" + lang.text + "\"",
@@ -3666,7 +3689,8 @@ StmtPtr Parser::parseStmt() {
         }
         case Tok::KwStatic:
             notYet(t.loc, "static local variables",
-                   "keep the value in a class object, or pass it to the function and return the new value");
+                   "write the variable outside the function, before it, where every call sees the same one: `" +
+                       (peek(1).kind == Tok::KwConst ? std::string("const ") : std::string("")) + "int count = 0;`");
         case Tok::KwSwitch: return parseSwitch();
         case Tok::KwTry:
             if (peek(1).kind == Tok::LBrace) return parseTry();

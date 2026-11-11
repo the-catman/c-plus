@@ -160,8 +160,8 @@ ConstValue ConstEval::evalName(const NameExpr& n) {
     auto& lookup = globalsOnly_ ? hooks_.globalConstant : hooks_.constant;
     const VarDecl* decl = lookup ? lookup(hooks_.resolve ? hooks_.resolve(n.name, n.loc) : n.name) : nullptr;
     if (!decl) throw ConstError{n.loc, "'" + n.name + "' is not a constant"};
-    if (!decl->isConst || !decl->init)
-        throw ConstError{n.loc, "'" + n.name + "' is a variable, whose value is only known while the program runs"};
+    if (!decl->isConst || !decl->init || decl->isGlobal)
+        throw ConstError{n.loc, "'" + n.name + "' is a variable" + std::string(decl->isGlobal ? " outside functions" : "") + ", whose value is only known while the program runs"};
     if (auto it = known_.find(decl); it != known_.end()) return it->second;
     if (std::find(evaluating_.begin(), evaluating_.end(), decl) != evaluating_.end())
         throw ConstError{n.loc, "the value of '" + n.name + "' depends on itself"};

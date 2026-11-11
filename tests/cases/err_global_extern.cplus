@@ -1,0 +1,5 @@
+// C+ declares no variable of another file: that file exports it.
+extern int shared;
+int main() { return 0; }
+// error: C+ has no `extern` for variables
+// error: A variable of another file is marked `export` there, and is written `other::name` here, after `import other;`

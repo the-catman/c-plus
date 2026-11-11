@@ -1,0 +1,9 @@
+// A variable outside functions whose value leads back to itself stops the program before main.
+int a = b + 1;
+int b = twice(a);
+int twice(int n) { return n * 2; }
+int main() {
+    println("not reached {}", a);
+    return 0;
+}
+// trap: 'a' is used while its value is being worked out, which leads back to it

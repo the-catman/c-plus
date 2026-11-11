@@ -26,15 +26,13 @@ namespace other { int inside() { return 1; } }
 // error: remove the `namespace ... {` line and its closing `}`, and keep what is inside
 [[nodiscard]] int attribute() { return 1; }
 // error: remove it. The attributes C+ has are `[[allow(new_delete)]]`
-auto topLevelAuto = 1;
-// error: this compiler does not support global variables yet
-// error: for a value that never changes, write a constant: `const auto topLevelAuto = ...;`
 int topLevelArray[5];
-// error: An array is written `array<int, N>`
+// error: write `array<int, 5> topLevelArray`
 char* topLevelText = "x";
-// error: for text that never changes, write `const string topLevelText = ...;`
+// error: text is a `string`, not a `char*`
+// error: or `const string topLevelText = ...;` for text that never changes
 let topLevelLet = 1;
-// error: write `const auto x = 1;`: variables that change are not supported outside functions yet
+// error: write `auto x = 1;`, or the type in place of `auto`. For a value that never changes, `const auto x = 1;`
 function withParameters(a, b) { }
 // error: write `int withParameters(int a) { ... }`: a return type first, `void` if none, and a type for each parameter
 int f() { return 1; };

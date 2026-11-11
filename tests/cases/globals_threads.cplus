@@ -1,0 +1,24 @@
+// Every thread sees the same variables outside functions, so what they change is behind a Mutex.
+class Total {
+public:
+    long sum = 0;
+};
+Mutex lock = Mutex();
+Total total = Total();
+vector<int> amounts = {1, 2, 3, 4};  // read by every thread, changed by none
+
+void work(int k) {
+    for (int i = 0; i < 1000; i++) {
+        LockGuard g = LockGuard(lock);
+        total.sum += amounts[k];
+    }
+}
+
+int main() {
+    vector<Task<void>> tasks;
+    for (int k = 0; k < 4; k++) tasks.push_back(spawn work(k));
+    for (auto& t : tasks) t.wait();
+    println("{}", total.sum);
+    return 0;
+}
+// expect: 10000

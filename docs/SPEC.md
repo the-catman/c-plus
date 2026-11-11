@@ -1599,14 +1599,16 @@ const string GREETING = "hello " + NAME;
 const string NAME = "Ada";
 ```
 
-- A constant is a number, a `char`, a `bool`, a `string` or a pointer, or `auto` for one of
-  those. Other types are not supported yet; write a function that returns the value. A
-  pointer has its `const` after the `*`, as in C++: `void* const NOTHING = null;`.
+- A constant is a number, a `char`, a `bool`, a `string`, a pointer or an enum, or `auto` for one of
+  those. A pointer has its `const` after the `*`, as in C++: `void* const NOTHING = null;`.
 - Its value is worked out from literals, other constants, operators, casts, `sizeof` and calls to
-  [`constexpr` functions](#constexpr). A variable or any other call is an error.
-- The compiler works the value out once, while compiling, whenever it can. A call in the value must be
-  able to run then, and it is an error if it cannot, since a constant has no moment to run anything
-  while the program runs.
+  [`constexpr` functions](#constexpr).
+- A `const` of another type, `const vector<int> PRIMES = {2, 3, 5};`, or one whose value uses a variable or
+  another call, `const int SEED = pick();`, is a [variable outside functions](#variables-outside-functions) that
+  cannot change. Its value is worked out as the program starts, and it cannot be used where a value must be known
+  while compiling, such as an array's size.
+- The compiler works a constant's value out once, while compiling. A call in the value must be able to run then,
+  and it is an error if it cannot.
 - C's macros are written this way: `const int SQLITE_OK = 0;`, and for a macro that is really
   an address, `void* const SQLITE_TRANSIENT = reinterpret_cast<void*>(-1);`.
 - A value that cannot be worked out, such as `1 / 0`, stops the program when the constant is
@@ -1615,8 +1617,52 @@ const string NAME = "Ada";
   variable first.
 - A local variable or a parameter can have the same name, and hides the constant. So does a field,
   inside its type, as in C++.
-- A variable outside any function, `int count = 0;`, is not supported yet. Pass the value to
-  the functions that use it, or keep it in a class object.
+
+### Variables outside functions
+
+A variable can be declared outside any function, as in C++. Every function in the file can use it, before or after
+it is written, and with `export`, so can the files that import it.
+
+```cpp
+int count = 0;
+vector<string> names;  // empty: the default of its type
+const vector<int> PRIMES = {2, 3, 5};
+Mutex lock = Mutex();
+export int level = 1;
+
+void add(string name) {
+    LockGuard g = LockGuard(lock);
+    names.push_back(name);
+    count++;
+}
+
+int main() {
+    add("ann");
+    println("{} {} {}", count, names, PRIMES[0]);  // 1 ["ann"] 2
+    return 0;
+}
+```
+
+- **Its value is worked out before `main` runs**, in the order they are written, and those of a module before those
+  of the files that import it. One that another one's value needs sooner is worked out then, so the order never
+  changes what the values are. One whose value leads back to itself stops the program: `int a = b + 1; int b = a;`.
+- **With no value** it holds the default of its type, as in C++: `0`, `""`, an empty vector, null for `T?`. A type
+  with no default, such as a class, needs a value: `User current = User("ann");`, or `User? current;`, which starts
+  out null.
+- **Its value cannot fail or `await`**, since nothing before `main` could say what happens then. Set it in `main`
+  instead, with `try`. No thread starts before `main`: `spawn` there stops the program.
+- **Every thread sees the same one**, as in C++. One that threads change is protected with a
+  [`Mutex`](#mutex), and `cplus run app.cplus --race` finds one that is not. One that they only read needs nothing.
+  It cannot hold a `local<T>`, which only one thread may use.
+- **At the end**, after `main` returns and the threads and async work are done, each is released, the last first,
+  so that the destructors of what they hold run. A destructor that uses one released already stops the program.
+- **It is never moved from**, since another function may still use it: `move(count)` is an error. An element of a
+  vector in one can be, as for a local vector. It cannot be a reference.
+- **A `const` one** cannot change. A local variable, a parameter or a field can have the same name, and hides it.
+- Reading one whose value is only known while the program runs costs a check that it is ready. One whose value is a
+  literal, or the default of a number or a pointer, costs no more than a local.
+- `static` and `extern` before one are errors: a name is already private to its file unless it is marked `export`,
+  and another file's is written with the name of its module: `counter::total`. `thread_local`, and `static` variables in a function, are planned.
 
 ### constexpr
 
@@ -3270,7 +3316,9 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | C headers: `import <sqlite3.h>;`, `import "mine.h";` and `-I`, for functions, structs, macros and enums | implemented |
 | `array<T, N>`: checked `a[i]`, `size`, `empty`, `front`, `back`, `fill`, `data`, range-based `for`, `==`, pointers to elements, `string(a)` | implemented |
 | `new`, `new[]`, `delete`, `delete[]`, with a warning; `[[allow(new_delete)]]`, `-Wno-new-delete` | implemented |
-| Constants outside functions: numbers, `char`, `bool`, `string`, pointers | implemented |
+| Constants outside functions: numbers, `char`, `bool`, `string`, pointers, enums | implemented |
+| Variables outside functions, and `const` ones of any type | implemented |
+| `thread_local`, `static` variables in a function | planned |
 | `main` with `argc` and `argv` | implemented |
 | `cplus check`, `build`, `run`, `explain`, `--emit-llvm`, `-O` | implemented |
 | `cplus fmt` | implemented |
@@ -3279,7 +3327,6 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Programs of more than one file | implemented |
 | `constexpr` values and functions, `if constexpr`, array sizes and template arguments worked out while compiling | implemented |
 | `constexpr` methods and structs; a generic `constexpr` function in an array's size | planned |
-| Variables outside functions; constants of other types | planned |
 | Lambdas | planned |
 | Enums held in other integer types, enumerator values that use enumerators, a switch with an initializer | planned |
 | Default arguments | implemented |

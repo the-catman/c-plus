@@ -80,6 +80,14 @@ private:
     void checkStructs(size_t first);
     void checkConstants(Program& program);
     void checkConstant(VarDecl& constant);
+    // Variables outside functions, whose values are worked out before main.
+    void checkGlobals(Program& program);
+    void checkGlobal(VarDecl& global);
+    void declareGlobals(Program& program);
+    void checkGlobalRules(const VarDecl& global);
+    std::set<const VarDecl*> globalsChecked_, globalsBeingChecked_;
+    // Runs `check` as if outside any function, where only constants, variables outside functions and functions are seen.
+    void outsideFunctions(const std::function<void()>& check);
     const Type* checkReinterpretCast(CastExpr& c, const Type* from, const Type* to);
     std::set<const VarDecl*> constantsChecked_, constantsBeingChecked_;
     void checkMembers(StructDecl& sd);
@@ -265,6 +273,7 @@ private:
     int tryBlocks_ = 0;     // the `try { }` blocks around the code being checked
     const VarDecl* defaultOf_ = nullptr;  // the parameter whose default value is being checked
     const FuncDecl* defaultFn_ = nullptr; // and its function
+    const VarDecl* globalOf_ = nullptr;   // the variable outside functions whose value is being checked
     int tryPrefixes_ = 0;   // the same for `try f()`
     int failPoints_ = 0;    // how many places that can fail have been seen, to tell if a try block has any
     std::vector<const CatchClause*> catches_;  // the catches around the code being checked

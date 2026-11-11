@@ -1,0 +1,19 @@
+// A variable outside functions that two threads change without a lock is a race, which --race finds.
+extern "C" int usleep(int microseconds);
+int count = 0;
+void work() {
+    for (int i = 0; i < 200; i++) {
+        count++;
+        usleep(100);  // so that the threads overlap
+    }
+}
+int main() {
+    auto a = spawn work();
+    auto b = spawn work();
+    a.wait();
+    b.wait();
+    println("{}", count > 0);
+    return 0;
+}
+// race: two threads used the same memory at the same time
+// race: race_global.cplus:6

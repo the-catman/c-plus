@@ -325,6 +325,9 @@ void Modules::scanMembers(ModuleFile& file, std::vector<size_t>& declaring) {
                     else if (a == Tok::Assign && depth == 0 && j > start) add(j - 1, exported, false, false);
                 }
                 i = j < n ? j + 1 : n;
+            } else if (at < n && t[at].kind == Tok::Semi && at > start + 1 && t[at - 1].kind == Tok::Ident) {  // `int count;`
+                add(at - 1, exported, false, false);
+                i = at + 1;
             } else {
                 i = endOf(i, false);
             }

@@ -1,0 +1,14 @@
+// At the end, the last is released first. One released already is not used again.
+class Log {
+public:
+    vector<string> lines;
+    ~Log() { println("log {}", names.size()); }
+};
+Log log = Log();
+vector<string> names = {"a"};
+int main() {
+    println("main {}", names.size());
+    return 0;
+}
+// expect: main 1
+// trap: 'names' is used after the program is done with the variables outside functions, as it ends

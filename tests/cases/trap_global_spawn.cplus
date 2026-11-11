@@ -1,0 +1,13 @@
+// No thread starts before main.
+int work() { return 1; }
+int started = start();
+int start() {
+    auto t = spawn work();
+    return t.wait();
+}
+int main() {
+    println("not reached {}", started);
+    return 0;
+}
+// trap: `spawn` ran while the variables outside functions were being worked out, before main
+// no-race: it stops before the thread starts

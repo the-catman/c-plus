@@ -38,7 +38,3 @@ void lists() {
     // error: write the list in braces: `{1, 2, 3}`. `auto` needs the type written: `vector<int>{1, 2, 3}`
 }
 int main() { return 0; }
-int topLevel = 100;
-// error: `const int topLevel = ...;`
-auto text = "x";
-// error: `const auto text = ...;`

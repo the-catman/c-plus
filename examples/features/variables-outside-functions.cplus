@@ -1,0 +1,21 @@
+// Variables outside functions: every function sees them, and their values are ready before main.
+int count = 0;
+vector<string> names;  // empty: the default of its type
+const vector<int> PRIMES = {2, 3, 5};
+string title = "users: " + first;  // first is worked out first, as title needs it
+string first = "ann";
+
+void add(string name) {
+    names.push_back(name);
+    count++;
+}
+
+int main() {
+    add(first);
+    add("bo");
+    println("{} {} {}", title, count, names);
+    // expect: users: ann 2 ["ann", "bo"]
+    println("{}", PRIMES[2]);
+    // expect: 5
+    return 0;
+}

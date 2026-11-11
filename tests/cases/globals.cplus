@@ -1,0 +1,97 @@
+// Variables outside functions: worked out before main in the order they are written, unless one is needed sooner.
+int say(string what, int value) {
+    println("{}", what);
+    return value;
+}
+int first = say("first", second + 1);
+int second = say("second", 10);
+int counted;
+double ratio;
+bool flag;
+char letter;
+string text;
+vector<int> numbers;
+hashmap<string, int> seen;
+struct Point { int x = 1; int y = 2; };
+Point corner;
+int* nowhere;
+Point? maybe;
+const int FROM_CALL = say("from call", 7) * 2;
+const auto PRIMES = vector<int>{2, 3, 5};
+const vector<string> NAMES = {"ann", "bo"};
+const Point ORIGIN = {.x = 5, .y = 6};
+const int PLAIN = 3;
+int pick() { return 4; }
+const int SEED = pick();
+long big = -5000000000;
+float small = 1.5;
+double negative = -2.5;
+char initial = 'z';
+bool on = true;
+int* empty = null;
+
+class Logger {
+public:
+    string name;
+    Logger(string n) : name(n) {}
+    ~Logger() { println("released {}", name); }
+};
+Logger one = Logger("one");
+Logger two = Logger("two");
+
+void bump(int& n) { n += 1; }
+int count = 0;
+int next() { return ++count; }
+
+class Holder {
+public:
+    int count = 100;
+    int own() { return count; }  // the field hides the variable outside functions
+};
+
+int main() {
+    println("main {} {}", first, second);
+    println("{} {} {} {} [{}] {} {}", counted, ratio, flag, int(letter), text, numbers.size(), seen.size());
+    println("{} {} {} {}", corner.x, corner.y, nowhere == null, maybe == null);
+    println("{} {} {} {} {} {}", FROM_CALL, PRIMES[2], NAMES[1], ORIGIN.y, PLAIN, SEED);
+    println("{} {} {} {} {} {}", big, small, negative, initial, on, empty == null);
+    array<int, PLAIN> room;
+    println("{}", room.size());
+    bump(counted);
+    bump(counted);
+    numbers.push_back(4);
+    seen["a"] = 1;
+    text = "changed";
+    corner.x = 9;
+    maybe = Point{};
+    println("{} {} {} {} {} {}", counted, numbers[0], seen["a"], text, corner.x, maybe?.y ?? 0);
+    int* p = &counted;
+    *p = 50;
+    println("{}", counted);
+    auto& n = numbers[0];
+    n = 8;
+    println("{}", numbers[0]);
+    int count = -1;  // a local hides it
+    println("{} {}", count, next());
+    Holder h = Holder();
+    println("{} {}", h.own(), next());
+    println("{} {}", one.name, two.name);
+    return 0;
+}
+// expect: second
+// expect: first
+// expect: from call
+// expect: main 11 10
+// expect: 0 0 false 0 [] 0 0
+// expect: 1 2 true true
+// expect: 14 5 bo 6 3 4
+// expect: -5000000000 1.5 -2.5 z true true
+// expect: 3
+// expect: 2 4 1 changed 9 2
+// expect: 50
+// expect: 8
+// expect: -1 1
+// expect: 100 2
+// expect: one two
+// expect: released two
+// expect: released one

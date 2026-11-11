@@ -1,0 +1,13 @@
+// A variable outside functions, even a `const` one, is not known while compiling.
+int count = 2;
+int seed() { return 3; }
+const int N = seed();
+int main() {
+    array<int, count> a;
+    switch (1) {
+        case N: break;
+    }
+    return 0;
+}
+// error: the size of an array must be known at compile time, but 'count' is not a constant
+// error: a case label must be known while compiling, but 'N' is a variable outside functions, whose value is only known while the program runs

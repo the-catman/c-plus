@@ -58,7 +58,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
-    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtArgs, rtDynamicCast, rtRetainObject, rtObjectStart;
+    llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtArgs, rtGlobalsStart, rtGlobalsDone, rtDynamicCast, rtRetainObject, rtObjectStart;
     llvm::FunctionCallee rtRetainClass, rtReleaseClass, rtFreeClass, rtDestructorHold, rtReferences;
     llvm::FunctionCallee rtWeakRetain, rtWeakRelease, rtWeakLock, rtWeakAlive, rtUncaught;
     llvm::FunctionCallee rtTrapEnum;
@@ -389,6 +389,8 @@ struct Codegen::Impl {
         rtDeleteFree = decl("cplus_delete_free", voidTy, {ptrTy});
         rtStart = decl("cplus_start", voidTy, {});
         rtArgs = decl("cplus_args", ptrTy, {i32, ptrTy});
+        rtGlobalsStart = decl("cplus_globals_start", voidTy, {});
+        rtGlobalsDone = decl("cplus_globals_done", voidTy, {});
         rtDynamicCast = decl("cplus_dynamic_cast", ptrTy, {ptrTy, ptrTy});
         rtRetainObject = decl("cplus_retain_object", voidTy, {ptrTy});
         rtRetainClass = decl("cplus_retain_class", voidTy, {ptrTy});
@@ -2322,6 +2324,7 @@ struct Codegen::Impl {
                 if (n.implicitField >= 0)
                     return fieldAddress(&n.path.back()->type, atOffset(thisPtr, pathOffset(n.path)), n.implicitField, n.name);
                 if (auto it = rederived.find(n.decl); it != rederived.end()) return rederive(it->second, &n, hold, write);
+                if (n.decl->isGlobal) return globalAddress(*n.decl);
                 return locals.at(n.decl);
             }
             case Expr::Kind::This: return thisPtr;
@@ -4648,6 +4651,12 @@ struct Codegen::Impl {
         // this function would lose that main's lines.
         startLineTable(userMain.nameLoc);
         b.CreateCall(rtStart, {});
+        if (!globalOrder.empty()) {  // the variables outside functions, in the order they are written, before main
+            b.CreateCall(rtGlobalsStart, {});
+            for (const VarDecl* g : globalOrder)
+                if (llvm::Function* init = globalVars.at(g).init) b.CreateCall(init, {});
+            b.CreateCall(rtGlobalsDone, {});
+        }
         std::vector<llvm::Value*> args;
         llvm::Value* argList = nullptr;  // `int main(vector<string> args)`, or `const vector<string>& args`
         if (userMain.params.size() == 2) {
@@ -4668,6 +4677,7 @@ struct Codegen::Impl {
         auto finish = [&](llvm::Value* code) {
             if (usesAsync) b.CreateCall(rtLoopFinish, {});
             if (usesThreads) b.CreateCall(rtThreadsFinish, {});
+            releaseGlobals();
             b.CreateRet(code);
         };
         llvm::AllocaInst* place = nullptr;
@@ -4706,6 +4716,121 @@ struct Codegen::Impl {
         b.SetInsertPoint(doneBB);
         finish(code);
         endLineTable();
+    }
+
+    // ---- Variables outside functions ----------------------------------------
+
+    // Where a variable outside functions is. One whose value is worked out while the program runs also has a state,
+    // 0 before it is worked out, 1 while it is, 2 once it is ready and 3 once the program is done with it, and the
+    // function that works it out. Each use checks the state, so that one used by another before its turn is ready in
+    // time, whatever the order.
+    struct GlobalVar {
+        llvm::GlobalVariable* value = nullptr;
+        llvm::GlobalVariable* state = nullptr;
+        llvm::Function* init = nullptr;
+    };
+    std::unordered_map<const VarDecl*, GlobalVar> globalVars;
+    std::vector<const VarDecl*> globalOrder;
+
+    // The value of a variable outside functions that is known while compiling, which costs nothing to use: a number,
+    // a char or a bool that is written as a literal, or the zero bytes that are a type's default.
+    llvm::Constant* staticValue(const VarDecl& g) {
+        const Type* t = g.type;
+        if (isManaged(t)) return nullptr;
+        if (!g.init) return defaultIsZero(t) ? llvm::Constant::getNullValue(llvmType(t)) : nullptr;
+        const Expr* e = g.init.get();
+        bool negative = false;
+        if (e->kind == Expr::Kind::Unary && static_cast<const UnaryExpr*>(e)->op == UnOp::Neg) {
+            negative = true;
+            e = static_cast<const UnaryExpr*>(e)->operand.get();
+        }
+        if (e->kind == Expr::Kind::IntLit && (t->isInteger() || t->isFloating())) {
+            const int64_t v = static_cast<const IntLitExpr*>(e)->value;
+            if (t->isFloating()) return llvm::ConstantFP::get(llvmType(t), negative ? -(double)v : (double)v);
+            if (t->is(K::Int) && (v > INT32_MAX + (negative ? 1LL : 0LL))) return nullptr;  // Sema has said so
+            return llvm::ConstantInt::get(llvmType(t), negative ? -v : v, true);
+        }
+        if (e->kind == Expr::Kind::FloatLit && t->isFloating()) {
+            const double v = static_cast<const FloatLitExpr*>(e)->value;
+            return llvm::ConstantFP::get(llvmType(t), negative ? -v : v);
+        }
+        if (negative) return nullptr;
+        if (e->kind == Expr::Kind::BoolLit && t->is(K::Bool)) return b.getInt1(static_cast<const BoolLitExpr*>(e)->value);
+        if (e->kind == Expr::Kind::CharLit && t->is(K::Char)) return b.getInt8(static_cast<const CharLitExpr*>(e)->value);
+        if (e->kind == Expr::Kind::NullLit && t->isPointer()) return llvm::ConstantPointerNull::get(b.getPtrTy());
+        return nullptr;
+    }
+
+    void declareGlobals(const Program& program) {
+        for (auto& g : program.globals) {
+            const Type* t = g->type;
+            llvm::Constant* known = staticValue(*g);
+            GlobalVar& v = globalVars[g.get()];
+            v.value = new llvm::GlobalVariable(*mod, llvmType(t), false, llvm::GlobalValue::InternalLinkage,
+                                               known ? known : llvm::Constant::getNullValue(llvmType(t)), "cplus.global." + g->name);
+            globalOrder.push_back(g.get());
+            if (known) continue;
+            v.state = new llvm::GlobalVariable(*mod, b.getInt8Ty(), false, llvm::GlobalValue::InternalLinkage, b.getInt8(0),
+                                               "cplus.global." + g->name + "#state");
+            v.init = llvm::Function::Create(llvm::FunctionType::get(b.getVoidTy(), {}, false), llvm::Function::InternalLinkage,
+                                            "cplus.global." + g->name + "#init", mod.get());
+        }
+        for (const VarDecl* g : globalOrder)
+            if (globalVars.at(g).init) defineGlobalInit(*g, globalVars.at(g));
+    }
+
+    void defineGlobalInit(const VarDecl& g, const GlobalVar& v) {
+        fn = v.init;
+        fnDecl = nullptr;
+        locals.clear();
+        errorOut = nullptr;
+        localError = nullptr;
+        thisPtr = nullptr;
+        b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
+        startLineTable(g.loc);
+        AtLine line(*this, g.loc);
+        llvm::Value* state = b.CreateLoad(b.getInt8Ty(), v.state, "state");
+        auto* readyBB = llvm::BasicBlock::Create(ctx, "ready", fn);
+        auto* workBB = llvm::BasicBlock::Create(ctx, "work", fn);
+        b.CreateCondBr(b.CreateICmpEQ(state, b.getInt8(2)), readyBB, workBB);
+        b.SetInsertPoint(workBB);
+        trapIf(b.CreateICmpEQ(state, b.getInt8(1)), "'" + g.name + "' is used while its value is being worked out, which leads back to it", g.loc);
+        trapIf(b.CreateICmpEQ(state, b.getInt8(3)), "'" + g.name + "' is used after the program is done with the variables outside functions, as it ends", g.loc);
+        b.CreateStore(b.getInt8(1), v.state);
+        if (g.init) storeValue(genOwned(*g.init, g.type), g.type, v.value);
+        else fillDefault(v.value, g.type);
+        flushTemps();
+        b.CreateStore(b.getInt8(2), v.state);
+        b.CreateBr(readyBB);
+        b.SetInsertPoint(readyBB);
+        b.CreateRetVoid();
+        endLineTable();
+    }
+
+    // The place of a variable outside functions, once its value is ready.
+    llvm::Value* globalAddress(const VarDecl& g) {
+        const GlobalVar& v = globalVars.at(&g);
+        if (v.state) {
+            auto* workBB = llvm::BasicBlock::Create(ctx, "work", fn);
+            auto* readyBB = llvm::BasicBlock::Create(ctx, "ready", fn);
+            llvm::Value* ready = b.CreateICmpEQ(b.CreateLoad(b.getInt8Ty(), v.state, g.name + ".state"), b.getInt8(2));
+            b.CreateCondBr(ready, readyBB, workBB, llvm::MDBuilder(ctx).createBranchWeights(1u << 20, 1));
+            b.SetInsertPoint(workBB);
+            b.CreateCall(v.init, {});
+            b.CreateBr(readyBB);
+            b.SetInsertPoint(readyBB);
+        }
+        return v.value;
+    }
+
+    // At the end, after the threads and the event loop: each is released, the last first, and is not to be used again.
+    void releaseGlobals() {
+        for (auto it = globalOrder.rbegin(); it != globalOrder.rend(); ++it) {
+            const GlobalVar& v = globalVars.at(*it);
+            if (!v.state) continue;
+            if (isManaged((*it)->type)) releaseValue(peekValue((*it)->type, v.value, (*it)->name.c_str()), (*it)->type);
+            b.CreateStore(b.getInt8(3), v.state);
+        }
     }
 
     // ---- Generated functions for structs and classes -----------------------
@@ -5326,6 +5451,7 @@ struct Codegen::Impl {
             rb.CreateCall(intrinsic(llvm::Intrinsic::coro_resume), {resumeFn->getArg(0)});
             rb.CreateRetVoid();
         }
+        declareGlobals(program);
         for (auto& f : program.funcs) defineFunction(*f);
         for (const StructDecl* sd : structs)
             for (auto& m : sd->methods)

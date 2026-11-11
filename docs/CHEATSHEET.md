@@ -76,7 +76,8 @@ long square(long n) { return n * n; }
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors and arrays element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
-| Constants | outside any function, in any order: `const int MAX = 100;`, `const string NAME = "a" + OTHER;`, `void* const NONE = null;`. A number, `char`, `bool`, `string` or pointer, from literals, other constants, operators, casts and calls to `constexpr` functions that can run while compiling |
+| Constants | outside any function, in any order: `const int MAX = 100;`, `const string NAME = "a" + OTHER;`, `void* const NONE = null;`. A number, `char`, `bool`, `string`, pointer or enum, from literals, other constants, operators, casts and calls to `constexpr` functions that can run while compiling |
+| Variables outside functions | `int count = 0;`, `vector<string> names;`, `Mutex lock = Mutex();`, `const vector<int> PRIMES = {2, 3, 5};`, `export int level = 1;`, used anywhere in the file, in any order. All are worked out before `main`, and one is ready whenever another needs it. A class needs a value: `User current = User("a");` or `User? current;`. The value cannot fail. Every thread sees the same one, so what threads change is behind a `Mutex`. Never moved from |
 | constexpr | `constexpr int MAX = square(4);`, `constexpr int square(int n) { return n * n; }`, worked out while compiling, so `1 / 0` there is a compile error. `array<int, MAX * 2> a;`, `Buffer<int, MAX>`, also with a plain `const` |
 | if constexpr | `if constexpr (Integer<T>) { ... } else { ... }`: only the branch taken is checked. Also `Number<T>`, `Floating<T>`, `Comparable<T>`, `same_as<T, int>`, `derived_from<T, Base>`, your own `Addable<T>`, and `N == 0` |
 | Program | `int main()`, or `int main(vector<string> args)`, with `args[1]` for the first argument. `cplus run app.cplus -- arg1 arg2` |
@@ -94,6 +95,8 @@ long square(long n) { return n * n; }
 | `typedef`, `using`, `inline`, `goto`, `register`, `volatile`, `mutable`, `explicit`, `friend`, `union` | left out, and each says what to write instead. `goto` is a loop or a function, and `volatile` is a `Mutex` |
 | `a = 1, b = 2;` | no comma operator: two statements |
 | `#define MAX 100`, `static const int MAX = 100;` | `const int MAX = 100;`, or `constexpr int MAX = 100;` |
+| `static int count = 0;` at the top of a file, or in a function | `int count = 0;` outside the functions: a name is private to its file unless it is marked `export` |
+| `extern int count;` | `export int count = 0;` in its file, and `other::count` after `import other;` |
 | `int count = 0;` outside a function | not supported yet. A value that never changes is a `const`; otherwise pass it to the functions that use it |
 | `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `int`. `char*` is a raw pointer, for buffers and text to free |
 | `struct FILE* f`, `struct tm t;`, `typedef struct x x;` | `extern "C" struct FILE;` once, then `FILE* f`; `tm t;`, no word `struct`; no `typedef` |
@@ -248,7 +251,7 @@ long square(long n) { return n * n; }
 | Types | unions, unsigned integers, `const` fields, types nested in a type or a function, `short` and other small integers, enums held in them |
 | Functions | default arguments in generics, `auto` parameters and return types, lambdas |
 | Statements | a declaration before a switch's value: `switch (auto k = f(); k)` |
-| Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
+| Top level | `thread_local`, `static` variables in a function, `constexpr` methods and structs |
 | Containers | iterators, and erasing a range, on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |
 | References | `T& f()`, and `for (auto& e : m)` over a hashmap |
 | Structured bindings | `for (auto [k, v] : m)`, `auto [a, b] = f();` |

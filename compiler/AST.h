@@ -561,6 +561,8 @@ struct VarDecl : Stmt {
     std::string defaultText;  // as written: `10`
     bool defaultBad = false;  // set by Sema: what is written has an error, which was reported once
     bool isTopLevel = false;  // a constant outside any function
+    bool isGlobal = false;    // a variable outside any function: `int count = 0;`, or a `const` whose value is not known while compiling
+    uint32_t topOrder = 0;    // for a constant or a variable outside functions, where it is among them in the program
     // `T& x` or `const T& x`: it names another place instead of holding a value of its own. Set for a parameter, a local and
     // the variable of a range-based for loop. Codegen passes a `const C&` of a class type as the object itself.
     bool isRef = false;
@@ -1107,6 +1109,8 @@ struct Program {
     std::vector<std::unique_ptr<StructDecl>> structs;
     std::vector<std::unique_ptr<FuncDecl>> funcs;
     std::vector<std::unique_ptr<VarDecl>> constants;
+    std::vector<std::unique_ptr<VarDecl>> globals;  // the variables outside functions, in the order they are written
+    uint32_t topLevelVars = 0;                      // how many constants and variables outside functions are written
     std::vector<std::unique_ptr<TemplateDecl>> templates;
     bool allowNewDelete = false;  // `[[allow(new_delete)]];` at the top of the file
     std::set<uint32_t> allowNewDeleteIn;  // the files that have it at their top, by SourceFile::id

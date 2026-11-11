@@ -536,8 +536,8 @@ PLANNED_FEATURES = [
     ("constexpr structs", 'constexpr struct P { int x = 0; };\n' + M % ""),
     ("constexpr of a struct", 'struct P { int x = 0; };\nconstexpr P ORIGIN = {1};\n' + M % ""),
     ("a generic constexpr function in an array's size", 'template<typename T> constexpr int size(T x) { return 2; }\n' + M % "array<int, size<int>(1)> a;"),
-    ("variables outside functions", 'int count = 0;\n' + M % ""),
-    ("constants of other types", 'struct P { int x = 0; };\nconst P ORIGIN = {1};\n' + M % ""),
+    ("thread_local", 'thread_local int count = 0;\n' + M % ""),
+    ("static variables in a function", 'int f() { static int n = 0; return n; }\n' + M % ""),
     ("enums held in other integer types", 'enum class Color : char { Red, Blue };\n' + M % ""),
     ("enumerator values that use enumerators", 'enum class Color { Red, Blue = Red };\n' + M % ""),
     ("a switch with an initializer", M % "int n = 1; switch (int k = n; k) { case 1: break; }"),
@@ -804,6 +804,7 @@ SPEC_NOT_CODE = {
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
+    "move(count)": "^int count = 0;\nint f() { return move(count); }",
     "server::address": "server::address(1);", "json.stringify(x)": "int x = 1; json.stringify(x);", "module net.server;": "^module net.server;",
     "export module net.server;": "^export module net.server;", "int net::server::extra()": "^int net::server::extra() { return 1; }",
     "export { ... }": "^export { int f() { return 1; } }", "export import": "^export import json;", 'export extern "C"': '^export extern "C" int abs(int n);',

@@ -750,6 +750,14 @@ what holds real programs back most:
    `replace` on strings, `insert` and `erase` on vectors, width, alignment and hex in `format`, unsigned integers,
    variables outside functions, and `int main(vector<string> args)`.
 
+   Variables outside functions (2026-11-11): each is worked out before `main`, in the order written and each module
+   after those it imports. One with a value known only while the program runs has a state, so that one used sooner
+   is worked out then, and one that leads back to itself stops the program; C++'s order of initialization across
+   files is a bug this cannot have. Their values cannot fail or `await`, and `spawn` before `main` stops the
+   program, so working them out needs no locks. They are released in reverse order after the threads and the event
+   loop end. A `const` of a constant's type whose value cannot be worked out while compiling is one of these too,
+   as it would be in C++. They are never moved from. `thread_local` and `static` in a function wait.
+
 Each is designed when it is reached, as before. Exit criterion: two or three programs of a few hundred lines each, one of
 them in several files, written by a model given only the cheat sheet, with nothing in them that works around a missing
 feature.

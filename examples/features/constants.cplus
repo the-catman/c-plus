@@ -1,4 +1,4 @@
-// Constants go outside functions, in any order. Variables do not.
+// Constants go outside functions, in any order.
 const string GREETING = "hello " + NAME;
 const string NAME = "world";
 const int LIMIT = 10 * 2;

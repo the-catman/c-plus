@@ -1,0 +1,12 @@
+// What another file sees is what is marked export.
+export int total = 0;
+export vector<string> log;
+int hidden = 5;
+
+export int bump() {
+    total++;
+    log.push_back("bump");
+    return hidden - 4;
+}
+
+export int read() { return total; }

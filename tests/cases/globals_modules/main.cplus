@@ -1,0 +1,14 @@
+// Variables outside functions in two files. Each module's are worked out before those of the files that import it.
+import counter;
+
+int uses = counter::bump() + 100;
+
+int main() {
+    counter::bump();
+    println("{} {} {}", counter::total, uses, counter::log.size());
+    counter::total = 0;
+    println("{}", counter::read());
+    return 0;
+}
+// expect: 2 101 2
+// expect: 0

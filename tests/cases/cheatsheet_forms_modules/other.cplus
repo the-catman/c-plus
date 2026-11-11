@@ -1,0 +1,2 @@
+// A variable outside functions that other files use.
+export int count = 0;

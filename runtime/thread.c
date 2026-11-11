@@ -62,6 +62,10 @@ static void* thread_main(void* given) {
 }
 
 void cplus_thread_start(void (*entry)(void*), void* closure) {
+    extern int cplus_before_main;
+    if (cplus_before_main)
+        cplus_stop("`spawn` ran while the variables outside functions were being worked out, before main",
+                   "start the thread in main, or in a function that main calls: before main, nothing may run on another thread");
     thread_start* start = cplus_malloc(sizeof *start);
     start->entry = entry;
     start->closure = closure;
