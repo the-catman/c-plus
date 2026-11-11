@@ -30,7 +30,7 @@ void loopsOverObjects(vector<C> cs, vector<vector<S?>> g, hashmap<string, vector
     for (auto row : g) {
         for (auto c : row) {
             c?.set();
-            // error: 'c' is a copy of an element of a copy, so to change the elements, loop over the outer list with indexes, and change them there
+            // error: 'c' is a copy of an element of a copy, so to change the elements, write `auto&` in both loops
         }
     }
     const vector<S?> cw = {S{}};

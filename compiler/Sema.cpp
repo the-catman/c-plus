@@ -503,13 +503,12 @@ std::string Sema::loopCopyNote(const Expr& e) {
     const LoopCopy& loop = found->second;
     const std::string& list = loop.list;
     const std::string name = q(var->name);
-    if (loop.overACopy) return ". " + name + " is a copy of an element of a copy, so to change the elements, loop over the outer list with indexes, and change them there";
+    if (loop.overACopy) return ". " + name + " is a copy of an element of a copy, so to change the elements, write `auto&` in both loops";
     if (!loop.constList.empty()) return ". " + name + " is a copy of an element of " + q(loop.constList) + ", which is const, so its elements cannot change";
     if (list.empty()) return ". " + name + " is a copy of the element, so this does not change what the loop goes over";
     const bool isMap = loop.isMap;
     if (isMap) return ". " + name + " is a copy of the entry, so to change the map, store it back in `" + asBase(list) + "[" + var->name + ".first]`";
-    const std::string i = freshName(list + " " + var->name, {"i", "j", "k", "index"});
-    return ". " + name + " is a copy of the element, so to change the element, loop with an index, `for (long " + i + " = 0; " + i + " < " + asBase(list) + ".size(); ++" + i + ")`, and change `" + asBase(list) + "[" + i + "]`";
+    return ". " + name + " is a copy of the element, so to change the element, make the loop go over the elements themselves: `for (auto& " + var->name + " : " + list + ")`";
 }
 
 static const char* const kStoreFirst = "store it in a variable first, change that, and store it back where it came from";
@@ -3295,13 +3294,32 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
              : root->kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr*>(root)->receiver ? static_cast<const MethodCallExpr*>(root)->receiver.get()
              : nullptr;
     }
-    loopCopies_[&v] = loop;
+    const bool changes = v.isRef && !v.isConst;  // `for (auto& x : v)`, which changes the elements themselves
+    if (!changes) loopCopies_[&v] = loop;
+    if (changes && isMap && !rangeType->isError()) {
+        diags_.error(v.typeLoc, "this compiler does not support references that change the entries of a hashmap, `auto&`, in a range-based for loop yet",
+                     "loop over the keys and change each value in the map: `for (auto key : " + asBase(loop.list.empty() ? std::string("m") : loop.list) +
+                         ".keys()) " + asBase(loop.list.empty() ? std::string("m") : loop.list) + "[key] = ...;`. To read the entries without copying them, write `for (const auto& " +
+                         v.name + " : ...)`",
+                     spec::Status);
+    } else if (changes && !rangeType->isError() && isPlaceKind(*st.range)) {
+        // As in C++, `auto&` over what cannot change is a `const auto&`, and an explicit `int&` is an error.
+        if (!v.declType->is(K::Auto)) checkChangeable(*st.range, "changed through a reference", nullptr, "");
+        else if (isReadOnlyPlace(*st.range)) v.isConst = true;
+    }
     if (v.declType->is(K::Auto)) {
         v.type = elem;
     } else {
         v.type = v.declType;
         const bool overMap = elem->isStruct() && elem->decl->templateOf && elem->decl->templateOf->nameLoc.line == 0 && elem->decl->templateName == "hashmap_entry";
-        if (!canConvert(elem, v.type))
+        if (v.isRef && v.type != elem && !elem->isError() && !v.type->isError() && !canConvert(elem, v.type)) {
+            diags_.error(v.typeLoc, "the elements of " + q(rangeType) + " are " + q(elem) + ", so a reference to them is `" + elem->name + "&`, not `" + v.type->name + "&`",
+                         "write `for (" + std::string(v.isConst ? "const " : "") + "auto& " + v.name + " : ...)`", spec::References);
+        } else if (v.isRef && !v.isConst && v.type != elem && !elem->isError() && !v.type->isError()) {
+            diags_.error(v.typeLoc, "a reference that changes the elements of " + q(rangeType) + " must be `" + elem->name + "&`, as they are " + q(elem) + ", not " + q(v.type),
+                         "write `for (auto& " + v.name + " : ...)`. To work on converted copies, write `for (" + std::string(v.type->name) + " " + v.name + " : ...)`",
+                         spec::References);
+        } else if (!canConvert(elem, v.type))
             diags_.error(v.typeLoc, "the " + std::string(overMap ? "entries of the hashmap" : "elements of " + q(rangeType)) + " are " + q(elem) + ", which cannot be stored in " +
                                         q(v.type) + " " + q(v.name),
                          overMap ? "write `for (auto " + v.name + " : ...)`, with `" + v.name + ".first` and `" + v.name + ".second`, or loop over `m.keys()`"
@@ -5019,12 +5037,6 @@ void Sema::checkRefBinding(const Expr& e, const Type* type, const std::string& w
                          ? "store it in a variable of type " + q(type) + " first, since any " + q(type) + " could be put there through the reference"
                          : "give it a variable of type " + q(type) + ". If it only reads it, make it `const " + name + "&`, which takes a converted copy",
                      spec::References);
-        return;
-    }
-    if (insideContainer(e)) {
-        diags_.error(e.loc, "this compiler does not support references to the elements of vectors, strings and hashmaps yet",
-                     "they move when the container grows. Change the element itself, `v[i] = ...`, or pass the container and the index",
-                     spec::Status);
         return;
     }
     // The variable and the fields of it that the place is, for the messages: `n` inside a method is `this.n`.

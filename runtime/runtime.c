@@ -325,6 +325,15 @@ _Noreturn void cplus_trap_string_index(int64_t index, int64_t size, const char* 
     cplus_trap(message, file, line, column);
 }
 
+// Called when a reference to an element of a vector, or to a char of a string, is used after the container has shrunk
+// to where the element is gone.
+_Noreturn void cplus_trap_gone(int64_t index, int64_t size, const char* name, int32_t chars, const char* file, int32_t line, int32_t column) {
+    char message[256];
+    snprintf(message, sizeof message, "'%s' refers to the %s at index %" PRId64 " of a %s that now has %" PRId64 " %s, so it is gone", name,
+             chars ? "char" : "element", index, chars ? "string" : "vector", size, chars ? (size == 1 ? "char" : "chars") : (size == 1 ? "element" : "elements"));
+    cplus_trap(message, file, line, column);
+}
+
 // Called when a value meant for a char is not from 0 to 255. `what` says where it came
 // from, such as "char(x) was given".
 _Noreturn void cplus_trap_char(int64_t value, const char* what, const char* file, int32_t line, int32_t column) {

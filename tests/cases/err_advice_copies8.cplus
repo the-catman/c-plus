@@ -38,7 +38,7 @@ void keepingResults() {
     vector<S?> list;
     for (auto e : list) {
         int? b = e?.bump();
-        // error: 'e' is a copy of the element, so to change the element, loop with an index
+        // error: 'e' is a copy of the element, so to change the element, make the loop go over the elements themselves: `for (auto& e : list)`
     }
     S? h = S{};
     int s = h.value().bump();

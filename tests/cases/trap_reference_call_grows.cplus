@@ -1,0 +1,12 @@
+// A function given a reference to an element must change the vector only through it: growing it some other way stops the
+// program when the function returns, since the element would have moved.
+void grow(int& n, vector<int>& all) {
+    all.push_back(n);
+    n = 5;
+}
+int main() {
+    vector<int> v = {1};
+    grow(v[0], v);
+    return 0;
+}
+// trap: a vector or hashmap was changed, copied or freed while 'grow' had a reference to one of its elements

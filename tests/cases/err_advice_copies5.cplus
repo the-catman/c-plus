@@ -11,7 +11,7 @@ class Node { public: int n = 0; };
 void loops(vector<S?>* p) {
     for (auto o : *p) {
         o?.set();
-        // error: 'o' is a copy of the element, so to change the element, loop with an index, `for (long i = 0; i < (*p).size(); ++i)`, and change `(*p)[i]`
+        // error: 'o' is a copy of the element, so to change the element, make the loop go over the elements themselves: `for (auto& o : *p)`
     }
     hashmap<string, S?> m;
     for (auto e : m) {
@@ -26,7 +26,7 @@ void loops(vector<S?>* p) {
     vector<S?> w;
     for (auto o : w) {
         o?.add(i);
-        // error: loop with an index, `for (long j = 0; j < w.size(); ++j)`, and change `w[j]`
+        // error: make the loop go over the elements themselves: `for (auto& o : w)`
     }
 }
 void jsonItems() {

@@ -593,8 +593,7 @@ PLANNED_FEATURES = [
     ("queue", M % "queue<int> d;"),
     ("pair", M % "pair<int, int> d;"),
     ("tuple", M % "tuple<int, int> d;"),
-    ("references in loops", M % "vector<int> v; for (auto& x : v) {}"),
-    ("references to elements of vectors", 'void f(int& n) {}\n' + M % "vector<int> v = {1}; f(v[0]);"),
+    ("references that change the entries of a hashmap", M % "hashmap<string, int> m; for (auto& e : m) {}"),
     ("functions that return references", 'int& f(int& n) { return n; }\n' + M % ""),
     ("bindings in loops", M % 'hashmap<string, int> m; for (auto [k, v] : m) {}'),
     ("bindings", 'struct P { int x; int y; };\n' + M % "auto [a, b] = P{1, 2};"),
@@ -669,6 +668,7 @@ long sum(vector<int> v) { return 1; }
 void save(vector<int> v) {}
 void take(unique<Node> n) {}
 void lend(Node n) {}
+void bump(int& n) { n += 1; }
 int fails() throws { return 1; }
 async string load(string name) { return name; }
 const int MAX = 100;
@@ -699,7 +699,7 @@ SHEET_NOT_CODE = {"T&", "const T&", "<cmath>", "<cctype>", "std::", "std::weak_p
                   'import "mine.h";', "-I dir", "cplus run app"}
 # Habits that the left side of the table only names a part of, which is fine on its own. The rest of its row says what is wrong.
 SHEET_HABITS_THAT_COMPILE = {"int count = 0;", "x", "*p", "u", "if (flag)", "Node? next", "u1 == u2", "v[i]", "m[k]", "n", "s[s.size()]", "'\\0'", "s.substr(pos)",
-                             "int x;", "int* p = new int;", "User u;", "array<int, 10000000> a;"}
+                             "int x;", "int* p = new int;", "User u;", "array<int, 10000000> a;", "auto& x = v[0];", "v.push_back(1);"}
 
 
 def span_sources(span):
@@ -859,7 +859,7 @@ SPEC_REJECTED = {
     "T&&": "^void f(vector<int>&& v) {}", "auto&&": "vector<int> v = {1}; for (auto&& x : v) {}",
 "int& at(int i)": "^struct G { int c = 0; int& at(int i) { return c; } };", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
     "enum struct": "^enum struct Hue { Red };", "using enum": "^enum class Hue { Red };\nusing enum Hue;", "case 1, 2:": "int n = 1; switch (n) { case 1, 2: break; }",
-    "case 1 ... 5:": "int n = 1; switch (n) { case 1 ... 5: break; }", "switch (auto k = f(); k)": "switch (auto k = f(); k) { default: break; }",
+    "case 1 ... 5:": "int n = 1; switch (n) { case 1 ... 5: break; }", "for (auto& e : m)": "hashmap<string, int> m; for (auto& e : m) {}", "switch (auto k = f(); k)": "switch (auto k = f(); k) { default: break; }",
 }
 SPEC_REJECT_PRELUDE = """struct Settable { int x = 0; void set() { x = 1; } };
 struct HoldsSettable { Settable p; };

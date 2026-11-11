@@ -31,7 +31,7 @@ void loops() {
     vector<S?> w;
     for (auto e : w) {
         e?.set();
-        // error: `if (auto v = e) { v.set(); e = v; }`. 'e' is a copy of the element, so to change the element, loop with an index, `for (long i = 0; i < w.size(); ++i)`, and change `w[i]`
+        // error: `if (auto v = e) { v.set(); e = v; }`. 'e' is a copy of the element, so to change the element, make the loop go over the elements themselves: `for (auto& e : w)`
     }
 }
 void canFail() throws {

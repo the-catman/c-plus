@@ -625,13 +625,22 @@ program and never dangles, but when its container is resized, replaced or was sh
   argument and an optional cannot. `T&&` and `auto&&` are errors. `catch (const Error& e)` means `catch (Error e)`.
 - `const T&` returns the value, as a copy. `T& f()` comes with operator overloading, through a stack of what the callee holds.
 - A function that is `async`, or run with `spawn`, cannot take a reference, and no reference is alive at an `await`.
-- Underneath, a reference into a vector or a string pins its buffer: a count beside the sharing count, so writes land in place
-  and a copy of the container gets a buffer of its own at once. While a `T&` lives, growing, replacing or freeing the container
-  is an error where the compiler sees it and stops the program where it does not. This replaces the trap of §6 for methods on
-  elements, and lets `v.back()`, `v.front()`, `m.at(k)` and `?:` of two places be places, which changes §2.17 and §2.24.
+- Elements of containers, as built 2026-11-11 in place of the pins first planned, which needed every copy in Codegen to be able
+  to give a new buffer, as a copy of a pinned buffer would have to:
+  - A local reference to an element, `auto& e = v[i];`, and the variable of `for (auto& x : v)`, find the element again at each
+    use, from the indexes, keys and class objects worked out where they were bound. So they never dangle, a copy of the
+    container never sees what is written through them, and growing, replacing or shrinking the container is allowed. Only
+    using one whose element is gone stops the program. `for (auto& x : v)` goes as far as `v` went when it started.
+  - A reference to an element given to a call, and the place a struct method is called on, are addresses. All the arguments'
+    code runs first, then the places are found, then their buffers are held, so `swap(v[0], v[1])` and `swap(m[a], m[b])` work.
+    After the call, the program stops if the container was changed, copied or freed in any other way, as the trap of §6 does
+    for methods, which this extends. That stop also covers a change C++ allows, such as writing another element through a
+    `vector<int>&` parameter; pins would remove it, at the cost above.
+  - Still to come: `v.back()`, `v.front()`, `m.at(k)` and `?:` of two places as places, which change §2.17 and §2.24, and
+    `for (auto& e : m)` over a hashmap.
 - Aliasing follows C++: `swap(v[0], v[1])` and `f(x, x)` are allowed.
-- Order: `const T&` first, with no change to the runtime, then `T&` to variables and fields (both done 2026-11-11), then the pins,
-  then `T&` returns with item 6. Until the pins, `const auto& e = v[i];` holds a copy of the element.
+- Order: `const T&` first, with no change to the runtime, then `T&` to variables and fields, then to elements (all done
+  2026-11-11), then `T&` returns with item 6.
 
 ### 2.32 Enums and switch — DECIDED
 Decided and built 2026-11-11, with C++'s syntax and meaning where they agree:
@@ -669,8 +678,7 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, the core
-language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references except those into
-vectors, strings and hashmaps and the functions that return them. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references except the functions that return them. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error
@@ -759,7 +767,7 @@ will confidently write C++ wherever the two differ.
 - Function overloading, as in C++, in Phase 7.
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, keeps a copy of it or frees it, since the update to the element would be lost (decided
-  2026-11-06). The alternative is to pin a buffer separately from its reference count, so that writes
+  2026-11-06). Since 2026-11-11 the same goes for a function given a reference to an element (§2.31). The alternative is to pin a buffer separately from its reference count, so that writes
   land in place, at a cost to every vector write. One case goes unnoticed: a copy taken through a
   pointer and dropped again inside the method's body sees what the method did to the element so far.
 - A plain `const` is worked out while compiling when it can be, but `const int X = 1 / 0;` still stops the

@@ -1,0 +1,11 @@
+// The same for a char of a string given to a function, which then appends to the string some other way.
+void shout(char& c, string& text) {
+    text += "!";
+    c = 'Y';
+}
+int main() {
+    string s = "yes";
+    shout(s[0], s);
+    return 0;
+}
+// trap: a string was changed, copied or freed while 'shout' had a reference to one of its chars

@@ -1,0 +1,16 @@
+// What a loop variable that changes the elements must be.
+int main() {
+    vector<int> v = {1, 2};
+    for (long& x : v) x += 1;
+    for (string& x : v) {}
+    const vector<int> fixed = {1};
+    for (int& x : fixed) x = 2;
+    hashmap<string, int> m;
+    for (auto& e : m) {}
+    return 0;
+}
+// error: a reference that changes the elements of 'vector<int>' must be `int&`, as they are 'int', not 'long'
+// error: write `for (auto& x : ...)`. To work on converted copies, write `for (long x : ...)`
+// error: the elements of 'vector<int>' are 'int', so a reference to them is `int&`, not `string&`
+// error: 'fixed' is const and cannot be changed through a reference
+// error: this compiler does not support references that change the entries of a hashmap, `auto&`, in a range-based for loop yet

@@ -61,7 +61,7 @@ long square(long n) { return n * n; }
 | Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them |
 | Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(x)` for any number |
 | Optionals | `User? u = find(name);` holds a `User` or `null`; `int? n;` starts out null. `u?.name` is null when `u` is, `u?.name ?? "nobody"` gives a fallback, `if (auto x = u)` runs with the `User` inside. `has_value()`, `value()`, `value_or(x)`, `u == null` |
-| References | as in C++. `void bump(int& n) { n += 1; }` changes the caller's variable, field or array element. To read without copying: `void show(const vector<int>& v) { ... }`, `for (const auto& x : v) println("{}", x);`, `const auto& first = v[0];`, `catch (const Error& e)`. A `T&` takes a variable of exactly its type. A `const T&` into a vector, string or hashmap may show its value as it was, never a freed one. Not on `async` functions, `spawn` or across `await`; never a field |
+| References | as in C++. `void bump(int& n) { n += 1; }` changes the caller's variable, field or element: `bump(n)`, `bump(v[i])`, `bump(m["a"])`. `for (auto& x : v) x *= 2;` changes the elements, and `auto& e = v[i];` names one. To read without copying: `void show(const vector<int>& v) { ... }`, `for (const auto& x : v) println("{}", x);`, `const auto& first = v[0];`, `catch (const Error& e)`. A `T&` takes a place of exactly its type. A reference to an element finds it again at each use, so it never dangles. A function given one stops the program if it changes the container in another way. Not on `async` functions, `spawn` or across `await`; never a field |
 | Pointers | `int* p = &x;`, `*p = 5`, `p->x`, `p[i]` (unchecked), `p + n`, `p - q`, `p++`, `const int*`, `int* const`, `void*`, `int**`, `null`, `if (p)`. Following a null pointer **stops the program**. `sizeof(T)`, `sizeof x` (a `long`). `string(p)` copies a `char*`'s text. A pointer prints as `0x...`. Returning the address of a local variable is an error. Run with `--debug` to catch overruns and use after free |
 | Manual memory | `int* p = new int(5); delete p;`, `new Point{1, 2}`, `int* a = new int[n]; delete[] a;`. Values start as their default, and each `new`/`delete` **warns**. Turn it off with `[[allow(new_delete)]]` before a function, `[[allow(new_delete)]];` at the top of the file, or `-Wno-new-delete`. The wrong form of delete **stops the program** |
 | C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`, `void* malloc(long n);`, `double frexp(double x, int* e);`. Strings are converted at each call. Link other libraries with `-lname` |
@@ -187,8 +187,7 @@ long square(long n) { return n * n; }
 | `v[i]` past the end is UB | every index is checked and a bad one **stops the program** with file:line; so do `pop_back()`, `front()`, `back()` on an empty vector |
 | `v.back().x = 1`, `v.back().set()`, `v.back().p.set()`, `m.at(k) = 1`, `(first ? a : b).set()` | error: `back()`, `front()`, `at()` and `?:` give copies. Write `v[v.size() - 1].x = 1`, `m[k] = 1`, `if (first) a.set(); else b.set();` |
 | `v.push_back(...)` inside `for (x : v)` is UB | safe: the loop goes over `v` as it was when the loop started |
-| `for (auto& x : v)`, `f(v[i])` for an `int&` | planned: references into vectors move when they grow. To read without copying: `for (const auto& x : v) println("{}", x);`. To change elements, `v[i] = ...` |
-| `void f(int& n)` | no references yet: `void f(int* n)`, called as `f(&x)` |
+| `auto& x = v[0];`, then `v.push_back(1);`, which can leave `x` dangling | safe: `x` is `v[0]` wherever the elements are now, found again at each use. Once `v` is too short for it, using `x` **stops the program** |
 | `vector<int> v(5);`, `vector<int> v{1, 2};` | `auto v = vector<int>(5);`, `vector<int> v = {1, 2};` |
 | `std::unordered_map<K, V>`, `std::map<K, V>` | `hashmap<K, V>`, in the order entries were added. Sorted maps are planned |
 | `for (auto [k, v] : m)`, `for (const auto& [k, v] : m)` | structured bindings are planned: `for (auto e : m)`, then `e.first` and `e.second` |
@@ -245,7 +244,7 @@ long square(long n) { return n * n; }
 | Statements | a declaration before a switch's value: `switch (auto k = f(); k)` |
 | Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
 | Containers | `insert`, `erase` and iterators on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |
-| References | `T&` to elements of vectors, strings and hashmaps, `for (auto& x : v)`, `T& f()` |
+| References | `T& f()`, and `for (auto& e : m)` over a hashmap |
 | Structured bindings | `for (auto [k, v] : m)`, `auto [a, b] = f();` |
 | Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
 | More string methods | `append`, `insert`, `erase`, `replace`, `rfind`, `compare` |

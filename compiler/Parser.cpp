@@ -3680,27 +3680,14 @@ StmtPtr Parser::parseFor() {
         if ((ref && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Colon) ||
             (check(Tok::Ident) && peek(1).kind == Tok::Colon)) {
             if (check(Tok::AmpAmp)) parseReferenceMark(ty, ReferencePlace::Loop);
-            bool constRef = ref && isConst;
-            if (constRef) advance();
-            if (ref && !constRef) {
-                // All of what comes after the ':', if it is a plain path.
-                std::string range;
-                size_t at = 3;
-                for (; at < 32 && (peek(at).kind == Tok::Ident || peek(at).kind == Tok::Dot); ++at) range += peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text;
-                if (range.empty() || peek(at).kind != Tok::RParen) range = "items";
-                std::string help = std::string("to read the elements without copying them, write `for (const ") + ty->name + "& " +
-                                   peek(1).text + " : " + range + ")`";
-                help += ". To change the elements of a vector, loop over the indexes: `for (long i = 0; i < " + range +
-                        ".size(); i++) " + range + "[i] = ...;`. Of a hashmap: `for (auto e : " + range + ") " + range + "[e.first] = ...;`";
-                notYet(peek().loc, "references that can change what they refer to, `" + std::string(ty->name) + "&`, in range-based for loops", help);
-            }
+            if (ref) advance();
             if (ty->is(Type::Kind::Void))
                 fail(typeLoc, "a loop variable cannot have type void", "write `auto` or the element type",
                      spec::RangeFor);
             const Token& name = expectNewName("for the name of the loop variable");
             auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
             var->isConst = isConst;
-            var->isRef = constRef;
+            var->isRef = ref;
             advance();  // ':'
             ExprPtr range = parseExpr();
             expect(Tok::RParen, "to close the for header");

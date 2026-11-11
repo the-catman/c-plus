@@ -38,8 +38,7 @@ class Node { public: int x = 0; };
 void refInLoop() {
     Node n = Node();
     vector<int> items;
-    for (auto& x : items) {}
-    // error: to read the elements without copying them, write `for (const auto& x : items)`
+    for (auto& x : items) {}  // the elements themselves
 }
 void sizeOfGeneric() {
     long s = sizeof vector<int>;

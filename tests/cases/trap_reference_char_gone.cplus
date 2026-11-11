@@ -1,0 +1,9 @@
+// A reference to a char of a string that has become shorter stops the program where it is used.
+int main() {
+    string s = "abc";
+    char& c = s[2];
+    s = "x";
+    c = 'y';
+    return 0;
+}
+// trap: 'c' refers to the char at index 2 of a string that now has 1 char, so it is gone

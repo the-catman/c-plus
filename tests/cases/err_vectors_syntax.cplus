@@ -19,9 +19,6 @@ int main() {
 // error: write e.g. `vector<int>`
 // error: vector takes one type: the type of its elements
 // error: a vector cannot hold 'void' elements
-// error: this compiler does not support references that can change what they refer to, `auto&`, in range-based for loops yet
-// error: to read the elements without copying them, write `for (const auto& x : items)`
-// error: To change the elements of a vector, loop over the indexes: `for (long i = 0; i < items.size(); i++) items[i] = ...;`
 // error: this compiler does not support brace and constructor initializers yet
 // error: write `vector<int> sized = {1, 2, 3};` or `auto sized = vector<int>(count, value);`
 // error: C+ has no C-style arrays

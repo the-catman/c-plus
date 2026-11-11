@@ -72,7 +72,6 @@ int main() {
 // error: parameter 'n' of 'bump' can change what it refers to, so it needs a variable, a field or an element of an array, but this is a value
 // error: parameter 'n' of 'widen' refers to 'long', but this is 'int'
 // error: store it in a variable of type 'Animal' first, since any 'Animal' could be put there through the reference
-// error: this compiler does not support references to the elements of vectors, strings and hashmaps yet
 // error: 'fixed' is const and cannot be changed through a reference
 // error: 'n' cannot be changed through a reference inside const method 'peek'
 // error: reference 'none' must say what it refers to

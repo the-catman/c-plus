@@ -21,13 +21,13 @@ public:
 void refInLoop() {
     hashmap<long, int> m;
     for (auto& e : m) {}
-    // error: Of a hashmap: `for (auto e : m) m[e.first] = ...;`
+    // error: this compiler does not support references that change the entries of a hashmap, `auto&`, in a range-based for loop yet
+    // error: loop over the keys and change each value in the map: `for (auto key : m.keys()) m[key] = ...;`
 }
 struct Holder { vector<int> items; };
 void refInPath() {
     Holder g;
-    for (auto& e : g.items) {}
-    // error: `for (const auto& e : g.items)`
+    for (auto& e : g.items) {}  // the elements themselves
 }
 void parenthesized() {
     P p(1, 2, 3);

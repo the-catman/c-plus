@@ -32,5 +32,12 @@ int main() {
     const int& n = 3 + 4;  // a value that is not a place lives as long as the reference
     println("{}", n);
     // expect: 7
+    for (auto& s : scores) s *= 10;  // each element itself
+    bump(scores[0]);
+    auto& last = scores[2];
+    scores.push_back(60);  // `last` is still scores[2], wherever the elements are now
+    last += 1;
+    println("{}", scores);
+    // expect: [31, 40, 51, 60]
     return 0;
 }

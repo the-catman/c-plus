@@ -1,0 +1,129 @@
+// References to the elements of vectors, strings and hashmaps: in loops, as local variables, and given to functions.
+struct P {
+    int x = 0;
+    int y = 0;
+    void grow() { x += 1; }
+    void swapWith(P& other) {
+        int tx = x;
+        x = other.x;
+        other.x = tx;
+    }
+};
+struct Box { vector<int> items; };
+class Bag { public: vector<int> items; };
+
+void bump(int& n) { n += 1; }
+void swapInts(int& a, int& b) { int t = a; a = b; b = t; }
+void swap(int& a, int& b) { swapInts(a, b); }
+void twice(P& p) { p.x *= 2; p.y *= 2; }
+void keep(int& a, vector<int> copy) {  // the copy is made before the reference: it does not see the write
+    a = 9;
+    println("{} {}", a, copy[0]);
+}
+long read(const int& a, const vector<int>& all) { return a + all.size(); }
+
+int main() {
+    vector<int> v = {1, 2, 3};
+    for (auto& x : v) x *= 10;
+    println("{}", v);
+    // expect: [10, 20, 30]
+    bump(v[1]);
+    swapInts(v[0], v[2]);
+    println("{}", v);
+    // expect: [30, 21, 10]
+    swap(v[0], v[1]);
+    swap(v[0], v[1]);
+
+    auto& first = v[0];
+    first = 7;
+    vector<int> w = v;  // a copy, which what is written through `first` from now on does not reach
+    first = 8;
+    println("{} {}", v, w);
+    // expect: [8, 21, 10] [7, 21, 10]
+    v.push_back(4);
+    first += 1;  // still v[0], wherever the elements of v are now
+    println("{}", v);
+    // expect: [9, 21, 10, 4]
+    auto& again = first;  // the same element
+    again = 6;
+    println("{}", v[0]);
+    // expect: 6
+
+    vector<P> ps = {{1, 2}, {3, 4}};
+    for (auto& p : ps) twice(p);
+    twice(ps[0]);
+    auto& last = ps[1];
+    last.x = 100;
+    auto& lastY = last.y;
+    lastY = 50;
+    println("{}", ps);
+    // expect: [{x: 4, y: 8}, {x: 100, y: 50}]
+    for (auto& p : ps) p.grow();
+    ps[0].swapWith(ps[1]);
+    println("{}", ps);
+    // expect: [{x: 101, y: 8}, {x: 5, y: 50}]
+
+    vector<vector<int>> grid = {{1, 2}, {3, 4}};
+    for (auto& row : grid)
+        for (auto& c : row) c += 1;
+    swapInts(grid[0][0], grid[1][1]);
+    println("{}", grid);
+    // expect: [[5, 3], [4, 2]]
+
+    array<array<int, 2>, 2> cells = {{1, 2}, {3, 4}};
+    for (auto& row : cells)
+        for (auto& c : row) c *= 3;
+    println("{}", cells);
+    // expect: [[3, 6], [9, 12]]
+
+    string s = "hello";
+    for (auto& c : s) c = toupper(c);
+    char& h = s[0];
+    h = 'J';
+    println("{}", s);
+    // expect: JELLO
+    string t = s;
+    h = 'H';
+    println("{} {}", s, t);
+    // expect: HELLO JELLO
+
+    hashmap<string, int> m;
+    bump(m["a"]);
+    bump(m["a"]);
+    swapInts(m["a"], m["b"]);
+    auto& e = m["c"];
+    e = 5;
+    m["d"] = 1;
+    e += 1;
+    println("{}", m);
+    // expect: {"a": 0, "b": 2, "c": 6, "d": 1}
+
+    Box box;
+    box.items = {1, 2};
+    for (auto& x : box.items) x += 100;
+    Bag bag = Bag();
+    bag.items = {7};
+    auto& inBag = bag.items[0];
+    Bag other = bag;  // the same object
+    other.items.push_back(8);
+    inBag = 70;
+    println("{} {}", box.items, bag.items);
+    // expect: [101, 102] [70, 8]
+
+    const auto& r = v[1];
+    v[1] = 42;
+    println("{}", r);
+    // expect: 42
+    const vector<int> fixed = {1, 2};
+    for (auto& x : fixed) print("{}", x);  // over something const, `auto&` is `const auto&`
+    println("");
+    // expect: 12
+
+    vector<int> k = {1};
+    keep(k[0], k);
+    println("{} {}", k, read(k[0], k));
+    // expect: 9 1
+    // expect: [9] 10
+    for (auto& x : vector<int>{1, 2}) x += 1;  // a temporary, changed and dropped
+    return 0;
+}

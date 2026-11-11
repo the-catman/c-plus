@@ -53,7 +53,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtThreadStart, rtThreadsFinish, rtPrintLock, rtPrintUnlock;
     llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq, rtHashBytes, rtTrapText;
     llvm::GlobalVariable* hashSeed = nullptr;
-    llvm::FunctionCallee rtTrapIndex, rtTrapArrayIndex, rtVecNew, rtVecRelease, rtVecReserve;
+    llvm::FunctionCallee rtTrapIndex, rtTrapArrayIndex, rtTrapGone, rtVecNew, rtVecRelease, rtVecReserve;
     llvm::FunctionCallee rtStrRelease, rtStrCompare, rtStrConcat, rtStrAppend, rtStrSubstr, rtStrFind;
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
@@ -213,9 +213,30 @@ struct Codegen::Impl {
     };
     std::vector<LoopTargets> loops;
     std::unordered_map<const Expr*, llvm::Value*> frozen;  // see freezePlace
-    // While a changing struct method's `this` is found: the vectors it lies in, each as the
-    // place holding the vector and the buffer held.
-    std::vector<std::pair<llvm::Value*, llvm::Value*>>* heldBuffers = nullptr;
+    // A buffer of a vector, a string or a hashmap that a call holds while it has a place in it (see genArguments): what is
+    // released when the statement ends, of type `type`, and the buffer whose count says who else holds it.
+    struct Hold {
+        llvm::Value* value;
+        const Type* type;
+        llvm::Value* buf;
+        bool write;     // a place in it can change: a `T&`, or `this` of a method that is not const
+        size_t from;    // the argument it is for
+    };
+    // While the places of a call are found, the holds they need, which are taken once all of them are found.
+    std::vector<Hold>* deferredHolds = nullptr;
+    size_t holdFrom = 0;
+
+    // A reference to an element of a vector, a string or a hashmap finds its element again each time it is used, so it never
+    // points into a buffer the container has left: the indexes, keys and class objects on the way, worked out where it was
+    // bound, are kept, and the containers are gone through again. For a loop, the element is `place[counter]`.
+    struct Rederived {
+        const Expr* place = nullptr;
+        std::vector<std::pair<const Expr*, llvm::Value*>> parts;  // what freezePlace worked out
+        llvm::AllocaInst* counter = nullptr;
+        const Type* range = nullptr;  // the loop's vector or string
+    };
+    std::unordered_map<const VarDecl*, Rederived> rederived;
+    const NameExpr* rederiving = nullptr;  // the use of a reference whose element is being found, for the message if it is gone
 
     Impl(const SourceFile& f, CodegenOptions o) : file(f), opts(o), b(ctx) { files.push_back(&f); }
 
@@ -354,7 +375,8 @@ struct Codegen::Impl {
         rtTrapArrayIndex = decl("cplus_trap_array_index", voidTy, {i64, i64, ptrTy, i32, i32});
         rtTrapStringIndex = decl("cplus_trap_string_index", voidTy, {i64, i64, ptrTy, i32, i32});
         rtTrapChar = decl("cplus_trap_char", voidTy, {i64, ptrTy, ptrTy, i32, i32});
-        for (llvm::FunctionCallee trap : {rtTrapIndex, rtTrapArrayIndex, rtTrapStringIndex, rtTrapChar})
+        rtTrapGone = decl("cplus_trap_gone", voidTy, {i64, i64, ptrTy, i32, ptrTy, i32, i32});
+        for (llvm::FunctionCallee trap : {rtTrapIndex, rtTrapArrayIndex, rtTrapStringIndex, rtTrapChar, rtTrapGone})
             if (auto* f = llvm::dyn_cast<llvm::Function>(trap.getCallee())) {
                 f->addFnAttr(llvm::Attribute::NoReturn);
                 f->addFnAttr(llvm::Attribute::Cold);
@@ -553,7 +575,14 @@ struct Codegen::Impl {
         // An unsigned compare also catches negative indexes.
         b.CreateCondBr(b.CreateICmpUGE(index, size), trapBB, okBB, llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
         b.SetInsertPoint(trapBB);
-        auto* call = b.CreateCall(trap, {index, size, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+        llvm::CallInst* call;
+        if (rederiving && trap.getCallee() != rtTrapArrayIndex.getCallee()) {  // an array never shrinks under a reference
+            Loc at = rederiving->loc;
+            bool chars = trap.getCallee() == rtTrapStringIndex.getCallee();
+            call = b.CreateCall(rtTrapGone, {index, size, cstring(rederiving->name), b.getInt32(chars), fileName, b.getInt32(at.line), b.getInt32(at.col)});
+        } else {
+            call = b.CreateCall(trap, {index, size, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+        }
         call->setDoesNotReturn();
         b.CreateUnreachable();
         b.SetInsertPoint(okBB);
@@ -1454,9 +1483,10 @@ struct Codegen::Impl {
 
     // Whether a place stays where it is while the variable it lies in lives: it is reached from the variable, or from `this`,
     // through fields of structs and elements of arrays only.
-    static bool stablePlace(const Expr& e) {
+    bool stablePlace(const Expr& e) const {
         switch (e.kind) {
-            case Expr::Kind::Name: case Expr::Kind::This: return true;
+            case Expr::Kind::Name: return !rederived.count(static_cast<const NameExpr&>(e).decl);
+            case Expr::Kind::This: return true;
             case Expr::Kind::Member: {
                 const Expr& base = *static_cast<const MemberExpr&>(e).base;
                 return !base.type->isClass() && stablePlace(base);
@@ -1470,8 +1500,9 @@ struct Codegen::Impl {
     }
 
     // Whether a place lies in an element of a vector, a string or a hashmap, before any class object on the way to its variable.
-    static bool inContainerElement(const Expr& e) {
+    bool inContainerElement(const Expr& e) const {
         switch (e.kind) {
+            case Expr::Kind::Name: return rederived.count(static_cast<const NameExpr&>(e).decl) > 0;  // a reference to an element
             case Expr::Kind::Member: {
                 const Expr& base = *static_cast<const MemberExpr&>(e).base;
                 return !base.type->isClass() && inContainerElement(base);
@@ -1501,6 +1532,100 @@ struct Codegen::Impl {
 
     llvm::Value* argument(const Expr& e, const VarDecl& param) {
         return passedByRef(param) ? refArgument(e, param.type, !param.isConst) : holdOwned(e, param.type);
+    }
+
+    // An argument of a call: what it is given, and the parameter, or none for the place a struct method is called on.
+    struct ArgSpec {
+        const Expr* e;
+        const VarDecl* param;
+        bool write;  // the place can change: a `T&`, or `this` of a method that is not const
+    };
+
+    static ArgSpec argSpec(const Expr& e, const VarDecl& param) { return {&e, &param, passedByRef(param) && !param.isConst}; }
+
+    // Whether finding the place `e` may add a key to a hashmap, which may move the entries that another place lies in.
+    static bool addsKey(const Expr& e) {
+        switch (e.kind) {
+            case Expr::Kind::Member: return addsKey(*static_cast<const MemberExpr&>(e).base);
+            case Expr::Kind::Index: {
+                auto& ix = static_cast<const IndexExpr&>(e);
+                return (ix.mapSlot && !ix.mapSlot->isConst) || addsKey(*ix.base);
+            }
+            default: return false;
+        }
+    }
+
+    // Works out the arguments of a call. A reference argument is the address of a place, found only after the code of every
+    // argument has run, as placeAfter does for one: first, in order, the indexes and keys that lead to each place and the
+    // values of the other arguments; then the places, with nothing in between, each container on the way getting a buffer
+    // of its own if the place can change; and only then are those buffers held for the call, so that holding one cannot
+    // make the next place copy it, as in `swap(v[0], v[1])`. Keys a place adds to a hashmap could move what an earlier one
+    // lies in, so when there are such keys every place is found twice, and the first time only adds them. The buffers a
+    // changeable place lies in go to `held`, for checkHeld after the call.
+    std::vector<llvm::Value*> genArguments(const std::vector<ArgSpec>& specs, std::vector<Hold>& held) {
+        std::vector<llvm::Value*> out(specs.size(), nullptr);
+        std::vector<size_t> places;
+        std::vector<const Expr*> made;
+        size_t mark = pending.size();
+        for (size_t i = 0; i < specs.size(); ++i) {
+            const ArgSpec& a = specs[i];
+            if (!a.param || (passedByRef(*a.param) && isPlace(*a.e) && a.e->type == a.param->type)) {
+                freezePlace(*a.e, made);
+                places.push_back(i);
+            } else {
+                out[i] = argument(*a.e, *a.param);
+            }
+        }
+        auto* outerHolds = deferredHolds;
+        size_t outerFrom = holdFrom;
+        bool adds = false;
+        for (size_t i : places) adds = adds || addsKey(*specs[i].e);
+        if (adds && places.size() > 1) {
+            std::vector<Hold> ignored;
+            deferredHolds = &ignored;
+            for (size_t i : places) addressOf(*specs[i].e, /*hold=*/true, specs[i].write);
+        }
+        std::vector<Hold> holds;
+        deferredHolds = &holds;
+        for (size_t i : places) {
+            holdFrom = i;
+            out[i] = addressOf(*specs[i].e, /*hold=*/true, specs[i].write);
+        }
+        deferredHolds = outerHolds;
+        holdFrom = outerFrom;
+        for (const Hold& h : holds) {
+            retainValue(h.value, h.type);
+            temps.push_back({h.value, h.type, false});
+            held.push_back(h);
+        }
+        for (const Expr* part : made) frozen.erase(part);
+        pending.resize(mark);
+        return out;
+    }
+
+    // After a call that had places in containers: each buffer that a changeable place lay in must be held by its container and
+    // by this call alone, as before the call. If not, the call changed, copied or freed the container in some other way than
+    // through the place, and what it did there would be lost, or seen by a copy, without a word, so the program stops. The
+    // buffer is held, so it can be looked at, while what holds the container may be gone.
+    void checkHeld(const std::vector<Hold>& held, const std::vector<ArgSpec>& specs, const std::string& callee, Loc loc) {
+        for (const Hold& h : held) {
+            if (!h.write) continue;
+            const std::string name = "'" + callee + "'";
+            llvm::Value* expected = b.getInt64(1);
+            for (const Hold& other : held) expected = b.CreateAdd(expected, b.CreateZExt(b.CreateICmpEQ(other.buf, h.buf), b.getInt64Ty()));
+            auto* count = b.CreateAlignedLoad(b.getInt64Ty(), h.buf, llvm::MaybeAlign(8), "count");
+            count->setAtomic(llvm::AtomicOrdering::Monotonic);
+            std::string container = h.type->is(K::String) ? "a string" : "a vector or hashmap";
+            trapIf(b.CreateICmpNE(count, expected),
+                   specs[h.from].param
+                       ? container + " was changed, copied or freed while " + name + " had a reference to " +
+                             (h.type->is(K::String) ? "one of its chars" : "one of its elements") + ", which would lose what " + name +
+                             " did through the reference; while the call runs, change the " + (h.type->is(K::String) ? "char" : "element") +
+                             " only through the reference, or pass the container and an index instead"
+                       : "a vector was changed, copied or freed while a method of one of its elements was running, which would lose "
+                         "what the method did to the element; call the method on a copy of the element, then store it back",
+                   loc);
+        }
     }
 
     // Keeps the temporaries made since `mark` until the current scope ends, instead of the statement.
@@ -1727,17 +1852,20 @@ struct Codegen::Impl {
     llvm::Value* construct(const StructDecl& sd, const std::vector<const Expr*>& args) {
         const FuncDecl& ctor = *sd.constructor;
         std::vector<llvm::Value*> values{nullptr};  // `this`, set below
-        size_t mark = pending.size();
-        for (size_t i = 0; i < args.size(); ++i) values.push_back(argument(*args[i], *ctor.params[i]));
-        pending.resize(mark);
+        std::vector<ArgSpec> specs;
+        for (size_t i = 0; i < args.size(); ++i) specs.push_back(argSpec(*args[i], *ctor.params[i]));
+        std::vector<Hold> held;
+        for (llvm::Value* v : genArguments(specs, held)) values.push_back(v);
         if (sd.isClass) {
             values[0] = allocObject(sd);
             b.CreateCall(funcs.at(&ctor), values);
+            checkHeld(held, specs, sd.name, args.empty() ? Loc{} : args[0]->loc);
             return values[0];
         }
         llvm::AllocaInst* slot = entryAlloca(types.at(&sd).layout, sd.name);
         values[0] = slot;
         b.CreateCall(funcs.at(&ctor), values);
+        checkHeld(held, specs, sd.name, args.empty() ? Loc{} : args[0]->loc);
         return peekValue(&sd.type, slot, sd.name.c_str());
     }
 
@@ -1929,11 +2057,7 @@ struct Codegen::Impl {
         llvm::Value* slot = fieldAddress(mapType, self, entriesField, "entries");
         llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "entries");
         if (write) buf = reserve(slot, buf, entries, b.getInt64(0));
-        if (hold) {
-            b.CreateCall(rtRetain, {buf});
-            temps.push_back({buf, entries, false});
-            if (write && heldBuffers) heldBuffers->push_back({slot, buf});
-        }
+        if (hold) takeHold({buf, entries, buf, write, holdFrom});
         return fieldAddress(entries->elem, elementAt(buf, position, entries), 1, "value");
     }
 
@@ -1961,6 +2085,74 @@ struct Codegen::Impl {
         return v ? v : genIndex(e);
     }
 
+    // Holds a buffer that a place lies in until the statement ends, or, while the places of a call are found, once all are.
+    void takeHold(const Hold& h) {
+        if (deferredHolds) {
+            deferredHolds->push_back(h);
+            return;
+        }
+        retainValue(h.value, h.type);
+        temps.push_back({h.value, h.type, false});
+    }
+
+    // The address of the element a reference to an element refers to, found again (see Rederived).
+    llvm::Value* rederive(const Rederived& r, const NameExpr* use, bool hold, bool write) {
+        std::vector<std::pair<const Expr*, llvm::Value*>> outer;  // what was frozen before, for a reference used in finding another
+        for (auto& [part, v] : r.parts) {
+            outer.push_back({part, frozenValue(*part)});
+            frozen[part] = v;
+        }
+        const NameExpr* outerUse = rederiving;
+        if (use) rederiving = use;
+        llvm::Value* address;
+        if (!r.counter) {
+            address = addressOf(*r.place, hold, write);
+        } else {  // the element of a loop: what the loop goes over, at its counter
+            llvm::Value* slot = addressOf(*r.place, hold, write);
+            llvm::Value* index = b.CreateLoad(b.getInt64Ty(), r.counter, "index");
+            Loc at = use ? use->loc : r.place->loc;
+            if (r.range->isArray()) {
+                address = arrayElement(slot, index, r.range);
+            } else if (r.range->is(K::String)) {
+                llvm::Value* str = b.CreateLoad(stringTy, slot, "str");
+                checkIndex(index, strLength(str), at, rtTrapStringIndex);
+                llvm::Value* data = write ? b.CreateCall(rtStrMutable, {slot}, "data") : strData(str);
+                if (hold) {
+                    llvm::Value* held = b.CreateLoad(stringTy, slot, "str");
+                    takeHold({held, Type::stringTy(), b.CreateExtractValue(held, 2, "owner"), write, holdFrom});
+                }
+                address = b.CreateInBoundsGEP(b.getInt8Ty(), data, index, "char.addr");
+            } else {
+                llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "vec");
+                checkIndex(index, vecSize(buf), at, rtTrapIndex);
+                if (write) buf = reserve(slot, buf, r.range, b.getInt64(0));
+                if (hold) takeHold({buf, r.range, buf, write, holdFrom});
+                address = elementAt(buf, index, r.range);
+            }
+        }
+        rederiving = outerUse;
+        for (auto& [part, v] : outer) {
+            if (v) frozen[part] = v;
+            else frozen.erase(part);
+        }
+        return address;
+    }
+
+    // Binds `var`, a reference, to the element `place` is, or for a loop to `place[counter]`: the indexes, keys and class objects
+    // on the way are worked out now, and kept, with what they hold, until the scope ends.
+    void bindRederived(const VarDecl& var, const Expr& place, llvm::AllocaInst* counter = nullptr, const Type* range = nullptr) {
+        size_t mark = temps.size();
+        std::vector<const Expr*> made;
+        freezePlace(place, made);
+        Rederived r{&place, {}, counter, range};
+        for (const Expr* part : made) {
+            r.parts.push_back({part, frozen.at(part)});
+            frozen.erase(part);
+        }
+        keepTempsForScope(mark);
+        rederived[&var] = std::move(r);
+    }
+
     // The address of a place. The object a field lies in is normally only kept alive
     // by its owner, which is fine while the address is used right away. With `hold`,
     // the object is retained until the statement ends, for an address that is used
@@ -1973,6 +2165,7 @@ struct Codegen::Impl {
                 auto& n = static_cast<const NameExpr&>(e);
                 if (n.implicitField >= 0)
                     return fieldAddress(&n.path.back()->type, atOffset(thisPtr, pathOffset(n.path)), n.implicitField, n.name);
+                if (auto it = rederived.find(n.decl); it != rederived.end()) return rederive(it->second, &n, hold, write);
                 return locals.at(n.decl);
             }
             case Expr::Kind::This: return thisPtr;
@@ -2036,11 +2229,7 @@ struct Codegen::Impl {
                     if (!slot) llvm_unreachable("Sema allowed changing an element of a temporary vector");
                     buf = reserve(slot, buf, vt, b.getInt64(0));
                 }
-                if (hold) {
-                    b.CreateCall(rtRetain, {buf});
-                    temps.push_back({buf, vt, false});
-                    if (write && heldBuffers) heldBuffers->push_back({slot, buf});
-                }
+                if (hold) takeHold({buf, vt, buf, write, holdFrom});
                 return elementAt(buf, index, vt);
             }
             default: llvm_unreachable("not a place");
@@ -2055,11 +2244,11 @@ struct Codegen::Impl {
         llvm::Value* index;
         if (isPlace(*ix.base)) {
             slot = addressOf(*ix.base, hold || mayRunCode(*ix.index), write);
-            index = genIndex(*ix.index);
+            index = indexOnce(*ix.index);
             s = b.CreateLoad(stringTy, slot, "str");
         } else {
-            s = gen(*ix.base);  // a temporary, kept until the statement ends
-            index = genIndex(*ix.index);
+            s = baseOnce(*ix.base);  // a temporary, kept until the statement ends
+            index = indexOnce(*ix.index);
         }
         checkIndex(index, strLength(s), ix.loc, rtTrapStringIndex);
         llvm::Value* data = strData(s);
@@ -2069,8 +2258,7 @@ struct Codegen::Impl {
         }
         if (hold) {
             llvm::Value* held = slot ? b.CreateLoad(stringTy, slot, "str") : s;
-            retainValue(held, Type::stringTy());
-            temps.push_back({held, Type::stringTy(), false});
+            takeHold({held, Type::stringTy(), b.CreateExtractValue(held, 2, "owner"), write && slot, holdFrom});
         }
         return b.CreateInBoundsGEP(b.getInt8Ty(), data, index, "char.addr");
     }
@@ -3036,10 +3224,13 @@ struct Codegen::Impl {
         if (target->isExtern) return genCCall(call, *target);
         std::vector<llvm::Value*> args;
         if (call.method) args.push_back(atOffset(thisPtr, pathOffset(call.path)));
-        size_t mark = pending.size();
-        for (size_t i = 0; i < call.args.size(); ++i) args.push_back(argument(*call.args[i], *target->params[i]));
-        pending.resize(mark);
-        return callFunction(*target, std::move(args), call.method != nullptr);
+        std::vector<ArgSpec> specs;
+        for (size_t i = 0; i < call.args.size(); ++i) specs.push_back(argSpec(*call.args[i], *target->params[i]));
+        std::vector<Hold> held;
+        for (llvm::Value* v : genArguments(specs, held)) args.push_back(v);
+        llvm::Value* result = callFunction(*target, std::move(args), call.method != nullptr);
+        checkHeld(held, specs, target->name, call.loc);
+        return result;
     }
 
     // `spawn f(a, b)`: the arguments, and what a method is called on, are worked out here as for any call, then go in memory of
@@ -3195,37 +3386,15 @@ struct Codegen::Impl {
             retainValue(object, recv.type->elem);
             return object;
         }
-        std::vector<llvm::Value*> args{nullptr};  // `this` comes first, and is set below
-        auto genArgs = [&] {
-            size_t mark = pending.size();
-            for (size_t i = 0; i < call.args.size(); ++i)
-                args.push_back(argument(*call.args[i], *call.method->params[i]));
-            pending.resize(mark);
-        };
-        // A struct method works on the struct in place, so its place is found after the arguments.
-        // An argument could write to a vector it lies in, or hold a copy of that vector, and in both
-        // cases the vector must then get a buffer of its own, with `this` in it.
-        bool argsFirst = false;
-        for (auto& a : call.args) argsFirst = argsFirst || mayRunCode(*a) || isManaged(a->type);
-        bool argsDone = false;
-        std::vector<std::pair<llvm::Value*, llvm::Value*>> held;
-        llvm::Value* self;
+        // A struct method works on the struct in place, so its place is found after the arguments, as a reference argument's is
+        // (see genArguments). An argument could write to a vector it lies in, or hold a copy of that vector, and in both cases
+        // the vector must then get a buffer of its own, with `this` in it.
+        std::vector<ArgSpec> specs;
+        llvm::Value* self = nullptr;
         if (recv.type->isClass()) {
             self = atOffset(gen(recv), pathOffset(call.path));
         } else if (isPlace(recv)) {
-            auto* outerHeld = heldBuffers;
-            auto* thisHeld = call.method->isConst ? nullptr : &held;
-            if (argsFirst) {
-                self = placeAfter(recv, [&] {
-                    genArgs();
-                    heldBuffers = thisHeld;
-                }, /*hold=*/true, /*write=*/!call.method->isConst);
-                argsDone = true;
-            } else {
-                heldBuffers = thisHeld;
-                self = addressOf(recv, /*hold=*/true, /*write=*/!call.method->isConst);
-            }
-            heldBuffers = outerHeld;
+            specs.push_back({&recv, nullptr, !call.method->isConst});
         } else {
             // A struct value that is not stored anywhere, e.g. makePoint().move(1): the
             // method works on a temporary, which is released when the statement ends.
@@ -3238,21 +3407,14 @@ struct Codegen::Impl {
             if (isManaged(recv.type)) temps.push_back({slot, recv.type, true});
             self = slot;
         }
-        if (!argsDone) genArgs();
-        args[0] = self;
+        size_t first = specs.size();
+        for (size_t i = 0; i < call.args.size(); ++i) specs.push_back(argSpec(*call.args[i], *call.method->params[i]));
+        std::vector<Hold> held;
+        std::vector<llvm::Value*> values = genArguments(specs, held);
+        std::vector<llvm::Value*> args{first ? values[0] : self};  // `this` comes first
+        args.insert(args.end(), values.begin() + (long)first, values.end());
         llvm::Value* result = callFunction(*call.method, std::move(args), call.qualifier.empty());
-        // While the method ran, only the vector and this call held the buffer `this` lies in. If that
-        // changed, the method's body changed, copied or freed the vector. What it did to `this` would then
-        // be lost, or seen by a copy, without a word, so the program stops. The buffer is held, so
-        // it can be looked at, while what holds the vector may be gone.
-        for (auto& [slot, buf] : held) {
-            auto* count = b.CreateAlignedLoad(b.getInt64Ty(), buf, llvm::MaybeAlign(8), "count");
-            count->setAtomic(llvm::AtomicOrdering::Monotonic);
-            trapIf(b.CreateICmpNE(count, b.getInt64(2)),
-                   "a vector was changed, copied or freed while a method of one of its elements was running, which would lose "
-                   "what the method did to the element; call the method on a copy of the element, then store it back",
-                   call.loc);
-        }
+        checkHeld(held, specs, call.method->name, call.loc);
         return result;
     }
 
@@ -3521,9 +3683,16 @@ struct Codegen::Impl {
         switch (s.kind) {
             case Stmt::Kind::VarDecl: {
                 auto& v = static_cast<const VarDecl&>(s);
-                // `const T& r = place;` names the place, and keeps what holds it alive until the scope ends. An element of a
-                // vector, a string or a hashmap is copied for now, since holding its buffer would make every change to the
-                // container copy it. Any other value is a temporary that lives as long as the reference, as in C++.
+                // `T& r = place;` names the place, and keeps what holds it alive until the scope ends. One to an element of a vector,
+                // a string or a hashmap finds it again at each use (see Rederived), and is found once now too, so that an index out of
+                // range stops here, and a key that `m[k]` adds is added here. A `const T&` to any other value is a temporary that
+                // lives as long as the reference, as in C++.
+                if (passedByRef(v) && isPlace(*v.init) && v.init->type == v.type && inContainerElement(*v.init)) {
+                    bindRederived(v, *v.init);
+                    rederive(rederived.at(&v), nullptr, /*hold=*/false, /*write=*/!v.isConst);
+                    flushTemps();
+                    return;
+                }
                 if (passedByRef(v) && isPlace(*v.init) && v.init->type == v.type && !inContainerElement(*v.init)) {
                     size_t mark = temps.size();
                     locals[&v] = addressOf(*v.init, /*hold=*/true, /*write=*/!v.isConst);
@@ -3726,14 +3895,40 @@ struct Codegen::Impl {
         bool byRef = passedByRef(var) && var.type == elemType;
         // `for (const auto& x : a)` over an array in a variable goes over the array itself, which stays where it is.
         bool inPlace = arr && byRef && isPlace(*st.range) && stablePlace(*st.range);
-        llvm::Value* range = inPlace ? addressOf(*st.range) : genOwned(*st.range, vt);
-        flushTemps();
-        if (arr) locals[st.rangeVar.get()] = range;
-        else b.CreateStore(range, allocaFor(*st.rangeVar));
-        if (!inPlace) scopes.back().push_back(st.rangeVar.get());
-        llvm::Value* size = arr ? b.getInt64(vt->length) : str ? strLength(range) : vecSize(range);
+        // `for (auto& x : v)` over a vector or a string, or an array that lies in one: each use of x finds `v[i]` again (see
+        // Rederived), and the loop goes as far as v went when it started.
+        bool refind = byRef && !var.isConst && !inPlace && isPlace(*st.range);
         llvm::AllocaInst* counter = entryAlloca(b.getInt64Ty(), "index");
         b.CreateStore(b.getInt64(0), counter);
+        llvm::Value* range = nullptr;
+        llvm::Value* size;
+        if (refind) {
+            bindRederived(var, *st.range, counter, vt);
+            Rederived whole = rederived.at(&var);
+            whole.counter = nullptr;
+            llvm::Value* slot = rederive(whole, nullptr, /*hold=*/false, /*write=*/false);
+            size = arr ? b.getInt64(vt->length) : str ? strLength(b.CreateLoad(stringTy, slot, "str")) : vecSize(b.CreateLoad(b.getPtrTy(), slot, "vec"));
+            flushTemps();
+        } else {
+            range = inPlace ? addressOf(*st.range) : genOwned(*st.range, vt);
+            flushTemps();
+            if (arr) {
+                locals[st.rangeVar.get()] = range;
+            } else {
+                llvm::Value* slot = allocaFor(*st.rangeVar);
+                b.CreateStore(range, slot);
+                if (byRef && !var.isConst) {  // a temporary that the loop changes, which first gets a buffer of its own
+                    if (str) {
+                        b.CreateCall(rtStrMutable, {slot});
+                        range = b.CreateLoad(stringTy, slot, "str");
+                    } else {
+                        range = reserve(slot, range, vt, b.getInt64(0));
+                    }
+                }
+            }
+            if (!inPlace) scopes.back().push_back(st.rangeVar.get());
+            size = arr ? b.getInt64(vt->length) : str ? strLength(range) : vecSize(range);
+        }
         auto* condBB = llvm::BasicBlock::Create(ctx, "foreach.cond", fn);
         auto* bodyBB = llvm::BasicBlock::Create(ctx, "foreach.body", fn);
         auto* stepBB = llvm::BasicBlock::Create(ctx, "foreach.step", fn);
@@ -3746,10 +3941,11 @@ struct Codegen::Impl {
         b.SetInsertPoint(bodyBB);
         loops.push_back({endBB, stepBB, scopes.size()});
         scopes.emplace_back();  // the loop variable: a new one for each element
-        if (byRef) {  // the element itself, in what the loop holds
-            locals[&var] = arr ? arrayElement(range, i, vt)
-                           : str ? b.CreateInBoundsGEP(b.getInt8Ty(), strData(range), i, "c.addr")
-                                 : elementAt(range, i, vt);
+        if (byRef) {  // the element itself, in what the loop holds, or found again
+            if (!refind)
+                locals[&var] = arr ? arrayElement(range, i, vt)
+                               : str ? b.CreateInBoundsGEP(b.getInt8Ty(), strData(range), i, "c.addr")
+                                     : elementAt(range, i, vt);
             genScoped(*st.body);
             popScope();
             loops.pop_back();

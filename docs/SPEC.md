@@ -1402,11 +1402,17 @@ void greet(const User& user) {
     const auto& name = user.name;   // the field itself: a change to it shows here
     println("{} {}", name, count);
 }
+
+void doubleAll(vector<int>& v) {
+    for (auto& x : v) x *= 2;       // each element itself
+    bump(v[0]);
+}
 ```
 
-- **Where.** A reference can be a parameter of a function, a method or a constructor, or a
-  local variable, which must say where it refers to when it is declared. A `const T&` can
-  also be the variable of a [range-based `for` loop](#range-based-for-loops).
+- **Where.** A reference can be a parameter of a function, a method or a constructor, the
+  variable of a [range-based `for` loop](#range-based-for-loops), or a local variable, which
+  must say where it refers to when it is declared. `for (auto& x : v)` over something `const`
+  is `for (const auto& x : v)`, as in C++.
   `catch (const Error& e)` means `catch (Error e)`, since an error is a class object, which
   already refers to the object. A function written to return `const T&` returns the value, as
   a copy.
@@ -1414,15 +1420,26 @@ void greet(const User& user) {
   element, is referred to. Any other value, such as `3 + 4`, the result of a call, or an `int`
   given to a `const long&`, goes into a temporary that lives as long as the reference, as in C++.
 - **What a `T&` is given** is a place that can be changed, of exactly its type: a variable, a
-  field, or an element of an [array](#arrays). A value, something `const`, or a variable of
-  another type is an error, even a class derived from it, since any value of its type can be
-  stored through it. Writing to a `T&`, `n = 5`, writes to the place.
-- **Changes show through it**, as in C++, when they are made to the place it refers to. The
-  exception is a place in a vector, a string or a hashmap, where a `const T&` never dangles
-  but may show the value as it was. A local `const auto& e = v[i];` holds a copy of the
-  element, for now. A parameter given `v[i]`, and a loop over `v`, keep `v`'s buffer while
-  they run, so a change made to `v` meanwhile gives it a buffer of its own, as for a
-  [loop](#range-based-for-loops), and leaves the reference on the old one.
+  field, or an element of an array, a vector, a string or a hashmap, `m["a"]` adding the key
+  if it is missing. A value, something `const`, or a variable of another type is an error,
+  even a class derived from it, since any value of its type can be stored through it. Writing
+  to a `T&`, `n = 5`, writes to the place.
+- **Changes show through it**, as in C++, when they are made to the place it refers to.
+- **Elements of containers.** A vector, a string or a hashmap moves its elements when it grows,
+  and C++ leaves a reference to one dangling then. In C+ a local reference, `auto& e = v[i];`,
+  and the variable of `for (auto& x : v)`, find their element again each time they are used:
+  `e` is always `v[i]`, wherever the elements of `v` are, so a copy of `v` never sees what is
+  written through it. Using it once `v` is too short to have that element stops the program.
+  `for (auto& x : v)` goes as far as `v` went when the loop started.
+  A reference to an element given to a function is the element's address, as in C++, and the
+  function must change the container only through that reference while it runs: if it
+  changes, copies or frees the container in some other way, the program stops when it
+  returns, as it does for a [method of an element](#vectors). `swap(v[0], v[1])` is two
+  references into one vector, which is fine.
+- **What a `const T&` to an element shows.** It follows the element as a `T&` does, except that
+  a parameter given `v[i]`, and `for (const auto& x : v)`, keep `v`'s buffer while they run,
+  so a change made to `v` meanwhile gives it a buffer of its own, as for a
+  [loop](#range-based-for-loops), and leaves the reference on the old one. It never dangles.
 - **A class.** `const User& u` is the same as `User u`: both refer to the same object, whose
   fields can still be changed through it. A `User& u` refers to the caller's variable, so
   `u = User("b")` makes that variable refer to another object.
@@ -1430,9 +1447,8 @@ void greet(const User& user) {
   since it goes on after its caller has moved on, and no reference may be alive at an `await`.
   A reference cannot be a field, a constant, an element of a container, or a template
   argument. There is no `T&&` or `auto&&`.
-- **Planned.** A `T&` to an element of a vector, a string or a hashmap, which moves when the
-  container grows, and with it `for (auto& x : v)`. Functions that return a `T&`, such as
-  `int& at(int i)`.
+- **Planned.** Functions that return a `T&`, such as `int& at(int i)`, and `for (auto& e : m)`
+  over a hashmap, whose entries it would change.
 
 ---
 
@@ -3072,8 +3088,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Reading numbers from strings: `stoi`, `stol`, `stod`, `stof` | implemented |
 | `hashmap<K, V>` | implemented |
 | Vector `insert`, `erase`, iterators; `find` on a hashmap, sorted maps, sets | planned |
-| References: `T&` and `const T&` parameters and local variables, `for (const auto& x : v)` | implemented |
-| `T&` to elements of vectors, strings and hashmaps, `for (auto& x : v)`, returning `T&` | planned |
+| References: `T&` and `const T&` parameters and local variables, to elements of vectors, strings and hashmaps too, `for (auto& x : v)` | implemented |
+| Returning `T&`, `for (auto& e : m)` over a hashmap | planned |
 | Structured bindings, `for (auto [k, v] : m)` | planned |
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |
