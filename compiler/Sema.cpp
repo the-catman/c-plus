@@ -883,7 +883,7 @@ static std::string cycleHelp(const Type* fieldType, const std::string& field, co
 static std::string signature(const FuncDecl& fn) {
     std::string sig = (fn.owner ? fn.owner->name + "." : "") + fn.name + "(";
     for (size_t i = 0; i < fn.params.size(); ++i)
-        sig += (i ? ", " : "") + std::string(fn.params[i]->declType->name) +
+        sig += (i ? ", " : "") + std::string(fn.params[i]->isRef ? "const " : "") + fn.params[i]->declType->name + (fn.params[i]->isRef ? "&" : "") +
                (fn.params[i]->name.empty() ? "" : " " + fn.params[i]->name);
     return sig + ")";
 }
@@ -1322,7 +1322,7 @@ void Sema::check(Program& program) {
                          std::string("write `") + (m->isAsync ? "async " : "") + "int main()`; the returned number becomes the exit code", spec::MainFunction);
         auto isArgv = [](const Type* t) { return t->isPointer() && t->elem->isPointer() && t->elem->elem->is(K::Char); };
         if (!m->params.empty() &&
-            !(m->params.size() == 2 && m->params[0]->declType->is(K::Int) && isArgv(m->params[1]->declType)))
+            !(m->params.size() == 2 && m->params[0]->declType->is(K::Int) && isArgv(m->params[1]->declType) && !m->params[0]->isRef && !m->params[1]->isRef))
             diags_.error(m->params[0]->loc, "main takes no parameters, or the command-line arguments as in C++",
                          "write `int main()`, or `int main(int argc, char** argv)`, where `string(argv[1])` is the "
                          "first argument",
@@ -1730,7 +1730,7 @@ void Sema::checkOverrides(StructDecl& sd) {
             bool same = m->retType == method->retType && m->params.size() == method->params.size() &&
                         m->isConst == method->isConst && m->isThrows == method->isThrows;
             for (size_t i = 0; same && i < m->params.size(); ++i)
-                same = m->params[i]->declType == method->params[i]->declType;
+                same = m->params[i]->declType == method->params[i]->declType && m->params[i]->isRef == method->params[i]->isRef;
             if (!same && m->retType != method->retType && m->retType->isClass() && method->retType->isClass() && m->retType->decl->derivesFrom(method->retType->decl)) {
                 diags_.error(m->nameLoc, "this compiler does not support covariant return types yet",
                              "return an " + q(method->retType) + ", which can hold the object, and use `dynamic_cast` where the class matters", spec::Inheritance);
@@ -2395,6 +2395,15 @@ const Type* Sema::checkSpawn(SpawnExpr& s, Flow& flow) {
     };
     const auto& args = call.kind == Expr::Kind::Call ? static_cast<CallExpr&>(call).args : static_cast<MethodCallExpr&>(call).args;
     bool refused = false;
+    for (size_t i = 0; i < args.size() && i < target->params.size(); ++i)
+        if (target->params[i]->isRef) {
+            diags_.error(args[i]->loc, "`spawn` cannot pass this to " + q(target->name) + ", whose parameter " + q(target->params[i]->name) +
+                                           " is a reference, since the thread runs on after this line",
+                         "have " + q(target->name) + " take the value, `" + std::string(target->params[i]->type->name) + " " + target->params[i]->name +
+                             "`: a copy of a vector or a string shares its buffer, so it costs little",
+                         spec::References);
+            refused = true;
+        }
     for (size_t i = 0; i < args.size(); ++i)
         refused = refuseLocal(args[i]->type ? args[i]->type : Type::error(), args[i]->loc, "this argument") || refused;
     if (call.kind == Expr::Kind::MethodCall) {
@@ -2441,6 +2450,13 @@ void Sema::prepareAsync(FuncDecl& fn) {
                      "return a class reference, whose count works across threads", spec::Async);
         return;
     }
+    for (auto& p : fn.params)
+        if (p->isRef) {
+            diags_.error(p->typeLoc, "an async function cannot take a reference, since it runs on after its caller has moved on",
+                         "take the value, `" + std::string(p->declType->name) + " " + p->name + "`: a copy of a vector or a string shares its buffer, so it costs little",
+                         spec::References);
+            return;
+        }
     for (auto& p : fn.params)
         if (holdsLocal(p->declType)) {
             diags_.error(p->typeLoc, "an async function cannot take a local reference, since it may go on on another thread after it waits",
@@ -2520,6 +2536,14 @@ const Type* Sema::checkAwait(AwaitExpr& a, Flow& flow) {
             if (var && var->type && var->type->isClass() && var->type->decl->name == "LockGuard" && var->type->decl->nameLoc.line == 0) {
                 diags_.error(a.loc, "this `await` comes while " + q(name) + " holds a lock, which would stay locked while other work goes on, and would then be unlocked on what may be another thread",
                              "end the block of " + q(name) + " before the `await`: `{ LockGuard " + name + " = LockGuard(m); ... }`", spec::Async);
+                diags_.note(var->loc, q(name) + " is declared here");
+                return Type::error();
+            }
+    for (auto& scope : scopes_)
+        for (auto& [name, var] : scope)
+            if (var && var->isRef && !var->isParam) {
+                diags_.error(a.loc, "this `await` comes while the reference " + q(name) + " is alive, and what it refers to could be gone by the time the function goes on",
+                             "copy the value before the `await`: `auto " + name + " = ...;`, or end the block of " + q(name) + " before it", spec::References);
                 diags_.note(var->loc, q(name) + " is declared here");
                 return Type::error();
             }
@@ -2878,7 +2902,7 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
                     // A local variable about to go away hands over what it holds, as in C++.
                     if (st.value->kind == Expr::Kind::Name) {
                         const VarDecl* local = lookup(static_cast<NameExpr&>(*st.value).name);
-                        if (local && !local->isTopLevel && !local->isConst && local->type && !isCopyable(local->type)) {
+                        if (local && !local->isTopLevel && !local->isConst && !local->isRef && local->type && !isCopyable(local->type)) {
                             std::vector<ExprPtr> args;
                             Loc loc = st.value->loc;
                             args.push_back(std::move(st.value));
@@ -2888,7 +2912,7 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
                         }
                     }
                     checkValue(*st.value, flow, ret, "as the return value of " + q(fn_->name));
-                    if (const VarDecl* local = flow.reachable ? localPointee(*st.value, flow) : nullptr) {
+                    if (const VarDecl* local = flow.reachable && ret->isPointer() ? localPointee(*st.value, flow) : nullptr) {
                         std::string what = (local->isParam ? "the parameter " : "the local variable ") + q(local->name);
                         const Expr& v = *st.value;
                         bool direct = v.kind == Expr::Kind::Unary && static_cast<const UnaryExpr&>(v).operand->kind == Expr::Kind::Name;
@@ -3102,7 +3126,7 @@ std::string Sema::copyHelp(const Expr& target, const std::string& change, bool g
 }
 
 void Sema::rejectCopy(const Expr& e) {
-    if (!e.type || e.type->isError() || isCopyable(e.type)) return;
+    if (!e.type || e.type->isError() || isCopyable(e.type) || &e == boundByRef_) return;
     const Expr* x = &e;
     while (x->kind == Expr::Kind::Try) x = static_cast<const TryExpr*>(x)->operand.get();
     if (x->kind == Expr::Kind::Assign) x = static_cast<const AssignExpr*>(x)->target.get();  // `b = (a = make())` would leave two
@@ -3386,8 +3410,11 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
         }
         for (size_t i = 0; i < args.size(); ++i) {
             if (args[i].fieldIndex) *args[i].fieldIndex = (int)i;
+            const Expr* bound = boundByRef_;
+            if (ctor->params[i]->isRef) boundByRef_ = args[i].value;
             value(args[i], ctor->params[i]->declType,
                   "for parameter " + q(ctor->params[i]->name) + " of the " + q(sd.name) + " constructor");
+            boundByRef_ = bound;
         }
         return;
     }
@@ -3788,7 +3815,7 @@ const VarDecl* Sema::localPointee(const Expr& e, const Flow& flow) {
             if (storageOf(*u.operand, root) != Storage::Variable || root->kind == Expr::Kind::This) return nullptr;
             auto& n = static_cast<const NameExpr&>(*root);
             if (n.implicitField >= 0) return nullptr;  // a field of the object the method was called on, which outlives the call
-            return n.decl && !n.decl->isTopLevel ? n.decl : nullptr;
+            return n.decl && !n.decl->isTopLevel && !n.decl->isRef ? n.decl : nullptr;  // a reference's place is not its own
         }
         case Expr::Kind::Name: {
             auto found = flow.pointsToLocal.find(static_cast<const NameExpr&>(e).decl);
@@ -3815,7 +3842,7 @@ const VarDecl* Sema::localPointee(const Expr& e, const Flow& flow) {
             const Expr* root = nullptr;
             if (storageOf(*m.receiver, root) != Storage::Variable || root->kind == Expr::Kind::This) return nullptr;
             auto& n = static_cast<const NameExpr&>(*root);
-            return n.implicitField < 0 && n.decl && !n.decl->isTopLevel ? n.decl : nullptr;
+            return n.implicitField < 0 && n.decl && !n.decl->isTopLevel && !n.decl->isRef ? n.decl : nullptr;
         }
         default: return nullptr;
     }
@@ -4663,8 +4690,11 @@ void Sema::checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow,
     }
     for (size_t i = 0; i < args.size(); ++i) {
         const std::string& n = fn.params[i]->name;  // a C function's parameters may have no names
+        const Expr* bound = boundByRef_;
+        if (fn.params[i]->isRef) boundByRef_ = args[i].get();
         checkValue(*args[i], flow, fn.params[i]->declType,
                    (n.empty() ? "for argument " + std::to_string(i + 1) : "for parameter " + q(n)) + " of " + q(fn.name));
+        boundByRef_ = bound;
     }
 }
 
@@ -5191,7 +5221,10 @@ const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow)
     for (size_t i = 0; i < call.args.size(); ++i) {
         Expr& a = *call.args[i];
         if (a.kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(a).explicitType) continue;
+        const Expr* bound = boundByRef_;
+        if (fn->params[i]->isRef) boundByRef_ = &a;
         requireConvertible(a, fn->params[i]->declType, "for parameter " + q(fn->params[i]->name) + " of " + q(fn->name));
+        boundByRef_ = bound;
     }
     checkTaskKept(*fn, call, nameLoc);
     return fn->retType;

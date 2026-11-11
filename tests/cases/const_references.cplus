@@ -1,0 +1,112 @@
+// `const T&` reads a place without copying it: parameters, loop variables and local variables.
+struct Point {
+    int x = 0;
+    int y = 0;
+    bool same(const Point& other) const { return x == other.x && y == other.y; }
+};
+class Shape {
+public:
+    virtual string describe(const string& prefix) const { return prefix + "shape"; }
+};
+class Circle : public Shape {
+public:
+    string describe(const string& prefix) const override { return prefix + "circle"; }
+};
+class User {
+public:
+    string name;
+    User(const string& n) : name(n) {}
+};
+class Node {
+public:
+    int value = 3;
+};
+int total(const vector<int>& v) {
+    int sum = 0;
+    for (const auto& x : v) sum += x;
+    return sum;
+}
+void watch(const Point& p, Point* q) {
+    q->x = 5;
+    println("{}", p.x);  // the caller's Point, changed through q
+}
+void during(const Point& p, vector<Point>* all) {
+    all->push_back(Point{9, 9});
+    (*all)[0].x = 8;
+    println("{}", p.x);  // the vector got a buffer of its own; p stays on the one it was given
+}
+template<typename T>
+T first(const vector<T>& v) { return v[0]; }
+const string& nameOf(const User& u) { return u.name; }
+long widen(const long& n) { return n * 2; }
+int peek(const unique<Node>& n) { return n.value; }
+int main() {
+    vector<int> v = {1, 2, 3};
+    println("{} {}", total(v), total({4, 5}));
+    Point p = Point{1, 2};
+    watch(p, &p);
+    println("{}", p.same(Point{5, 2}));
+    vector<Point> ps = {Point{1, 1}, Point{2, 2}};
+    println("{}", ps[0].same(ps[1]));
+    during(ps[0], &ps);
+    println("{} {}", ps[0].x, ps.size());
+    println("{}", first(v));
+    Shape s = Circle();
+    println("{}", s.describe("a "));
+    User u = User("Ada");
+    println("{}", nameOf(u));
+    println("{}", widen(21));
+    unique<Node> owned = unique<Node>();
+    println("{}", peek(owned));
+    println("{}", owned.value);  // still owned here
+
+    const auto& name = u.name;  // the field itself
+    u.name = "Grace";
+    println("{}", name);
+    const Point& here = p;
+    p.y = 9;
+    println("{}", here.y);
+    const auto& elem = ps[1];  // a copy of the element, for now
+    ps[1].x = 7;
+    println("{}", elem.x);
+    const int& n = 3 + 4;
+    println("{}", n);
+
+    array<int, 3> a = {1, 2, 3};
+    for (const auto& x : a) {
+        a[2] = 30;  // the loop goes over the array itself
+        print("{} ", x);
+    }
+    println("");
+    string word = "hey";
+    for (const char& c : word) print("{}", c);
+    println("");
+    hashmap<string, int> m = {{"k", 1}};
+    for (const auto& e : m) println("{} {}", e.first, e.second);
+    try {
+        throw Error("boom");
+    } catch (const Error& e) {
+        println("{}", e.message);
+    }
+    return 0;
+}
+// expect: 6 9
+// expect: 5
+// expect: true
+// expect: false
+// expect: 1
+// expect: 8 3
+// expect: 1
+// expect: a circle
+// expect: Ada
+// expect: 42
+// expect: 3
+// expect: 3
+// expect: Grace
+// expect: 9
+// expect: 2
+// expect: 7
+// expect: 1 2 30 
+// expect: hey
+// expect: k 1
+// expect: boom

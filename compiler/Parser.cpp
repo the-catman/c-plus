@@ -49,6 +49,61 @@ void Parser::notYet(Loc loc, const std::string& feature, const std::string& help
     fail(loc, "this compiler does not support " + feature + " yet", help, spec::Status);
 }
 
+// The `&` or `&&` after the type of a parameter, a variable, a loop variable or a catch. Returns whether this is a reference,
+// which only `const T&` can be so far.
+bool Parser::parseReferenceMark(const Type* ty, bool isConst, ReferencePlace place) {
+    const std::string name = ty->name;
+    Loc at = peek().loc;
+    if (check(Tok::AmpAmp))
+        fail(at, "C+ has no rvalue references, `&&`",
+             place == ReferencePlace::Loop
+                 ? "write `const auto&` to read the elements without copying them. To change them, loop over the indexes"
+                 : "take the value, `" + name + " x`: a copy of a vector or a string shares its buffer, so it costs little, and `move(x)` "
+                   "hands over a `unique`. To read it without copying, take `const " + name + "&`",
+             spec::References);
+    if (place == ReferencePlace::Constant)
+        fail(at, "a constant holds its own value, not a reference", "write `const " + name + " " + (peek(1).kind == Tok::Ident ? peek(1).text : "X") + " = ...;`",
+             spec::Constants);
+    if (!isConst) {
+        if (place == ReferencePlace::Parameter)
+            notYet(at, "references that can change what they refer to, `" + name + "&`",
+                   "to read the value without copying it, write `const " + name + "&`. To let the function change the caller's "
+                   "variable, pass a pointer: `" + name + "* x`, called as `f(&n)`");
+        notYet(at, "references that can change what they refer to, `" + name + "&`",
+               "to read the value without copying it, write `const " + name + "& x = ...;`. To change another variable, use a "
+               "pointer: `" + name + "* p = &n;`");
+    }
+    advance();
+    if (check(Tok::Amp) || check(Tok::AmpAmp))
+        fail(peek().loc, "a reference cannot refer to a reference", "write one `&`: `const " + name + "&`", spec::References);
+    return true;
+}
+
+// `const T& name()` returns the value, which is what the caller gets in C++ too. Returns whether it read the `&`. A field
+// cannot be a reference, and `T& name()`, whose caller could change what it gives, comes later.
+bool Parser::parseReturnReference(const Type* ret, bool isConst, bool member) {
+    if (!check(Tok::Amp) && !check(Tok::AmpAmp)) return false;
+    const std::string name = ret->name;
+    if (check(Tok::AmpAmp))
+        fail(peek().loc, "C+ has no rvalue references, `&&`", "return the value: write `" + name + "`", spec::References);
+    bool function = peek(1).kind == Tok::Ident && peek(2).kind == Tok::LParen;
+    if (!function && member)
+        fail(peek().loc, "a field cannot be a reference",
+             "a field would outlive what it refers to: hold the value, `" + name + " x;`, make the type a `class` to share it, or use a "
+             "pointer, `" + name + "* x;`",
+             spec::References);
+    if (!function)
+        fail(peek().loc, "a constant holds its own value, not a reference",
+             "write `const " + name + " " + (peek(1).kind == Tok::Ident ? peek(1).text : "X") + " = ...;`", spec::Constants);
+    if (isConst) {
+        advance();
+        return true;
+    }
+    notYet(peek().loc, "functions that return a reference, `" + name + "&`",
+           "return the value: write `" + name + " " + peek(1).text + "(...)`. A struct is copied and a class object is shared. To let "
+           "the caller change it, return a pointer, `" + name + "*`, to something that outlives the call");
+}
+
 // A name being declared. What a module has is only read, by the name that joinModuleNames makes.
 const Token& Parser::expectNewName(const std::string& context) {
     if (check(Tok::KwOperator)) notYet(peek().loc, "operator overloading", operatorHelp());
@@ -1490,6 +1545,7 @@ void Parser::parseTopLevel(Program& prog) {
     Loc retLoc;
     bool isConst = false;
     const Type* ret = parseType(retLoc, &isConst);
+    parseReturnReference(ret, isConst, false);
     if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && (isTypeName(peek()) || classTemplate(peek().text)))
         fail(peek().loc, "methods are defined inside their " + std::string(isTypeName(peek()) ? prog_->findStruct(peek().text)->keyword() : "class"),
              "move this definition into the body of '" + peek().text + "'; C+ has no headers, so there is no "
@@ -2520,11 +2576,7 @@ void Parser::parseParams(FuncDecl& fn) {
             bool isConst = false;
             const Type* ty = parseType(typeLoc, &isConst);
             if (ty->is(Type::Kind::Auto)) notYet(typeLoc, "'auto' parameters", "write the parameter type");
-            if (check(Tok::Amp) || check(Tok::AmpAmp))
-                notYet(peek().loc, "reference parameters",
-                       "pass the value itself: structs are copied, class objects are shared, and a vector is only "
-                       "copied if one of the copies changes. To let the function change the caller's variable, "
-                       "pass a pointer: `int* count`, called as `f(&n)`");
+            bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) && parseReferenceMark(ty, isConst, ReferencePlace::Parameter);
             const Token& pname = expectNewName("for the parameter name");
             rejectTemplateParamName(pname);
             if (check(Tok::LBracket) && fn.name == "main" && fn.role == FuncDecl::Role::Free) {
@@ -2540,6 +2592,7 @@ void Parser::parseParams(FuncDecl& fn) {
             auto param = std::make_unique<VarDecl>(pname.loc, pname.text, ty, typeLoc);
             param->isParam = true;
             param->isConst = isConst;
+            param->isRef = isRef;
             if (check(Tok::Assign)) notYet(peek().loc, "default argument values", "remove `= ...`, and write the value at each call");
             fn.params.push_back(std::move(param));
         } while (match(Tok::Comma));
@@ -2891,6 +2944,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
     Loc typeLoc;
     bool isConst = false;
     const Type* ty = parseType(typeLoc, &isConst);
+    if (parseReturnReference(ty, isConst, true)) isConst = false;  // the `const` of `const T&`, which gives a value
     if (isConst) notYet(t.loc, "const fields", "leave out `const`, keep it private, and give the type a method that returns it");
     if (ty->is(Type::Kind::Auto))
         fail(typeLoc, "fields and methods need a written type", "write the type, e.g. `int x = 0;`. `auto` is only for local variables", spec::Structs);
@@ -3016,11 +3070,8 @@ StmtPtr Parser::parseTry() {
                 fail(peek().loc, "a catch says the type of error it takes", "write `catch (Error " + peek().text + ")`", spec::Errors);
             bool isConst = false;
             clause.type = parseType(clause.typeLoc, &isConst);
-            if (check(Tok::Amp) || check(Tok::AmpAmp))
-                fail(peek().loc, "a catch takes its error without a reference",
-                     "write `catch (" + std::string(clause.type->name) + " e)`: a class variable already refers to the object, "
-                     "so nothing is copied",
-                     spec::Errors);
+            if (check(Tok::AmpAmp)) parseReferenceMark(clause.type, isConst, ReferencePlace::Catch);
+            match(Tok::Amp);  // `catch (const Error& e)` means `catch (Error e)`: an error is a class object, already a reference
             if (check(Tok::Ident)) {
                 const Token& name = expectNewName("for the name of the error");
                 rejectTemplateParamName(name);
@@ -3125,14 +3176,20 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
         if (check(Tok::LBracket) || ((check(Tok::Amp) || check(Tok::AmpAmp)) && peek(1).kind == Tok::LBracket))
             notYet(peek().loc, "structured bindings",
                    "name the whole value, and reach into it: `for (auto e : m) ... e.first ... e.second`, or `auto p = f(); ... p.x`");
-        if (check(Tok::Amp) || check(Tok::AmpAmp))
-            notYet(peek().loc, "references",
-                   "a variable holds its own value. To refer to another variable, use a pointer: `int* p = &x;`");
+        Loc refLoc = peek().loc;
+        bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) &&
+                     parseReferenceMark(ty, isConst, localScopes_.empty() ? ReferencePlace::Constant : ReferencePlace::Local);
         const Token& name =
             expectNewName(decls.empty() ? "for the variable name" : "for the next variable name after ','");
         rejectTemplateParamName(name);
         auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
         var->isConst = isConst;
+        var->isRef = isRef;
+        if (isRef && !check(Tok::Assign))
+            fail(check(Tok::Semi) || check(Tok::Comma) ? refLoc : peek().loc, "reference '" + name.text + "' must say what it refers to",
+                 "a reference names another value for as long as it lives, so it is given one where it is declared: `const " +
+                     std::string(ty->name) + "& " + name.text + " = ...;`",
+                 spec::References);
         if (!localScopes_.empty()) localScopes_.back()[name.text] = var.get();  // a name in an array's size may mean it
         if (match(Tok::Assign)) {
             var->init = parseAssign();
@@ -3309,18 +3366,20 @@ StmtPtr Parser::parseFor() {
         bool ref = check(Tok::Amp) || check(Tok::AmpAmp);
         if ((ref && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Colon) ||
             (check(Tok::Ident) && peek(1).kind == Tok::Colon)) {
-            if (ref) {
+            if (check(Tok::AmpAmp)) parseReferenceMark(ty, isConst, ReferencePlace::Loop);
+            bool constRef = ref && isConst;
+            if (constRef) advance();
+            if (ref && !constRef) {
                 // All of what comes after the ':', if it is a plain path.
                 std::string range;
                 size_t at = 3;
                 for (; at < 32 && (peek(at).kind == Tok::Ident || peek(at).kind == Tok::Dot); ++at) range += peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text;
                 if (range.empty() || peek(at).kind != Tok::RParen) range = "items";
-                std::string help = std::string("drop the '&': `for (") + (isConst ? "const " : "") + ty->name + " " +
-                                   peek(1).text + " : " + range + ")` copies each element, which is cheap";
-                if (!isConst)
-                    help += ". To change the elements of a vector, loop over the indexes: `for (long i = 0; i < " + range +
-                            ".size(); i++) " + range + "[i] = ...;`. Of a hashmap: `for (auto e : " + range + ") " + range + "[e.first] = ...;`";
-                notYet(peek().loc, "references in range-based for loops", help);
+                std::string help = std::string("to read the elements without copying them, write `for (const ") + ty->name + "& " +
+                                   peek(1).text + " : " + range + ")`";
+                help += ". To change the elements of a vector, loop over the indexes: `for (long i = 0; i < " + range +
+                        ".size(); i++) " + range + "[i] = ...;`. Of a hashmap: `for (auto e : " + range + ") " + range + "[e.first] = ...;`";
+                notYet(peek().loc, "references that can change what they refer to, `" + std::string(ty->name) + "&`, in range-based for loops", help);
             }
             if (ty->is(Type::Kind::Void))
                 fail(typeLoc, "a loop variable cannot have type void", "write `auto` or the element type",
@@ -3328,6 +3387,7 @@ StmtPtr Parser::parseFor() {
             const Token& name = expectNewName("for the name of the loop variable");
             auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
             var->isConst = isConst;
+            var->isRef = constRef;
             advance();  // ':'
             ExprPtr range = parseExpr();
             expect(Tok::RParen, "to close the for header");

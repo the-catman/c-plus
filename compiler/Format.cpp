@@ -174,6 +174,7 @@ private:
             if (k != Tok::Ident || types_.count(toks_[i].text) || before == Tok::Dot || before == Tok::Arrow || before == Tok::QuestionDot) continue;
             size_t j = i + 1;
             while (kind(j) == Tok::Star) ++j;
+            if (kind(j) == Tok::Amp) ++j;  // `const Point& p`
             const bool stars = j > i + 1;
             const Tok after = kind(j);
             if (stars && (after == Tok::RParen || after == Tok::Greater || after == Tok::Shr || after == Tok::Comma)) {
@@ -389,7 +390,9 @@ private:
             case Tok::Question:
                 role_[i] = isType(p) ? Role::Optional : Role::Binary;
                 break;
-            case Tok::Amp:
+            case Tok::Amp:  // `const Point& p` is a reference, like the `*` of a pointer
+                role_[i] = isType(p) ? Role::Pointer : endsValue(p) ? Role::Binary : Role::Prefix;
+                break;
             case Tok::Minus:
             case Tok::Plus:
                 role_[i] = endsValue(p) ? Role::Binary : Role::Prefix;

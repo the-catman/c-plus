@@ -14,8 +14,8 @@ int main() {
     fixed = null;
     return 0;
 }
-// error: this compiler does not support reference parameters yet
-// error: To let the function change the caller's variable, pass a pointer: `int* count`, called as `f(&n)`
+// error: this compiler does not support references that can change what they refer to, `int&` yet
+// error: to read the value without copying it, write `const int&`. To let the function change the caller's variable, pass a pointer: `int* x`, called as `f(&n)`
 // error: in C++, this makes 'b' a plain int, not a pointer like 'a'
 // error: Write `int* a, * b;` if both are pointers, or declare 'b' on its own
 // error: in C++, this makes 'd' a pointer but 'c' a plain int
@@ -24,8 +24,7 @@ int main() {
 // error: a pointer cannot be optional
 // error: a pointer can already be null: write `int*` and compare it with null
 // error: 'auto' finds out by itself that a value is a pointer
-// error: this compiler does not support references yet
-// error: To refer to another variable, use a pointer: `int* p = &x;`
+// error: to read the value without copying it, write `const int& x = ...;`. To change another variable, use a pointer: `int* p = &n;`
 // error: 'const' cannot be used here
 // error: unknown type 'FILE'
 // error: check the spelling, or define it. If 'FILE' is a C type used through pointers, declare it first, at the top level: `extern "C" struct FILE;`

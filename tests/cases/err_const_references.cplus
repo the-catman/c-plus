@@ -1,0 +1,62 @@
+// What references cannot be yet, or ever.
+struct Holder {
+    int& x;
+};
+const int& LIMIT = 5;
+const int A = 1, & B = A;
+string&& make() { return ""; }
+void bump(int& n) { n += 1; }
+int moved(vector<int>&& v) { return 0; }
+struct Grid {
+    int cells = 0;
+    int& at(int i) { return cells; }
+};
+async int later(const string& s) {
+    await delay(1);
+    return 1;
+}
+int count(const vector<int>& v) { return 0; }
+void handles() {
+    try {
+        throw Error("x");
+    } catch (Error&& e) {
+    }
+}
+async int waits() {
+    vector<int> v = {1};
+    const auto& first = v;
+    await delay(1);
+    return first.size();
+}
+int main() {
+    int x = 1;
+    int& r = x;
+    const int& none;
+    const int& & twice = x;
+    vector<int> v = {1, 2};
+    for (auto&& e : v) {}
+    auto t = spawn count(v);
+    t.wait();
+    return 0;
+}
+// error: a field cannot be a reference
+// error: a field would outlive what it refers to: hold the value, `int x;`, make the type a `class` to share it, or use a pointer, `int* x;`
+// error: a constant holds its own value, not a reference
+// error: write `const int LIMIT = ...;`
+// error: write `const int B = ...;`
+// error: return the value: write `string`
+// error: this compiler does not support references that can change what they refer to, `int&` yet
+// error: C+ has no rvalue references, `&&`
+// error: take the value, `vector<int> x`: a copy of a vector or a string shares its buffer, so it costs little
+// error: this compiler does not support functions that return a reference, `int&` yet
+// error: return the value: write `int at(...)`
+// error: an async function cannot take a reference, since it runs on after its caller has moved on
+// error: this `await` comes while the reference 'first' is alive
+// error: copy the value before the `await`: `auto first = ...;`
+// error: to read the value without copying it, write `const int& x = ...;`
+// error: reference 'none' must say what it refers to
+// error: a reference cannot refer to a reference
+// error: write `const auto&` to read the elements without copying them
+// error: take the value, `Error x`
+// error: `spawn` cannot pass this to 'count', whose parameter 'v' is a reference, since the thread runs on after this line
+// error: have 'count' take the value, `vector<int> v`

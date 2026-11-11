@@ -49,6 +49,7 @@ inline constexpr const char* Arrays = "arrays";
 inline constexpr const char* RangeFor = "range-based-for-loops";
 inline constexpr const char* Printing = "printing";
 inline constexpr const char* Pointers = "pointers";
+inline constexpr const char* References = "references";
 inline constexpr const char* PointerDeclarations = "pointer-declarations";
 inline constexpr const char* Sizeof = "sizeof";
 inline constexpr const char* CTypes = "c-types-known-by-name";

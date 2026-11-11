@@ -173,6 +173,9 @@ private:
     StmtPtr parseStmt();
     StmtPtr parseDeclaration();  // one or more variables, without the trailing ';'
     StmtPtr parseDeclarators(bool isConst, const Type* ty, Loc typeLoc);  // the part after the type
+    enum class ReferencePlace { Parameter, Local, Loop, Catch, Constant };
+    bool parseReferenceMark(const Type* ty, bool isConst, ReferencePlace place);
+    bool parseReturnReference(const Type* ret, bool isConst, bool member);
     StmtPtr parseFor();
     bool isValueOfType() const;
     bool isDeclarationStart() const { return isTypeStart() && !isValueOfType(); }

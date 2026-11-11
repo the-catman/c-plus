@@ -773,7 +773,7 @@ SPEC_NOT_CODE = {
     "break cplus_trap", "uncaught error:", "--race", "--debug", "cplus build", "cplus.", "-fsanitize=address", "llvm-symbolizer", "libclang-rt-18-dev", "exit()",
     "cplus run app.cplus --race", "-l<name>", "-L<dir>", "--emit-llvm", "cplus explain", "spec:", "cplus explain cheatsheet", "{ x }", "[ x ]", "value_or()", "new[]",
     "cplus fmt", "--check", "cplus lsp", "editors/vscode", 'import "mine.h";', "-I", "-I<dir>", "cplus build app.cplus -I include", "-lsqlite3",
-    "static inline", "const unsigned char*",
+    "static inline", "const unsigned char*", "const T&", "T&",
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
@@ -807,7 +807,10 @@ SPEC_REJECTED = {
     "v.back().x = 1": "vector<Point> v = {Point{}}; v.back().x = 1;", "v.back().set()": "vector<Settable> v = {Settable{}}; v.back().set();",
     "v.back().p.set()": "vector<HoldsSettable> v = {HoldsSettable{}}; v.back().p.set();",
     "(f ? a : b).set()": "Settable a = {}; Settable b = {}; bool f = true; (f ? a : b).set();",
-    "for (auto [k, v] : m)": "hashmap<string, int> m; for (auto [k, v] : m) {}", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
+    "for (auto [k, v] : m)": "hashmap<string, int> m; for (auto [k, v] : m) {}",
+    "return &x;": "^int* f() { int x = 1; return &x; }", "return a.data();": "^int* f() { array<int, 2> a = {1, 2}; return a.data(); }",
+    "T&&": "^void f(vector<int>&& v) {}", "auto&&": "vector<int> v = {1}; for (auto&& x : v) {}",
+    "void bump(int& n)": "^void bump(int& n) { n += 1; }", "int& at(int i)": "^struct G { int c = 0; int& at(int i) { return c; } };", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
 }
 SPEC_REJECT_PRELUDE = """struct Settable { int x = 0; void set() { x = 1; } };
 struct HoldsSettable { Settable p; };

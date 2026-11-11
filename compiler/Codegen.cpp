@@ -177,6 +177,7 @@ struct Codegen::Impl {
     // them when its scope ends. A value made or read during a statement and not stored
     // anywhere is a temporary, released when the statement ends.
     std::vector<std::vector<const VarDecl*>> scopes;  // locals to release, per open scope
+    std::deque<VarDecl> heldForScope;  // what a reference variable's place lies in, kept alive until its scope ends
     struct Temp {
         llvm::Value* value;
         const Type* type;
@@ -1418,6 +1419,78 @@ struct Codegen::Impl {
         return v;
     }
 
+    // `const T& x` is passed as the address of a place. A class object is already a reference, so a `const C&` is the object.
+    static bool passedByRef(const VarDecl& p) { return p.isRef && !p.type->isClass(); }
+
+    // Whether a place stays where it is while the variable it lies in lives: it is reached from the variable, or from `this`,
+    // through fields of structs and elements of arrays only.
+    static bool stablePlace(const Expr& e) {
+        switch (e.kind) {
+            case Expr::Kind::Name: case Expr::Kind::This: return true;
+            case Expr::Kind::Member: {
+                const Expr& base = *static_cast<const MemberExpr&>(e).base;
+                return !base.type->isClass() && stablePlace(base);
+            }
+            case Expr::Kind::Index: {
+                const Expr& base = *static_cast<const IndexExpr&>(e).base;
+                return base.type->isArray() && stablePlace(base);
+            }
+            default: return false;
+        }
+    }
+
+    // Whether a place lies in an element of a vector, a string or a hashmap, before any class object on the way to its variable.
+    static bool inContainerElement(const Expr& e) {
+        switch (e.kind) {
+            case Expr::Kind::Member: {
+                const Expr& base = *static_cast<const MemberExpr&>(e).base;
+                return !base.type->isClass() && inContainerElement(base);
+            }
+            case Expr::Kind::Index: {
+                const Expr& base = *static_cast<const IndexExpr&>(e).base;
+                if (base.type->isArray()) return inContainerElement(base);
+                return !base.type->isPointer();
+            }
+            default: return false;
+        }
+    }
+
+    // What a reference parameter is given: the address of the argument, if it is a place of the parameter's type, and otherwise of
+    // a temporary that lives until the statement ends, as in C++. What holds the place is kept alive meanwhile.
+    llvm::Value* refArgument(const Expr& e, const Type* to) {
+        if (isPlace(e) && e.type == to) return addressOf(e, /*hold=*/true, /*write=*/false);
+        llvm::Value* v = genOwned(e, to);
+        llvm::Value* slot = v;  // a value handled through its address already has its place
+        if (!inMemory(to)) {
+            slot = entryAlloca(llvmType(to), "ref.tmp");
+            b.CreateStore(v, slot);
+        }
+        if (isManaged(to)) temps.push_back({slot, to, true});
+        return slot;
+    }
+
+    llvm::Value* argument(const Expr& e, const VarDecl& param) {
+        return passedByRef(param) ? refArgument(e, param.type) : holdOwned(e, param.type);
+    }
+
+    // Keeps the temporaries made since `mark` until the current scope ends, instead of the statement.
+    void keepTempsForScope(size_t mark) {
+        for (size_t i = mark; i < temps.size(); ++i) {
+            const Temp& t = temps[i];
+            VarDecl& held = heldForScope.emplace_back(Loc{}, "held", t.type, Loc{});
+            held.type = t.type;
+            if (t.inMemory) {
+                locals[&held] = t.value;
+            } else {
+                llvm::AllocaInst* slot = entryAlloca(llvmType(t.type), "held");
+                b.CreateStore(t.value, slot);
+                locals[&held] = slot;
+            }
+            scopes.back().push_back(&held);
+        }
+        temps.resize(mark);
+    }
+
     // The same, for a value that waits while more of the expression is worked out: an error there
     // releases it. The caller removes it from `pending` once it is used.
     llvm::Value* holdOwned(const Expr& e, const Type* to) {
@@ -1624,7 +1697,7 @@ struct Codegen::Impl {
         const FuncDecl& ctor = *sd.constructor;
         std::vector<llvm::Value*> values{nullptr};  // `this`, set below
         size_t mark = pending.size();
-        for (size_t i = 0; i < args.size(); ++i) values.push_back(holdOwned(*args[i], ctor.params[i]->type));
+        for (size_t i = 0; i < args.size(); ++i) values.push_back(argument(*args[i], *ctor.params[i]));
         pending.resize(mark);
         if (sd.isClass) {
             values[0] = allocObject(sd);
@@ -2788,7 +2861,7 @@ struct Codegen::Impl {
         std::vector<llvm::Value*> args;
         if (call.method) args.push_back(atOffset(thisPtr, pathOffset(call.path)));
         size_t mark = pending.size();
-        for (size_t i = 0; i < call.args.size(); ++i) args.push_back(holdOwned(*call.args[i], target->params[i]->type));
+        for (size_t i = 0; i < call.args.size(); ++i) args.push_back(argument(*call.args[i], *target->params[i]));
         pending.resize(mark);
         return callFunction(*target, std::move(args), call.method != nullptr);
     }
@@ -2950,7 +3023,7 @@ struct Codegen::Impl {
         auto genArgs = [&] {
             size_t mark = pending.size();
             for (size_t i = 0; i < call.args.size(); ++i)
-                args.push_back(holdOwned(*call.args[i], call.method->params[i]->type));
+                args.push_back(argument(*call.args[i], *call.method->params[i]));
             pending.resize(mark);
         };
         // A struct method works on the struct in place, so its place is found after the arguments.
@@ -3272,6 +3345,16 @@ struct Codegen::Impl {
         switch (s.kind) {
             case Stmt::Kind::VarDecl: {
                 auto& v = static_cast<const VarDecl&>(s);
+                // `const T& r = place;` names the place, and keeps what holds it alive until the scope ends. An element of a
+                // vector, a string or a hashmap is copied for now, since holding its buffer would make every change to the
+                // container copy it. Any other value is a temporary that lives as long as the reference, as in C++.
+                if (passedByRef(v) && isPlace(*v.init) && v.init->type == v.type && !inContainerElement(*v.init)) {
+                    size_t mark = temps.size();
+                    locals[&v] = addressOf(*v.init, /*hold=*/true, /*write=*/false);
+                    keepTempsForScope(mark);
+                    flushTemps();
+                    return;
+                }
                 llvm::Value* init = v.init ? genOwned(*v.init, v.type)
                                     : v.type->is(K::String) || v.type->hasFields() || v.type->isVector() ||
                                               v.type->isOptional() || v.type->isArray() || v.type->isWeak() || v.type->isUnique() || v.type->isLocal()
@@ -3457,11 +3540,15 @@ struct Codegen::Impl {
         bool str = vt->is(K::String);  // a string goes over its bytes
         bool arr = vt->isArray();
         scopes.emplace_back();  // holds the vector, array or string
-        llvm::Value* range = genOwned(*st.range, vt);
+        const Type* elemType = str ? Type::charTy() : vt->elem;
+        bool byRef = passedByRef(var) && var.type == elemType;
+        // `for (const auto& x : a)` over an array in a variable goes over the array itself, which stays where it is.
+        bool inPlace = arr && byRef && isPlace(*st.range) && stablePlace(*st.range);
+        llvm::Value* range = inPlace ? addressOf(*st.range) : genOwned(*st.range, vt);
         flushTemps();
         if (arr) locals[st.rangeVar.get()] = range;
         else b.CreateStore(range, allocaFor(*st.rangeVar));
-        scopes.back().push_back(st.rangeVar.get());
+        if (!inPlace) scopes.back().push_back(st.rangeVar.get());
         llvm::Value* size = arr ? b.getInt64(vt->length) : str ? strLength(range) : vecSize(range);
         llvm::AllocaInst* counter = entryAlloca(b.getInt64Ty(), "index");
         b.CreateStore(b.getInt64(0), counter);
@@ -3477,6 +3564,21 @@ struct Codegen::Impl {
         b.SetInsertPoint(bodyBB);
         loops.push_back({endBB, stepBB, scopes.size()});
         scopes.emplace_back();  // the loop variable: a new one for each element
+        if (byRef) {  // the element itself, in what the loop holds
+            locals[&var] = arr ? arrayElement(range, i, vt)
+                           : str ? b.CreateInBoundsGEP(b.getInt8Ty(), strData(range), i, "c.addr")
+                                 : elementAt(range, i, vt);
+            genScoped(*st.body);
+            popScope();
+            loops.pop_back();
+            b.CreateBr(stepBB);
+            b.SetInsertPoint(stepBB);
+            b.CreateStore(b.CreateAdd(i, b.getInt64(1)), counter);
+            b.CreateBr(condBB);
+            b.SetInsertPoint(endBB);
+            popScope();
+            return;
+        }
         llvm::Value* elem = arr ? peekValue(vt->elem, arrayElement(range, i, vt), "elem")
                             : str ? b.CreateLoad(b.getInt8Ty(), b.CreateInBoundsGEP(b.getInt8Ty(), strData(range), i), "c")
                                   : peekValue(vt->elem, elementAt(range, i, vt), "elem");
@@ -3504,7 +3606,7 @@ struct Codegen::Impl {
         bool result = inMemory(f.retType);
         if (result) params.push_back(b.getPtrTy());  // where the result goes; see callFunction
         if (f.owner) params.push_back(b.getPtrTy());  // `this`
-        for (auto& p : f.params) params.push_back(valueType(p->type));
+        for (auto& p : f.params) params.push_back(passedByRef(*p) ? b.getPtrTy() : valueType(p->type));
         if (f.callFails()) params.push_back(b.getPtrTy());  // where an error goes; see errorPlace
         auto* type = llvm::FunctionType::get(result ? b.getVoidTy() : llvmType(f.retType), params, false);
         // User functions get a prefixed, internal symbol so they never collide with C
@@ -3828,6 +3930,10 @@ struct Codegen::Impl {
         // Parameters own their values, like locals, and are released when the function ends.
         scopes.emplace_back();
         for (size_t i = 0; i < f.params.size(); ++i) {
+            if (passedByRef(*f.params[i])) {  // the caller's place, which the caller keeps
+                locals[f.params[i].get()] = fn->getArg(first + i);
+                continue;
+            }
             if (inMemory(f.params[i]->type)) locals[f.params[i].get()] = fn->getArg(first + i);  // the caller's copy
             else b.CreateStore(fn->getArg(first + i), allocaFor(*f.params[i]));
             if (isManaged(f.params[i]->type)) scopes.back().push_back(f.params[i].get());

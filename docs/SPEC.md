@@ -1244,6 +1244,47 @@ delete[] many;
 
 This is the one attribute C+ has. C++'s others, such as `[[nodiscard]]`, are errors.
 
+### References
+
+A reference names a place that already exists, instead of holding a value of its own. `const T&`
+works as in C++: it reads a value where it is, without copying it.
+
+```cpp
+int total(const vector<int>& v) {   // the caller's vector itself
+    int sum = 0;
+    for (const auto& x : v) sum += x;  // each element in place
+    return sum;
+}
+
+bool same(const Point& a, const Point& b) { return a.x == b.x && a.y == b.y; }
+
+const auto& name = user.name;       // the field itself: a change to it shows here
+```
+
+- **Where.** A `const T&` can be a parameter of a function, a method or a constructor, the
+  variable of a [range-based `for` loop](#range-based-for-loops), or a local variable, which
+  must say where it refers to when it is declared. `catch (const Error& e)` means
+  `catch (Error e)`, since an error is a class object, which already refers to the object. A
+  function written to return `const T&` returns the value, as a copy.
+- **What it is given.** A place of the same type, such as a variable, a field or an element,
+  is referred to. Any other value, such as `3 + 4`, the result of a call, or an `int` given to a
+  `const long&`, goes into a temporary that lives as long as the reference, as in C++.
+- **Changes show through it**, as in C++, when they are made to the place it refers to. The
+  exception is a place in a vector, a string or a hashmap, where the reference never dangles
+  but may show the value as it was. A local `const auto& e = v[i];` holds a copy of the
+  element, for now. A parameter given `v[i]`, and a loop over `v`, keep `v`'s buffer while
+  they run, so a change made to `v` meanwhile gives it a buffer of its own, as for a
+  [loop](#range-based-for-loops), and leaves the reference on the old one.
+- **A class.** `const User& u` is the same as `User u`: both refer to the same object, whose
+  fields can still be changed through it.
+- **Not allowed.** An `async` function, or one run with `spawn`, cannot take a reference,
+  since it goes on after its caller has moved on, and no reference may be alive at an `await`.
+  A reference cannot be a field, a constant, an element of a container, or a template
+  argument. There is no `T&&` or `auto&&`.
+- **Planned.** `T&`, through which the place can also be changed: `void bump(int& n)`,
+  `for (auto& x : v)`, `int& at(int i)`. Meanwhile a [pointer](#pointers) parameter lets a
+  function change the caller's variable.
+
 ---
 
 ## Declarations
@@ -2712,7 +2753,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Strings: `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
 | `hashmap<K, V>` | implemented |
 | Vector `insert`, `erase`, iterators; `find` on a hashmap, sorted maps, sets | planned |
-| References (`T&`), including `for (auto& x : v)` | planned |
+| `const T&` parameters, local variables and range-based `for` loops | implemented |
+| References that can change their place (`T&`), including `for (auto& x : v)` | planned |
 | Structured bindings, `for (auto [k, v] : m)` | planned |
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |

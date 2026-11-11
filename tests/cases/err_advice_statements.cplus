@@ -39,7 +39,7 @@ void refInLoop() {
     Node n = Node();
     vector<int> items;
     for (auto& x : items) {}
-    // error: drop the '&': `for (auto x : items)` copies each element
+    // error: to read the elements without copying them, write `for (const auto& x : items)`
 }
 void sizeOfGeneric() {
     long s = sizeof vector<int>;

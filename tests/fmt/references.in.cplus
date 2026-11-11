@@ -1,0 +1,14 @@
+struct Point { int x = 0; };
+int total(const vector<int> &v) {
+    int sum = 0;
+    for (const auto & x : v) sum += x&1;
+    return sum;
+}
+bool same(const Point &a, const Point & b) { return a.x == b.x; }
+int main() {
+    int flags = 6;
+    const int &low = flags & 3;
+    const Point&p = Point{};
+    println("{} {}", low, same(p, p));
+    return 0;
+}

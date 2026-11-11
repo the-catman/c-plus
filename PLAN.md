@@ -609,6 +609,23 @@ looked for next to the program first, as `#include` does, and `-I` adds folders.
   its use says.
 - libclang is optional when the compiler is built, as libcurl is: without it, a header import is an error.
 
+### 2.31 References — DECIDED
+C++'s `T&` and `const T&`, for references that are used but not kept, as chosen on 2026-11-11 (§6). The details were settled the
+same day. One rule holds it together: a `T&` does exactly what it does in C++, or the program stops; a `const T&` never stops the
+program and never dangles, but when its container is resized, replaced or was sharing its buffer, it may show the element as it was.
+- Being a reference belongs to a declaration, not to a type. A parameter of a function, method or constructor, the variable of a
+  range-based `for` loop, and a local variable can be references. A field, a constant, an element of a container, a template
+  argument and an optional cannot. `T&&` and `auto&&` are errors. `catch (const Error& e)` means `catch (Error e)`.
+- `const T&` returns the value, as a copy. `T& f()` comes with operator overloading, through a stack of what the callee holds.
+- A function that is `async`, or run with `spawn`, cannot take a reference, and no reference is alive at an `await`.
+- Underneath, a reference into a vector or a string pins its buffer: a count beside the sharing count, so writes land in place
+  and a copy of the container gets a buffer of its own at once. While a `T&` lives, growing, replacing or freeing the container
+  is an error where the compiler sees it and stops the program where it does not. This replaces the trap of §6 for methods on
+  elements, and lets `v.back()`, `v.front()`, `m.at(k)` and `?:` of two places be places, which changes §2.17 and §2.24.
+- Aliasing follows C++: `swap(v[0], v[1])` and `f(x, x)` are allowed.
+- Order: `const T&` first, with no change to the runtime (done 2026-11-11). Then `T&` to variables and fields, then the pins,
+  then `T&` returns with item 6. Until the pins, `const auto& e = v[i];` holds a copy of the element.
+
 ## 3. Compiler architecture
 
 ```
@@ -743,7 +760,7 @@ will confidently write C++ wherever the two differ.
     this where it can tell, and the running program where it cannot, so a reference never dangles or changes a copy.
   - Plain C++ references were turned down. Copies share a buffer until one is written (§2.12, §2.17), so writing through a
     reference could change another variable's value, silently, where C++ would at worst crash under `--debug`.
-  - The details are decided when the item is reached. Today `for (auto& x : v)` and `T&` are errors that point to a copy.
+  - The details are in §2.31. `const T&` works; `T&` is an error that points to `const T&` or a pointer.
 - A scheduler that shares async work between threads, which the rules in 2.9 allow
   (decided 2026-11-10), when real workloads need more than one loop per thread.
 - A runtime error stops the whole program, as in Swift. A server may want to end only the request that failed, which

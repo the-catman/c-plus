@@ -54,7 +54,6 @@ int main() {
 // error: a catch says the type of error it takes
 // error: write `catch (Error e)`
 // error: a catch says what it takes
-// error: a catch takes its error without a reference
 // error: C+ has no finally
 // error: a try block is a statement, so it has no value
 // error: `throw` is a statement, so it cannot be part of an expression

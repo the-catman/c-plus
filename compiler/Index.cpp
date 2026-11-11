@@ -79,7 +79,7 @@ private:
     std::string describe(const VarDecl& v) const {
         const Type* t = typeOf(v);
         if (!t) return "";
-        return with(std::string(v.isConstexpr ? "constexpr " : v.isConst ? "const " : "") + t->name + " " + v.name, v.loc);
+        return with(std::string(v.isConstexpr ? "constexpr " : v.isConst ? "const " : "") + t->name + (v.isRef ? "& " : " ") + v.name, v.loc);
     }
 
     std::string describe(const FuncDecl& f) const {
@@ -87,7 +87,7 @@ private:
         std::string params;
         for (auto& p : f.params) {
             const Type* t = typeOf(*p);
-            params += (params.empty() ? "" : ", ") + std::string(t ? t->name : "?") + " " + p->name;
+            params += (params.empty() ? "" : ", ") + std::string(p->isRef ? "const " : "") + (t ? t->name : "?") + (p->isRef ? "& " : " ") + p->name;
         }
         std::string owner = f.owner ? std::string(f.owner->type.name) : "";
         std::string text;
