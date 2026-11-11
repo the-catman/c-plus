@@ -1,11 +1,17 @@
-// ++ on the last char, 255, does not wrap around to 0.
+// ++ on the last char, 255, wraps around to 0. In a function marked [[checked]] it stops
+// the program instead.
+[[checked]] void step(char& c) { c++; }
 int main() {
-    char c = char(254);
+    char c = char(255);
     c++;
     println("{}", int(c));
-    c++;
+    c = char(254);
+    step(c);
+    println("{}", int(c));
+    step(c);
     return 0;
 }
+// expect: 0
 // expect: 255
 // trap: the result of '++' is 256, which does not fit in a char (from 0 to 255)
-// trap: trap_char_increment.cplus:6:6
+// trap: trap_char_increment.cplus:3:35

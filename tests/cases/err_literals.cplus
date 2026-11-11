@@ -4,10 +4,10 @@ int main() {
     int b = 0b102;
     int c = 5u;
     int d = 5x;
-    long e = 1 << 40;
+    long e = checked(1 << 40);
     int f = 5L;
     int g = 0;
-    g <<= 32;
+    checked(g <<= 32);
     return 0;
 }
 // error: numbers cannot start with 0 in C+

@@ -1,4 +1,7 @@
-// An infinity does not fit in any integer type.
+// An infinity does not fit in any integer type, so in a file that starts with
+// `[[checked]];` converting one stops the program.
+[[checked]];
+
 int main() {
     float zero = 0;
     long n = long(-1 / zero);
@@ -6,4 +9,4 @@ int main() {
     return 0;
 }
 // trap: long(x) was given -inf, which does not fit in a long
-// trap: trap_cast_infinity.cplus:4:14
+// trap: trap_cast_infinity.cplus:7:14

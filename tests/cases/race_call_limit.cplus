@@ -1,5 +1,5 @@
 // Calls deeper than --race can follow stop the program, before they damage what it needs. This one would run without --race.
-long down(long n) { return n == 0 ? 0 : down(n - 1) + 1; }
+long down(long n) { return n == 0 ? 0 : checked(down(n - 1) + 1); }  // checked, so -O keeps the calls
 
 int main() {
     println("{}", (spawn down(70000)).wait());

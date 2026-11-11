@@ -251,6 +251,10 @@
           "match": "\\b(?:import|export)\\b"
         },
         {
+          "name": "keyword.operator.word.cplus",
+          "match": "\\b(?:checked|unchecked)(?=\\s*\\()"
+        },
+        {
           "name": "constant.language.cplus",
           "match": "\\b(?:true|false|null)\\b"
         },

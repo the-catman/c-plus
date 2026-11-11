@@ -126,11 +126,17 @@ The default path:
     - Wrapping: `+ - *`, unary `-`, `++ --` and compound assignment, on every integer type and `char`; `MIN / -1` is
       `MIN` and `abs(MIN)` is `MIN`. `MIN % -1` is 0. Division by zero always stops.
     - A shift count out of range is masked to the width, as in JavaScript and C#, so `1 << 32` on an `int` is 1. Bits
-      shifted out fall off. In `checked`, a count out of range stops.
+      shifted out fall off. In `checked`, a count out of range stops. A written count out of range is a warning, and in
+      `checked` an error.
     - A narrowing cast, `int(someLong)`, keeps the low bits, as in C++20. A float out of an integer's range becomes the
       nearest end, and NaN becomes 0. In `checked`, both stop. `Color(n)` with no enumerator still stops.
-    - Constants and `constexpr` work out what the running program would, so they wrap too. In `checked`, an overflow there
-      is a compile error. `--debug` changes nothing.
+    - Constants and `constexpr` work out what the running program would, so they wrap too. In `checked`, an overflow in a
+      `constexpr` is a compile error, and in a `const` it stops the program where the constant is used, as `1 / 0` does.
+      `--debug` changes nothing.
+    - Built on 2026-11-11. Each expression knows whether it is checked, set where the parser reads it, so generics,
+      `if constexpr` branches and default arguments keep what is written around them. `checked` and `unchecked` cannot
+      name a function. One cost: infinite recursion such as `f(n + 1) + 1` can become an endless loop under `-O`, where
+      checked arithmetic kept the calls, as it does in C++.
     - Unsigned integers: signed and unsigned never mix without a cast, and literals adapt. `char`, `uint8_t`, `uint16_t`
       and `uint32_t` widen by themselves to a wider unsigned type, and `uint32_t` and smaller to `long`. `size()` stays
       `long`. A C `unsigned` from a header becomes the unsigned type.
@@ -446,8 +452,8 @@ Decided 2026-11-05.
   is a value. `%` and the bit operators stay integer-only; `fmod` gives the remainder.
 - Casts use C++'s spellings, `int(x)`, `static_cast<int>(x)` and `(int)x`, all with the
   same meaning, between the number types and `bool`, and between pointer types (§2.21). A
-  value that does not fit the new type, including NaN and the infinities converted to an
-  integer, stops the program, as integer overflow does. `reinterpret_cast` is the one cast
+  smaller integer type keeps the low bits, and a float out of range gives the nearest integer, NaN 0 (§2.7). In checked
+  code, a value that does not fit the new type stops the program, as integer overflow does. `reinterpret_cast` is the one cast
   between a pointer and a number (§2.21). `const_cast` does not exist; `dynamic_cast` is in
   §2.11. A cast never makes or reads a string, except `string(p)` from a `char*` and
   `string(a)` from an `array<char, N>`.
@@ -466,8 +472,8 @@ Decided 2026-11-05.
   literal of more than one byte (`'ab'`, `'é'`) and the prefixed forms are errors.
 - In arithmetic a char is promoted to `int`, as in C++, so `c - '0'` is an `int`. A char
   converts to every number type by itself. A number never becomes a char by itself:
-  `char(n)` is a checked cast. `c++`, `c--`, `c += n` and `c -= n` keep a char, as in
-  C#, and stop the program outside 0 to 255.
+  `char(n)` is a cast, which keeps the low byte. `c++`, `c--`, `c += n` and `c -= n` keep a char, as in
+  C#, and wrap at 256, or stop the program outside 0 to 255 in checked code (§2.7).
 - A char is not a condition and does not convert to `bool`: with no NUL-terminated
   strings, `if (c)` is rarely the intent. `c != '\0'` says it.
 - `{}` prints the character. Inside a struct, vector or optional it prints quoted, with

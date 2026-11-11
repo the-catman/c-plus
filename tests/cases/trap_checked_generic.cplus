@@ -1,0 +1,28 @@
+// A generic marked [[checked]] is checked in each of its instances, and so is a [[checked]]
+// method of a generic struct.
+template <typename T>
+struct Pair {
+    T a;
+    T b;
+    [[checked]] T sum() { return a + b; }
+};
+
+[[checked]] template <typename T>
+T twice(T x) {
+    if constexpr (true) {
+        return x * 2;
+    }
+    return x;
+}
+
+int main() {
+    println("{}", twice(4000000000L));
+    Pair<long> p = {9223372036854775807, 0};
+    println("{}", p.sum());
+    println("{}", twice(2000000000));
+    return 0;
+}
+// expect: 8000000000
+// expect: 9223372036854775807
+// trap: integer overflow: the result of '*' does not fit in 'int'
+// trap: trap_checked_generic.cplus:13:18

@@ -1,10 +1,12 @@
-// NaN has no integer value, so converting it stops the program.
+// NaN has no integer value. Converting it gives 0, and in checked code it stops the program.
 int main() {
     double zero = 0;
     double nan = zero / zero;
-    long n = static_cast<long>(nan);
+    println("{}", static_cast<long>(nan));
+    long n = checked(static_cast<long>(nan));
     println("{}", n);
     return 0;
 }
+// expect: 0
 // trap: long(x) was given NaN, which is not a number
-// trap: trap_cast_nan.cplus:5:14
+// trap: trap_cast_nan.cplus:6:22

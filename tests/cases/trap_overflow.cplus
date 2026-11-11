@@ -1,10 +1,13 @@
+// Arithmetic wraps around, and `checked(...)` stops the program instead.
 int main() {
     int big = 2147483647;
+    println("{}", big + 1);
     println("before");
-    big = big + 1;
+    big = checked(big + 1);
     println("after {}", big);
     return 0;
 }
+// expect: -2147483648
 // expect: before
 // trap: integer overflow: the result of '+' does not fit in 'int'
-// trap: trap_overflow.cplus:4:15
+// trap: trap_overflow.cplus:6:23

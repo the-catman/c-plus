@@ -22,9 +22,9 @@ long square(long n) { return n * n; }
 |------|----|
 | Types | `int` (32-bit), `long` (64-bit), `double` (64-bit), `float` (32-bit), `bool`, `char` (one byte, 0 to 255), `string`, `void`, `auto`, structs, classes, `vector<T>`, `array<T, N>`, `T?`, `T*` |
 | Floating point | `1.5`, `.5`, `1e9`, `2.5f`, as in C++. `7 / 2` is 3, `7 / 2.0` is 3.5. IEEE: `1 / 0.0` is `inf`, no traps. `float f = 0.5;` works for a written number |
-| Casts | `int(x)`, `static_cast<int>(x)`, `(int)x` between numbers, `char` and `bool`. A fraction is dropped toward zero; a value that does not fit **stops the program**. `(int*)p`, `static_cast<int*>(p)` between pointer types. `reinterpret_cast<void*>(-1)`, `reinterpret_cast<long>(p)` between a pointer and a number |
+| Casts | `int(x)`, `static_cast<int>(x)`, `(int)x` between numbers, `char` and `bool`. A fraction is dropped toward zero. A smaller integer keeps the lowest bits, and a float out of range gives the nearest integer (NaN gives 0); in checked code a value that does not fit **stops the program**. `(int*)p`, `static_cast<int*>(p)` between pointer types. `reinterpret_cast<void*>(-1)`, `reinterpret_cast<long>(p)` between a pointer and a number |
 | Math | `sqrt`, `pow`, `sin`, `floor`, `round`, `fmod`, `isnan`, `abs`, `min`, `max` and the rest of `<cmath>`, with no `std::` |
-| Characters | `char c = 'a';`, escapes as in strings. `c + 1` and `c - '0'` are `int`s, as in C++; `char(n)` is checked. `c++`, `c += 2` stay chars. `isdigit`, `isalpha`, `isspace`, `toupper`, `tolower` and the rest of `<cctype>` (ASCII, return `bool` or `char`) |
+| Characters | `char c = 'a';`, escapes as in strings. `c + 1` and `c - '0'` are `int`s, as in C++; `char(n)` keeps the lowest byte. `c++`, `c += 2` stay chars and wrap at 256. `isdigit`, `isalpha`, `isspace`, `toupper`, `tolower` and the rest of `<cctype>` (ASCII, return `bool` or `char`) |
 | Structs | `struct P { int x; int y = 0; };` is a **value** that is copied. Build with `{1, 2}`, `{.y = 2}`, `P{1, 2}`, `P(1, 2)`, `{}`. `P(p)` copies one |
 | Fields | `p.x`, `p.x += 1`. `Point p;` can be filled field by field before use |
 | Classes | `class U {...}; U u = U("a");` is a **reference-counted object**: `U v = u;` shares it. No `new`; freed when the last reference goes away |
@@ -77,6 +77,7 @@ long square(long n) { return n * n; }
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors and arrays element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
+| Overflow | integers **wrap**, as two's complement: `2147483647 + 1` is `-2147483648`, and a shift uses the lowest 5 bits of its amount (6 for a `long`). `checked(a * b)` **stops the program** on overflow instead, as does all of a function marked `[[checked]]`, or a file starting with `[[checked]];`. `unchecked(...)` wraps inside them. `/0` always stops |
 | Constants | outside any function, in any order: `const int MAX = 100;`, `const string NAME = "a" + OTHER;`, `void* const NONE = null;`. A number, `char`, `bool`, `string`, pointer or enum, from literals, other constants, operators, casts and calls to `constexpr` functions that can run while compiling |
 | Variables outside functions | `int count = 0;`, `vector<string> names;`, `Mutex lock = Mutex();`, `const vector<int> PRIMES = {2, 3, 5};`, `export int level = 1;`, used anywhere in the file, in any order. All are worked out before `main`, and one is ready whenever another needs it. A class needs a value: `User current = User("a");` or `User? current;`. The value cannot fail. Every thread sees the same one, so what threads change is behind a `Mutex`. Never moved from |
 | constexpr | `constexpr int MAX = square(4);`, `constexpr int square(int n) { return n * n; }`, worked out while compiling, so `1 / 0` there is a compile error. `array<int, MAX * 2> a;`, `Buffer<int, MAX>`, also with a plain `const` |
@@ -111,7 +112,7 @@ long square(long n) { return n * n; }
 | prototypes / headers | none. Define each function once, in any order |
 | a function or a lambda inside a function | write it at the top level of the file, and pass it what it needs |
 | `int x;` then read `x` | compile error until `x` is assigned on every path |
-| `int i = someLong;`, `int i = 2.5;` | error: a conversion that can lose information needs a cast: `int(x)`, which stops the program if `x` does not fit |
+| `int i = someLong;`, `int i = 2.5;` | error: a conversion that can lose information needs a cast: `int(x)`, which keeps the lowest bits, or `checked(int(x))`, which stops the program if `x` does not fit |
 | `float f = someDouble;` | error: write `float(x)`. Only a double written as a number, `float f = 0.5;`, converts by itself |
 | `const_cast` | does not exist. `const` cannot be cast away |
 | `throw 42`, `throw "bad"`, `throw new Error(...)` | only an `Error` or a class deriving from it: `throw Error("bad");` |
@@ -169,11 +170,12 @@ long square(long n) { return n * n; }
 | `10u`, `unsigned` | unsigned types are planned |
 | `long long`, `size_t`, `int32_t` | `long` / `int` |
 | `int f() { if (c) return 1; }` | error: every path must return |
-| signed overflow is UB | overflow, `/0`, bad shifts **stop the program** with file:line |
+| signed overflow is UB | overflow is defined: it wraps around, as two's complement. `/0` **stops the program** with file:line |
+| `__builtin_add_overflow`, `ckd_add`, `-ftrapv` | `checked(a + b)`, `[[checked]]` before a function, or `[[checked]];` at the top of a file: overflow **stops the program** |
 | `int x{5}`, `int x(5)` | `int x = 5;` for now |
 | `new User("a")`, `delete u` on a class | `User("a")`; the object is freed automatically. `new` is for other values: `new Point{1, 2}` |
 | `int* p = new int;` then read `*p` | it is 0: `new` always gives a default value |
-| `#pragma`, `[[nodiscard]]`, `[[maybe_unused]]` | the attributes are `[[allow(new_delete)]]` and, in a switch, `[[fallthrough]];` |
+| `#pragma`, `[[nodiscard]]`, `[[maybe_unused]]` | the attributes are `[[checked]]`, `[[allow(new_delete)]]` and, in a switch, `[[fallthrough]];` |
 | `enum Color { RED };` | `enum class Color { Red };`, used as `Color::Red`: C+ has only scoped enums |
 | `switch (n) { case 1: n++; case 2: n--; }` | error: a case does not fall into the next by itself. End it with `break;`, or `[[fallthrough]];` |
 | `-g`, `-fsanitize=address,undefined`, valgrind for a memory bug | `cplus run app.cplus --debug`: memory errors stop the program with a stack trace, and leaks are reported at exit |
@@ -226,7 +228,7 @@ long square(long n) { return n * n; }
 | a huge local array, `array<int, 10000000> a;` | it is on the stack, like in C++, and running out of stack **stops the program**. Use a vector |
 | `if (v)`, `if (!v)` | `if (!v.empty())`, `if (v.empty())`; a vector itself is not a condition |
 | `s + 5`, `"abc" + 1` | error: `+` joins a string with a string or a `char` (`s + 'c'` works). Write `s + to_string(5)`; a number is never a character code |
-| `char c = 65;`, `char c = n;` | error: write `'A'`, or `char(n)`, which stops the program unless `n` is from 0 to 255 |
+| `char c = 65;`, `char c = n;` | error: write `'A'`, or `char(n)`, which keeps the lowest byte of `n` |
 | `if (c)` on a char | error: a char is not a condition. Write `c != '\0'` |
 | `to_string(c)` on a char | error, since C++ gives the code. Write `string(1, c)`, or `to_string(int(c))` for the code |
 | `'ab'`, `'é'`, `L'a'` | error: a char literal is one byte. Use a string, `"é"`, for anything longer |

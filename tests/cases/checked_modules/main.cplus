@@ -1,0 +1,24 @@
+// A file that starts with `[[checked]];` is checked, generics included, and the files that
+// import it are not.
+import stats;
+
+template <typename T>
+T wrapTotal(vector<T> v) {
+    T sum = 0;
+    for (T x : v) sum += x;
+    return sum;
+}
+
+int main() {
+    vector<int> v = {2147483647, 1};
+    println("{}", wrapTotal(v));
+    println("{}", stats::scaled(1000));
+    println("{}", stats::total(vector<long>{2147483647, 1}));
+    println("{}", stats::total(v));
+    return 0;
+}
+// expect: -2147483648
+// expect: 1000000
+// expect: 2147483648
+// trap: integer overflow: the result of '+' does not fit in 'int'
+// trap: stats.cplus:7:23

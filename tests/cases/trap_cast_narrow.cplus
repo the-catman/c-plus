@@ -1,11 +1,14 @@
-// A long that does not fit in an int stops the program instead of wrapping around.
+// A long that does not fit in an int keeps its lowest 32 bits, as in C++. In checked code
+// it stops the program instead.
 int main() {
     long big = 3000000000L;
     println("{}", int(big - 1000000000L));
-    int n = int(big);
+    println("{}", int(big));
+    int n = checked(int(big));
     println("{}", n);
     return 0;
 }
 // expect: 2000000000
+// expect: -1294967296
 // trap: int(x) was given 3000000000, which does not fit in an int (from -2147483648 to 2147483647)
-// trap: trap_cast_narrow.cplus:5:13
+// trap: trap_cast_narrow.cplus:7:21

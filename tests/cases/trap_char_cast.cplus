@@ -1,12 +1,15 @@
-// A code that is not from 0 to 255 has no char, so converting it stops the program.
+// A code that is not from 0 to 255 keeps its lowest byte as a char. In checked code it
+// stops the program instead.
 int main() {
     int n = 255;
     println("{}", int(char(n)));
     n++;
-    char c = char(n);
+    println("{}", int(char(n)));
+    char c = checked(char(n));
     println("{}", c);
     return 0;
 }
 // expect: 255
+// expect: 0
 // trap: char(x) was given 256, which does not fit in a char (from 0 to 255)
-// trap: trap_char_cast.cplus:6:14
+// trap: trap_char_cast.cplus:8:22

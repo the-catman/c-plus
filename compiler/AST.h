@@ -182,6 +182,17 @@ struct TemplatePattern {
 
 // ---- Expressions -----------------------------------------------------------
 
+// Whether arithmetic written where the parser is now is checked: inside `checked(...)`, in a function marked
+// `[[checked]]`, or in a file that starts with `[[checked]];`. Each expression takes it when it is made.
+inline thread_local bool checkedHere = false;
+struct CheckedHere {  // sets it while the parser reads one part
+    bool saved = checkedHere;
+    explicit CheckedHere(bool now) { checkedHere = now; }
+    ~CheckedHere() { checkedHere = saved; }
+    CheckedHere(const CheckedHere&) = delete;
+    CheckedHere& operator=(const CheckedHere&) = delete;
+};
+
 struct Expr {
     enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
                       Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof, New,
@@ -189,6 +200,8 @@ struct Expr {
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
+    // Overflow, a shift by too much, or a cast that loses the value stops the program here, instead of wrapping.
+    bool checked = checkedHere;
 
     Expr(Kind k, Loc l) : kind(k), loc(l) {}
     virtual ~Expr() = default;
@@ -558,6 +571,7 @@ struct VarDecl : Stmt {
     // its own copy, read again from the tokens at `defaultAt`.
     ExprPtr defaultArg;
     size_t defaultAt = 0, defaultEnd = 0;
+    bool defaultChecked = false;  // the default is written where arithmetic is checked
     std::string defaultText;  // as written: `10`
     bool defaultBad = false;  // set by Sema: what is written has an error, which was reported once
     bool isTopLevel = false;  // a constant outside any function
@@ -610,6 +624,7 @@ struct LazyBranches {
     std::vector<TemplateArg> args;
     const Type* injected = nullptr;  // what the generic's own name means
     std::vector<std::unordered_map<std::string, const VarDecl*>> localScopes;
+    bool checked = false;  // the branches are where arithmetic is checked
 };
 
 struct IfStmt : Stmt {
@@ -1022,6 +1037,7 @@ struct TemplateDecl {
     size_t start = 0, end = 0;   // the tokens of the declaration, after the `template<...>`
     bool failed = false;         // it has a syntax error, so nothing is made from it
     bool allowNewDelete = false;  // `[[allow(new_delete)]]` is written before it
+    bool checked = false;         // `[[checked]]` is written before it, or its file starts with `[[checked]];`
     std::unique_ptr<FuncDecl> pattern;  // a function, with its parameter types as they are written
     std::map<std::string, StructDecl*> records;  // what has been made, by name
     std::map<std::string, FuncDecl*> functions;

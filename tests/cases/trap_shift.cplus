@@ -1,6 +1,10 @@
+// A shift uses only the lowest bits of its amount, 5 for an int. In checked code an amount
+// that is not from 0 to 31 stops the program.
 int main() {
-    int amount = 32;
+    int amount = 33;
     println("{}", 1 << amount);
+    println("{}", checked(1 << amount));
     return 0;
 }
+// expect: 2
 // trap: shift amount out of range

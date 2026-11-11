@@ -1,0 +1,15 @@
+// A shift by a written amount that is too large compiles, as only the lowest bits of the
+// amount count, but it is unlikely to be what was meant.
+int main() {
+    int a = 1;
+    println("{}", a << 33);
+    // warning: shifting 'int' by 33 shifts by 1, since only the lowest 5 bits of the amount count
+    // warning: write an amount from 0 to 31 for 'int'. Make the left side a long to shift further
+    long b = 1;
+    b <<= 65;
+    // warning: shifting 'long' by 65 shifts by 1, since only the lowest 6 bits of the amount count
+    println("{}", b);
+    return 0;
+}
+// expect: 2
+// expect: 2

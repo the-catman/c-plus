@@ -1,0 +1,19 @@
+// Checked arithmetic stops the program on overflow, and says where, instead of wrapping.
+[[checked]] int total(vector<int> v) {
+    int sum = 0;
+    for (int x : v) sum += x;
+    return sum;
+}
+
+int main() {
+    int width = 100000;
+    long area = checked(long(width) * width);
+    println("{}", area);
+    // expect: 10000000000
+    println("{}", total({1, 2, 3}));
+    // expect: 6
+    println("{}", total({2147483647, 1}));
+    return 0;
+}
+// trap: integer overflow
+// trap: examples/features/checked.cplus:4:25

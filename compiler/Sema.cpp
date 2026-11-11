@@ -3129,19 +3129,27 @@ void Sema::checkCondition(Expr& e, Flow& flow, const char* what) {
     diags_.error(e.loc, notACondition(std::string("the ") + what, t), help, spec::Conditions);
 }
 
-void Sema::checkShiftAmount(const Type* lhsType, const Expr* lhs, const Expr& amount) {
+void Sema::checkShiftAmount(const Type* lhsType, const Expr* lhs, const Expr& amount, bool checked) {
     if (amount.kind != Expr::Kind::IntLit || !lhsType->isInteger()) return;
     int64_t n = static_cast<const IntLitExpr&>(amount).value;
     int64_t bits = lhsType->bits();
     if (n >= 0 && n < bits) return;
-    std::string help = "the amount must be from 0 to " + std::to_string(bits - 1) + " for " + q(lhsType);
+    std::string help = (checked ? "the amount must be from 0 to " : "write an amount from 0 to ") + std::to_string(bits - 1) + " for " + q(lhsType);
     if (lhsType->is(K::Int) && n >= 32 && n < 64)
         help += lhs && lhs->kind == Expr::Kind::IntLit
                     ? ". Write the left side as a long with an L suffix, e.g. `" +
                           std::to_string(static_cast<const IntLitExpr*>(lhs)->value) + "L << " + std::to_string(n) + "`"
                     : ". Make the left side a long to shift further";
-    diags_.error(amount.loc, "shifting " + q(lhsType) + " by " + std::to_string(n) + " is out of range", help,
-                 spec::IntegerOverflow);
+    if (checked) {
+        diags_.error(amount.loc, "shifting " + q(lhsType) + " by " + std::to_string(n) + " is out of range", help,
+                     spec::IntegerOverflow);
+        return;
+    }
+    // Only the lowest bits of the amount count, so this compiles, but it is unlikely to be what was meant.
+    diags_.warning(amount.loc,
+                   "shifting " + q(lhsType) + " by " + std::to_string(n) + " shifts by " + std::to_string(n & (bits - 1)) +
+                       ", since only the lowest " + (bits == 64 ? "6" : "5") + " bits of the amount count",
+                   help, spec::IntegerOverflow);
 }
 
 void Sema::checkLoopBody(Stmt& body, Flow& flow) {
@@ -5126,7 +5134,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (b.op == BinOp::Shl || b.op == BinOp::Shr) {
                 b.operandType = promoted(l);  // a shift keeps the type of its left side
                 result = b.operandType;
-                checkShiftAmount(b.operandType, b.lhs.get(), *b.rhs);
+                checkShiftAmount(b.operandType, b.lhs.get(), *b.rhs, b.checked);
             } else {
                 b.operandType = commonNumber(l, r);
                 result = comparison ? Type::boolTy() : b.operandType;
@@ -5201,7 +5209,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 else if (*a.op != BinOp::Shl && *a.op != BinOp::Shr)
                     requireConvertible(*a.value, t, "on the right of " + opName);
                 else
-                    checkShiftAmount(t, nullptr, *a.value);
+                    checkShiftAmount(t, nullptr, *a.value, a.checked);
             } else {
                 checkValue(*a.value, flow, t, "when assigning to " + name);
                 if (ok && var) markAssigned(flow, var, path);
@@ -5637,6 +5645,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             return Type::error();
         }
         std::string help;
+        const char* anchor = spec::Functions;
         const std::string& name = call.callee;
         std::string stem = name.size() > 3 ? name.substr(0, name.size() - 1) : "";
         if (name == "sleep" || name == "usleep" || name == "nanosleep" || name == "Sleep" || name == "setTimeout") {
@@ -5731,6 +5740,13 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         else if (name == "fmin" || name == "fmax" || name == "fminf" || name == "fmaxf")
             help = "write `" + std::string(name.compare(0, 4, "fmin") == 0 ? "min" : "max") + "(a, b)`, which works for doubles and floats too";
         else if (name == "log1p") help = "write `log(1 + x)`";
+        else if (name == "__builtin_add_overflow" || name == "__builtin_sub_overflow" || name == "__builtin_mul_overflow" ||
+                 name == "ckd_add" || name == "ckd_sub" || name == "ckd_mul") {
+            const char* op = name.find("add") != std::string::npos ? "+" : name.find("sub") != std::string::npos ? "-" : "*";
+            help = std::string("write `checked(a ") + op + " b)`, which stops the program when the result does not fit. Outside "
+                   "`checked`, arithmetic wraps around, as the result these give does";
+            anchor = spec::Checked;
+        }
         else if (name == "expm1") help = "write `exp(x) - 1`";
         else if (name == "printf" || name == "puts" || name == "putchar")
             help = "C+ prints with println: `printf(\"%d\\n\", x)` becomes `println(\"{}\", x)`";
@@ -5743,7 +5759,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             help = "did you mean " + q(guess) + "?";
         else
             help = "define it in this file, in any order, or declare a C function with `extern \"C\"`";
-        if (!program_->unreadFunctions.count(call.callee)) diags_.error(nameLoc, "there is no function named " + q(call.callee), help, spec::Functions);
+        if (!program_->unreadFunctions.count(call.callee)) diags_.error(nameLoc, "there is no function named " + q(call.callee), help, anchor);
         return Type::error();
     }
     FuncDecl* fn = it->second;

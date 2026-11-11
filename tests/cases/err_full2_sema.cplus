@@ -20,9 +20,9 @@ template <typename T, int Q> struct Buf { array<T, Q> a; };
 template <typename T, int Q> void h(Buf<T, Q> a, Buf<T, Q> b) { }
 bool? ready() { return true; }
 void nothing() { }
-constexpr int OVERFLOW = 2147483647 + 1;
+constexpr int OVERFLOW = checked(2147483647 + 1);
 // error: make the value fit: declare it as a `long` and write the numbers as `long`, as in `constexpr long n = 2147483647L + 1;`, or use smaller ones
-constexpr char WIDE = char(300);
+constexpr char WIDE = checked(char(300));
 // error: use a value from 0 to 255, which is what a char holds
 
 void values(json::Value doc, U? o, U u) throws {

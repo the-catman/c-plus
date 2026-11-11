@@ -1,0 +1,16 @@
+// A method marked [[checked]] stops the program when its arithmetic overflows.
+struct Counter {
+    int n = 0;
+    [[checked]] int next() { return ++n; }
+};
+
+int main() {
+    Counter c;
+    c.n = 2147483646;
+    println("{}", c.next());
+    println("{}", c.next());
+    return 0;
+}
+// expect: 2147483647
+// trap: integer overflow: the result of '++' does not fit in 'int'
+// trap: trap_checked_method.cplus:4:37

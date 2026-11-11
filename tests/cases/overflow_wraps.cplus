@@ -1,0 +1,78 @@
+// Integer arithmetic wraps around, as two's complement, unless it is checked.
+const int WRAPPED = 2147483647 + 1;  // constants wrap as the running program does
+constexpr long LONG_WRAPPED = 9223372036854775807L * 2;
+
+int hash(string s) {
+    int h = 17;
+    for (char c : s) h = h * 31 + int(c);  // the usual hash, which overflows on purpose
+    return h;
+}
+
+int main() {
+    int big = 2147483647;
+    println("{} {}", big + 1, big * 2);
+    long l = 9223372036854775807;
+    println("{} {}", l + 1, -(-l - 1));
+    int smallest = -big - 1;
+    println("{} {} {} {}", -smallest, smallest / -1, smallest % -1, abs(smallest));
+    big++;
+    println("{}", big);
+    big--;
+    println("{}", big);
+    int n = 1000000;
+    n *= n;
+    println("{}", n);
+    n = 2147483647;
+    n += 10;
+    println("{}", n);
+    println("{} {}", WRAPPED, LONG_WRAPPED);
+    println("{} {}", hash("hello"), hash("a much longer string than the other"));
+    // A shift uses the lowest 5 bits of its amount for an int, and 6 for a long.
+    int amount = 33;
+    println("{} {} {}", 1 << amount, 1L << 65 + 0 * amount, -16 >> 36 + 0 * amount);
+    int s = 1;
+    s <<= amount;
+    println("{}", s);
+    println("{} {}", 1 << 31, 3 << 30);  // bits shifted off the top are lost
+    // Casts to a smaller integer keep its lowest bits.
+    println("{} {} {}", int(l), int(5000000000L), int(-5000000000L));
+    println("{} {} {}", int(char(300)), int(char(-1)), int(char(256 + 65)));
+    // Floating-point values out of range give the nearest integer, and NaN gives 0.
+    double zero = 0;
+    println("{} {} {}", int(1e20), int(-1e20), int(zero / zero));
+    println("{} {}", long(1e30), long(-1 / zero));
+    println("{} {} {}", int(char(1000.5)), int(char(-3.5)), int(char(zero / zero)));
+    // A char wraps around at 256.
+    char c = char(255);
+    c++;
+    println("{}", int(c));
+    c--;
+    println("{}", int(c));
+    char d = 'a';
+    d += 200;
+    println("{}", int(d));
+    d -= 250;
+    println("{}", int(d));
+    return 0;
+}
+// expect: -2147483648 -2
+// expect: -9223372036854775808 -9223372036854775808
+// expect: -2147483648 -2147483648 0 -2147483648
+// expect: -2147483648
+// expect: 2147483647
+// expect: -727379968
+// expect: -2147483639
+// expect: -2147483648 -2
+// expect: 585857889 92577693
+// expect: 2 2 -1
+// expect: 2
+// expect: -2147483648 -1073741824
+// expect: -1 705032704 -705032704
+// expect: 44 255 65
+// expect: 2147483647 -2147483648 0
+// expect: 9223372036854775807 -9223372036854775808
+// expect: 255 0 0
+// expect: 0
+// expect: 255
+// expect: 41
+// expect: 47

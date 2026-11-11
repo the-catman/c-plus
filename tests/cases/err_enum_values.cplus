@@ -10,7 +10,7 @@ enum class Last { A = 2147483647, B };
 enum class LongLast : long { A = 9223372036854775807, B };
 enum class FromOther { A, B = A + 1 };
 enum class Itself { A = int(Itself::A) };
-enum class Overflow { A = 2147483647 + 1 };
+enum class Overflow { A = checked(2147483647 + 1) };
 enum class Divided { A = 1 / 0 };
 
 int main() { return 0; }

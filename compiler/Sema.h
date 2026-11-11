@@ -226,7 +226,7 @@ private:
     void reportAccess(const StructDecl& sd, const std::string& member, bool isMethod, Access access, Loc loc);
     const Type* checkPrint(CallExpr& call, Flow& flow);
     void checkCondition(Expr& e, Flow& flow, const char* what);
-    void checkShiftAmount(const Type* lhsType, const Expr* lhs, const Expr& amount);
+    void checkShiftAmount(const Type* lhsType, const Expr* lhs, const Expr& amount, bool checked);
     void requireConvertible(const Expr& e, const Type* to, const std::string& context);
     // Resolves a variable or field access. When the expression is rooted at a variable,
     // `var` and `path` name the place; otherwise var is null (e.g. `makePoint().x`).

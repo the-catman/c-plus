@@ -1,5 +1,5 @@
 // Running out of stack on a thread is reported as it is on the main thread.
-int down(int n) { return down(n + 1) + 1; }
+int down(int n) { return checked(down(n + 1) + 1); }  // checked, so -O keeps the calls
 
 int main() {
     println("before");

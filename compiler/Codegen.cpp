@@ -129,6 +129,7 @@ struct Codegen::Impl {
     bool usesDescriptors = false;  // a program that imports json or reflect: a class then says what it really is
     bool buildsFromDescriptors = false;  // one that imports json, which makes values from them too
     bool usesThreads = false;      // a program with a `spawn`
+    bool checkedNow = false;       // the expression being lowered is checked: overflow stops the program instead of wrapping
     bool usesAsync = false;        // a program with `async` or `await`, which has an event loop
 
     // An async function is two: the one that is called, which makes the Task and gives it, and a coroutine that runs the
@@ -620,9 +621,10 @@ struct Codegen::Impl {
         return loadValue(e.type, place, name);
     }
 
-    // The char a computed code stands for. `wide` is an i64; a value that is not from 0
-    // to 255 stops the program, saying `what` gave it.
+    // The char a computed code stands for. `wide` is an i64, which wraps at 256: only its lowest byte is kept. In
+    // checked code, a value that is not from 0 to 255 stops the program instead, saying `what` gave it.
     llvm::Value* checkedChar(llvm::Value* wide, const std::string& what, Loc loc) {
+        if (!checkedNow) return b.CreateTrunc(wide, b.getInt8Ty(), "char");
         auto* trapBB = llvm::BasicBlock::Create(ctx, "char.trap", fn);
         auto* okBB = llvm::BasicBlock::Create(ctx, "char.ok", fn);
         b.CreateCondBr(b.CreateICmpUGT(wide, b.getInt64(255)), trapBB, okBB,  // also catches negative values
@@ -634,8 +636,14 @@ struct Codegen::Impl {
         return b.CreateTrunc(wide, b.getInt8Ty(), "char");
     }
 
+    // `+`, `-` or `*`, which wraps around as two's complement, or in checked code stops the program on overflow.
     llvm::Value* checkedArith(llvm::Intrinsic::ID id, llvm::Value* l, llvm::Value* r, const char* sym,
                               const Type* ty, Loc loc) {
+        if (!checkedNow) {
+            if (id == llvm::Intrinsic::sadd_with_overflow) return b.CreateAdd(l, r);
+            if (id == llvm::Intrinsic::ssub_with_overflow) return b.CreateSub(l, r);
+            return b.CreateMul(l, r);
+        }
         llvm::Function* f = llvm::Intrinsic::getDeclaration(mod.get(), id, {l->getType()});
         llvm::Value* pair = b.CreateCall(f, {l, r});
         trapIf(b.CreateExtractValue(pair, 1),
@@ -658,8 +666,10 @@ struct Codegen::Impl {
                 llvm::Value* minusOne = b.CreateICmpEQ(r, llvm::ConstantInt::getSigned(t, -1));
                 if (op == BinOp::Div) {
                     llvm::Value* isMin = b.CreateICmpEQ(l, llvm::ConstantInt::get(t, llvm::APInt::getSignedMinValue(t->getIntegerBitWidth())));
-                    trapIf(b.CreateAnd(isMin, minusOne),
-                           std::string("integer overflow: the result of '/' does not fit in '") + ty->name + "'", loc);
+                    llvm::Value* overflows = b.CreateAnd(isMin, minusOne);
+                    if (!checkedNow)  // the smallest number divided by -1 wraps around to itself, which dividing by 1 gives
+                        return b.CreateSDiv(l, b.CreateSelect(overflows, llvm::ConstantInt::get(t, 1), r));
+                    trapIf(overflows, std::string("integer overflow: the result of '/' does not fit in '") + ty->name + "'", loc);
                     return b.CreateSDiv(l, r);
                 }
                 // x % -1 is always 0; LLVM treats MIN % -1 as undefined, so avoid it.
@@ -669,6 +679,10 @@ struct Codegen::Impl {
             case BinOp::Shl:
             case BinOp::Shr: {
                 unsigned width = ty->bits();
+                if (!checkedNow) {  // only the lowest bits of the amount count, as in Java, C# and JavaScript
+                    llvm::Value* amount = b.CreateAnd(b.CreateSExtOrTrunc(r, l->getType()), llvm::ConstantInt::get(l->getType(), width - 1));
+                    return op == BinOp::Shl ? b.CreateShl(l, amount) : b.CreateAShr(l, amount);
+                }
                 llvm::Value* limit = llvm::ConstantInt::get(r->getType(), width);
                 trapIf(b.CreateICmpUGE(r, limit),  // unsigned compare also catches negative amounts
                        std::string("shift amount out of range: shifting '") + ty->name + "' needs an amount from 0 to " +
@@ -2425,6 +2439,12 @@ struct Codegen::Impl {
     // Lowers `e`. `owned` is set when the result is a new value the caller must
     // release; otherwise a value holding class references is borrowed from a place.
     llvm::Value* genRaw(const Expr& e, bool& owned) {
+        struct Checking {
+            bool& now;
+            bool saved;
+            ~Checking() { now = saved; }
+        } checking{checkedNow, checkedNow};
+        checkedNow = e.checked;
         switch (e.kind) {
             case Expr::Kind::IntLit:
                 return llvm::ConstantInt::getSigned(llvmType(e.type), static_cast<const IntLitExpr&>(e).value);
@@ -3049,6 +3069,8 @@ struct Codegen::Impl {
         if (to->is(K::Char)) {  // `char(65)` is 'A'; a value outside 0 to 255 stops the program
             if (from->is(K::Bool)) return b.CreateZExt(v, target);
             if (from->isFloating()) {
+                if (!checkedNow)  // the nearest code from 0 to 255, and NaN is 0
+                    return b.CreateIntrinsic(llvm::Intrinsic::fptoui_sat, {target, v->getType()}, {v});
                 llvm::Value* x = convert(v, from, Type::doubleTy());
                 llvm::Value* fits = b.CreateAnd(b.CreateFCmpOGT(x, llvm::ConstantFP::get(b.getDoubleTy(), -1.0)),
                                                 b.CreateFCmpOLT(x, llvm::ConstantFP::get(b.getDoubleTy(), 256.0)));
@@ -3067,7 +3089,8 @@ struct Codegen::Impl {
         if (from->is(K::Bool)) return to->isFloating() ? b.CreateUIToFP(v, target) : b.CreateZExt(v, target);
         if (from->isInteger() && to->isInteger()) {
             if (to->is(K::Long)) return b.CreateSExt(v, target);
-            llvm::Value* narrow = b.CreateTrunc(v, target);
+            llvm::Value* narrow = b.CreateTrunc(v, target);  // the lowest bits
+            if (!checkedNow) return narrow;
             auto* trapBB = llvm::BasicBlock::Create(ctx, "narrow.trap", fn);
             auto* okBB = llvm::BasicBlock::Create(ctx, "narrow.ok", fn);
             b.CreateCondBr(b.CreateICmpNE(b.CreateSExt(narrow, v->getType()), v), trapBB, okBB,
@@ -3080,8 +3103,10 @@ struct Codegen::Impl {
         }
         if (from->isInteger()) return b.CreateSIToFP(v, target);
         if (to->isFloating()) return from->is(K::Float) ? b.CreateFPExt(v, target) : b.CreateFPTrunc(v, target);
-        // A floating-point value becomes an integer by dropping its fraction. It must be
-        // a number, and the result must fit: from -2^31 to 2^31 - 1 for an int.
+        // A floating-point value becomes an integer by dropping its fraction. One too large or too small gives the
+        // integer nearest to it, and NaN gives 0. In checked code it must be a number, and the result must fit: from
+        // -2^31 to 2^31 - 1 for an int.
+        if (!checkedNow) return b.CreateIntrinsic(llvm::Intrinsic::fptosi_sat, {target, v->getType()}, {v});
         llvm::Value* x = convert(v, from, Type::doubleTy());
         double lo = to->is(K::Int) ? -2147483649.0 : -9223372036854775808.0;
         double hi = to->is(K::Int) ? 2147483648.0 : 9223372036854775808.0;
@@ -3110,6 +3135,7 @@ struct Codegen::Impl {
         if (from->isEnum()) {
             if (to->is(K::Long) || from->decl->underlying->is(K::Int)) return b.CreateSExt(v, llvmType(to));
             llvm::Value* narrow = b.CreateTrunc(v, b.getInt32Ty());  // a long enum's number, as an int
+            if (!checkedNow) return narrow;
             auto* trapBB = llvm::BasicBlock::Create(ctx, "narrow.trap", fn);
             auto* okBB = llvm::BasicBlock::Create(ctx, "narrow.ok", fn);
             b.CreateCondBr(b.CreateICmpEQ(b.CreateSExt(narrow, b.getInt64Ty()), v), okBB, trapBB, weights);

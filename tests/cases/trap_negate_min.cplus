@@ -1,6 +1,9 @@
+// Negating the smallest int wraps around to itself. In checked code it stops the program.
 int main() {
     int m = -2147483648;
-    int n = -m;
+    println("{}", -m);
+    int n = checked(-m);
     return 0;
 }
+// expect: -2147483648
 // trap: integer overflow: the result of '-' does not fit in 'int'

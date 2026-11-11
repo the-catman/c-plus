@@ -4,6 +4,6 @@ export struct Config {
     int port = 8080;
 };
 
-int checked(int port) { return port < 1024 ? 8080 : port; }  // only this file can call it
+int usablePort(int port) { return port < 1024 ? 8080 : port; }  // only this file can call it
 
-export string address(Config c) { return c.host + ":" + to_string(checked(c.port)); }
+export string address(Config c) { return c.host + ":" + to_string(usablePort(c.port)); }

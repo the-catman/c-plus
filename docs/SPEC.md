@@ -85,7 +85,7 @@ UTF-8 already.
 | `long` | 64-bit signed | same on every platform; there is no `long long` |
 
 There are no unsigned types yet and no `size_t`, `int32_t` and so on. Use `int` or `long`.
-Arithmetic never wraps silently; see [Integer overflow](#integer-overflow).
+Arithmetic wraps around on overflow, unless it is checked; see [Integer overflow](#integer-overflow).
 
 ### Floating-point types
 
@@ -155,11 +155,12 @@ string word = string(1, c);       // "a"
 
 - **A char is its code in arithmetic.** As in C++, `c + 1`, `c - '0'` and `-c` are `int`s,
   and a char converts to `int`, `long`, `float` or `double` by itself. A number does not
-  convert to a `char`: write a character such as `'A'`, or `char(n)`, which stops the
-  program unless n is from 0 to 255 (see [Casts](#casts)).
+  convert to a `char`: write a character such as `'A'`, or `char(n)`, which keeps the lowest
+  byte of n (see [Casts](#casts)).
 - **`++`, `--`, `+=` and `-=` step through the characters** and keep a char: `c++`,
-  `c += 2`. A result outside 0 to 255 stops the program instead of wrapping around. The
-  other compound assignments, such as `c *= 2`, are errors.
+  `c += 2`. A result outside 0 to 255 wraps around, as a byte does, and in
+  [checked](#checked) code it stops the program. The other compound assignments, such as
+  `c *= 2`, are errors.
 - **Comparisons** order chars by their codes: `'a' < 'b'`, `'Z' < 'a'`, and a byte above
   127 is above every ASCII character. A char compares with a number by its code.
 - **A char is not a condition**, unlike in C++: write `c != '\0'` instead of `if (c)`.
@@ -377,13 +378,15 @@ double share = double(n) / total;   // without the cast, n / total divides integ
 
 - Converting to an integer drops the fraction, rounding toward zero, as in C++:
   `int(-2.7)` is `-2`. For the nearest integer, write `int(round(x))`.
-- **A value the new type cannot hold stops the program** with file:line, as integer
-  overflow does: `int(3000000000L)`, `int(1e10)`, and NaN or an infinity converted to an
-  integer. C++ wraps the first around and leaves the others undefined.
+- **A smaller integer type keeps the lowest bits**, as in C++: `int(3000000000L)` is
+  `-1294967296`, and `char(300)` is `char(44)`.
+- **A floating-point value out of range gives the nearest integer**, and NaN gives 0:
+  `int(1e10)` is `2147483647`. C++ leaves both undefined.
+- In [checked](#checked) code, a value the new type cannot hold stops the program instead,
+  with file:line.
 - `double(x)` and `float(x)` take any number; `float(x)` rounds to the nearest `float`.
 - `bool(x)` is true when `x` is not zero, and `int(b)` is 1 or 0.
-- `char(x)` is the char whose code is `x`, which must be from 0 to 255: `char(65)` is
-  `'A'`. `int(c)` is the code of `c`.
+- `char(x)` is the char whose code is `x`: `char(65)` is `'A'`. `int(c)` is the code of `c`.
 - A cast binds like a unary operator, as in C++: `(int)x * 2` is `((int)x) * 2`.
 - A cast cannot make a string: write `to_string(x)` or `format("{}", x)`, or
   `string(1, c)` for a char. `string(s)` of a string is allowed, and is a copy. Reading a number
@@ -1496,7 +1499,7 @@ delete[] many;
 - `-Wno-new-delete` on the command line of `cplus check`, `build` or `run`, for the whole
   program.
 
-This is the one attribute C+ has besides `[[fallthrough]];`, in a [switch](#switch). C++'s others, such as `[[nodiscard]]`, are errors.
+C+ has two other attributes: `[[fallthrough]];`, in a [switch](#switch), and [`[[checked]]`](#checked). C++'s others, such as `[[nodiscard]]`, are errors.
 
 ### References
 
@@ -1687,7 +1690,8 @@ constexpr int BAD = 1 / 0;                  // error: division by zero
   and casts. It can call other `constexpr` functions. What a function does is only looked at when it
   runs while compiling, so it can also do things that only work in the program, such as printing, on paths that
   are not taken then. A `throw` that is reached is a compile error. Methods cannot be `constexpr` yet.
-- The rules are the running program's: overflow, a bad shift and a cast that does not fit are errors, not surprises.
+- The rules are the running program's: overflow wraps, and in [checked](#checked) code overflow, a bad shift and a
+  cast that does not fit are errors.
   A function that takes too long (about 20 million steps) or calls itself more than 512 deep is an error too.
 - **An array's size and a template argument** can be any such expression, including a plain `const` with a value that can be
   worked out, as in C++: `const int N = 3; array<int, N> a;`. A `>` at the top of it would end the type,
@@ -2128,9 +2132,9 @@ export struct Config {
     int port = 8080;
 };
 
-int checked(int port) { return port < 1024 ? 8080 : port; }  // only this file can call it
+int usablePort(int port) { return port < 1024 ? 8080 : port; }  // only this file can call it
 
-export string address(Config c) { return c.host + ":" + to_string(checked(c.port)); }
+export string address(Config c) { return c.host + ":" + to_string(usablePort(c.port)); }
 ```
 
 ```cpp
@@ -2162,7 +2166,7 @@ file, and other files hold such a value with `auto`.
 - A file cannot declare a name in a module, such as `int net::server::extra()`; it is declared in the module's own file.
 - C's functions and types are not members of a module: a C name is one thing in the whole program, which each file that
   uses it declares with [`extern "C"`](#c-functions) or imports with its [header](#c-headers). Two declarations of it must be the same.
-- `[[allow(new_delete)]];` is for the file it is written in.
+- `[[allow(new_delete)]];` and `[[checked]];` are for the file they are written in.
 - A type or function of the main file named `Error`, `hashmap`, `Task`, `Mutex`, `LockGuard` or `delay` takes the place
   of the language's own in the whole program. A module cannot declare one of those names.
 - `export { ... }` around several declarations, `export import`, `export extern "C"` and aliases of modules, as
@@ -2330,28 +2334,72 @@ after function overloading. `&&`, `||` and the comma operator will not be overlo
 
 ### Integer overflow
 
-Integer arithmetic is checked. When a result does not fit its type, the program stops with
-an error naming the operator, the type and the source location:
+Integer arithmetic wraps around, as two's complement, when a result does not fit its type:
+`2147483647 + 1` is `-2147483648`. Every integer type wraps the same way, `char` included,
+so hash and checksum code works as written:
+
+```cpp
+int hash(string s) {
+    int h = 17;
+    for (char c : s) h = h * 31 + int(c);
+    return h;
+}
+```
+
+- `+`, `-`, `*`, unary `-`, `++`, `--` and the compound assignments all wrap. The smallest
+  number divided by -1 is itself, `MIN % -1` is 0, and `abs` of the smallest number is itself.
+- **Division or remainder by zero stops the program**, always.
+- A shift uses only the lowest bits of its amount, 5 for an `int` and 6 for a `long`, as in
+  Java, C# and JavaScript: `1 << 33` is 2. Bits shifted off the top are lost. A written amount
+  out of range, such as `1 << 40`, is a warning; write `1L << 40` to shift a `long`.
+- A cast to a smaller integer type keeps the lowest bits, and a floating-point value out of
+  range gives the nearest integer (see [Casts](#casts)).
+- Constants and `constexpr` values wrap as the running program does.
+
+C and C++ leave signed overflow undefined, and the optimizer assumes it never happens. C+
+defines it, so the result is always the same.
+
+#### checked
+
+**Checked arithmetic stops the program instead of wrapping.** `checked(...)` checks the
+arithmetic written inside it, `[[checked]]` before a function or a method checks all of
+its body, and `[[checked]];` at the top of a file checks the whole file. Inside checked code,
+`unchecked(...)` wraps again:
+
+```cpp
+long area(int width, int height) { return checked(long(width) * height); }
+
+[[checked]] int total(vector<int> v) {
+    int sum = 0;
+    for (int x : v) sum += x;          // stops the program if the sum does not fit
+    return sum + unchecked(sum * 31);  // this part wraps
+}
+```
+
+When checked arithmetic overflows, the program stops with an error naming the operator,
+the type and the source location:
 
 ```
 fatal error: integer overflow: the result of '+' does not fit in 'int'
   --> main.cplus:4:15
 ```
 
-The same happens for:
-- division or remainder by zero,
-- `MIN / -1`, whose result does not fit (`MIN % -1` is simply 0),
-- shifting by a negative amount or by at least the bit width of the type.
+- Checking is about what is written there: `checked(f(x))` checks no arithmetic inside `f`.
+  A generic marked `[[checked]]`, or in a checked file, is checked in each of its instances,
+  wherever they are used, and so is a default argument, wherever the call is.
+- In checked code, a shift amount that is not from 0 to the width minus 1 stops the program,
+  and a written one is a compile error. A cast that loses the value stops it too:
+  `int(3000000000L)`, `int(1e10)`, `char(300)`, and NaN or an infinity converted to an integer.
+- An overflow in a checked `constexpr` value is a compile error. In a checked `const`, it
+  stops the program where the constant is used, as `1 / 0` does.
+- `checked` and `unchecked` cannot name a function. `[[checked]]` is written before a
+  function, a method or a generic function, not before a type, a variable or a statement.
 
-When the shift amount is a literal, an out-of-range shift is a compile error instead:
-`1 << 40` is rejected because `1` is a 32-bit `int`. Write `1L << 40`.
+C's `__builtin_add_overflow` and `ckd_add`, and C++'s `-ftrapv`, are what `checked` replaces.
 
 Like every runtime error, it goes to standard error, after whatever the program printed so
 far, and ends the program with exit code 134. Destructors do not run. To look around at that
-point in a debugger, set a breakpoint: `break cplus_trap` in `gdb`.
-
-C and C++ leave all of these undefined. Explicit wrapping operators for hashing and
-cryptography, and a flag to turn checks off in hot code, are planned. Floating-point
+point in a debugger, set a breakpoint: `break cplus_trap` in `gdb`. Floating-point
 arithmetic is not checked; see [Floating-point types](#floating-point-types).
 
 ### sizeof
@@ -2775,7 +2823,7 @@ What a debug build adds:
   the first ten. `CPLUS_CHECK_LEAKS=0` turns the report off.
 
 Everything else that is undefined in C and C++, such as integer overflow and shifting too
-far, already stops the program in every build, so a debug build has nothing to add.
+far, is defined in C+, or stops the program in every build, so a debug build has nothing to add.
 
 What it cannot catch:
 
@@ -3225,7 +3273,7 @@ reasons, such as the type of a value. What is reported as not supported yet is l
 program      = { import | [ "export" ] item } ;
 import       = "import" name { "." name } ";" ;
 item         = function | record | generic | constant | extern | attribute | enum ;
-attribute    = "[[" "allow" "(" "new_delete" ")" "]]" [ ";" ] ;
+attribute    = "[[" ( "allow" "(" "new_delete" ")" | "checked" ) "]]" [ ";" ] ;
 enum         = "enum" "class" name [ ":" ( "int" | "long" ) ] "{" enumerator { "," enumerator } [ "," ] "}" ";" ;
 enumerator   = name [ "=" expr ] ;
 name         = letter { letter | digit | "_" } ;              (* with `module::name` for what a module has *)
@@ -3306,7 +3354,8 @@ primary      = literal | name | "this" | "null" | "(" expr ")"
              | name [ "<" targ { "," targ } ">" ] "(" [ args ] ")"
              | type list | type "(" [ args ] ")"              (* builds a value, or converts one *)
              | ( "static_cast" | "reinterpret_cast" | "dynamic_cast" ) "<" type ">" "(" expr ")"
-             | "move" "(" expr ")" ;
+             | "move" "(" expr ")"
+             | ( "checked" | "unchecked" ) "(" expr ")" ;      (* see Integer overflow *)
 args         = value { "," value } ;
 literal      = integer | float | string | char | "true" | "false" ;
 ```
@@ -3327,7 +3376,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | `if`, `while`, `do`-`while`, `for`, `break`, `continue`, `?:` | implemented |
 | Enums: `enum class`, `: long`, values, casts that stop the program, printing, JSON, hashmap keys | implemented |
 | `switch` on integers, chars, enums and strings, `[[fallthrough]]`, every enumerator in an enum switch | implemented |
-| All integer operators with overflow, division and shift traps | implemented |
+| All integer operators, wrapping on overflow, with division traps | implemented |
+| `checked(...)`, `unchecked(...)`, `[[checked]]` and `[[checked]];` | implemented |
 | `print` / `println` with checked `{}` placeholders | implemented |
 | Structs: fields, defaults, `{ }` lists, named fields, copying, printing | implemented |
 | Definite assignment of individual struct fields | implemented |

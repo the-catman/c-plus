@@ -1,0 +1,71 @@
+// The ways of checking arithmetic, and what each one covers.
+int wraps(int x) { return x * 2; }
+int f(int x) { return x * 4; }
+
+[[checked]] int strict(int x) {
+    int doubled = x * 2;  // checked
+    return doubled + unchecked(x * 1000000);  // this part wraps
+}
+
+struct Counter {
+    int n = 0;
+    [[checked]] int next() { return ++n; }
+    int wrapNext() { return ++n; }
+};
+
+template <typename T>
+struct Pair {
+    T a;
+    T b;
+    [[checked]] T sum() { return a + b; }
+    T wrapSum() { return a + b; }
+};
+
+[[checked]] template <typename T>
+T triple(T x) {
+    if constexpr (true) {
+        return unchecked(x * 3);
+    }
+    return x;
+}
+
+[[checked]] [[allow(new_delete)]] int fromHeap(int x) {
+    int* p = new int(x);
+    int v = *p + 1;
+    delete p;
+    return v;
+}
+
+int withDefault(int x = 2147483647 + 1) { return x; }
+
+int main() {
+    int big = 2147483647;
+    println("{}", checked(big - 1 + 1));
+    println("{}", checked(wraps(big)));  // only what is written inside is checked, not the functions it calls
+    int x = big;
+    println("{}", checked(f(x)));
+    println("{}", checked(unchecked(big + 1) - 0));
+    println("{}", strict(1000));
+    Counter c;
+    c.n = big;
+    println("{}", c.wrapNext());
+    Pair<int> p = {big, 1};
+    println("{}", p.wrapSum());
+    println("{}", triple(1000000000));
+    println("{}", fromHeap(41));
+    println("{}", withDefault());
+    long l = checked(long(big) * 4);
+    println("{}", l);
+    return 0;
+}
+// expect: 2147483647
+// expect: -2
+// expect: -4
+// expect: -2147483648
+// expect: 1000002000
+// expect: -2147483648
+// expect: -2147483648
+// expect: -1294967296
+// expect: 42
+// expect: -2147483648
+// expect: 8589934588

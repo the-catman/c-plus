@@ -114,8 +114,15 @@ bool ConstEval::isTrue(const ConstValue& v, Loc loc) {
     throw ConstError{loc, std::string("a ") + v.typeName() + " is not a condition"};
 }
 
-ConstValue ConstEval::convert(const ConstValue& v, const Type* to, Loc loc) {
+ConstValue ConstEval::convert(const ConstValue& v, const Type* to, Loc loc, bool wraps) {
     auto fits = [&](int64_t low, int64_t high) {
+        if (wraps && isFloating(v)) {  // the nearest value that fits, and NaN is 0, as the running program does
+            if (std::isnan(v.d)) return (int64_t)0;
+            if (v.d <= (double)low) return low;
+            if (v.d >= (double)high) return high;
+            return (int64_t)v.d;
+        }
+        if (wraps) return low == 0 ? (int64_t)(uint8_t)v.i : (int64_t)(int32_t)v.i;  // the lowest bits
         if (isFloating(v)) {
             // Below these, a truncated value is in range, as the running program finds.
             if (std::isnan(v.d) || v.d <= (double)low - 1 || v.d >= (double)high + 1)
@@ -143,6 +150,11 @@ ConstValue ConstEval::convert(const ConstValue& v, const Type* to, Loc loc) {
     switch (to->kind) {
         case K::Int: return intValue(fits(INT32_MIN, INT32_MAX), VK::Int);
         case K::Long: {
+            if (wraps && isFloating(v)) {
+                if (std::isnan(v.d)) return intValue(0, VK::Long);
+                if (v.d < -9223372036854775808.0) return intValue(INT64_MIN, VK::Long);
+                if (v.d >= 9223372036854775808.0) return intValue(INT64_MAX, VK::Long);
+            }
             if (isFloating(v) && !(v.d >= -9223372036854775808.0 && v.d < 9223372036854775808.0))
                 throw ConstError{loc, "the value " + std::to_string(v.d) + " does not fit in 'long'"};
             return intValue(isFloating(v) ? (int64_t)v.d : v.i, VK::Long);
@@ -257,7 +269,7 @@ ConstValue ConstEval::evalUnary(const UnaryExpr& u) {
             if (isFloating(v)) return floatValue(u.op == UnOp::Neg ? -v.d : v.d, v.kind);
             VK kind = v.kind == VK::Char ? VK::Int : v.kind;
             if (u.op == UnOp::Plus) return intValue(v.i, kind);
-            return arith(BinOp::Sub, intValue(0, kind), intValue(v.i, kind), u.loc);
+            return arith(BinOp::Sub, intValue(0, kind), intValue(v.i, kind), u.loc, u.checked);
         }
         case UnOp::BitNot:
             if (!isIntegerLike(v)) throw ConstError{u.loc, std::string("'~' does not work on a ") + v.typeName()};
@@ -267,7 +279,7 @@ ConstValue ConstEval::evalUnary(const UnaryExpr& u) {
     throw ConstError{u.loc, "this operator cannot be worked out while compiling"};
 }
 
-ConstValue ConstEval::arith(BinOp op, const ConstValue& l, const ConstValue& r, Loc loc) {
+ConstValue ConstEval::arith(BinOp op, const ConstValue& l, const ConstValue& r, Loc loc, bool checked) {
     std::string sym = binOpSpelling(op);
     bool comparison = op == BinOp::Eq || op == BinOp::Ne || op == BinOp::Lt || op == BinOp::Le || op == BinOp::Gt || op == BinOp::Ge;
     auto compared = [&](auto a, auto b) {
@@ -323,23 +335,28 @@ ConstValue ConstEval::arith(BinOp op, const ConstValue& l, const ConstValue& r, 
     };
     int64_t out = 0;
     switch (op) {
-        case BinOp::Add: if (__builtin_add_overflow(a, b, &out)) throw overflow(); break;
-        case BinOp::Sub: if (__builtin_sub_overflow(a, b, &out)) throw overflow(); break;
-        case BinOp::Mul: if (__builtin_mul_overflow(a, b, &out)) throw overflow(); break;
+        // Wrapped around, as the running program does, unless the arithmetic is checked.
+        case BinOp::Add: if (__builtin_add_overflow(a, b, &out) && checked) throw overflow(); break;
+        case BinOp::Sub: if (__builtin_sub_overflow(a, b, &out) && checked) throw overflow(); break;
+        case BinOp::Mul: if (__builtin_mul_overflow(a, b, &out) && checked) throw overflow(); break;
         case BinOp::Div:
         case BinOp::Rem:
             if (b == 0) throw ConstError{loc, std::string("division by zero: the right side of '") + sym + "' is 0"};
             if (b == -1) {
                 if (op == BinOp::Rem) return intValue(0, kind);
-                if (a == (kind == VK::Long ? INT64_MIN : (int64_t)INT32_MIN)) throw overflow();
+                if (a == (kind == VK::Long ? INT64_MIN : (int64_t)INT32_MIN)) {
+                    if (checked) throw overflow();
+                    return intValue(a, kind);  // the smallest number divided by -1 wraps around to itself
+                }
             }
             out = op == BinOp::Div ? a / b : a % b;
             break;
         case BinOp::Shl:
         case BinOp::Shr: {
             int bits = kind == VK::Long ? 64 : 32;
-            if (b < 0 || b >= bits)
+            if ((b < 0 || b >= bits) && checked)
                 throw ConstError{loc, "shift amount " + std::to_string(b) + " is out of range for '" + typeName + "'"};
+            b &= bits - 1;  // only its lowest bits count
             if (op == BinOp::Shr) return intValue(a >> b, kind);
             return intValue(kind == VK::Long ? (int64_t)((uint64_t)a << b) : (int64_t)(int32_t)((uint32_t)a << b), kind);
         }
@@ -348,7 +365,10 @@ ConstValue ConstEval::arith(BinOp op, const ConstValue& l, const ConstValue& r, 
         case BinOp::BitXor: out = a ^ b; break;
         default: throw ConstError{loc, "this operator cannot be worked out while compiling"};
     }
-    if (kind == VK::Int && (out < INT32_MIN || out > INT32_MAX)) throw overflow();
+    if (kind == VK::Int && (out < INT32_MIN || out > INT32_MAX)) {
+        if (checked) throw overflow();
+        out = (int32_t)out;
+    }
     return intValue(out, kind);
 }
 
@@ -361,7 +381,7 @@ ConstValue ConstEval::evalBinary(const BinaryExpr& b) {
     }
     ConstValue l = eval(*b.lhs);
     ConstValue r = eval(*b.rhs);
-    return arith(b.op, l, r, b.loc);
+    return arith(b.op, l, r, b.loc, b.checked);
 }
 
 ConstValue ConstEval::evalAssign(const AssignExpr& a) {
@@ -372,8 +392,8 @@ ConstValue ConstEval::evalAssign(const AssignExpr& a) {
     if (!local) throw ConstError{a.loc, "'" + name + "' cannot be changed while compiling, since it is not a local variable of this function"};
     ConstValue value = eval(*a.value);
     local = findLocal(name);  // what the value called may have moved it
-    if (a.op) value = arith(*a.op, local->value, value, a.loc);
-    local->value = convert(value, local->type, a.loc);
+    if (a.op) value = arith(*a.op, local->value, value, a.loc, a.checked);
+    local->value = convert(value, local->type, a.loc, a.op && !a.checked);  // `c += 1` on a char wraps at 256
     return local->value;
 }
 
@@ -383,8 +403,8 @@ ConstValue ConstEval::evalIncDec(const IncDecExpr& i) {
     Local* local = findLocal(name);
     if (!local) throw ConstError{i.loc, "'" + name + "' cannot be changed while compiling, since it is not a local variable of this function"};
     ConstValue old = local->value;
-    ConstValue next = arith(i.increment ? BinOp::Add : BinOp::Sub, old, intValue(1), i.loc);
-    local->value = convert(next, local->type, i.loc);
+    ConstValue next = arith(i.increment ? BinOp::Add : BinOp::Sub, old, intValue(1), i.loc, i.checked);
+    local->value = convert(next, local->type, i.loc, !i.checked);
     return i.prefix ? local->value : old;
 }
 
@@ -399,12 +419,12 @@ ConstValue ConstEval::evalCall(const CallExpr& c) {
             ConstValue v = eval(*c.args[0]);
             if (isFloating(v)) return floatValue(std::fabs(v.d), v.kind);
             if (!isIntegerLike(v)) throw ConstError{c.loc, std::string("abs() does not work on a ") + v.typeName()};
-            return v.i < 0 ? arith(BinOp::Sub, intValue(0, v.kind == VK::Long ? VK::Long : VK::Int), v, c.loc) : v;
+            return v.i < 0 ? arith(BinOp::Sub, intValue(0, v.kind == VK::Long ? VK::Long : VK::Int), v, c.loc, c.checked) : v;
         }
         if ((c.callee == "min" || c.callee == "max") && c.args.size() == 2) {
             ConstValue x = eval(*c.args[0]);
             ConstValue y = eval(*c.args[1]);
-            bool pickSecond = isTrue(arith(BinOp::Lt, c.callee == "min" ? y : x, c.callee == "min" ? x : y, c.loc), c.loc);
+            bool pickSecond = isTrue(arith(BinOp::Lt, c.callee == "min" ? y : x, c.callee == "min" ? x : y, c.loc, true), c.loc);
             return pickSecond ? y : x;
         }
         if (hooks_.generic && hooks_.generic(callee))
@@ -506,7 +526,7 @@ ConstValue ConstEval::eval(const Expr& e) {
                 if (c.target->is(K::String)) return stringValue("");
                 return convert(intValue(0), c.target, e.loc);
             }
-            return convert(eval(*c.operand), c.target, e.loc);
+            return convert(eval(*c.operand), c.target, e.loc, !c.checked);
         }
         case Expr::Kind::Sizeof: {
             auto& z = static_cast<const SizeofExpr&>(e);
@@ -652,7 +672,7 @@ ConstEval::Flow ConstEval::execSwitch(const SwitchStmt& s) {
     for (size_t i = 0; i < s.sections.size() && start == s.sections.size(); ++i)
         for (auto& label : s.sections[i].labels) {
             if (!label.value) fallback = i;
-            else if (isTrue(arith(BinOp::Eq, value, eval(*label.value), label.loc), label.loc)) {
+            else if (isTrue(arith(BinOp::Eq, value, eval(*label.value), label.loc, true), label.loc)) {
                 start = i;
                 break;
             }

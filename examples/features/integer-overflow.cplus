@@ -1,11 +1,19 @@
-// Overflow is not undefined here: it stops the program, and says where.
+// Overflow is not undefined here: integers wrap around, so a hash works as written.
+int hash(string s) {
+    int h = 17;
+    for (char c : s) h = h * 31 + int(c);
+    return h;
+}
+
 int main() {
     int n = 2147483647;
-    println("before");
-    // expect: before
     n += 1;
-    println("never {}", n);
+    println("{}", n);
+    // expect: -2147483648
+    println("{}", hash("hello"));
+    // expect: 585857889
+    int amount = 33;
+    println("{}", 1 << amount);  // only the lowest 5 bits of the amount count: 1 << 1
+    // expect: 2
     return 0;
 }
-// trap: integer overflow
-// trap: examples/features/integer-overflow.cplus:6

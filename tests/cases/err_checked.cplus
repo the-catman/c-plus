@@ -1,0 +1,47 @@
+// What is said when checking arithmetic is written in the wrong place, or in the wrong way.
+int one() { return 1; }
+[[checked]];
+// error: `[[checked]];` applies to the whole file, so it is written at the top, before the first declaration
+// error: or write `[[checked]]`, without the ';', just before a function whose arithmetic should be checked
+
+[[checked]] struct Point {
+    int x = 0;
+};
+// error: [[checked]] is written before a function or a method, not a struct
+// error: or write `[[checked]];` at the top of the file to check it everywhere
+
+[[checked]] enum class Color { Red };
+// error: [[checked]] is written before a function or a method, not an enum
+
+[[checked]] template <typename T>
+struct Box {
+    T value;
+};
+// error: [[checked]] is written before a function or a method, not a generic struct
+
+[[checked]] int counter = 0;
+// error: [[checked]] is written before a function
+// error: for a variable, write `checked(...)` around the arithmetic in its value
+
+struct Sizes {
+    [[checked]] long total = 0;
+    // error: [[checked]] is written before a method, not a field
+    // error: write `checked(...)` around the arithmetic in its default value
+    [[checked]]
+public:
+    // error: [[checked]] is written before a method
+    int n = 0;
+};
+
+void fromC() {
+    int r = 0;
+    __builtin_mul_overflow(1, 2, &r);
+    // error: write `checked(a * b)`, which stops the program when the result does not fit
+}
+
+int main() {
+    int a = 1;
+    println("{}", checked(a << 40));
+    // error: shifting 'int' by 40 is out of range
+    return 0;
+}

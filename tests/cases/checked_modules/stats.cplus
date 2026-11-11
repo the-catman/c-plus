@@ -1,0 +1,11 @@
+[[checked]];
+// Everything in this file is checked, even where another file uses it.
+
+export template <typename T>
+T total(vector<T> v) {
+    T sum = 0;
+    for (T x : v) sum += x;
+    return sum;
+}
+
+export int scaled(int x) { return x * 1000; }

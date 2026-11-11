@@ -25,7 +25,7 @@ Nod* misspelled = null;
 namespace other { int inside() { return 1; } }
 // error: remove the `namespace ... {` line and its closing `}`, and keep what is inside
 [[nodiscard]] int attribute() { return 1; }
-// error: remove it. The attributes C+ has are `[[allow(new_delete)]]`
+// error: remove it. The attributes C+ has are `[[checked]]`
 int topLevelArray[5];
 // error: write `array<int, 5> topLevelArray`
 char* topLevelText = "x";

@@ -1,0 +1,13 @@
+// A default argument of a function marked [[checked]] is checked, wherever the call is.
+int start = 2147483647;
+
+[[checked]] int count(int from = start + 1) { return from; }
+
+int main() {
+    println("{}", count(5));
+    println("{}", count());
+    return 0;
+}
+// expect: 5
+// trap: integer overflow: the result of '+' does not fit in 'int'
+// trap: trap_checked_default.cplus:4:40

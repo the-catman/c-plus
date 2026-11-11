@@ -1,15 +1,17 @@
-// A floating-point value too large for the integer type stops the program. In C++ the
-// result would be undefined.
+// A floating-point value too large for the integer type gives the nearest integer, and in
+// checked code it stops the program. In C++ the result would be undefined.
 int main() {
     double d = 2147483647.9;
     println("{} {}", int(d), int(-2147483648.9));
     double big = 1e10;
     println("{}", long(big));
-    int n = (int)big;
+    println("{} {}", int(big), int(-big));
+    int n = checked((int)big);
     println("{}", n);
     return 0;
 }
 // expect: 2147483647 -2147483648
 // expect: 10000000000
+// expect: 2147483647 -2147483648
 // trap: int(x) was given 1e+10, which does not fit in an int
-// trap: trap_cast_float.cplus:8:13
+// trap: trap_cast_float.cplus:9:21

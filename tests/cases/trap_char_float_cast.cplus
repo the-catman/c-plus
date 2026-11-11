@@ -1,11 +1,14 @@
-// A floating-point value converted to a char drops its fraction, and must then fit.
+// A floating-point value converted to a char drops its fraction, and one outside 0 to 255
+// gives the nearest of them. In checked code it must fit.
 int main() {
     double x = 65.9;
     println("{}", char(x));
     x = -1.5;
-    println("{}", char(x));
+    println("{}", int(char(x)));
+    println("{}", checked(char(x)));
     return 0;
 }
 // expect: A
+// expect: 0
 // trap: char(x) was given -1.5, which does not fit in a char
-// trap: trap_char_float_cast.cplus:6:19
+// trap: trap_char_float_cast.cplus:8:27

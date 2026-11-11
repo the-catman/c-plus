@@ -1,7 +1,10 @@
+// The smallest int divided by -1 wraps around to itself. In checked code it stops the program.
 int main() {
     int m = -2147483648;
     int d = -1;
-    println("{}", m / d);
+    println("{} {}", m / d, m % d);
+    println("{}", checked(m / d));
     return 0;
 }
+// expect: -2147483648 0
 // trap: integer overflow: the result of '/' does not fit in 'int'

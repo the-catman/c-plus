@@ -1,7 +1,7 @@
 // Running out of stack on the main thread, in a program that has threads, and so is built with --race too.
 void other() {}
 
-int down(int n) { return down(n + 1) + 1; }
+int down(int n) { return checked(down(n + 1) + 1); }  // checked, so -O keeps the calls
 
 int main() {
     spawn other();

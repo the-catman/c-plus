@@ -11,9 +11,9 @@ public:
     int use() { return twice + 1; }
     // error: call it with `twice(...)`
 };
-constexpr int A = 2147483647 + 1;
+constexpr int A = checked(2147483647 + 1);
 // error: declare it as a `long` and write the numbers as `long`, as in `constexpr long n = 2147483647L + 1;`
-constexpr long C = 9223372036854775807L + 1;
+constexpr long C = checked(9223372036854775807L + 1);
 // error: the result does not fit in a long either: use smaller numbers, or a `double` if a close value will do
 void f(json::Value doc, vector<int> v, local<Dog> l, unique<Dog> ud) {
     hashmap<string, int> big = {"a", 1, "b", 2, "c", 3, "d", 4};

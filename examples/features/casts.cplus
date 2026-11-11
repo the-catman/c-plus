@@ -1,4 +1,4 @@
-// Casts are written as in C++. One whose value does not fit stops the program instead of wrapping around.
+// Casts are written as in C++. A smaller integer keeps the lowest bits; checked code stops the program instead.
 int main() {
     double d = 3.9;
     println("{} {} {}", int(d), static_cast<int>(d), (int)d);
@@ -11,7 +11,9 @@ int main() {
     println("{}", *back);
     // expect: 7
     long tooBig = 3000000000;
-    int small = int(tooBig);
+    println("{} {}", int(tooBig), int(1e10));
+    // expect: -1294967296 2147483647
+    int small = checked(int(tooBig));
     println("never printed {}", small);
     return 0;
 }

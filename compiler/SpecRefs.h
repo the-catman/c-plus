@@ -37,6 +37,7 @@ inline constexpr const char* HashMaps = "hash-maps";
 inline constexpr const char* Json = "json";
 inline constexpr const char* Operators = "operators";
 inline constexpr const char* IntegerOverflow = "integer-overflow";
+inline constexpr const char* Checked = "checked";
 inline constexpr const char* Structs = "structs";
 inline constexpr const char* Classes = "classes";
 inline constexpr const char* Inheritance = "inheritance";

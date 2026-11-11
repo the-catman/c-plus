@@ -52,8 +52,9 @@ public:
     explicit ConstEval(ConstHooks hooks) : hooks_(std::move(hooks)) {}
     // Throws a ConstError when it cannot.
     ConstValue eval(const Expr& e);
-    // The value as a `to`, as a cast would convert it.
-    ConstValue convert(const ConstValue& v, const Type* to, Loc loc);
+    // The value as a `to`. Unless it `wraps`, as a cast does where arithmetic is not checked, a value that does not
+    // fit is an error.
+    ConstValue convert(const ConstValue& v, const Type* to, Loc loc, bool wraps = false);
     bool isTrue(const ConstValue& v, Loc loc);
 
 private:
@@ -69,7 +70,7 @@ private:
     ConstValue evalName(const NameExpr& n);
     ConstValue evalUnary(const UnaryExpr& u);
     ConstValue evalBinary(const BinaryExpr& b);
-    ConstValue arith(BinOp op, const ConstValue& l, const ConstValue& r, Loc loc);
+    ConstValue arith(BinOp op, const ConstValue& l, const ConstValue& r, Loc loc, bool checked);
     ConstValue evalAssign(const AssignExpr& a);
     ConstValue evalIncDec(const IncDecExpr& i);
     ConstValue evalCall(const CallExpr& c);

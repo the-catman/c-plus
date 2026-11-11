@@ -179,7 +179,7 @@ SPEC_SKETCHES = (
 
 
 def spec_code_problems(cplus, text, workdir):
-    declaration = re.compile(r"^\s*(import\b|struct\b|class\b|interface\b|enum\b|template\b|extern\b|constexpr\b|\[\[allow\(new_delete\)\]\];|const\s+\w+\s+[A-Z_]+\s*=)")
+    declaration = re.compile(r"^\s*(import\b|struct\b|class\b|interface\b|enum\b|template\b|extern\b|constexpr\b|\[\[allow\(new_delete\)\]\];|\[\[checked\]\]|const\s+\w+\s+[A-Z_]+\s*=)")
     function = re.compile(r"^\s*(?:[\w:<>,\s\*\?]+?)\s+\**\w+\s*\([^;]*\)\s*(const\s*)?(throws\s*)?\{")
     needs_context = re.compile(r"is not declared|unknown type|there is no function named|there is no class named|has no field named|has no method named")
     source = workdir / "spec_block.cplus"
@@ -436,7 +436,7 @@ def check_crash_paths(cplus, workdir):
                 ok = False
                 return
     stopping = {
-        "the same check fails": ("n + 2147483647", "does not fit in 'int'"),
+        "the same check fails": ("checked(n + 2147483647)", "does not fit in 'int'"),
         "a crash": ("crashes()", "the program used memory it does not own"),
     }
     # Threads held back, and let go together.
@@ -452,7 +452,7 @@ def check_crash_paths(cplus, workdir):
     # A thread stuck in the output, holding its lock.
     endings = {
         "a crash": ("crash();", 134, "the program used memory it does not own"),
-        "a failed check": ("println(\"{}\", big() + 1);", 134, "does not fit in 'int'"),
+        "a failed check": ("println(\"{}\", checked(big() + 1));", 134, "does not fit in 'int'"),
         "a stop": ("Mutex m = Mutex();\n    m.lock();\n    m.lock();", 134, "it would wait for itself"),
     }
     for what, (statement, code, message) in endings.items():
@@ -799,7 +799,7 @@ SPEC_NOT_CODE = {
     "compiler/SpecRefs.h", "cplus explain <topic>", ".cplus", "\\n \\t \\r \\0 \\\\ \\\" \\'", "\\xHH", "\\012", "<cctype>", "<cmath>", "std::format", "std::string", "std::",
     "std::optional<T>", "std::optional", "std::vector", "std::array", "std::unordered_map", "std::numbers::pi", "std::println", "std::weak_ptr", "std::make_shared",
     "std::unique_ptr", "std::async", "int + long", "long + float", "float + double", "Transfer-Encoding", "wss://", "libcurl4-openssl-dev", "CPLUS_CHECK_LEAKS=1",
-    "CPLUS_CHECK_LEAKS=0", "-Wno-new-delete", "cplus check", "cplus run", "cplus run greet.cplus -- Ada", "cplus build app.cplus -lsqlite3", "-L <directory>", ".hplus",
+    "-ftrapv", "CPLUS_CHECK_LEAKS=0", "-Wno-new-delete", "cplus check", "cplus run", "cplus run greet.cplus -- Ada", "cplus build app.cplus -lsqlite3", "-L <directory>", ".hplus",
     "break cplus_trap", "uncaught error:", "--race", "--debug", "cplus build", "cplus.", "-fsanitize=address", "llvm-symbolizer", "libclang-rt-18-dev", "exit()",
     "cplus run app.cplus --race", "-l<name>", "-L<dir>", "--emit-llvm", "cplus explain", "spec:", "cplus explain cheatsheet", "{ x }", "[ x ]", "value_or()", "new[]",
     "cplus fmt", "--check", "cplus lsp", "editors/vscode", 'import "mine.h";', "-I", "-I<dir>", "cplus build app.cplus -I include", "-lsqlite3",

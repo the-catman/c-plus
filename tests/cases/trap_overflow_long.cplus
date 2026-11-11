@@ -1,4 +1,5 @@
-int main() {
+// main can be marked [[checked]] as well.
+[[checked]] int main() {
     long x = 9223372036854775807;
     x++;
     return 0;

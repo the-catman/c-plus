@@ -1,11 +1,16 @@
-// c -= n must leave a char; stepping back past 0 stops the program.
+// c -= n wraps around at 0, as a byte does. In checked code, stepping back past 0 stops
+// the program.
 int main() {
     char c = 'c';
     c -= 2;
     println("{}", c);
-    c -= 'b';
+    char d = c;
+    d -= 'b';
+    println("{}", int(d));
+    checked(c -= 'b');
     return 0;
 }
 // expect: a
+// expect: 255
 // trap: the result of '-=' is -1, which does not fit in a char (from 0 to 255)
-// trap: trap_char_step.cplus:6:7
+// trap: trap_char_step.cplus:10:15

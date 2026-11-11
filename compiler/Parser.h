@@ -117,7 +117,12 @@ private:
     void parseConstants(Program& prog, const Type* type, Loc typeLoc, bool isConstexpr);
     void parseGlobals(Program& prog, const Type* type, Loc typeLoc, bool isConst);
     // `[[allow(new_delete)]]`, the one attribute C+ has. Returns where it is written.
-    Loc parseAttribute();
+    enum class Attribute { AllowNewDelete, Checked };
+    Loc parseAttribute(Attribute& which);
+    // The attributes written just before the token at `i`, past any `export`: `[[checked]] export template<...>`.
+    void attributesBefore(size_t i, bool& allowNewDelete, bool& checked) const;
+    bool fileChecked(Loc at) const { return at.line && checkedFiles_.count(at.file); }  // what comes with C+ is not
+    void rejectCheckedName(const Token& name);  // `checked` and `unchecked` are not names for functions
     bool atAttribute() const { return check(Tok::LBracket) && peek(1).kind == Tok::LBracket; }
     ExprPtr parseNew();
     void parseRecord(StructDecl* into = nullptr);  // struct or class; `into` when the type is made from a generic
@@ -139,6 +144,7 @@ private:
         bool dryRun;
         size_t splitShr;
         std::vector<std::unordered_map<std::string, const VarDecl*>> localScopes;
+        bool checked;  // checkedHere
         explicit GenericScope(Parser& parser);
         ~GenericScope();
     };
@@ -251,7 +257,8 @@ private:
     int instanceCount_ = 0;
     size_t splitShr_ = SIZE_MAX;  // the `>>` whose first half closed an angle bracket
     bool declSeen_ = false;  // a declaration came before; `[[allow(new_delete)]];` must be first
-    bool fileAttr_ = false;  // the item just parsed was `[[allow(new_delete)]];`
+    bool fileAttr_ = false;  // the item just parsed was `[[allow(new_delete)]];` or `[[checked]];`
+    std::set<uint32_t> checkedFiles_;  // the files that start with `[[checked]];`, by SourceFile::id
 
     // Enums and switch
     void readEnums();  // the enums of the file, before anything else, as their values can be used anywhere

@@ -1,0 +1,36 @@
+// What is said about `checked` written in a way C+ does not read.
+[[checked(overflow)]] int f() { return 1; }
+// error: `[[checked]]` takes nothing in parentheses
+// error: write `[[checked]]` before a function, to check all the arithmetic in it, or `checked(a * b)` around one expression
+
+[[unchecked]] int g() { return 1; }
+// error: C+ has no attribute 'unchecked': arithmetic wraps wherever it is not checked
+// error: inside a function marked `[[checked]]`, write `unchecked(a * b)` around the arithmetic that should wrap
+
+int checked(int x) { return x; }
+// error: 'checked' is a word of C+, so it cannot name a function
+// error: give the function another name. `checked(a * b)` stops the program when the arithmetic in it overflows
+
+struct Account {
+    int unchecked() { return 0; }
+    // error: 'unchecked' is a word of C+, so it cannot name a function
+};
+
+int empty() {
+    return checked();
+    // error: `checked(...)` is written around the arithmetic it is for
+}
+
+int statement() {
+    int total = 0;
+    [[checked]] total += 1;
+    // error: [[checked]] is written before a function, not before a statement
+    // error: write `checked(...)` around the arithmetic, as in `total = checked(total + n);`
+    return total;
+}
+
+[[checked]] extern "C" int abs(int x);
+// error: [[checked]] is written before a function
+// error: or end it with ';' at the top of the file to check the whole file
+
+int main() { return 0; }

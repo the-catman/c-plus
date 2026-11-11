@@ -694,6 +694,7 @@ void Parser::parseProgram(Program& prog) {
             declSeen_ = false;
         }
         const size_t declaration = pos_;
+        CheckedHere checking(fileChecked(peek().loc));
         try {
             parseTopLevel(prog);
         } catch (TooDeep&) {
@@ -726,6 +727,10 @@ void Parser::scanDeclarations(Program& prog) {
         Tok kind = toks_[i].kind;
         if (kind == Tok::LBrace) ++depth;
         else if (kind == Tok::RBrace) --depth;
+        if (kind == Tok::LBracket && depth == 0 && i + 5 < toks_.size() && toks_[i + 1].kind == Tok::LBracket &&
+            toks_[i + 2].kind == Tok::Ident && toks_[i + 2].text == "checked" && toks_[i + 3].kind == Tok::RBracket &&
+            toks_[i + 4].kind == Tok::RBracket && toks_[i + 5].kind == Tok::Semi)  // `[[checked]];`, for the whole file
+            checkedFiles_.insert(toks_[i].loc.file);
         if (kind == Tok::KwTemplate && depth == 0) {
             scanTemplate(prog, i);
             continue;
@@ -750,6 +755,7 @@ void Parser::scanDeclarations(Program& prog) {
             alias->name = toks_[i + 1].text;
             alias->nameLoc = toks_[i + 1].loc;
             alias->start = i + 3;
+            alias->checked = fileChecked(toks_[i].loc);
             prog.templates.push_back(std::move(alias));
         }
         bool isRecord = kind == Tok::KwStruct || kind == Tok::KwClass || kind == Tok::KwInterface;
@@ -771,8 +777,8 @@ size_t Parser::afterBraces(size_t i) const {
 void Parser::scanTemplate(Program& prog, size_t& i) {
     size_t first = i;
     auto t = std::make_unique<TemplateDecl>();
-    const size_t before = i >= 1 && toks_[i - 1].kind == Tok::KwExport ? i - 1 : i;  // `[[allow(new_delete)]] export template<...>`
-    t->allowNewDelete = before >= 2 && toks_[before - 1].kind == Tok::RBracket && toks_[before - 2].kind == Tok::RBracket;
+    attributesBefore(i, t->allowNewDelete, t->checked);  // `[[allow(new_delete)]] export template<...>`
+    if (fileChecked(toks_[i].loc)) t->checked = true;
     pos_ = i;
     try {
         parseTemplateHeader(*t);
@@ -948,7 +954,7 @@ void Parser::parseTemplateHeader(TemplateDecl& t) {
 Parser::GenericScope::GenericScope(Parser& parser)
     : p(parser), pos(parser.pos_), bindings(std::move(parser.bindings_)), current(parser.currentTemplate_),
       currentArgs(std::move(parser.currentArgs_)), injected(parser.injected_), dryRun(parser.dryRun_), splitShr(parser.splitShr_),
-      localScopes(std::move(parser.localScopes_)) {
+      localScopes(std::move(parser.localScopes_)), checked(checkedHere) {
     p.bindings_.clear();
     p.currentArgs_.clear();
     p.localScopes_.clear();
@@ -964,6 +970,7 @@ Parser::GenericScope::~GenericScope() {
     p.splitShr_ = splitShr;
     p.currentArgs_ = std::move(currentArgs);
     p.localScopes_ = std::move(localScopes);
+    checkedHere = checked;
 }
 
 // The file's constants and constexpr functions, wherever they are, for values worked out before
@@ -982,6 +989,9 @@ void Parser::readConstants() {
     } unmute{diags_};
     for (size_t start : constantStarts_) {
         pos_ = start;
+        bool allowNewDelete = false, checkedAttr = false;
+        attributesBefore(start, allowNewDelete, checkedAttr);
+        CheckedHere checking(checkedAttr || fileChecked(toks_[start].loc));
         try {
             bool isConstexpr = match(Tok::KwConstexpr);
             match(Tok::KwConst);
@@ -1092,6 +1102,7 @@ StmtPtr Parser::readBranch(const LazyBranches& lazy, bool thenBranch) {
     bindTemplate(*lazy.tmpl, lazy.args);
     injected_ = lazy.injected;
     localScopes_ = lazy.localScopes;
+    checkedHere = lazy.checked;
     pos_ = start;
     try {
         return parseStmt();
@@ -1119,6 +1130,7 @@ StmtPtr Parser::parseIf(bool isConstexpr, size_t ifPos, Loc loc) {
         st->lazy->args = currentArgs_;
         st->lazy->injected = injected_;
         st->lazy->localScopes = localScopes_;
+        st->lazy->checked = checkedHere;
         pos_ = place.end;
         return st;
     }
@@ -1142,6 +1154,7 @@ StmtPtr Parser::parseIf(bool isConstexpr, size_t ifPos, Loc loc) {
 void Parser::readTemplate(TemplateDecl& t) {
     if (t.failed) return;
     GenericScope scope(*this);
+    checkedHere = t.checked;
     dryRun_ = true;
     currentTemplate_ = &t;
     pos_ = t.start;
@@ -1259,6 +1272,7 @@ const Type* Parser::aliasType(TemplateDecl& alias, Loc usedAt) {
     const Type* made = Type::error();
     {
         GenericScope scope(*this);
+        checkedHere = alias.checked;
         struct Resolving {
             TemplateDecl& a;
             ~Resolving() { a.resolving = false; }
@@ -1460,6 +1474,7 @@ const Type* Parser::instantiateRecord(TemplateDecl& t, const std::vector<Templat
     t.records[name] = sd;  // before its body, which can refer to it
     ++instanceCount_;
     GenericScope scope(*this);
+    checkedHere = t.checked;
     dryRun_ = false;
     bindTemplate(t, args);
     injected_ = &sd->type;
@@ -1487,6 +1502,7 @@ FuncDecl* Parser::instantiateFunction(TemplateDecl& t, const std::vector<Templat
     if (t.failed) return nullptr;
     t.functions[name] = nullptr;
     GenericScope scope(*this);
+    checkedHere = t.checked;
     dryRun_ = false;
     injected_ = nullptr;
     bindTemplate(t, args);
@@ -1546,6 +1562,7 @@ void Parser::parseConcept(ConceptBody& out) {
 bool Parser::instantiateConcept(TemplateDecl& t, const TemplateArg& arg, ConceptBody& out) {
     if (t.failed) return false;
     GenericScope scope(*this);
+    checkedHere = t.checked;
     dryRun_ = false;
     injected_ = nullptr;
     bindTemplate(t, {arg});
@@ -1561,18 +1578,35 @@ bool Parser::instantiateConcept(TemplateDecl& t, const TemplateArg& arg, Concept
 }
 
 // `[[allow(new_delete)]]`. C++'s own attributes, such as [[nodiscard]], are not part of C+.
-Loc Parser::parseAttribute() {
+Loc Parser::parseAttribute(Attribute& which) {
     Loc loc = advance().loc;
     advance();
     const Token& name = peek();
     if (name.kind == Tok::Ident && name.text == "fallthrough")
         fail(name.loc, "`[[fallthrough]];` is a statement, written in a switch",
              "remove it here. It ends a section of a switch that runs on into the next one: `case 1: f(); [[fallthrough]]; case 2: g();`", spec::Switch);
+    if (name.kind == Tok::Ident && name.text == "checked") {
+        advance();
+        if (check(Tok::LParen))
+            fail(peek().loc, "`[[checked]]` takes nothing in parentheses",
+                 "write `[[checked]]` before a function, to check all the arithmetic in it, or `checked(a * b)` around one expression",
+                 spec::Checked);
+        expect(Tok::RBracket, "to close the attribute `[[checked]]`");
+        expect(Tok::RBracket, "to close the attribute `[[checked]]`");
+        if (prev().loc.line == loc.line) loc.len = prev().loc.col + 1 - loc.col;
+        which = Attribute::Checked;
+        return loc;
+    }
+    if (name.kind == Tok::Ident && name.text == "unchecked")
+        fail(name.loc, "C+ has no attribute 'unchecked': arithmetic wraps wherever it is not checked",
+             "inside a function marked `[[checked]]`, write `unchecked(a * b)` around the arithmetic that should wrap",
+             spec::Checked);
     if (name.kind != Tok::Ident || name.text != "allow")
         fail(name.loc,
              name.kind == Tok::Ident ? "C+ has no attribute '" + name.text + "'"
                                      : "expected an attribute name after '[[', found " + describeToken(name),
-             "remove it. The attributes C+ has are `[[allow(new_delete)]]`, which turns off the warning for new and delete, and `[[fallthrough]];` in a switch",
+             "remove it. The attributes C+ has are `[[checked]]`, which stops the program when arithmetic overflows, "
+             "`[[allow(new_delete)]]`, which turns off the warning for new and delete, and `[[fallthrough]];` in a switch",
              spec::NewDelete);
     advance();
     expect(Tok::LParen, "after 'allow'");
@@ -1588,7 +1622,36 @@ Loc Parser::parseAttribute() {
     expect(Tok::RBracket, "to close the attribute `[[allow(new_delete)]]`");
     expect(Tok::RBracket, "to close the attribute `[[allow(new_delete)]]`");
     if (prev().loc.line == loc.line) loc.len = prev().loc.col + 1 - loc.col;
+    which = Attribute::AllowNewDelete;
     return loc;
+}
+
+void Parser::attributesBefore(size_t i, bool& allowNewDelete, bool& checked) const {
+    while (i >= 1) {
+        if (toks_[i - 1].kind == Tok::KwExport) {
+            --i;
+            continue;
+        }
+        if (i < 5 || toks_[i - 1].kind != Tok::RBracket || toks_[i - 2].kind != Tok::RBracket) return;
+        size_t open = i - 2;  // back to the `[[` that this `]]` closes
+        while (open >= 2 && i - open < 10 && !(toks_[open - 1].kind == Tok::LBracket && toks_[open - 2].kind == Tok::LBracket)) --open;
+        if (open < 2 || i - open >= 10) return;
+        if (toks_[open].text == "checked") checked = true;
+        if (toks_[open].text == "allow") allowNewDelete = true;
+        i = open - 2;
+    }
+}
+
+void Parser::rejectCheckedName(const Token& name) {
+    if (name.kind != Tok::Ident) return;
+    const size_t colons = name.text.rfind("::");  // a module's own functions are named with its path
+    const std::string word = colons == std::string::npos ? name.text : name.text.substr(colons + 2);
+    if (word == "checked" || word == "unchecked")
+        fail(name.loc, "'" + word + "' is a word of C+, so it cannot name a function",
+             "give the function another name. `" + word + "(a * b)` " +
+                 (word == "checked" ? "stops the program when the arithmetic in it overflows"
+                                    : "wraps the arithmetic in it, in code that is checked"),
+             spec::Checked);
 }
 
 // The type that C++ writes in the tokens from `from` to `to`, as C+ writes it: `std::unordered_map<std::string, int>` is
@@ -1861,36 +1924,69 @@ void Parser::parseTopLevel(Program& prog) {
         case Tok::KwInterface: parseRecord(); return;
         case Tok::LBracket: {
             if (!atAttribute()) break;
-            Loc attr = parseAttribute();
-            if (match(Tok::Semi)) {  // `[[allow(new_delete)]];` for the whole file
+            Attribute which;
+            Loc attr = parseAttribute(which);
+            const bool checks = which == Attribute::Checked;
+            const std::string spelled = checks ? "[[checked]]" : "[[allow(new_delete)]]";
+            const char* anchor = checks ? spec::Checked : spec::NewDelete;
+            if (match(Tok::Semi)) {  // `[[allow(new_delete)]];` or `[[checked]];`, for the whole file
                 if (declSeen_)
-                    diags_.error(attr, "`[[allow(new_delete)]];` applies to the whole file, so it is written at the "
-                                       "top, before the first declaration",
-                                 "move it to the top of the file, or write `[[allow(new_delete)]]`, without the ';', "
-                                 "just before a function that uses new and delete",
-                                 spec::NewDelete);
-                if (attr.file == 0) prog.allowNewDelete = true;
-                prog.allowNewDeleteIn.insert(attr.file);
+                    diags_.error(attr, "`" + spelled + ";` applies to the whole file, so it is written at the top, before the first declaration",
+                                 checks ? "move it to the top of the file, or write `[[checked]]`, without the ';', just before a "
+                                          "function whose arithmetic should be checked"
+                                        : "move it to the top of the file, or write `[[allow(new_delete)]]`, without the ';', "
+                                          "just before a function that uses new and delete",
+                                 anchor);
+                if (!checks) {
+                    if (attr.file == 0) prog.allowNewDelete = true;
+                    prog.allowNewDeleteIn.insert(attr.file);
+                }  // a checked file was found when the file was first scanned
                 fileAttr_ = true;
                 return;
             }
-            if (check(Tok::KwStruct) || check(Tok::KwClass)) {
-                diags_.error(attr, "[[allow(new_delete)]] is written before a function or a method, not a " +
-                                       std::string(tokSpelling(peek().kind)),
-                             "write it before each method that uses new and delete, or write `[[allow(new_delete)]];` "
-                             "at the top of the file to allow them everywhere",
-                             spec::NewDelete);
-                parseRecord();
+            if (check(Tok::KwStruct) || check(Tok::KwClass) || check(Tok::KwInterface) || check(Tok::KwEnum)) {
+                const std::string kw = tokSpelling(peek().kind);
+                diags_.error(attr, spelled + " is written before a function or a method, not " + (kw[0] == 'e' || kw[0] == 'i' ? "an " : "a ") + kw,
+                             checks ? "write it before each method whose arithmetic should be checked, or write `[[checked]];` "
+                                      "at the top of the file to check it everywhere"
+                                    : "write it before each method that uses new and delete, or write `[[allow(new_delete)]];` "
+                                      "at the top of the file to allow them everywhere",
+                             anchor);
+                parseTopLevel(prog);
                 return;
             }
-            if (check(Tok::KwExtern) || check(Tok::KwImport) || atAttribute() || check(Tok::Eof))
-                fail(attr, "[[allow(new_delete)]] is written before a function",
-                     "write it just before a function that uses new and delete, or end it with ';' at the top of "
-                     "the file to allow them in the whole file",
-                     spec::NewDelete);
+            if (check(Tok::KwExtern) || check(Tok::KwImport) || check(Tok::Eof))
+                fail(attr, spelled + " is written before a function",
+                     checks ? "write it just before a function whose arithmetic should be checked, or end it with ';' at the "
+                              "top of the file to check the whole file"
+                            : "write it just before a function that uses new and delete, or end it with ';' at the top of "
+                              "the file to allow them in the whole file",
+                     anchor);
+            size_t at = pos_;
+            while (toks_[at].kind == Tok::KwExport || (toks_[at].kind == Tok::LBracket && toks_[at + 1].kind == Tok::LBracket)) {
+                if (toks_[at].kind == Tok::KwExport) ++at;
+                else while (at + 1 < toks_.size() && !(toks_[at].kind == Tok::RBracket && toks_[at + 1].kind == Tok::RBracket)) ++at;
+                if (toks_[at].kind == Tok::RBracket) at += 2;
+            }
+            const bool generic = toks_[at].kind == Tok::KwTemplate;  // marked when the file was first scanned
+            const TemplateDecl* tmpl = generic && templateAt_.count(at) ? templateAt_.at(at) : nullptr;
+            if (checks && tmpl && tmpl->kind == TemplateDecl::Kind::Record)
+                diags_.error(attr, "[[checked]] is written before a function or a method, not a generic struct",
+                             "write it before each method whose arithmetic should be checked, or write `[[checked]];` at "
+                             "the top of the file to check it everywhere",
+                             anchor);
             size_t before = prog.funcs.size();
-            parseTopLevel(prog);
-            if (prog.funcs.size() > before) prog.funcs.back()->allowNewDelete = true;
+            {
+                CheckedHere checking(checkedHere || checks);
+                parseTopLevel(prog);
+            }
+            if (prog.funcs.size() > before) {
+                if (!checks) prog.funcs.back()->allowNewDelete = true;
+            } else if (checks && !generic)
+                diags_.error(attr, "[[checked]] is written before a function",
+                             "for a variable, write `checked(...)` around the arithmetic in its value: `const long big = "
+                             "checked(a * b);`",
+                             anchor);
             return;
         }
         case Tok::KwTemplate: {  // read when the file was first scanned
@@ -3105,6 +3201,7 @@ void Parser::parseParams(FuncDecl& fn) {
                     notYet(prev().loc, "default values for the parameters of generics",
                            "write the value at each call, or add a function without the parameter that calls this one with the value");
                 param->defaultAt = pos_;
+                param->defaultChecked = checkedHere;
                 param->defaultArg = match(Tok::LBrace) ? parseInitList(prev().loc, nullptr) : parseTernary();
                 param->defaultEnd = pos_;
                 param->defaultText = tokensText(param->defaultAt, param->defaultEnd);
@@ -3134,6 +3231,7 @@ std::string Parser::tokensText(size_t from, size_t to) const {
 ExprPtr Parser::reparseDefault(const VarDecl& p) {
     const size_t saved = pos_;
     ExprPtr e;
+    CheckedHere checking(p.defaultChecked);
     pos_ = p.defaultAt;
     try {
         e = match(Tok::LBrace) ? parseInitList(prev().loc, nullptr) : parseTernary();
@@ -3147,6 +3245,7 @@ std::unique_ptr<FuncDecl> Parser::parseFunction(const Type* retType, Loc retLoc)
     auto fn = std::make_unique<FuncDecl>();
     fn->retType = retType;
     fn->retTypeLoc = retLoc;
+    rejectCheckedName(peek());
     const Token& name = expectNewName("for the function name after the return type");
     fn->name = name.text;
     fn->nameLoc = name.loc;
@@ -3344,24 +3443,32 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         return;
     }
     rejectOtherLanguages();
-    if (atAttribute()) {  // `[[allow(new_delete)]]` before a method, constructor or destructor
-        Loc attr = parseAttribute();
-        if (check(Tok::KwPublic) || check(Tok::KwPrivate) || check(Tok::KwProtected) || check(Tok::RBrace) ||
-            atAttribute()) {
-            diags_.error(attr, "[[allow(new_delete)]] is written before a method",
-                         "write it just before a method, constructor or destructor that uses new and delete",
-                         spec::NewDelete);
+    if (atAttribute()) {  // `[[allow(new_delete)]]` or `[[checked]]` before a method, constructor or destructor
+        Attribute which;
+        Loc attr = parseAttribute(which);
+        const bool checks = which == Attribute::Checked;
+        const std::string spelled = checks ? "[[checked]]" : "[[allow(new_delete)]]";
+        const char* anchor = checks ? spec::Checked : spec::NewDelete;
+        if (check(Tok::KwPublic) || check(Tok::KwPrivate) || check(Tok::KwProtected) || check(Tok::RBrace) || check(Tok::Semi)) {
+            diags_.error(attr, spelled + " is written before a method",
+                         checks ? "write it just before a method, constructor or destructor whose arithmetic should be checked"
+                                : "write it just before a method, constructor or destructor that uses new and delete",
+                         anchor);
             if (!check(Tok::RBrace)) parseMember(sd, access);
             return;
         }
         size_t methods = sd.methods.size(), fields = sd.fields.size();
-        parseMember(sd, access);
-        if (sd.methods.size() > methods) sd.methods.back()->allowNewDelete = true;
-        else if (sd.fields.size() > fields)
-            diags_.error(attr, "[[allow(new_delete)]] is written before a method, not a field",
-                         "for a field whose default value uses new, write `[[allow(new_delete)]];` at the top of the "
-                         "file",
-                         spec::NewDelete);
+        {
+            CheckedHere checking(checkedHere || checks);
+            parseMember(sd, access);
+        }
+        if (sd.methods.size() > methods) {
+            if (!checks) sd.methods.back()->allowNewDelete = true;
+        } else if (sd.fields.size() > fields)
+            diags_.error(attr, spelled + " is written before a method, not a field",
+                         checks ? "for a field, write `checked(...)` around the arithmetic in its default value: `long size = checked(a * b);`"
+                                : "for a field whose default value uses new, write `[[allow(new_delete)]];` at the top of the file",
+                         anchor);
         return;
     }
     const std::string& ownName = sd.templateName.empty() ? sd.name : sd.templateName;  // of its constructor
@@ -3520,6 +3627,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         auto method = std::make_unique<FuncDecl>();
         method->retType = ty;
         method->retTypeLoc = typeLoc;
+        rejectCheckedName(peek());
         const Token& name = expectNewName("for the method name");
         method->name = name.text;
         method->nameLoc = name.loc;
@@ -3808,7 +3916,13 @@ StmtPtr Parser::parseStmt() {
         case Tok::LBracket:
             if (atAttribute() && peek(2).kind == Tok::Ident && peek(2).text == "fallthrough") return parseFallthrough();
             if (atAttribute()) {
-                Loc attr = parseAttribute();
+                Attribute which;
+                Loc attr = parseAttribute(which);
+                if (which == Attribute::Checked)
+                    fail(attr, "[[checked]] is written before a function, not before a statement",
+                         "write `checked(...)` around the arithmetic, as in `total = checked(total + n);`, or move "
+                         "`[[checked]]` to just before the function to check all of it",
+                         spec::Checked);
                 fail(attr, "[[allow(new_delete)]] is written before a function, not before a statement",
                      "move it to just before the function, as in `[[allow(new_delete)]] void f() { ... }`",
                      spec::NewDelete);
@@ -4501,6 +4615,19 @@ ExprPtr Parser::parsePrimary() {
             if (t.text == "const_cast")
                 fail(t.loc, "C+ has no const_cast", "a const variable cannot be changed; copy it into a variable that is not const",
                      spec::Casts);
+            if ((t.text == "checked" || t.text == "unchecked") && check(Tok::LParen)) {  // `checked(a * b)`
+                advance();
+                if (check(Tok::RParen))
+                    fail(peek().loc, "`" + t.text + "(...)` is written around the arithmetic it is for",
+                         "write `" + t.text + "(a * b)`", spec::Checked);
+                ExprPtr inner;
+                {
+                    CheckedHere checking(t.text == "checked");
+                    inner = parseExpr();
+                }
+                expect(Tok::RParen, "to close `" + t.text + "(...)`");
+                return inner;
+            }
             if ((t.text == "function" || t.text == "func" || t.text == "fn") && check(Tok::LParen)) {  // `function(a) { ... }`
                 size_t close = 1;
                 for (int depth = 1; depth > 0 && close < 256 && peek(close).kind != Tok::Eof; ++close) {
@@ -4752,6 +4879,7 @@ static std::string sampleEnumerator(const StructDecl& en) { return en.enumerator
 void Parser::readEnums() {
     for (size_t start : enumStarts_) {
         pos_ = start;
+        CheckedHere checking(fileChecked(toks_[start].loc));
         try {
             parseEnum();
         } catch (ParseError&) {
