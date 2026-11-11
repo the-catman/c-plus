@@ -4,4 +4,4 @@ int main() {
     return 0;
 }
 // error: 'cin' is not declared
-// error: there are no input functions yet
+// error: read a line with `readLine()`, which is null at the end of the input, and a number from it with `try stoi(line)`

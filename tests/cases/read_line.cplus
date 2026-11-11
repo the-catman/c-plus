@@ -1,0 +1,28 @@
+// readLine() gives each line of standard input without its "\n" or "\r\n", and null once there is no more.
+// stdin: plain\n
+// stdin: windows\r\n
+// stdin: \n
+// stdin: lone\rreturn\n
+// stdin: zero\0byte\n
+// stdin: \r\n
+// stdin: last, with no newline
+int main() {
+    vector<string> lines;
+    while (auto line = readLine()) lines.push_back(line);
+    println("{}", lines.size());
+    // expect: 7
+    for (string line : lines) println("{} {}", vector<string>{line}, line.size());
+    // expect: ["plain"] 5
+    // expect: ["windows"] 7
+    // expect: [""] 0
+    // expect: ["lone\rreturn"] 11
+    // expect: ["zero\x00byte"] 9
+    // expect: [""] 0
+    // expect: ["last, with no newline"] 21
+    // At the end it stays null.
+    println("{} {}", readLine() == null, readLine() ?? "none");
+    // expect: true none
+    println("{} {}", "\r\n".size(), "\r".size());
+    // expect: 2 1
+    return 0;
+}

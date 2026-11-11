@@ -44,7 +44,7 @@ void conversions(Node nd) {
     Dog dg = nd;
     // error: write `dynamic_cast<Dog>(nd)`, which stops the program when it is not one, or test it with `if (auto d = dynamic_cast<Dog?>(nd))`
     float f = text();
-    // error: then call `float(atof(s))`
+    // error: read the number in the text with `try stof(s)`
 }
 void generics() {
     auto a = Pair;

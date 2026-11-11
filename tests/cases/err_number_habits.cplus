@@ -1,0 +1,48 @@
+// Reading a number from a string as C and C++ do, and what the compiler says to write instead.
+int main() throws {
+    long a = stoll("1");
+    double b = stold("1");
+    long c = stoul("1");
+    long d = stoull("1");
+    int e = try stoi("ff", null, 16);
+    double f = try stod("1.5", null);
+    int g = atoi("1");
+    long h = atol("1");
+    double i = atof("1");
+    string s = "5";
+    int j = int(s);
+    bool k = bool(s);
+    int m = stoi(s);
+    return 0;
+}
+void withStd() { double x = std::stod("1"); }
+void withStdLong() { long x = std::stoll("1"); }
+void withStdUnsigned() { long x = std::stoul("1"); }
+void withStdC() { long x = std::strtol("1", null, 10); }
+void withStdAtoi() { int x = std::atoi("1"); }
+// error: C+ has no `stoll`, as a `long` is 64 bits already
+// error: write `try stol(s)`, which reads a `long`
+// error: C+ has no `stold`, as there is no `long double`
+// error: write `try stod(s)`, which reads a `double`, of 64 bits
+// error: this compiler does not support `stoul` yet, as it has no unsigned types
+// error: this compiler does not support `stoull` yet, as it has no unsigned types
+// error: write `try stol(s)`, which reads a `long`, of 64 bits
+// error: 'stoi' takes 1 argument but 3 were given
+// error: write `try stoi(s)`, which reads all of the text, in decimal. For a number that is only the start of it, or in another base, declare C's: `extern "C" long strtol(string s, char** end, int base);`
+// error: 'stod' takes 1 argument but 2 were given
+// error: declare C's: `extern "C" double strtod(string s, char** end);`
+// error: spec: docs/SPEC.md#parsing-numbers
+// not-error: is defined here
+// error: write `try stoi(s)`, which throws an Error if the text is not a number, where C's `atoi` gives 0. C's can be declared instead: `extern "C" int atoi(string text);`
+// error: write `try stol(s)`, which throws an Error if the text is not a number, where C's `atol` gives 0
+// error: write `try stod(s)`, which throws an Error if the text is not a number, where C's `atof` gives 0
+// error: a cast cannot read a number from a string
+// error: read the number in the text with `try stoi(s)`, which throws an Error if it is not a whole number
+// error: a cast cannot turn a string into a bool
+// error: compare the text instead, e.g. `s == "true"`
+// error: 'stoi' can fail, so its call must say what happens then
+// error: write `try stod(s)`, which is built in. It throws an Error if the text is not a number
+// error: write `try stol(s)`, which is built in, as a `long` is 64 bits. It throws an Error if the text is not a number
+// error: write `try stol(s)`, which is built in, as there are no unsigned types yet
+// error: a C function must be declared: `extern "C" long strtol(string s, char** end, int base);`
+// error: write `try stoi(s)`, which is built in. It throws an Error if the text is not a number

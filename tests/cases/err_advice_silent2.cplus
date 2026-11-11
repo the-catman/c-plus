@@ -47,11 +47,11 @@ void strings() {
 }
 void readers() {
     long n = "5";
-    // error: declare `extern "C" long atol(string text);`, then call `atol(s)`
+    // error: read the number in the text with `try stol(s)`, which throws an Error if it is not a whole number
     double d = 1;
     string s = "1.5";
     d *= s;
-    // error: declare `extern "C" double atof(string text);`, then call `atof(s)`
+    // error: read the number in the text with `try stod(s)`, which throws an Error if it is not a number
     bool b = true;
     b ^= true;
     // error: write `b = b != c`

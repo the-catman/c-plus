@@ -1,0 +1,21 @@
+// `stoi`, `stol`, `stod` and `stof` read a number from a string, and throw an Error unless all of it is the number.
+int main() throws {
+    int count = try stoi("42");
+    long many = try stol(" -9000000000 ");
+    double ratio = try stod("2.5e-3");
+    float half = try stof("0.5");
+    println("{} {} {} {}", count, many, ratio, half);
+    // expect: 42 -9000000000 0.0025 0.5
+
+    for (string text : vector<string>{"12abc", "3000000000", "1.5"}) {
+        try {
+            println("{}", try stoi(text));
+        } catch (Error e) {
+            println("{}", e.what());
+        }
+    }
+    // expect: "12abc" is not a whole number
+    // expect: "3000000000" does not fit in an int
+    // expect: "1.5" is not a whole number: stod reads one with a fraction or an exponent
+    return 0;
+}

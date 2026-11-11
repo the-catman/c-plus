@@ -1,0 +1,24 @@
+// What was printed before readLine() is written out first, so a prompt shows before the program waits, even when the
+// output is a pipe. write() goes around the buffer of println, so it would come first otherwise. readLine() reads C's
+// stdin, which C's own functions read from too.
+// stdin: Ada\nxB\n3\n
+extern "C" {
+    long write(int fd, string s, long n);
+    int getchar();
+}
+
+int main() throws {
+    print("Name: ");
+    string name = readLine() ?? "nobody";
+    write(1, "[" + name + "]\n", name.size() + 3);
+    // expect: Name: [Ada]
+    char c = char(getchar());
+    println("{} {}", c, readLine() ?? "none");
+    // expect: x B
+    int n = try stoi(readLine() ?? "");
+    println("{}", n * 2);
+    // expect: 6
+    println("{}", readLine() ?? "end");
+    // expect: end
+    return 0;
+}

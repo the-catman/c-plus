@@ -129,9 +129,9 @@ void conversions() {
     string t = true;
     // error: turn it into a string: `format("{}", b)`
     int n = "5";
-    // error: declare `extern "C" int atoi(string text);`, then call `atoi(s)`
+    // error: read the number in the text with `try stoi(s)`, which throws an Error if it is not a whole number
     double d = "5";
-    // error: declare `extern "C" double atof(string text);`, then call `atof(s)`
+    // error: read the number in the text with `try stod(s)`, which throws an Error if it is not a number
     int* p = 5;
     // error: a number is not a pointer. To make one from a number, write `reinterpret_cast<int*>(n)`
     Node o = 5;

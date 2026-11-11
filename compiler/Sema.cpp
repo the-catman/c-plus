@@ -1238,7 +1238,16 @@ void Sema::reportUnknownName(const NameExpr& n) {
     if (program_->unreadFunctions.count(n.name)) return;  // a header that could not be read may declare it, which has been said
     if (false) {}
     else if (n.name == "cout" || n.name == "endl" || n.name == "cerr" || n.name == "console") help = "C+ prints with `println(\"{}\", value);`";
-    else if (n.name == "cin") help = "there are no input functions yet. C's can be declared: `extern \"C\" int getchar();`";
+    else if (n.name == "cin") help = "read a line with `readLine()`, which is null at the end of the input, and a number from it with `try stoi(line)`";
+    else if (isBuiltinModule(n.name)) {  // `fs.readFileSync(path)`, as in JavaScript
+        bool imported = false;
+        for (auto& imp : program_->imports) imported = imported || imp.path == n.name;
+        const std::string example = n.name == "fs" ? "try fs::read(path)" : n.name == "json" ? "json::stringify(x)" : n.name == "http" ? "try http::get(url)" : "reflect::type<T>()";
+        diags_.error(n.loc, q(n.name) + " is a module, not a value",
+                     std::string(imported ? "" : "write `import " + n.name + ";` at the top of the file, then ") + "use its names with `::`, as in `" + example + "`",
+                     n.name == "fs" ? spec::Files : spec::Modules);
+        return;
+    }
     else if (n.name == "JSON") help = "`import json;`, then `json::parse<T>(text)` and `json::stringify(x)`";
     else if (n.name == "Math") help = "write `sqrt(x)`, `floor(x)` and the rest with no prefix";
     else if (n.name == "nullptr" || n.name == "NULL") help = "write `null`; only an optional, such as `User?`, or a pointer can be null";
@@ -1262,7 +1271,7 @@ void Sema::check(Program& program) {
     program_ = &program;
     for (auto& imp : program.imports) {
         if (!isBuiltinModule(imp.path))
-            diags_.error(imp.loc, "this compiler does not support modules yet, except for `http`, `json` and `reflect`, so '" + imp.path + "' cannot be imported",
+            diags_.error(imp.loc, "this compiler does not support modules yet, except for `fs`, `http`, `json` and `reflect`, so '" + imp.path + "' cannot be imported",
                          "remove the import for now; built-ins like println need no import", spec::Status);
 #ifndef CPLUS_CURL_LINK
         if (imp.path == "http")
@@ -2668,12 +2677,10 @@ static bool usableAsCondition(const Type* t) {
            (t->isOptional() && !t->elem->is(K::Bool));
 }
 
-// How to read a number of this type from text, which there is no way to do but C's for now.
+// How to read a number of this type from text.
 static std::string readingNumberHelp(const Type* t) {
-    if (t->is(K::Float)) return "declare `extern \"C\" double atof(string text);`, then call `float(atof(s))`";
-    if (t->isFloating()) return "declare `extern \"C\" double atof(string text);`, then call `atof(s)`";
-    if (t->is(K::Long)) return "declare `extern \"C\" long atol(string text);`, then call `atol(s)`";
-    return "declare `extern \"C\" int atoi(string text);`, then call `atoi(s)`";
+    const std::string call = t->is(K::Float) ? "stof" : t->isFloating() ? "stod" : t->is(K::Long) ? "stol" : "stoi";
+    return "read the number in the text with `try " + call + "(s)`, which throws an Error if it is not " + (t->isFloating() ? "a number" : "a whole number");
 }
 
 // Help for a bool? used as a condition.
@@ -3201,7 +3208,7 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         help = "make one with `json::of`: `json::of(" + (spelled(e, "").empty() || spelled(e, "").find("...") != std::string::npos ? std::string("x") : spelled(e, "")) + ")`";
     if (help.empty() && to->is(K::String) && from->isNumber()) help = "turn it into a string: `to_string(x)`";
     if (help.empty() && to->is(K::String) && from->is(K::Bool)) help = "turn it into a string: `format(\"{}\", b)`";
-    if (help.empty() && from->is(K::String) && to->isNumber()) help = "this compiler cannot read a number from a string yet: " + readingNumberHelp(to);
+    if (help.empty() && from->is(K::String) && to->isNumber()) help = readingNumberHelp(to);
     if (help.empty() && to->isStruct() && !isHashmap(to) && from->isNumber() && to->decl->constructor)
         help = comesWithTheLanguage(*to->decl) ? "give it a value such as " + declarationOf(to, "x") : "build one with its constructor: `" + std::string(to->name) + "(...)`";
     if (help.empty() && to->isStruct() && !isHashmap(to) && from->isNumber() && !to->decl->fields.empty() && canConvert(from, to->decl->fields[0].type))
@@ -4487,7 +4494,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 else if (!a.value->type->isError() && !a.value->type->isArithmetic())
                     diags_.error(a.value->loc, opName + " needs a number, but this is " + q(a.value->type), a.value->type->isOptional() ? unwrapHelp(spelled(*a.value))
                                  : a.value->type->is(K::Bool) ? std::string("convert it first: `int(b)`")
-                                 : a.value->type->is(K::String) ? "this compiler cannot read a number from a string yet: " + readingNumberHelp(t)
+                                 : a.value->type->is(K::String) ? readingNumberHelp(t)
                                                                 : std::string("give it a number"), spec::Operators);
                 else if ((*a.op == BinOp::Rem || *a.op == BinOp::Shl || *a.op == BinOp::Shr || *a.op == BinOp::BitAnd ||
                           *a.op == BinOp::BitOr || *a.op == BinOp::BitXor) &&
@@ -4585,11 +4592,16 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
 void Sema::checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow, Loc loc, const std::string& what) {
     if (args.size() != fn.params.size()) {
         for (auto& a : args) checkLooseValue(*a, flow);
+        // `stoi(s, &pos, 16)`, as in C++: the built-in one takes no position or base, which wait for default arguments
+        const bool reader = fn.nameLoc.line == 0 && (fn.name == "stoi" || fn.name == "stol" || fn.name == "stod" || fn.name == "stof");
+        const std::string cReader = cNumberReader(fn.name == "stod" || fn.name == "stof" ? "strtod" : "strtol");
         diags_.error(loc, what + " takes " + std::to_string(fn.params.size()) + " argument" +
                               (fn.params.size() == 1 ? "" : "s") + " but " + std::to_string(args.size()) +
                               (args.size() == 1 ? " was" : " were") + " given",
-                     "its signature is `" + signature(fn) + "`", fn.owner ? spec::Methods : spec::Functions);
-        diags_.note(fn.nameLoc, q(fn.name) + " is defined here");
+                     reader ? "write `try " + fn.name + "(s)`, which reads all of the text, in decimal. For a number that is only the start of it, or in another base, declare C's: `extern \"C\" " + cReader + ";`"
+                            : "its signature is `" + signature(fn) + "`",
+                     reader ? spec::ParsingNumbers : fn.owner ? spec::Methods : spec::Functions);
+        if (fn.nameLoc.line) diags_.note(fn.nameLoc, q(fn.name) + " is defined here");  // not in what comes with the language
         return;
     }
     for (size_t i = 0; i < args.size(); ++i) {
@@ -4738,7 +4750,7 @@ const Type* Sema::checkMath(CallExpr& call, Flow& flow) {
                                : t->is(K::Bool)   ? "a bool is not a number here; write `int(b)` for 1 or 0"
                                : t->is(K::String) && (call.callee == "min" || call.callee == "max")
                                    ? std::string("for strings, which compare by their bytes, write `a ") + (call.callee == "min" ? "<" : ">") + " b ? a : b`"
-                               : t->is(K::String) ? "this compiler cannot read a number from a string yet. Declare C's: `extern \"C\" double atof(string text);`, and call `atof(s)`"
+                               : t->is(K::String) ? readingNumberHelp(Type::doubleTy())
                                                   : "pass an int, a long, a float or a double";
             diags_.error(a->loc, call.callee + "() takes " + (m.args == 1 ? "a number" : "numbers") + ", but this is " +
                                      q(t),
@@ -4857,12 +4869,37 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
                          spec::Async);
             return Type::error();
         }
-        if (name.starts_with("sto") && !cNumberReader(name).empty()) {
-            diags_.error(nameLoc, "this compiler does not support reading a number from a string yet",
-                         "until it does, declare `extern \"C\" " + cNumberReader(name) + ";`, and call `" + cReaderName(name) + "(s)` instead of `" + name + "`", spec::Status);
+        if (name == "stoll" || name == "stold") {
+            diags_.error(nameLoc, name == "stoll" ? "C+ has no `stoll`, as a `long` is 64 bits already" : "C+ has no `stold`, as there is no `long double`",
+                         name == "stoll" ? "write `try stol(s)`, which reads a `long`" : "write `try stod(s)`, which reads a `double`, of 64 bits", spec::ParsingNumbers);
             return Type::error();
         }
-        if (name.find("::") != std::string::npos) {
+        if (name == "stoul" || name == "stoull") {
+            diags_.error(nameLoc, "this compiler does not support `" + name + "` yet, as it has no unsigned types",
+                         "write `try stol(s)`, which reads a `long`, of 64 bits", spec::ParsingNumbers);
+            return Type::error();
+        }
+        bool importsFs = false;
+        for (auto& imp : program_->imports) importsFs = importsFs || imp.path == "fs";
+        const std::string readingFile = std::string(importsFs ? "write " : "write `import fs;` at the top of the file, then ") + "`string text = try fs::read(path);`";
+        if (name == "fs::readFile" || name == "fs::writeFile" || name == "fs::write" || name == "fs::append" || name == "fs::exists" || name == "fs::remove" ||
+            name == "fs::list" || name == "fs::open") {
+            const std::string what = name.substr(4);
+            const std::string writing = "declare C's for now: `extern \"C\" { struct FILE; FILE* fopen(string path, string mode); int fputs(string text, FILE* f); int fclose(FILE* f); }`, then `fopen(path, \"";
+            diags_.error(nameLoc, "this compiler does not support `" + name + "` yet",
+                         what == "readFile"                             ? "write `try fs::read(path)`, which waits for all of the file. The async `fs::readFile`, for `await`, comes later"
+                         : what == "writeFile" || what == "write"       ? writing + "w\")`"
+                         : what == "append"                             ? writing + "a\")`"
+                         : what == "exists"                             ? "declare C's for now: `extern \"C\" int access(string path, int mode);`, then `access(path, 0) == 0`"
+                         : what == "remove"                             ? "declare C's for now: `extern \"C\" int remove(string path);`, then `remove(path) == 0`"
+                         : what == "list"                               ? "pass the names of the files to the program as arguments: `cplus run app.cplus -- a.txt b.txt`"
+                                                                        : "read all of the file with `try fs::read(path)`, then go through the text",
+                         spec::Files);
+            return Type::error();
+        }
+        if (name.starts_with("fs::") && (name.find("read") != std::string::npos || name.find("Read") != std::string::npos)) {
+            help = "to read all of a file, write `try fs::read(path)`";
+        } else if (name.find("::") != std::string::npos) {
             const std::string module = name.substr(0, name.find("::"));
             help = "`cplus explain " + module + "` says what the module '" + module + "' has";
         } else if (lookup(name)) {
@@ -4877,6 +4914,16 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             help = "`format(\"{}\", x)` returns the string";
         else if (name == "assert")
             help = "write `if (!ok) throw Error(\"...\");`, or stop the program with a C function";
+        else if (name == "getline")
+            help = "write `while (auto line = readLine()) { ... }`: `readLine()` gives the next line of standard input, and null at its end";
+        else if (name == "scanf")
+            help = "read a line with `readLine()`, and a number from it with `try stoi(line)`";
+        else if (name == "fopen" || name == "readFileSync" || name == "readFile" || name == "read_to_string")
+            help = "to read all of a file, " + readingFile +
+                   (name == "fopen" ? ". To use C's, declare it: `extern \"C\" { struct FILE; FILE* fopen(string path, string mode); }`" : "");
+        else if (name == "atoi" || name == "atol" || name == "atof")
+            help = std::string("write `try ") + (name == "atoi" ? "stoi" : name == "atol" ? "stol" : "stod") + "(s)`, which throws an Error if the text is not a number, where C's `" +
+                   name + "` gives 0. C's can be declared instead: `extern \"C\" " + cNumberReader(name) + ";`";
         else if (!cDeclarationOf(name).empty())
             help = "a C function must be declared: `extern \"C\" " + cDeclarationOf(name) + ";`";
         else if (name == "sort" || name == "stable_sort" || name == "reverse" || name == "accumulate" || name == "min_element" || name == "max_element")
@@ -6208,10 +6255,9 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
         diags_.error(c.loc, "a cast cannot turn a string into a char",
                      "`s[i]` is the char at position i of a string, and 'a' in single quotes is a char", spec::Casts);
     else if (from->is(K::String))
-        diags_.error(c.loc, "this compiler does not support reading a number from a string yet",
-                     to->is(K::Bool)      ? "compare the text instead, e.g. `s == \"true\"`"
-                                          : readingNumberHelp(to),
-                     spec::Status);
+        diags_.error(c.loc, to->is(K::Bool) ? "a cast cannot turn a string into a bool" : "a cast cannot read a number from a string",
+                     to->is(K::Bool) ? "compare the text instead, e.g. `s == \"true\"`" : readingNumberHelp(to),
+                     to->is(K::Bool) ? spec::Casts : spec::ParsingNumbers);
     else
         diags_.error(c.operand->loc, "'" + cast + "' converts a number, a char or a bool, but this is " + q(from),
                      from->isOptional() ? unwrapHelp(spelled(*c.operand))

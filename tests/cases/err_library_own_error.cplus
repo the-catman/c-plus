@@ -1,0 +1,12 @@
+// stoi throws the built-in Error, which a class of the program's own by that name would take the place of.
+class Error {
+public:
+    string message;
+    Error(string m) : message(m) {}
+};
+int main() throws {
+    int n = try stoi("1");
+    return n;
+}
+// error: 'stoi' uses the built-in class 'Error', but this program has its own
+// error: rename your class. One of your own for errors can derive from the built-in one

@@ -13,13 +13,12 @@ int main() {
     return 0;
 }
 // error: it is built in: write `sqrt(...)` instead of `std::sqrt(...)`
-// error: Until then, declare the C function: `extern "C" double atof(string text);`
+// error: write `try stod(s)`, which is built in. It throws an Error if the text is not a number
 // error: math constants are planned. Until then, `acos(-1)` is pi
 // error: this compiler does not support math constants such as 'M_PI' yet
 // error: write `import <math.h>;`, which declares C's, as in C. Without it, `acos(-1)` is pi and `exp(1)` is e
-// error: this compiler does not support reading a number from a string yet
-// error: this compiler cannot read a number from a string yet
-// error: a C function must be declared: `extern "C" int atoi(string text);`
+// error: 'stod' can fail, so its call must say what happens then
+// error: write `try stoi(s)`, which throws an Error if the text is not a number, where C's `atoi` gives 0. C's can be declared instead: `extern "C" int atoi(string text);`
 // error: write `fabs`, which returns a float when given floats, as in C++
 // error: C+ has no long double; write `sqrt`
 // error: define it in this file, in any order, or declare a C function with `extern "C"`

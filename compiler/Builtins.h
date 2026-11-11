@@ -787,4 +787,93 @@ template<typename T> reflect::Type reflect::type() { return reflect::Type(__type
 template<typename T> reflect::Type reflect::of(T value) { return reflect::Type(cplus_type_real(__type_of(T), (void*)&value)); }
 )cplus";
 
+// `import fs;`. The C side is runtime/fs.c, on C's stdio: `fs::read` waits for the whole file, and is not async. The kinds of
+// fs::Error, and which failure is which, are chosen there.
+inline constexpr const char* kFsSource = R"cplus(
+extern "C" {
+    bool cplus_fs_read(void* path, void* out, void* kind, void* problem);
+}
+
+class fs::Error : public Error {
+public:
+    string kind;
+    string path;
+    fs::Error(string m, string k, string p) : Error(m), kind(k), path(p) {}
+};
+
+string fs::read(string path) throws {
+    string text;
+    string kind;
+    string problem;
+    if (!cplus_fs_read((void*)&path, (void*)&text, (void*)&kind, (void*)&problem)) throw fs::Error(problem, kind, path);
+    return text;
+}
+)cplus";
+
+// What a program uses without an import, each added by itself, when the program uses it and has no function of that name of
+// its own: see Parser::librarySources. The C side of readLine is runtime/input.c, and that of the others runtime/parse.c.
+inline constexpr const char* kReadLineSource = R"cplus(
+extern "C" {
+    bool cplus_read_line(void* out);
+}
+
+string? readLine() {
+    string line;
+    if (!cplus_read_line((void*)&line)) return null;
+    return line;
+}
+)cplus";
+
+inline constexpr const char* kStoiSource = R"cplus(
+extern "C" {
+    bool cplus_parse_int(void* text, int* out, void* problem);
+}
+
+int stoi(string text) throws {
+    int value = 0;
+    string problem;
+    if (!cplus_parse_int((void*)&text, &value, (void*)&problem)) throw Error(problem);
+    return value;
+}
+)cplus";
+
+inline constexpr const char* kStolSource = R"cplus(
+extern "C" {
+    bool cplus_parse_long(void* text, long* out, void* problem);
+}
+
+long stol(string text) throws {
+    long value = 0;
+    string problem;
+    if (!cplus_parse_long((void*)&text, &value, (void*)&problem)) throw Error(problem);
+    return value;
+}
+)cplus";
+
+inline constexpr const char* kStodSource = R"cplus(
+extern "C" {
+    bool cplus_parse_double(void* text, double* out, void* problem);
+}
+
+double stod(string text) throws {
+    double value = 0;
+    string problem;
+    if (!cplus_parse_double((void*)&text, &value, (void*)&problem)) throw Error(problem);
+    return value;
+}
+)cplus";
+
+inline constexpr const char* kStofSource = R"cplus(
+extern "C" {
+    bool cplus_parse_float(void* text, float* out, void* problem);
+}
+
+float stof(string text) throws {
+    float value = 0;
+    string problem;
+    if (!cplus_parse_float((void*)&text, &value, (void*)&problem)) throw Error(problem);
+    return value;
+}
+)cplus";
+
 }  // namespace cplus

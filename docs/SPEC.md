@@ -237,7 +237,50 @@ Copies of a string, and large substrings, share their bytes instead of copying t
 loop takes linear time. See [Memory model](#memory-model).
 
 `s.at(i)` does not exist, since `s[i]` is always checked. Planned: `append`, `insert`,
-`erase`, `replace`, `rfind` and `compare`, and parsing numbers out of strings.
+`erase`, `replace`, `rfind` and `compare`. A number is read from a string with `stoi` and the functions like it:
+
+#### Parsing numbers
+
+`stoi`, `stol`, `stod` and `stof` read a number from a string, as in C++. They are built in, with no `std::`, and they
+can fail, so each call is written with `try`.
+
+```cpp
+int count = try stoi("42");
+long many = try stol(" -9000000000 ");    // spaces around it are fine
+double ratio = try stod("2.5e-3");
+float half = try stof("0.5");
+
+try {
+    int n = try stoi("12abc");
+} catch (Error e) {
+    println("{}", e.what());   // "12abc" is not a whole number
+}
+```
+
+| Function | Gives | Reads |
+|----------|-------|-------|
+| `stoi(text)` | `int` | a whole number |
+| `stol(text)` | `long` | a whole number |
+| `stod(text)` | `double` | a number |
+| `stof(text)` | `float` | a number |
+
+- All of the text must be the number. Spaces before and after it, as `isspace` finds them, are left out, but anything
+  else is an error: `"12abc"` and `"12 3"` are, where C++ would read 12 and stop. Text that is empty, or only spaces, is
+  an error too.
+- A whole number has at most one `+` or `-`, and then decimal digits. `"007"` is 7, while `"0x1F"`, `"0b1"`, `"1'000"`,
+  `"5L"`, `"1.5"` and `"1e3"` are errors. For the last two, the error says to use `stod`.
+- A number for `stod` and `stof` is written as in C++, without a suffix: `"1e5"`, `"1."`, `".5"` and `"5"`. So are
+  `"inf"`, `"infinity"` and `"nan"`, in any case and with a sign, so that `stod(to_string(x))` gives `x` back. Hexadecimal
+  numbers and `"nan(...)"` are errors.
+- A number that does not fit is an error: `stoi("3000000000")`, and `stod("1e999")`, as in C++. The smallest `int` and
+  `long` fit. A number too close to zero for the type is rounded, without an error, where C++ throws.
+- The error is an `Error`, and its `what()` quotes the text, cut short after 40 bytes, with what cannot be printed
+  escaped, as in: "99999999999" does not fit in an int.
+- A zero byte in the text is one more character that is not part of the number, so it is an error like the others.
+- There is no second argument, for where the number ended or for another base, which waits for default arguments. C's
+  `strtol` and `strtod` do that, declared with [`extern "C"`](#c-functions).
+- `stoll` is `stol`, as a `long` is 64 bits. `stoul` and `stoull` wait for unsigned types.
+- A function of the program's own with one of these names is used instead.
 
 ### Implicit conversions
 
@@ -1097,6 +1140,42 @@ for (auto f : t.fields()) println("{} at {}: {}", f.name, f.offset, f.type.name(
 
 Not yet: reading or changing a field through its `reflect::Field`, methods, and looking up a type by its name.
 
+### Files
+
+`import fs;` reads files. `fs::read(path)` gives all that is in a file as a string, and waits until it has read it.
+
+```cpp
+import fs;
+
+try {
+    string notes = try fs::read("notes.txt");
+    println("{} bytes", notes.size());
+} catch (fs::Error e) {
+    println("{}", e.what());   // could not read "notes.txt": there is no such file
+}
+```
+
+- The path is relative to the working directory, as in C, unless it starts with `/`.
+- The string holds the bytes of the file as they are. Line endings are not changed, a byte order mark stays, the text does
+  not have to be UTF-8, and zero bytes are kept. An empty file gives `""`.
+- Reading goes on until the file ends, however long it is, and not only as far as the size the file says it has, so a
+  pipe is read whole, and so is a file that the system writes as it is read.
+- `fs::read` is not async: an [async function](#async-functions) that calls it holds up its thread until it returns.
+
+What goes wrong is an `fs::Error`, with `what()`, `kind`, which is one of these, and `path`, the path as it was given.
+
+| `kind` | What happened |
+|--------|---------------|
+| `"not-found"` | there is no file at that path, or a part of the path before its end is a file and not a folder |
+| `"permission"` | the program is not allowed to read it |
+| `"is-directory"` | it is a folder |
+| `"bad-path"` | the path is empty or too long, goes through too many symbolic links, or has a zero byte in it, which no name of a file can have |
+| `"io"` | anything else, such as a disk that fails while it is read |
+
+Not yet: writing and appending, `fs::exists`, `fs::remove`, `fs::list`, `fs::open` for reading a file in parts, and
+`fs::readFile` and `fs::writeFile`, which an async function waits for with `await`. Until then, C's `fopen`, `fputs` and
+`fclose` write a file, declared with [`extern "C"`](#c-functions).
+
 ### Pointers
 
 Pointers work as in C++: `&x` is the address of `x`, `*p` is what `p` points to, and
@@ -1634,7 +1713,7 @@ int main() {
 
 ### Modules
 
-Partly planned: the modules that come with the language work, which are [`http`](#http), [`json`](#json) and [`reflect`](#reflection). There are no
+Partly planned: the modules that come with the language work, which are [`fs`](#files), [`http`](#http), [`json`](#json) and [`reflect`](#reflection). There are no
 header files of C+, but C's can be [imported](#c-headers). One file is one module.
 
 ```cpp
@@ -1871,6 +1950,33 @@ C++. `string` covers the other ways to build strings.
 string label = format("{}/{}", done, total);   // "3/10"
 string key = "user" + to_string(id);
 ```
+
+### Reading input
+
+`readLine()` reads the next line of standard input. It is built in, so it needs no import, and it waits until a line has
+come.
+
+```cpp
+print("Your name: ");
+string? name = readLine();
+println("Hello, {}!", name ?? "stranger");
+
+long total = 0;
+while (auto line = readLine()) total += try stol(line);
+```
+
+- It gives a `string?`, which is null once nothing more can be read: at the end of the input, which a terminal gives with
+  Ctrl-D, or when reading fails. An empty line is `""`, which is a value, so `while (auto line = readLine())` goes on.
+- The line comes without the `"\n"` or `"\r\n"` that ended it, while a `"\r"` on its own stays. The last line counts even
+  when nothing ends it, and the call after it gives null.
+- The line holds the bytes as they came, zero bytes too, and it can be of any length.
+- What was printed before is written out first, so a prompt from `print` shows even when the output goes to a pipe, and
+  not to a terminal.
+- It reads C's `stdin`, so it can be mixed with C functions that read from there.
+- A function of the program's own named `readLine` is used instead.
+
+C++'s `std::getline(std::cin, line)` is `readLine()`, and `std::cin >> n` is `readLine()` and then
+[`stoi`](#parsing-numbers).
 
 ---
 
@@ -2706,7 +2812,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Unsigned types | planned |
 | Format options for width, alignment and `{:x}`; math constants | planned |
 | Function overloading | planned |
-| Strings: `append`, `insert`, `erase`, `replace`, parsing numbers | planned |
+| Strings: `append`, `insert`, `erase`, `replace` | planned |
+| Reading numbers from strings: `stoi`, `stol`, `stod`, `stof` | implemented |
 | `hashmap<K, V>` | implemented |
 | Vector `insert`, `erase`, iterators; `find` on a hashmap, sorted maps, sets | planned |
 | References (`T&`), including `for (auto& x : v)` | planned |
@@ -2728,6 +2835,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; C's macros with arguments and inline functions | planned |
 | Modules `http`, `json` and `reflect`, and raw strings | implemented |
 | `http::fetch` | implemented |
+| `import fs;` and `fs::read`; `readLine()` | implemented |
+| Files: writing, `fs::exists`, `fs::remove`, `fs::list`, `fs::open`, `fs::readFile`, `fs::writeFile` | planned |
 | Modules of your own | planned |
 | Threads: `spawn`, `Task`, `Mutex`, `LockGuard`, `--race` | implemented |
 | `async` functions, `await`, `delay` | implemented |

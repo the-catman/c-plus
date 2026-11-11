@@ -1,0 +1,24 @@
+// A method named readLine does not take the place of the built-in function, which the program also calls.
+// stdin: first\nsecond\n
+class Lines {
+public:
+    vector<string> items;
+    string? readLine() {
+        if (items.empty()) return null;
+        string first = items[0];
+        items = {};
+        return first;
+    }
+};
+
+int main() {
+    Lines l = Lines();
+    l.items.push_back("from the object");
+    println("{}", l.readLine() ?? "none");
+    // expect: from the object
+    println("{}", readLine() ?? "none");
+    // expect: first
+    println("{}", readLine() ?? "none");
+    // expect: second
+    return 0;
+}

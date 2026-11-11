@@ -74,7 +74,7 @@ void strings() {
     println("{}", s + o);
     // error: it may be null: `to_string(o ?? 0)` for a number, or `format("{}", o)`, which gives its value or "null"
     println("{}", stoi(s));
-    // error: until it does, declare `extern "C" int atoi(string text);`, and call `atoi(s)` instead of `stoi`
+    // error: 'stoi' can fail, so its call must say what happens then
     println("{}", strtol(s, null, 10));
     // error: a C function must be declared: `extern "C" long strtol(string s, char** end, int base);`
     println("{}", pthread_create(1));
