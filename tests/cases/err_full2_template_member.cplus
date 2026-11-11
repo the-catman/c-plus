@@ -1,4 +1,4 @@
-// Members of a generic class defined outside it, and aliases of generics, which C+ has neither of.
+// Members of a generic class defined outside it, which C+ does not have, and a generic alias of a C++ type.
 template <typename T>
 class Box { public: T v; };
 string Box::name() { return "x"; }
@@ -6,6 +6,6 @@ string Box::name() { return "x"; }
 template <typename T> Box<T>::Box(T x) : v(x) {}
 template <typename T> T Box<T>::get() { return v; }
 template <typename T> using Vec = std::vector<T>;
-// error: write the type itself wherever `Vec` is used, with the type you mean in place of each parameter
+// error: built-ins need no prefix: write `vector` instead of `std::vector`
 // not-error: rename one of them
 int main() { return 0; }

@@ -1014,7 +1014,7 @@ struct TemplateParam {
 };
 
 struct TemplateDecl {
-    enum class Kind { Function, Record, Concept };
+    enum class Kind { Function, Record, Concept, Alias };  // an alias, `using Id = long;`, has no parameters unless it is generic
     Kind kind = Kind::Function;
     std::string name;
     Loc nameLoc;
@@ -1025,6 +1025,9 @@ struct TemplateDecl {
     std::unique_ptr<FuncDecl> pattern;  // a function, with its parameter types as they are written
     std::map<std::string, StructDecl*> records;  // what has been made, by name
     std::map<std::string, FuncDecl*> functions;
+    // An alias: what it stands for, once it has been worked out, by its arguments for a generic one.
+    std::map<std::string, const Type*> aliased;
+    bool resolving = false;  // its type is being read, so meeting it again means it stands for itself
 };
 
 // Whether a value of this type holds a unique reference, directly or inside. `seen` stops at a struct

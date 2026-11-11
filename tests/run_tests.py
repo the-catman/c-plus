@@ -537,6 +537,8 @@ PLANNED_FEATURES = [
     ("constexpr of a struct", 'struct P { int x = 0; };\nconstexpr P ORIGIN = {1};\n' + M % ""),
     ("a generic constexpr function in an array's size", 'template<typename T> constexpr int size(T x) { return 2; }\n' + M % "array<int, size<int>(1)> a;"),
     ("thread_local", 'thread_local int count = 0;\n' + M % ""),
+    ("type aliases inside a function", M % "using Id = long;"),
+    ("type aliases inside a type", 'struct P { using Id = long; int x = 0; };\n' + M % ""),
     ("static variables in a function", 'int f() { static int n = 0; return n; }\n' + M % ""),
     ("enums held in other integer types", 'enum class Color : char { Red, Blue };\n' + M % ""),
     ("enumerator values that use enumerators", 'enum class Color { Red, Blue = Red };\n' + M % ""),
@@ -793,6 +795,7 @@ def check_cheat_sheet(cplus, workdir):
 # What the spec's text writes that is not code: tools and what is typed at a shell, the names of other languages' things, and how
 # rules are written.
 SPEC_NOT_CODE = {
+    "using Name = type;",
     "compiler/SpecRefs.h", "cplus explain <topic>", ".cplus", "\\n \\t \\r \\0 \\\\ \\\" \\'", "\\xHH", "\\012", "<cctype>", "<cmath>", "std::format", "std::string", "std::",
     "std::optional<T>", "std::optional", "std::vector", "std::array", "std::unordered_map", "std::numbers::pi", "std::println", "std::weak_ptr", "std::make_shared",
     "std::unique_ptr", "std::async", "int + long", "long + float", "float + double", "Transfer-Encoding", "wss://", "libcurl4-openssl-dev", "CPLUS_CHECK_LEAKS=1",
@@ -804,6 +807,8 @@ SPEC_NOT_CODE = {
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
+    "using namespace": "^using namespace std;", "using Tree = vector<Tree>;": "^using Tree = vector<Tree>;",
+    "using Map = std::unordered_map<std::string, int>;": "^using Map = std::unordered_map<std::string, int>;", "typedef long UserId;": "^typedef long UserId;",
     "move(count)": "^int count = 0;\nint f() { return move(count); }",
     "server::address": "server::address(1);", "json.stringify(x)": "int x = 1; json.stringify(x);", "module net.server;": "^module net.server;",
     "export module net.server;": "^export module net.server;", "int net::server::extra()": "^int net::server::extra() { return 1; }",

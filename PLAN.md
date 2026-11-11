@@ -119,6 +119,10 @@ The default path:
 - Integer overflow traps always, with an error naming file and line. Explicit wrapping
   operators for hashing and crypto code are planned. A compiler flag could disable checks for a
   hot loop, if profiling ever justifies it.
+  - Reversed by the owner on 2026-11-11, to be built with unsigned integers: every integer, signed and unsigned,
+    wraps on overflow, as C# does, so that hash and crypto code works as written and one rule covers both. A keyword
+    makes overflow stop the program where that is wanted. Its form, and the rules for shifts, casts, constants and
+    unsigned numbers, are being settled; until it is built, overflow still traps.
 
 Always available, no `unsafe` block:
 - Raw pointers `T*`, address-of, pointer arithmetic, casts, `new`/`delete`, `malloc`/`free`.
@@ -336,10 +340,11 @@ programs that import `json` or `reflect`, and for debug builds, whose leak repor
   shared libraries, some with no static form, so linking it would not let a program run on any more machines. That takes a
   libcurl built for it, with few features and its TLS library linked in too. One setting, `CPLUS_CURL_LIBRARY`, chooses which is used.
 - Threads and `spawn`.
-- Later, after async exists: `fs`, `net` on libuv.
-- Chosen 2026-11-11, waiting for the owner's word since it changes the line above: `fs::read` and the rest of `fs` that
-  waits are written on C's stdio, so a small program needs neither async nor libuv. The async forms, such as `fs::readFile`,
-  take Node's names and use libuv. `readLine()` is built in, like `println`, and `stoi`, `stol`, `stod` and `stof` throw on
+- Later, after async exists: `net` on libuv, and the async forms of `fs`.
+- Decided 2026-11-11: `fs::read` and the rest of `fs` that waits are written on C's stdio, so a small program needs
+  neither async nor libuv. The async forms, such as `fs::readFile`, take Node's names and use libuv, and the same tests
+  of errors run against both, so that `e.kind` cannot drift. `fs` uses POSIX calls too, so Windows (Phase 9) needs a
+  layer for it either way. `readLine()` is built in, like `println`, and `stoi`, `stol`, `stod` and `stof` throw on
   text that is not wholly a number, where C++'s take what they can and leave the rest.
 
 ### 2.16 Syntax — DECIDED
@@ -369,6 +374,10 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
 - `==` and `!=` work on every struct without writing anything: fields are compared in
   order. On class references they compare identity, true only for the same object, like
   `===` on objects in JavaScript and `==` on `shared_ptr` in C++.
+- Type aliases, decided 2026-11-11: `using Name = type;` at the top of a file, generic ones with
+  `template<...> using`, and `export using`. An alias is the same type, not a new one. `typedef` stays
+  out, with the `using` line as its help, and so does `using namespace`. Aliases inside a function or a
+  type wait for types inside them.
 - Operator overloading uses C++ syntax, `Point operator+(Point other) const`, and arrives
   after function overloading. `&&`, `||` and the comma operator cannot be overloaded.
 - Printing follows C++23: `println("x = {}", x)`. The format string must be a literal and
@@ -796,6 +805,10 @@ will confidently write C++ wherever the two differ.
 ## 6. Open items
 
 - Remaining syntax: lambdas, in Phase 7. Enums and `switch` are in §2.32.
+  - Decided 2026-11-11 by the owner: a lambda captures as a JavaScript closure does. `[&]` shares the variable with
+    the function, and the variable lives as long as anything uses it: one that a kept lambda captures moves into a
+    counted box. `[=]` copies, as in C++. One type, `function<R(Args...)>`, and no `mutable`. The details, such as a
+    loop's own variable and what cannot be shared, are being settled.
 - Default arguments in generics, and a template beside a function of its name, in Phase 7 (§2.33).
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, keeps a copy of it or frees it, since the update to the element would be lost (decided
@@ -815,7 +828,8 @@ will confidently write C++ wherever the two differ.
   are used but not kept, as in Swift and Hylo.
   - In: parameters (`Point& p`, `const T&`), `for (auto& x : v)`, a result used where it is made (`v.back().x = 1`,
     `m[k].count++`), and a reference variable in a block (`auto& e = m[k];`).
-  - Out: a reference in a field, a returned reference to a local, and a reference kept by a lambda that outlives the call.
+  - Out: a reference in a field, and a returned reference to a local. A lambda's `[&]` shares the variable instead,
+    as decided below.
   - While a reference into a vector, string or hashmap lives, that one cannot grow or share its buffer. The compiler checks
     this where it can tell, and the running program where it cannot, so a reference never dangles or changes a copy.
   - Plain C++ references were turned down. Copies share a buffer until one is written (§2.12, §2.17), so writing through a

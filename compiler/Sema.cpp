@@ -1334,6 +1334,10 @@ void Sema::reportUnknownName(const NameExpr& n) {
                      "a C type declared by name is only used through pointers: get a `" + n.name + "*` from the C function that makes one", spec::CFunctions);
         return;
     }
+    if (const TemplateDecl* alias = program_->findTemplate(n.name); alias && alias->kind == TemplateDecl::Kind::Alias && alias->params.empty()) {
+        diags_.error(n.loc, q(n.name) + " is a type alias, not a value", "to make a value of it, write `" + n.name + "(...)` or `" + n.name + "{...}`", spec::TypeAliases);
+        return;
+    }
     if (const TemplateDecl* tmpl = program_->findTemplate(n.name); tmpl && tmpl->kind != TemplateDecl::Kind::Function) {
         std::string example = exampleArguments(*tmpl), note = constraintNote(*tmpl);
         if (!note.empty()) {  // a constraint of the program's own: `int` or `double` may have what it requires
@@ -1572,7 +1576,10 @@ void Sema::checkTemplateNames(Program& program) {
         if (t->kind == TemplateDecl::Kind::Function && isBuiltinFunction(t->name))
             diags_.error(t->nameLoc, q(t->name) + " is a built-in function and cannot be redefined",
                          "give your function a different name", spec::Printing);
-        if (auto f = funcs_.find(t->name); f != funcs_.end()) {
+        if (auto f = funcs_.find(t->name); f != funcs_.end() && t->kind == TemplateDecl::Kind::Alias) {
+            diags_.error(f->second->nameLoc, q(t->name) + " is already the name of a type alias", "give the function a different name", spec::TypeAliases);
+            diags_.note(t->nameLoc, "the alias is here");
+        } else if (f != funcs_.end()) {
             diags_.error(t->nameLoc, "this compiler does not support a template function and another function of the same name yet",
                          "rename one of them. Functions that are not templates can share a name, when they take different parameters", spec::Overloading);
             diags_.note(f->second->nameLoc, "it is defined here");

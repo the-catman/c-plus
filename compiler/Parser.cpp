@@ -711,6 +711,11 @@ void Parser::parseProgram(Program& prog) {
     }
 }
 
+// The names of types that come with C+ and are read by their words, which an alias cannot take.
+static bool builtinTypeWord(const std::string& name) {
+    return name == "vector" || name == "array" || name == "unique" || name == "local" || name == "std";
+}
+
 // Types and generics can be used before they are defined, since there are no headers or forward
 // declarations, so their names are found before anything else is read.
 void Parser::scanDeclarations(Program& prog) {
@@ -737,6 +742,15 @@ void Parser::scanDeclarations(Program& prog) {
                 prog.structs.back()->type.kind = Type::Kind::Enum;
                 if (depth == 0) enumStarts_.push_back(i);
             }
+        }
+        if (kind == Tok::Ident && depth == 0 && !inBuiltins && toks_[i].text == "using" && toks_[i + 1].kind == Tok::Ident && i + 2 < toks_.size() &&
+            toks_[i + 2].kind == Tok::Assign && !prog.findTemplate(toks_[i + 1].text) && !builtinTypeWord(toks_[i + 1].text)) {  // `using Id = long;`
+            auto alias = std::make_unique<TemplateDecl>();
+            alias->kind = TemplateDecl::Kind::Alias;
+            alias->name = toks_[i + 1].text;
+            alias->nameLoc = toks_[i + 1].loc;
+            alias->start = i + 3;
+            prog.templates.push_back(std::move(alias));
         }
         bool isRecord = kind == Tok::KwStruct || kind == Tok::KwClass || kind == Tok::KwInterface;
         if (isRecord && toks_[i + 1].kind == Tok::Ident && typeNames_.insert(toks_[i + 1].text).second)
@@ -806,10 +820,10 @@ void Parser::scanTemplate(Program& prog, size_t& i) {
         skipTemplate_[first] = last;
         i = last;
     };
-    if (head.kind == Tok::Ident && head.text == "using") {  // `template<typename T> using Vec = std::vector<T>;`
-        passOver(head.loc, "C+ has no type aliases",
-                 "write the type itself wherever `" + (peek(1).kind == Tok::Ident ? peek(1).text : std::string("it")) + "` is used, with the type you mean in place of each parameter",
-                 spec::Variables);
+    const bool aliasHead = head.kind == Tok::Ident && head.text == "using";  // `template<typename T> using List = vector<T>;`
+    if (aliasHead && (peek(1).kind != Tok::Ident || peek(2).kind != Tok::Assign || builtinTypeWord(peek(1).text))) {
+        passOver(head.loc, peek(1).kind == Tok::Ident && builtinTypeWord(peek(1).text) ? "'" + peek(1).text + "' is a type that comes with C+" : "a generic type alias is written `template<typename T> using Name = type;`",
+                 "give the alias a name of its own: `template<typename T> using List = vector<T>;`", spec::TypeAliases);
         return;
     }
     for (size_t at = pos_; at < toks_.size() && at < pos_ + 64; ++at) {  // `Box<T>::Box(T x)`, `T Box<T>::get()`
@@ -830,7 +844,14 @@ void Parser::scanTemplate(Program& prog, size_t& i) {
             return;
         }
     }
-    if (head.kind == Tok::KwStruct || head.kind == Tok::KwClass || head.kind == Tok::KwInterface) {
+    if (aliasHead) {
+        t->kind = TemplateDecl::Kind::Alias;
+        t->nameLoc = peek(1).loc;
+        t->name = peek(1).text;
+        t->start = pos_ + 3;
+        while (end + 1 < toks_.size() && toks_[end].kind != Tok::Semi) ++end;
+        if (end + 1 < toks_.size()) ++end;
+    } else if (head.kind == Tok::KwStruct || head.kind == Tok::KwClass || head.kind == Tok::KwInterface) {
         t->kind = TemplateDecl::Kind::Record;
         t->nameLoc = peek(1).loc;
         t->name = peek(1).text;
@@ -861,8 +882,8 @@ void Parser::scanTemplate(Program& prog, size_t& i) {
     t->end = end;
     i = end;
     if (TemplateDecl* other = prog.findTemplate(t->name); other && !t->name.empty()) {
-        diags_.error(t->nameLoc, "the name '" + t->name + "' is already used by another generic", "rename one of them",
-                     spec::Generics);
+        diags_.error(t->nameLoc, "the name '" + t->name + "' is already used by " + (other->kind == TemplateDecl::Kind::Alias ? "a type alias" : "another generic"),
+                     "rename one of them", t->kind == TemplateDecl::Kind::Alias ? spec::TypeAliases : spec::Generics);
         diags_.note(other->nameLoc, "the first definition is here");
         skipTemplate_[first] = end;
         return;
@@ -1148,6 +1169,11 @@ void Parser::readTemplate(TemplateDecl& t) {
         } else if (t.kind == TemplateDecl::Kind::Concept) {
             ConceptBody body;
             parseConcept(body);
+        } else if (t.kind == TemplateDecl::Kind::Alias) {
+            if (t.params.empty()) return;  // worked out where it is written, or where it is used first
+            Loc loc;
+            const Type* aliased = parseType(loc);
+            aliasEnd(t, aliased, loc);
         } else {
             if (match(Tok::KwConstexpr) && check(Tok::KwAsync))
                 fail(peek().loc, "an async function cannot be constexpr", "remove `constexpr`: an async function waits for what happens while the program runs", spec::Async);
@@ -1199,6 +1225,125 @@ std::string Parser::instanceName(const TemplateDecl& t, const std::vector<Templa
 TemplateDecl* Parser::classTemplate(const std::string& name) const {
     TemplateDecl* t = prog_->findTemplate(name);
     return t && t->kind == TemplateDecl::Kind::Record ? t : nullptr;
+}
+
+TemplateDecl* Parser::aliasTemplate(const std::string& name) const {
+    TemplateDecl* t = prog_->findTemplate(name);
+    return t && t->kind == TemplateDecl::Kind::Alias ? t : nullptr;
+}
+
+bool Parser::isAlias(const Token& t) const { return t.kind == Tok::Ident && !bindings_.count(t.text) && aliasTemplate(t.text); }
+
+// What an alias stands for, after its name; a generic one's arguments come next. Its type is read from where it is
+// written, once for each set of arguments.
+const Type* Parser::aliasType(TemplateDecl& alias, Loc usedAt) {
+    std::vector<TemplateArg> args;
+    if (!alias.params.empty()) {
+        if (!check(Tok::Less))
+            fail(usedAt, "'" + alias.name + "' is generic, so its template arguments must be written",
+                 "write e.g. `" + exampleArguments(alias) + "`" + constraintNote(alias), spec::TypeAliases);
+        args = parseTemplateArgs(alias, usedAt, false);
+    }
+    if (alias.params.empty() && check(Tok::Less))
+        fail(peek().loc, "'" + alias.name + "' is not generic, so it takes no template arguments", "remove the `<...>` after '" + alias.name + "'", spec::TypeAliases);
+    if (alias.failed) return Type::error();  // what is wrong with it has been said where it is written
+    // While a generic is read with its parameters unknown, a generic alias stands for something that depends on them.
+    const bool dry = dryRun_ && !alias.params.empty();
+    const std::string key = alias.params.empty() ? std::string() : instanceName(alias, args);
+    if (!dry)
+        if (auto it = alias.aliased.find(key); it != alias.aliased.end()) return it->second;
+    if (alias.resolving)
+        fail(usedAt, "the type alias '" + alias.name + "' stands for a type that uses '" + alias.name + "' itself, which never ends",
+             "give it a type that does not lead back to '" + alias.name + "'. For a type that holds itself, write a class: `class Node { public: vector<Node> children; };`",
+             spec::TypeAliases);
+    const Type* made = Type::error();
+    {
+        GenericScope scope(*this);
+        struct Resolving {
+            TemplateDecl& a;
+            ~Resolving() { a.resolving = false; }
+        } resolving{alias};
+        alias.resolving = true;
+        dryRun_ = dry;
+        injected_ = nullptr;
+        currentTemplate_ = nullptr;
+        if (!alias.params.empty()) bindTemplate(alias, args);
+        pos_ = alias.start;
+        const bool context = !alias.params.empty() && !dry;
+        if (context) diags_.pushContext(usedAt, "in '" + key + "', which is used here");
+        try {
+            Loc loc;
+            const Type* t = parseType(loc);
+            aliasEnd(alias, t, loc);
+            made = t;
+        } catch (ParseError&) {
+            alias.failed = true;  // said once, where it is written
+        }
+        if (context) diags_.popContext();
+    }
+    if (!dry) alias.aliased[key] = made;
+    return made;
+}
+
+// After the type an alias stands for, which must be one type, and not a reference.
+void Parser::aliasEnd(const TemplateDecl& alias, const Type* type, Loc typeLoc) {
+    if (check(Tok::Amp) || check(Tok::AmpAmp))
+        fail(peek().loc, "a type alias cannot stand for a reference",
+             "remove the `&`, and write it where the reference is meant: `const " + alias.name + "& x`", spec::TypeAliases);
+    if (type->is(Type::Kind::Auto))
+        fail(typeLoc, "a type alias stands for a type, and `auto` is none", "write the type itself: `using " + alias.name + " = long;`", spec::TypeAliases);
+    if (!check(Tok::Semi))
+        fail(peek().loc, "expected ';' after the type of '" + alias.name + "', found " + describeToken(peek()),
+             "write one type, then ';': `using " + alias.name + " = vector<int>;`", spec::TypeAliases);
+}
+
+// `using Id = long;` at the top of a file, which was found before anything was read.
+void Parser::parseAlias(Program& prog) {
+    const Token& name = peek(1);
+    const size_t typeAt = pos_ + 3;
+    size_t end = typeAt;
+    while (end < toks_.size() && toks_[end].kind != Tok::Semi && toks_[end].kind != Tok::Eof) ++end;
+    struct Skip {
+        Parser& p;
+        size_t end;
+        ~Skip() { p.pos_ = end < p.toks_.size() && p.toks_[end].kind == Tok::Semi ? end + 1 : end; }
+    } skip{*this, end};
+    if (builtinTypeWord(name.text)) {
+        diags_.error(name.loc, "'" + name.text + "' is a type that comes with C+", "give the alias a name of its own", spec::TypeAliases);
+        return;
+    }
+    TemplateDecl* alias = prog.findTemplate(name.text);
+    auto same = [](Loc a, Loc b) { return a.line == b.line && a.col == b.col && a.file == b.file; };
+    if (!alias || !same(alias->nameLoc, name.loc)) {
+        const bool builtin = alias && alias->nameLoc.line == 0;
+        diags_.error(name.loc, builtin ? "'" + name.text + "' is a type that comes with C+"
+                                       : "'" + name.text + "' is already the name of " + (alias && alias->kind == TemplateDecl::Kind::Alias ? "a type alias" : "a generic"),
+                     builtin ? "give the alias a name of its own" : "give one of them a different name", spec::TypeAliases);
+        if (alias && !builtin) diags_.note(alias->nameLoc, "the other one is here");
+        return;
+    }
+    if (const StructDecl* sd = typeNames_.count(name.text) ? prog.findStruct(name.text) : nullptr) {
+        const bool builtin = sd->nameLoc.line == 0;
+        diags_.error(name.loc, builtin ? "'" + name.text + "' is a type that comes with C+" : "'" + name.text + "' is already the name of a " + sd->keyword(),
+                     builtin ? "give the alias a name of its own" : "give one of them a different name", spec::TypeAliases);
+        if (!builtin) diags_.note(sd->nameLoc, "it is defined here");
+        alias->name.clear();  // the type is what the name means
+        return;
+    }
+    // A type as C++ writes it, which C+ writes another way
+    bool known = false;
+    const std::string cplus = cplusSpelling(typeAt, end, known);
+    std::string written, squeezed;
+    for (size_t at = typeAt; at < end; ++at) written += toks_[at].text.empty() ? tokSpelling(toks_[at].kind) : toks_[at].text;
+    for (char c : cplus)
+        if (c != ' ') squeezed += c;
+    if (known && squeezed != written && written.find("__TaskThrows") == std::string::npos) {  // `Task<T, throws>` is C+'s own
+        diags_.error(toks_[typeAt].loc, "C+ writes this type `" + cplus + "`", "write `using " + name.text + " = " + cplus + ";`", spec::TypeAliases);
+        alias->failed = true;
+        return;
+    }
+    pos_ += 2;
+    aliasType(*alias, name.loc);
 }
 
 TemplateDecl* Parser::functionTemplate(const std::string& name) const {
@@ -1446,11 +1591,166 @@ Loc Parser::parseAttribute() {
     return loc;
 }
 
+// The type that C++ writes in the tokens from `from` to `to`, as C+ writes it: `std::unordered_map<std::string, int>` is
+// `hashmap<string, int>`. Empty, and `known` false, when C+ has no such type, or says nothing about it.
+std::string Parser::cplusSpelling(size_t from, size_t to, bool& known) const {
+    std::vector<std::string> words;
+    std::vector<bool> fromStd;  // written `std::name`, which only names what C+ has under another name, if anything
+    bool cutShort = false;
+    for (size_t at = from; at < to && toks_[at].kind != Tok::Semi && toks_[at].kind != Tok::Eof; ++at) {
+        if (at >= from + 400) {  // too long to say anything about
+            cutShort = true;
+            break;
+        }
+        bool isStd = false;
+        if (toks_[at].kind == Tok::ColonColon) continue;  // `::std::string`
+        if (toks_[at].kind == Tok::Ident && toks_[at].text == "std" && toks_[at + 1].kind == Tok::ColonColon) {
+            at += 2;
+            isStd = true;
+            if (toks_[at].kind == Tok::Semi || toks_[at].kind == Tok::Eof) break;
+        }
+        words.push_back(toks_[at].text.empty() ? tokSpelling(toks_[at].kind) : toks_[at].text);
+        fromStd.push_back(isStd);
+    }
+    size_t pos = 0;
+    known = !cutShort;
+    auto isClassName = [&](const std::string& name) {  // a class of the program's own, generic or not: `Box<int>`, and not `Box<int>?`
+        if (name.empty() || name.back() == '?' || name.back() == '*') return false;
+        const std::string base = name.substr(0, name.find('<'));
+        if (const TemplateDecl* tmpl = classTemplate(base)) return tmpl->start < toks_.size() && toks_[tmpl->start].kind == Tok::KwClass;
+        const StructDecl* sd = typeNames_.count(base) ? prog_->findStruct(base) : nullptr;
+        return sd && sd->isClass;
+    };
+    // What a word can stand for: a type of C+, a C++ name C+ has another form of, or a type of the program's own
+    auto cName = [](const std::string& w) -> std::string {  // C's names for numbers, as C+ writes them: the same size
+        if (w == "uint8_t") return "char";  // a char is one byte, 0 to 255
+        if (w == "int32_t" || w == "uint32_t") return "int";
+        if (w == "int64_t" || w == "uint64_t" || w == "size_t" || w == "ssize_t" || w == "ptrdiff_t" || w == "intptr_t" || w == "uintptr_t") return "long";
+        return "";
+    };
+    static const char* const ownWords[] = {"int", "long", "bool", "char", "double", "float", "void", "string", "vector", "array", "hashmap", "unique", "weak", "local", "Mutex", "Task",
+                                           "__TaskThrows"};
+    static const char* const stdWords[] = {"string", "vector", "array", "optional", "unique_ptr", "weak_ptr", "shared_ptr", "unordered_map", "map", "mutex"};
+    auto among = [](const auto& list, const std::string& w) { return std::find_if(std::begin(list), std::end(list), [&](const char* n) { return w == n; }) != std::end(list); };
+    auto isKey = [](const std::string& k) { return k == "int" || k == "long" || k == "char" || k == "bool" || k == "string"; };  // what a hashmap can hash
+    bool madeOfSmart = false;  // what `typeAt` gave last came from a smart pointer, whose ownership a C+ type of it would lose
+    std::function<std::string()> typeAt = [&]() -> std::string {
+        madeOfSmart = false;
+        if (pos >= words.size()) return known = false, "";
+        std::string prefix;
+        if (words[pos] == "const") {  // `const int*` stays as it is
+            prefix = "const ";
+            if (++pos >= words.size()) return known = false, "";
+        }
+        const bool isStd = fromStd[pos];
+        std::string w = words[pos++];
+        if (w == "signed" && pos < words.size() && words[pos] == "char") known = false;  // a char is 0 to 255, and C+ has no signed byte
+        if (w == "unsigned" || w == "signed") {  // the C+ type of the same size
+            w = pos < words.size() && (words[pos] == "long" || words[pos] == "char") ? words[pos] : "int";
+            if (pos < words.size() && (words[pos] == "int" || words[pos] == "long" || words[pos] == "char")) ++pos;
+        }
+        if (w == "long" && pos < words.size() && words[pos] == "long") ++pos;
+        if (w == "long" && pos < words.size() && words[pos] == "int") ++pos;
+        const bool isOwn = !isStd && (typeNames_.count(w) || classTemplate(w)) && !among(ownWords, w);  // the program's own, kept as it is
+        if (isStd || !isOwn) {
+            if (!cName(w).empty() && !typeNames_.count(w)) w = cName(w);
+            else if (isStd ? !among(stdWords, w) : !among(ownWords, w)) known = false;
+        }
+        if (w == "int8_t" || w == "int16_t" || w == "uint16_t") known = false;  // no C+ type of that size
+        std::vector<std::string> args;
+        bool smartInside = false;
+        if (pos < words.size() && words[pos] == "<") {
+            ++pos;
+            bool closed = false;
+            while (known && pos < words.size()) {
+                if (w == "array" && args.size() == 1) {  // its size, a number
+                    const std::string& n = words[pos];
+                    if (n.empty() || !std::isdigit((unsigned char)n[0]) || !std::all_of(n.begin(), n.end(), [](char c) { return std::isdigit((unsigned char)c) || c == '\''; })) { known = false; break; }
+                    args.push_back(words[pos++]);
+                } else {
+                    args.push_back(typeAt());
+                    smartInside = smartInside || madeOfSmart;
+                    if (args.back().rfind("const ", 0) == 0 && args.back().back() != '*') { known = false; break; }  // a const element; a pointer to const is fine
+                }
+                if (pos < words.size() && words[pos] == ",") { ++pos; continue; }
+                if (pos < words.size() && words[pos] == ">") { ++pos; closed = true; break; }
+                if (pos < words.size() && words[pos] == ">>") { words[pos] = ">"; closed = true; break; }
+                break;
+            }
+            if (!closed) known = false;  // cut off, or something that is not a list of types
+        }
+        auto joined = [&] {
+            std::string all;
+            for (size_t i = 0; i < args.size(); ++i) all += (i ? ", " : "") + args[i];
+            return all;
+        };
+        auto takes = [&](size_t n) { if (args.size() != n) known = false; };
+        const std::string first = args.empty() ? "" : args[0];
+        auto inner = [&](const std::string& t) { return t.size() > 5 && (t.rfind("weak<", 0) == 0); };
+        std::string out;
+        for (const std::string& a : args)
+            if (a.empty() || (a == "void" && w != "Task" && w != "__TaskThrows")) known = false;  // nothing but a task holds a void
+        if (isOwn) {  // the program's own type, with as many arguments as it takes
+            const TemplateDecl* own = classTemplate(w);
+            if (own ? own->params.size() != args.size() : !args.empty()) known = false;
+            out = w + (args.empty() ? "" : "<" + joined() + ">");
+            size_t stars = 0;
+            while (pos < words.size() && words[pos] == "*") ++stars, ++pos;
+            if (stars > 0 && isClassName(w) && (stars > 1 || !prefix.empty())) known = false;  // a class object can always be changed through its variable
+            else if (stars == 1 && isClassName(w)) out += "?";  // a pointer to an object is what a class variable already is, and may be null
+            else out += std::string(stars, '*');
+            if (pos < words.size() && (words[pos] == "[" || words[pos] == "&")) known = false;
+            madeOfSmart = false;  // the program's own type, whatever it holds
+            return prefix + out;
+        }
+        if (w == "__TaskThrows") {  // what `Task<T, throws>` is read as, with `, throws` taken out
+            takes(1);
+            out = "Task<" + first + ", throws>";
+        } else if (w == "Task") {
+            takes(1);
+            out = "Task<" + first + ">";
+        } else if (w == "string" || w == "int" || w == "long" || w == "bool" || w == "char" || w == "double" || w == "float" || w == "void" || w == "Mutex" || w == "mutex") {
+            takes(0);
+            out = w == "mutex" ? "Mutex" : w;
+        } else if (w == "shared_ptr") {  // a class variable is already a counted reference; nothing else is shared that way
+            takes(1);
+            out = first;
+            if (!isClassName(first) || smartInside) known = false;
+        } else if (w == "optional") {
+            takes(1);
+            out = first;
+            if (!out.empty() && out.back() != '?' && out.back() != '*' && !inner(out)) out += "?";  // a pointer or a weak reference can already be null
+        } else if (w == "unique_ptr" || w == "weak_ptr" || w == "unique" || w == "weak" || w == "local") {
+            takes(1);
+            out = (w == "unique_ptr" ? std::string("unique") : w == "weak_ptr" ? std::string("weak") : w) + "<" + first + ">";
+            if (!isClassName(first) || smartInside) known = false;  // they hold an object of a class, and not another smart pointer
+        } else if (w == "unordered_map" || w == "map" || w == "hashmap") {
+            takes(2);
+            out = "hashmap<" + joined() + ">";
+            if (!isKey(first)) known = false;
+        } else if (w == "vector") {
+            takes(1);
+            out = "vector<" + first + ">";
+        } else if (w == "array") {
+            takes(2);
+            out = "array<" + joined() + ">";
+        } else out = w + (args.empty() ? "" : "<" + joined() + ">");
+        while (pos < words.size() && words[pos] == "*") out += "*", ++pos;
+        if (pos < words.size() && (words[pos] == "[" || words[pos] == "&")) known = false;  // a C array, which C+ writes `array<T, N>`, or a reference
+        madeOfSmart = w == "shared_ptr" || w == "unique_ptr" || w == "weak_ptr";
+        return prefix + out;
+    };
+    std::string type = typeAt();
+    if (pos != words.size()) known = false;
+    if (!known) type.clear();
+    return type;
+}
+
 void Parser::rejectOtherLanguages() {
     const Token& t = peek();
     if (t.kind == Tok::KwAsync && !localScopes_.empty())
         fail(t.loc, "C+ has no functions inside functions", "write the async function at the top level of the file, or as a method, and pass it what it needs", spec::Async);
-    if (t.kind != Tok::Ident || isTypeName(t) || boundType(t) || classTemplate(t.text)) return;
+    if (t.kind != Tok::Ident || isTypeName(t) || boundType(t) || classTemplate(t.text) || isAlias(t)) return;
     // Only when a name or a type comes next, which an expression cannot have: `let` can still be the name of a variable.
     Tok next = peek(1).kind;
     if (t.text == "union" && next == Tok::LBrace) notYet(t.loc, "unions", "use a struct with a field for each, or classes that derive from one");
@@ -1465,166 +1765,36 @@ void Parser::rejectOtherLanguages() {
         next != Tok::KwChar && next != Tok::KwVoid && next != Tok::KwAuto && next != Tok::KwConst && next != Tok::KwStruct && next != Tok::KwClass && next != Tok::KwNamespace)
         return;
     const std::string& w = t.text;
-    if (w == "typedef") fail(t.loc, "C+ has no typedef", "write the type itself. A struct or a class already goes by its name", spec::Variables);
-    if (w == "using" && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Assign) {  // `using Id = long;`
-        // The type as C+ writes it, or nothing when C+ has none
-        std::vector<std::string> words;
-        std::vector<bool> fromStd;  // written `std::name`, which only names what C+ has under another name, if anything
-        bool cutShort = false;
-        for (size_t at = 3; peek(at).kind != Tok::Semi && peek(at).kind != Tok::Eof; ++at) {
-            if (at >= 400) {  // too long to say anything about
-                cutShort = true;
-                break;
-            }
-            bool isStd = false;
-            if (peek(at).kind == Tok::ColonColon) continue;  // `::std::string`
-            if (peek(at).kind == Tok::Ident && peek(at).text == "std" && peek(at + 1).kind == Tok::ColonColon) {
-                at += 2;
-                isStd = true;
-                if (peek(at).kind == Tok::Semi || peek(at).kind == Tok::Eof) break;
-            }
-            words.push_back(peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text);
-            fromStd.push_back(isStd);
+    if (w == "typedef") {  // `typedef unsigned long Id;`
+        size_t end = 1;
+        bool plain = true;  // no `(`, as a function's type has, or `[`
+        while (end < 400 && peek(end).kind != Tok::Semi && peek(end).kind != Tok::Eof) {
+            plain = plain && peek(end).kind != Tok::LParen && peek(end).kind != Tok::LBracket && peek(end).kind != Tok::LBrace;
+            ++end;
         }
-        size_t pos = 0;
-        bool known = !cutShort;
-        auto isClassName = [&](const std::string& name) {  // a class of the program's own, generic or not: `Box<int>`, and not `Box<int>?`
-            if (name.empty() || name.back() == '?' || name.back() == '*') return false;
-            const std::string base = name.substr(0, name.find('<'));
-            if (const TemplateDecl* tmpl = classTemplate(base)) return tmpl->start < toks_.size() && toks_[tmpl->start].kind == Tok::KwClass;
-            const StructDecl* sd = typeNames_.count(base) ? prog_->findStruct(base) : nullptr;
-            return sd && sd->isClass;
-        };
-        // What a word can stand for: a type of C+, a C++ name C+ has another form of, or a type of the program's own
-        auto cName = [](const std::string& w) -> std::string {  // C's names for numbers, as C+ writes them: the same size
-            if (w == "uint8_t") return "char";  // a char is one byte, 0 to 255
-            if (w == "int32_t" || w == "uint32_t") return "int";
-            if (w == "int64_t" || w == "uint64_t" || w == "size_t" || w == "ssize_t" || w == "ptrdiff_t" || w == "intptr_t" || w == "uintptr_t") return "long";
-            return "";
-        };
-        static const char* const ownWords[] = {"int", "long", "bool", "char", "double", "float", "void", "string", "vector", "array", "hashmap", "unique", "weak", "local", "Mutex", "Task",
-                                               "__TaskThrows"};
-        static const char* const stdWords[] = {"string", "vector", "array", "optional", "unique_ptr", "weak_ptr", "shared_ptr", "unordered_map", "map", "mutex"};
-        auto among = [](const auto& list, const std::string& w) { return std::find_if(std::begin(list), std::end(list), [&](const char* n) { return w == n; }) != std::end(list); };
-        auto isKey = [](const std::string& k) { return k == "int" || k == "long" || k == "char" || k == "bool" || k == "string"; };  // what a hashmap can hash
-        bool madeOfSmart = false;  // what `typeAt` gave last came from a smart pointer, whose ownership a C+ type of it would lose
-        std::function<std::string()> typeAt = [&]() -> std::string {
-            madeOfSmart = false;
-            if (pos >= words.size()) return known = false, "";
-            std::string prefix;
-            if (words[pos] == "const") {  // `const int*` stays as it is
-                prefix = "const ";
-                if (++pos >= words.size()) return known = false, "";
-            }
-            const bool isStd = fromStd[pos];
-            std::string w = words[pos++];
-            if (w == "signed" && pos < words.size() && words[pos] == "char") known = false;  // a char is 0 to 255, and C+ has no signed byte
-            if (w == "unsigned" || w == "signed") {  // the C+ type of the same size
-                w = pos < words.size() && (words[pos] == "long" || words[pos] == "char") ? words[pos] : "int";
-                if (pos < words.size() && (words[pos] == "int" || words[pos] == "long" || words[pos] == "char")) ++pos;
-            }
-            if (w == "long" && pos < words.size() && words[pos] == "long") ++pos;
-            if (w == "long" && pos < words.size() && words[pos] == "int") ++pos;
-            const bool isOwn = !isStd && (typeNames_.count(w) || classTemplate(w)) && !among(ownWords, w);  // the program's own, kept as it is
-            if (isStd || !isOwn) {
-                if (!cName(w).empty() && !typeNames_.count(w)) w = cName(w);
-                else if (isStd ? !among(stdWords, w) : !among(ownWords, w)) known = false;
-            }
-            if (w == "int8_t" || w == "int16_t" || w == "uint16_t") known = false;  // no C+ type of that size
-            std::vector<std::string> args;
-            bool smartInside = false;
-            if (pos < words.size() && words[pos] == "<") {
-                ++pos;
-                bool closed = false;
-                while (known && pos < words.size()) {
-                    if (w == "array" && args.size() == 1) {  // its size, a number
-                        const std::string& n = words[pos];
-                        if (n.empty() || !std::isdigit((unsigned char)n[0]) || !std::all_of(n.begin(), n.end(), [](char c) { return std::isdigit((unsigned char)c) || c == '\''; })) { known = false; break; }
-                        args.push_back(words[pos++]);
-                    } else {
-                        args.push_back(typeAt());
-                        smartInside = smartInside || madeOfSmart;
-                        if (args.back().rfind("const ", 0) == 0 && args.back().back() != '*') { known = false; break; }  // a const element; a pointer to const is fine
-                    }
-                    if (pos < words.size() && words[pos] == ",") { ++pos; continue; }
-                    if (pos < words.size() && words[pos] == ">") { ++pos; closed = true; break; }
-                    if (pos < words.size() && words[pos] == ">>") { words[pos] = ">"; closed = true; break; }
-                    break;
+        std::string help = "write `using Name = type;`, such as `using Id = long;`. A struct or a class already goes by its name";
+        if (plain && end > 2 && peek(end).kind == Tok::Semi && peek(end - 1).kind == Tok::Ident) {
+            bool known = false;
+            std::string type = cplusSpelling(pos_ + 1, pos_ + end - 1, known);
+            if (!known) {
+                type.clear();
+                for (size_t at = 1; at + 1 < end; ++at) {
+                    const std::string word = peek(at).text.empty() ? tokSpelling(peek(at).kind) : peek(at).text;
+                    const bool spaced = !type.empty() && std::isalnum((unsigned char)type.back()) && std::isalnum((unsigned char)word[0]);
+                    type += (spaced ? " " : "") + word;
                 }
-                if (!closed) known = false;  // cut off, or something that is not a list of types
             }
-            auto joined = [&] {
-                std::string all;
-                for (size_t i = 0; i < args.size(); ++i) all += (i ? ", " : "") + args[i];
-                return all;
-            };
-            auto takes = [&](size_t n) { if (args.size() != n) known = false; };
-            const std::string first = args.empty() ? "" : args[0];
-            auto inner = [&](const std::string& t) { return t.size() > 5 && (t.rfind("weak<", 0) == 0); };
-            std::string out;
-            for (const std::string& a : args)
-                if (a.empty() || (a == "void" && w != "Task" && w != "__TaskThrows")) known = false;  // nothing but a task holds a void
-            if (isOwn) {  // the program's own type, with as many arguments as it takes
-                const TemplateDecl* own = classTemplate(w);
-                if (own ? own->params.size() != args.size() : !args.empty()) known = false;
-                out = w + (args.empty() ? "" : "<" + joined() + ">");
-                size_t stars = 0;
-                while (pos < words.size() && words[pos] == "*") ++stars, ++pos;
-                if (stars > 0 && isClassName(w) && (stars > 1 || !prefix.empty())) known = false;  // a class object can always be changed through its variable
-                else if (stars == 1 && isClassName(w)) out += "?";  // a pointer to an object is what a class variable already is, and may be null
-                else out += std::string(stars, '*');
-                if (pos < words.size() && (words[pos] == "[" || words[pos] == "&")) known = false;
-                madeOfSmart = false;  // the program's own type, whatever it holds
-                return prefix + out;
-            }
-            if (w == "__TaskThrows") {  // what `Task<T, throws>` is read as, with `, throws` taken out
-                takes(1);
-                out = "Task<" + first + ", throws>";
-            } else if (w == "Task") {
-                takes(1);
-                out = "Task<" + first + ">";
-            } else if (w == "string" || w == "int" || w == "long" || w == "bool" || w == "char" || w == "double" || w == "float" || w == "void" || w == "Mutex" || w == "mutex") {
-                takes(0);
-                out = w == "mutex" ? "Mutex" : w;
-            } else if (w == "shared_ptr") {  // a class variable is already a counted reference; nothing else is shared that way
-                takes(1);
-                out = first;
-                if (!isClassName(first) || smartInside) known = false;
-            } else if (w == "optional") {
-                takes(1);
-                out = first;
-                if (!out.empty() && out.back() != '?' && out.back() != '*' && !inner(out)) out += "?";  // a pointer or a weak reference can already be null
-            } else if (w == "unique_ptr" || w == "weak_ptr" || w == "unique" || w == "weak" || w == "local") {
-                takes(1);
-                out = (w == "unique_ptr" ? std::string("unique") : w == "weak_ptr" ? std::string("weak") : w) + "<" + first + ">";
-                if (!isClassName(first) || smartInside) known = false;  // they hold an object of a class, and not another smart pointer
-            } else if (w == "unordered_map" || w == "map" || w == "hashmap") {
-                takes(2);
-                out = "hashmap<" + joined() + ">";
-                if (!isKey(first)) known = false;
-            } else if (w == "vector") {
-                takes(1);
-                out = "vector<" + first + ">";
-            } else if (w == "array") {
-                takes(2);
-                out = "array<" + joined() + ">";
-            } else out = w + (args.empty() ? "" : "<" + joined() + ">");
-            while (pos < words.size() && words[pos] == "*") out += "*", ++pos;
-            if (pos < words.size() && (words[pos] == "[" || words[pos] == "&")) known = false;  // a C array, which C+ writes `array<T, N>`, or a reference
-            madeOfSmart = w == "shared_ptr" || w == "unique_ptr" || w == "weak_ptr";
-            return prefix + out;
-        };
-        std::string type = typeAt();
-        if (pos != words.size()) known = false;
-        fail(t.loc, "C+ has no type aliases",
-             known && !type.empty() ? "write the type itself, `" + type + "`, wherever `" + peek(1).text + "` is used"
-                                    : "write the type itself wherever `" + peek(1).text + "` is used, as C+ writes it: `cplus explain cheatsheet` shows what takes the place of each C++ type",
-             spec::Variables);
+            help = "write `using " + peek(end - 1).text + " = " + type + ";`";
+        }
+        fail(t.loc, "C+ has no typedef", help, spec::TypeAliases);
     }
+    if (w == "using" && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Assign)  // `using Id = long;` in a function or a type
+        notYet(t.loc, localScopes_.empty() ? "type aliases inside a type" : "type aliases inside a function",
+               "move it to the top of the file, outside any function or type: `using " + peek(1).text + " = ...;`");
     if (w == "using")
         fail(t.loc, "C+ has no 'using' declarations",
              "built-ins like println, string and vector need no std:: prefix, so `using` has nothing to do. A module's names are written with its path, "
-             "such as `net::server::start()`",
+             "such as `net::server::start()`. A type alias is written `using Name = type;`",
              spec::Modules);
     if (w == "inline") fail(t.loc, "C+ has no 'inline'", "remove it: with -O, the compiler decides what to inline", spec::Functions);
     if (w == "goto") fail(t.loc, "C+ has no goto", "use a loop with `break` or `continue`, or a function with `return`", spec::ControlFlow);
@@ -1651,6 +1821,7 @@ void Parser::rejectOtherLanguages() {
 
 void Parser::parseTopLevel(Program& prog) {
     if (check(Tok::KwExport)) passExport();
+    if (check(Tok::Ident) && peek().text == "using" && peek(1).kind == Tok::Ident && peek(2).kind == Tok::Assign) return parseAlias(prog);
     rejectOtherLanguages();
     const Token& t = peek();
     switch (t.kind) {
@@ -2217,11 +2388,11 @@ bool Parser::isTypeStart(size_t ahead) const {
                 if (peek(ahead).text == "unique" || peek(ahead).text == "local")
                     return isTypeAt(ahead + 2) || (peek(ahead + 2).kind == Tok::Ident && peek(ahead + 3).kind == Tok::Greater && (peek(ahead + 4).kind == Tok::Ident || peek(ahead + 4).kind == Tok::Question));
                 if (peek(ahead).text == "unordered_map" || peek(ahead).text == "map" || isOtherContainer(peek(ahead).text)) return isTypeAt(ahead + 2);
-                return peek(ahead).text == "vector" || classTemplate(peek(ahead).text);
+                return peek(ahead).text == "vector" || classTemplate(peek(ahead).text) || isAlias(peek(ahead));
             }
             // `Box b`: reports that its arguments are missing.
             if (classTemplate(peek(ahead).text) && !boundType(peek(ahead)) && peek(ahead + 1).kind == Tok::Ident) return true;
-            if (!isTypeName(peek(ahead))) return false;
+            if (!isTypeName(peek(ahead)) && !isAlias(peek(ahead))) return false;
             if (peek(ahead + 1).kind == Tok::Question || peek(ahead + 1).kind == Tok::QuestionQuestion) ++ahead;
             while (peek(ahead + 1).kind == Tok::Star || (peek(ahead + 1).kind == Tok::KwConst &&
                                                           peek(ahead).kind == Tok::Star))
@@ -2262,9 +2433,9 @@ bool Parser::isTypeAt(size_t ahead) const {
         case Tok::KwDouble: case Tok::KwFloat: case Tok::KwChar: case Tok::KwConst: case Tok::KwWeak:
             return true;
         case Tok::Ident:
-            if (isTypeName(t)) return true;
+            if (isTypeName(t) || (isAlias(t) && aliasTemplate(t.text)->params.empty())) return true;
             if (peek(ahead + 1).kind != Tok::Less) return false;
-            return t.text == "vector" || ((t.text == "array" || t.text == "unique" || t.text == "local") && isTypeAt(ahead + 2)) || classTemplate(t.text);
+            return t.text == "vector" || ((t.text == "array" || t.text == "unique" || t.text == "local") && isTypeAt(ahead + 2)) || classTemplate(t.text) || isAlias(t);
         default: return false;
     }
 }
@@ -2651,6 +2822,11 @@ const Type* Parser::parseBaseType(Loc& loc) {
                 return made;
             }
             if (isTypeName(t)) return &prog_->findStruct(t.text)->type;
+            if (TemplateDecl* alias = isAlias(t) ? aliasTemplate(t.text) : nullptr) {
+                const Type* made = aliasType(*alias, t.loc);
+                if (prev().loc.line == t.loc.line) loc.len = prev().loc.col + prev().loc.len - t.loc.col;
+                return made;
+            }
             if (t.text == "unique" && check(Tok::Less)) {
                 advance();
                 Loc inner;
@@ -4259,7 +4435,7 @@ ExprPtr Parser::parsePrimary() {
                 notYet(t.loc, "lambdas", "write a function at the top level of the file, and call it by name");
             // `(char*)p` or `(const Node*)p`: a type with stars, then ')'.
             size_t i = peek().kind == Tok::KwConst ? 1 : 0;
-            bool baseType = isCastType(peek(i).kind) || peek(i).kind == Tok::KwVoid || isTypeName(peek(i));
+            bool baseType = isCastType(peek(i).kind) || peek(i).kind == Tok::KwVoid || isTypeName(peek(i)) || isAlias(peek(i));
             size_t afterBase = i + 1;
             if (peek(i).kind == Tok::Ident && peek(i + 1).kind == Tok::Less && isTypeAt(i)) {  // `(array<int, 3>*)p`
                 afterBase = afterAngles(i + 1);
@@ -4276,7 +4452,7 @@ ExprPtr Parser::parsePrimary() {
                     return std::make_unique<CastExpr>(loc, ty, parseUnary());
                 }
             }
-            if ((isCastType(peek().kind) || isTypeName(peek())) && peek(1).kind == Tok::RParen) {  // `(int)x`, as in C
+            if ((isCastType(peek().kind) || isTypeName(peek()) || isAlias(peek())) && peek(1).kind == Tok::RParen) {  // `(int)x`, as in C
                 Loc loc;
                 const Type* ty = parseBaseType(loc);
                 advance();
@@ -4374,6 +4550,16 @@ ExprPtr Parser::parsePrimary() {
                 }
                 expectCloseAngle("to close '" + t.text + "<...>'");
                 return std::make_unique<ConstraintExpr>(t.loc, t.text, first, second);
+            }
+            if (TemplateDecl* alias = isAlias(t) ? aliasTemplate(t.text) : nullptr;
+                alias && (alias->params.empty() ? check(Tok::LParen) || check(Tok::LBrace) : check(Tok::Less) && isTypeAt(1))) {
+                --pos_;  // back to the name, to read the whole type
+                Loc loc;
+                const Type* ty = parseBaseType(loc);
+                if (ty->isError()) throw ParseError{};  // said where the alias is written
+                if (!check(Tok::LParen) && !check(Tok::LBrace))
+                    fail(peek().loc, "expected '(' or '{' after '" + std::string(ty->name) + "'", "write `" + t.text + "(...)` to make a value of it", spec::TypeAliases);
+                return parseBoundValue(t, ty);
             }
             TemplateDecl* tmpl = classTemplate(t.text);
             if (tmpl && !boundType(t) && (check(Tok::LParen) || check(Tok::LBrace)))

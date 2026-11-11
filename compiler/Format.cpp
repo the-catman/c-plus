@@ -146,6 +146,8 @@ private:
             const Tok k = kind(i);
             if ((k == Tok::KwStruct || k == Tok::KwClass || k == Tok::KwInterface || k == Tok::KwTypename) && kind(i + 1) == Tok::Ident)
                 types_.insert(toks_[i + 1].text);
+            if (isIdent(i, "using") && kind(i + 1) == Tok::Ident && kind(i + 2) == Tok::Assign && (i == 0 || kind(i - 1) != Tok::Greater))
+                types_.insert(toks_[i + 1].text);  // `using Id = long;`
             if (k != Tok::KwTemplate || kind(i + 1) != Tok::Less) continue;
             size_t j = i + 1;
             for (int depth = 0; j < toks_.size(); ++j) {
@@ -155,7 +157,7 @@ private:
             ++j;  // what the template is
             if ((kind(j) == Tok::KwStruct || kind(j) == Tok::KwClass || kind(j) == Tok::KwInterface) && kind(j + 1) == Tok::Ident) {
                 templates_.insert(toks_[j + 1].text);
-            } else if (isIdent(j, "concept") && kind(j + 1) == Tok::Ident) {
+            } else if ((isIdent(j, "concept") || isIdent(j, "using")) && kind(j + 1) == Tok::Ident) {
                 templates_.insert(toks_[j + 1].text);
             } else {
                 for (; j + 1 < toks_.size() && kind(j) != Tok::Semi && kind(j) != Tok::LBrace; ++j)

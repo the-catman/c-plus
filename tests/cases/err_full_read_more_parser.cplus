@@ -5,11 +5,11 @@ static vector<string> split(string s) { return {}; }
 static Node? root() { return null; }
 static array<int, 3> fa() { return {}; }
 using F = std::vector<std::string>;
-// error: write the type itself, `vector<string>`, wherever `F` is used
+// error: write `using F = vector<string>;`
 using N = long long;
-// error: write the type itself, `long`, wherever `N` is used
+// error: write `using N = long;`
 using U = uint32_t;
-// error: write the type itself, `int`, wherever `U` is used
+// error: write `using U = int;`
 extern "C" unsigned long long strtoull(string s, char** e, int b);
 // error: write `long` in place of `unsigned long long`
 // not-error: make it a constant if it never changes

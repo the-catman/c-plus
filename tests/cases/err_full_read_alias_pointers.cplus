@@ -1,41 +1,39 @@
-// A pointer to a class, generic or not, is what a class variable already is, and may be null; a const one, a pointer to
-// a pointer, and a signed byte have no C+ form.
+// In an alias of a C++ type, a pointer to a class, generic or not, is what a class variable already is, and may be null. A const one
+// and a pointer to a pointer are pointers in C+ too, and a signed byte has no C+ form.
 class Node { public: int v = 0; };
 template <typename T>
 class Box { public: T x; };
 using A1 = const Node*;
-// error: write the type itself wherever `A1` is used, as C+ writes it
 using A2 = Box<int>*;
-// error: write the type itself, `Box<int>?`, wherever `A2` is used
+// error: write `using A2 = Box<int>?;`
 using A3 = Box<int>**;
-// error: write the type itself wherever `A3` is used, as C+ writes it
 using A4 = std::vector<Box<int>*>;
-// error: write the type itself, `vector<Box<int>?>`, wherever `A4` is used
+// error: write `using A4 = vector<Box<int>?>;`
 using A6 = signed char;
-// error: write the type itself wherever `A6` is used, as C+ writes it
+// error: write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program
 using A7 = unsigned char;
-// error: write the type itself, `char`, wherever `A7` is used
+// error: write `using A7 = char;`
 using B1 = LaterClass*;
-// error: write the type itself, `LaterClass?`, wherever `B1` is used
+// error: write `using B1 = LaterClass?;`
 class LaterClass { };
 using C1 = std::unique_ptr<Box<int>*>;
-// error: write the type itself wherever `C1` is used, as C+ writes it
+// error: write `unique<Node>`, which works like std::unique_ptr, but is never empty
 using C2 = std::weak_ptr<Box<int>*>;
-// error: write the type itself wherever `C2` is used, as C+ writes it
+// error: write `weak<Node>`, which works like std::weak_ptr
 using C3 = std::shared_ptr<Box<int>*>;
-// error: write the type itself wherever `C3` is used, as C+ writes it
+// error: a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`
 using C4 = std::unique_ptr<Box<int>>;
-// error: write the type itself, `unique<Box<int>>`, wherever `C4` is used
+// error: write `using C4 = unique<Box<int>>;`
 using C5 = std::unique_ptr<std::shared_ptr<Box<int>>>;
-// error: write the type itself wherever `C5` is used, as C+ writes it
+// error: write `unique<Node>`, which works like std::unique_ptr, but is never empty
 using C6 = std::weak_ptr<std::shared_ptr<Box<int>>>;
-// error: write the type itself wherever `C6` is used, as C+ writes it
+// error: write `weak<Node>`, which works like std::weak_ptr
 using C7 = std::shared_ptr<std::shared_ptr<Box<int>>>;
-// error: write the type itself wherever `C7` is used, as C+ writes it
+// error: a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`
 using C8 = std::vector<std::shared_ptr<Box<int>>>;
-// error: write the type itself, `vector<Box<int>>`, wherever `C8` is used
+// error: write `using C8 = vector<Box<int>>;`
 using C9 = std::unique_ptr<Box<std::shared_ptr<Node>>>;
-// error: write the type itself, `unique<Box<Node>>`, wherever `C9` is used
+// error: write `using C9 = unique<Box<Node>>;`
 using D1 = std::weak_ptr<Box<Box<std::shared_ptr<Node>>>>;
-// error: write the type itself, `weak<Box<Box<Node>>>`, wherever `D1` is used
+// error: write `using D1 = weak<Box<Box<Node>>>;`
 int main() { return 0; }

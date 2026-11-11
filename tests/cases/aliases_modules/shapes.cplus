@@ -1,0 +1,12 @@
+// What another file sees is what is marked export, as for any other name.
+export struct Point { int x = 0; int y = 0; };
+export using Points = vector<Point>;
+export using Size = long;
+export template<typename T> using Grid = vector<vector<T>>;
+using Hidden = int;
+
+export Size count(const Points& ps) {
+    Hidden n = 0;
+    for (const auto& p : ps) n++;
+    return n;
+}

@@ -152,6 +152,13 @@ private:
     std::string instanceName(const TemplateDecl& t, const std::vector<TemplateArg>& args) const;
     TemplateDecl* classTemplate(const std::string& name) const;
     TemplateDecl* functionTemplate(const std::string& name) const;
+    // Type aliases, `using Id = long;` and `template<typename T> using List = vector<T>;`.
+    TemplateDecl* aliasTemplate(const std::string& name) const;
+    bool isAlias(const Token& t) const;  // the name of one, which a template parameter of the same name hides
+    const Type* aliasType(TemplateDecl& alias, Loc usedAt);
+    void aliasEnd(const TemplateDecl& alias, const Type* type, Loc typeLoc);
+    void parseAlias(Program& prog);
+    std::string cplusSpelling(size_t from, size_t to, bool& known) const;
     const Type* boundType(const Token& t) const;  // a type parameter, or a generic class's own name inside it
     // At the '<' after a generic's name. `partial` when the rest can be worked out from a call.
     std::vector<TemplateArg> parseTemplateArgs(const TemplateDecl& t, Loc nameLoc, bool partial);

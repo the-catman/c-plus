@@ -1,0 +1,81 @@
+// Type aliases: another name for a type, which is the same type, and generic ones.
+using Id = long;
+using Names = vector<string>;
+using Table = hashmap<string, List<int>>;  // an alias can use one written after it
+template<typename T> using List = vector<T>;
+template<typename K, typename V> using Map = hashmap<K, V>;
+template<int N> using Row = array<int, N>;
+struct Point { int x = 0; int y = 0; };
+using Spot = Point;
+class Box {
+public:
+    int n = 0;
+    Box(int k) : n(k) {}
+};
+using Crate = Box;
+using Text = string;
+using MaybeId = Id?;
+using IdPointer = Id*;
+using UserId = long;
+
+Id twice(Id x) { return x * 2; }
+Names all() { return {"a", "b"}; }
+int count(const List<int>& v) { return int(v.size()); }
+template<typename T> List<T> both(T a, T b) { return {a, b}; }
+long plain(long x) { return x; }
+
+int main() {
+    Id a = 21;
+    println("{} {}", twice(a), plain(a));  // an Id is a long
+    Names n = all();
+    println("{}", n);
+    List<int> v = {1, 2, 3};
+    println("{}", count(v));
+    Table t;
+    t["x"] = List<int>{4, 5};
+    println("{}", t["x"]);
+    Map<string, int> m;
+    m["k"] = 1;
+    println("{}", m);
+    Row<3> r = {7, 8, 9};
+    println("{}", r.size());
+    Spot s = Spot{1, 2};
+    Spot s2 = {3, 4};
+    Point same = s;
+    println("{} {} {}", s.y, s2.x, same.x);
+    Crate c = Crate(7);
+    println("{}", c.n);
+    Id b = Id(5);
+    long c2 = (Id)3;
+    println("{} {}", b, c2);
+    Text tx = Text("hi");
+    println("{}", tx);
+    MaybeId mi = null;
+    IdPointer p = &a;
+    println("{} {}", mi == null, *p);
+    for (Id k : List<Id>{1, 2}) println("{}", k);
+    auto pair = both<Id>(1, 2);
+    println("{}", pair);
+    println("{} {}", sizeof(Id), static_cast<Id>(3.9));
+    UserId x = UserId(5);
+    UserId y = (UserId)x;
+    Names one = Names{"a"};
+    println("{} {}", y, one);
+    return 0;
+}
+// expect: 42 21
+// expect: ["a", "b"]
+// expect: 3
+// expect: [4, 5]
+// expect: {"k": 1}
+// expect: 3
+// expect: 2 3 1
+// expect: 7
+// expect: 5 3
+// expect: hi
+// expect: true 21
+// expect: 1
+// expect: 2
+// expect: [1, 2]
+// expect: 8 3
+// expect: 5 ["a"]

@@ -37,6 +37,7 @@ long square(long n) { return n * n; }
 | Weak references | `weak<Node> parent;` starts empty and does not keep the object alive, which breaks cycles. `parent = node;`, `if (auto p = parent.lock())`, `parent.lock()?.name`, `parent.expired()`, `parent.reset()`. As `std::weak_ptr` |
 | Errors | `int f() throws { if (bad) throw Error("why"); return 1; }`. Each call that can fail is `try f()`, which passes the error on, or is inside `try { f(); } catch (NotFound e) { } catch (Error e) { println("{}", e.what()); }`. `class NotFound : public Error {...}`. `catch (...)`, `throw;`, `int main() throws`. Everything is released on the way out |
 | Generics | `template<typename T> T largest(T a, T b) { ... }`, called as `largest(1, 2)` or `largest<long>(1, 2)`. `template<typename T> class Stack { ... };`, used as `Stack<int>` with its arguments always written. `template<typename T, int N> struct Buffer { array<T, N> items; };`. `T()` is the default value of T |
+| Type aliases | `using UserId = long;`, `template<typename T> using Grid = vector<vector<T>>;`, `export using Points = vector<Point>;`, at the top of a file. The same type under another name |
 | Constraints | `template<Comparable T>`, `template<Number T>`, `template<Integer T>`, `template<Floating T>`, `template<Hashable T>`, `template<Speaker T>` for an interface or class. Your own: `template<typename T> concept Addable = requires(T a, T b) { a + b; };` |
 | Unique references | `unique<Node> a = unique<Node>("x");` is the one owner, never empty: `a.name`, `a.go()`. `unique<Node> b = move(a);` leaves `a` with no value. `take(move(b))` hands it over, `lend(a.get())` lends it as a `Node`. `unique<Node>?` can be empty. Copying is an error |
 | Local references | `local<Node> a = local<Node>("x");` counts without atomic steps, so only one thread can use it. `local<Node> b = a;` shares it. `a.name`, `a.go()`, `a.get()` lends it as a `Node`. `local<Node>?` can be empty. Cannot go into `spawn` |
@@ -92,7 +93,7 @@ long square(long n) { return n * n; }
 | `#include`, `#define` | no preprocessor. Built-ins need nothing; modules use `import x;`; C headers use `import <stdio.h>;`, and C functions can be declared with `extern "C"` |
 | `let x = 1`, `var x = 1`, `function f() { }` | `auto x = 1;`, `void f() { }`: a type or `auto` always comes first |
 | `console.log(x)`, `Math.sqrt(x)` | `println("{}", x)`, `sqrt(x)` |
-| `typedef`, `using`, `inline`, `goto`, `register`, `volatile`, `mutable`, `explicit`, `friend`, `union` | left out, and each says what to write instead. `goto` is a loop or a function, and `volatile` is a `Mutex` |
+| `typedef`, `using namespace`, `inline`, `goto`, `register`, `volatile`, `mutable`, `explicit`, `friend`, `union` | left out, and each says what to write instead. A `typedef` is written `using Id = long;`, `goto` is a loop or a function, and `volatile` is a `Mutex` |
 | `a = 1, b = 2;` | no comma operator: two statements |
 | `#define MAX 100`, `static const int MAX = 100;` | `const int MAX = 100;`, or `constexpr int MAX = 100;` |
 | `static int count = 0;` at the top of a file, or in a function | `int count = 0;` outside the functions: a name is private to its file unless it is marked `export` |
@@ -242,7 +243,7 @@ long square(long n) { return n * n; }
 |---------|---------|
 | Classes | `final`, covariant return types, private and protected base classes |
 | Operators | operator overloading with C++ syntax, after function overloading |
-| Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments |
+| Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments, type aliases inside a function or a type |
 | Modules | `export { ... }` around several declarations, `export import`, `export extern "C"`, aliases such as `namespace srv = net::server;` |
 | HTTP | a body in pieces instead of all at once; keeping cookies; async WebSockets |
 | JSON | other names for fields, marking a field to leave out |

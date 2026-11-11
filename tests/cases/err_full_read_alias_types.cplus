@@ -1,17 +1,17 @@
 // What a C++ type of an alias is in C+, or that it has none.
 class Node { };
 using M = std::unordered_map<std::string, int>;
-// error: write the type itself, `hashmap<string, int>`, wherever `M` is used
+// error: write `using M = hashmap<string, int>;`
 using O = std::optional<int>;
-// error: write the type itself, `int?`, wherever `O` is used
+// error: write `using O = int?;`
 using S = std::shared_ptr<Node>;
-// error: write the type itself, `Node`, wherever `S` is used
+// error: write `using S = Node;`
 using U = std::unique_ptr<Node>;
-// error: write the type itself, `unique<Node>`, wherever `U` is used
+// error: write `using U = unique<Node>;`
 using PR = std::pair<int, int>;
-// error: write the type itself wherever `PR` is used, as C+ writes it: `cplus explain cheatsheet` shows what takes the place of each C++ type
+// error: write a struct with a name for each part
 using G = ::std::string;
-// error: write the type itself, `string`, wherever `G` is used
+// error: write `using G = string;`
 using V = std::vector<std::vector<int>>;
-// error: write the type itself, `vector<vector<int>>`, wherever `V` is used
+// error: write `using V = vector<vector<int>>;`
 int main() { return 0; }

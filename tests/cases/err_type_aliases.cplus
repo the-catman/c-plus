@@ -1,0 +1,34 @@
+// What a type alias cannot be.
+using A = vector<A>;
+using B = C;
+using C = B;
+using M = std::unordered_map<std::string, int>;
+struct Point { int x = 0; };
+using Point = long;
+using vector = int;
+using Error = int;
+using Id = long;
+using Id = int;
+template<typename T> using Id = vector<T>;
+using R = int&;
+using Au = auto;
+using Two = int long;
+template<typename T> using List = vector<T>;
+int Id() { return 1; }
+int main() { return 0; }
+// error: the type alias 'A' stands for a type that uses 'A' itself, which never ends
+// error: For a type that holds itself, write a class: `class Node { public: vector<Node> children; };`
+// error: the type alias 'B' stands for a type that uses 'B' itself
+// error: C+ writes this type `hashmap<string, int>`
+// error: write `using M = hashmap<string, int>;`
+// error: 'Point' is already the name of a struct
+// error: 'vector' is a type that comes with C+
+// error: 'Error' is a type that comes with C+
+// error: 'Id' is already the name of a type alias
+// error: the name 'Id' is already used by a type alias
+// error: a type alias cannot stand for a reference
+// error: remove the `&`, and write it where the reference is meant: `const R& x`
+// error: a type alias stands for a type, and `auto` is none
+// error: expected ';' after the type of 'Two', found keyword 'long'
+// error: 'Id' is already the name of a type alias
+// error: give the function a different name

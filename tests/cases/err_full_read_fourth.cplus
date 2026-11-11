@@ -3,23 +3,22 @@
 class Node { };
 struct Pt { int x = 0; };
 using A1 = std::optional<int*>;
-// error: write the type itself, `int*`, wherever `A1` is used
+// error: write `using A1 = int*;`
 using A2 = std::optional<std::optional<int>>;
-// error: write the type itself, `int?`, wherever `A2` is used
+// error: write `using A2 = int?;`
 using A3 = std::unique_ptr<int>;
-// error: write the type itself wherever `A3` is used, as C+ writes it
+// error: write `unique<Node>`, which works like std::unique_ptr, but is never empty
 using A5 = std::shared_ptr<int>;
-// error: write the type itself wherever `A5` is used, as C+ writes it
+// error: a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`
 using A6 = std::queue<int>;
-// error: write the type itself wherever `A6` is used, as C+ writes it
+// error: use a `vector<T>` or a `hashmap<K, V>` for now: `cplus explain hashmap` says what they do
 using A7 = std::mutex;
-// error: write the type itself, `Mutex`, wherever `A7` is used
+// error: write `using A7 = Mutex;`
 using A8 = intptr_t;
-// error: write the type itself, `long`, wherever `A8` is used
+// error: write `using A8 = long;`
 using B2 = const int*;
-// error: write the type itself, `const int*`, wherever `B2` is used
 using B3 = std::vector<const int*>;
-// error: write the type itself, `vector<const int*>`, wherever `B3` is used
+// error: write `using B3 = vector<const int*>;`
 void f(vector<Pt*>* pp, string path) {
     int c = (*pp)->x;
     // error: only a pointer is followed with '->', and '*pp' holds 'Pt*': write `(*pp)[i]->x`

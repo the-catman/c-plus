@@ -300,6 +300,9 @@ void Modules::scanMembers(ModuleFile& file, std::vector<size_t>& declaring) {
         } else if (k == Tok::Ident && t[i].text == "concept") {
             add(i + 1, exported, true, false);
             i = endOf(i, false);
+        } else if (k == Tok::Ident && t[i].text == "using" && i + 2 < n && t[i + 1].kind == Tok::Ident && t[i + 2].kind == Tok::Assign) {  // a type alias
+            add(i + 1, exported, true, false);
+            i = endOf(i, false);
         } else {
             // A function, when a `(` comes before any `=`; otherwise constants, each named just before its `=`.
             int angles = 0;

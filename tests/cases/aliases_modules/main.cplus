@@ -1,0 +1,13 @@
+// A type alias of another file, used with its module's name.
+import shapes;
+
+shapes::Points line() { return {shapes::Point{1, 2}, shapes::Point{3, 4}}; }
+
+int main() {
+    shapes::Points ps = line();
+    shapes::Size total = shapes::count(ps);
+    shapes::Grid<int> g = {{1, 2}, {3}};
+    println("{} {} {}", total, ps[1].y, g[1][0]);
+    return 0;
+}
+// expect: 2 4 3

@@ -1,0 +1,15 @@
+// Type aliases: another name for a type, which stays the same type.
+using UserId = long;
+using Names = vector<string>;
+template<typename T> using Grid = vector<vector<T>>;
+
+UserId next(UserId id) { return id + 1; }
+
+int main() {
+    Names names = {"ann", "bo"};
+    Grid<int> grid = {{1, 2}, {3, 4}};
+    long plain = next(41);  // a UserId is a long
+    println("{} {} {}", plain, names.size(), grid[1][0]);
+    // expect: 42 2 3
+    return 0;
+}

@@ -27,6 +27,7 @@ inline constexpr const char* Functions = "functions";
 inline constexpr const char* Overloading = "overloading";
 inline constexpr const char* DefaultArguments = "default-arguments";
 inline constexpr const char* Globals = "variables-outside-functions";
+inline constexpr const char* TypeAliases = "type-aliases";
 inline constexpr const char* MainFunction = "the-main-function";
 inline constexpr const char* CFunctions = "c-functions";
 inline constexpr const char* Conditions = "conditions";

@@ -1,0 +1,23 @@
+// Using a type alias the wrong way.
+using Id = long;
+template<typename T> using List = vector<T>;
+void f() {
+    List x;
+}
+void g() {
+    List<int, int> y;
+}
+void h() {
+    Id<int> z;
+}
+void k() {
+    println("{}", Id);
+}
+int main() { return 0; }
+// error: 'List' is generic, so its template arguments must be written
+// error: write e.g. `List<int>`
+// error: 'List' takes 1 template argument, but more were given
+// error: 'Id' is not generic, so it takes no template arguments
+// error: remove the `<...>` after 'Id'
+// error: 'Id' is a type alias, not a value
+// error: to make a value of it, write `Id(...)` or `Id{...}`

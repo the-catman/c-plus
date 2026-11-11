@@ -1,0 +1,18 @@
+// A type alias is written at the top of a file, and `typedef` is written as one.
+class Holder {
+    using Inner = int;
+};
+void f() {
+    using Local = int;
+}
+typedef unsigned long Big;
+typedef int myint;
+typedef void (*callback)(int);
+int main() { return 0; }
+// error: this compiler does not support type aliases inside a type yet
+// error: move it to the top of the file, outside any function or type: `using Inner = ...;`
+// error: this compiler does not support type aliases inside a function yet
+// error: C+ has no typedef
+// error: write `using Big = long;`
+// error: write `using myint = int;`
+// error: write `using Name = type;`, such as `using Id = long;`. A struct or a class already goes by its name

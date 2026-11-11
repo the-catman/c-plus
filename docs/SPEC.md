@@ -2107,7 +2107,7 @@ import net.server;    // the file net/server.cplus, in the folder of the main fi
 ```
 
 Members of a module are used with `::`, as in `json::parse<User>(text)`. What a module has is its own: a program
-cannot declare a name such as `json::Mine`. There is no `std::` namespace and no `using`; built-ins need no prefix.
+cannot declare a name such as `json::Mine`. There is no `std::` namespace and no `using namespace`; built-ins need no prefix.
 Only what a program imports is linked into it.
 
 **The project.** The main file is the one given to `cplus run`, `build` or `check`, and the only one with `main`. Its folder is
@@ -2917,6 +2917,40 @@ A constraint is only a check on what is passed in. The generic's body is still c
 do things the constraint does not mention. A name written in the program takes the place of a built-in one
 with the same name.
 
+### Type aliases
+
+`using Name = type;` gives a type another name, as in C++. The name is the same type, not a new one, so a `UserId`
+is a `long`, and goes wherever a `long` does.
+
+```cpp
+using UserId = long;
+using Names = vector<string>;
+template<typename T> using Grid = vector<vector<T>>;
+template<int N> using Row = array<int, N>;
+
+UserId next(UserId id) { return id + 1; }
+
+int main() {
+    Names names = {"ann", "bo"};
+    Grid<int> grid = {{1, 2}, {3, 4}};
+    Row<3> row = {1, 2, 3};
+    println("{} {} {} {}", next(41), names.size(), grid[1][0], row.size());  // 42 2 3 3
+    return 0;
+}
+```
+
+- **An alias is written at the top of a file**, and can be used anywhere in it, before or after where it is written.
+  `export using` makes it a name that the files that import the module use, as `shapes::Points`. Aliases inside a
+  function or a type are planned.
+- **A generic alias** takes type and value parameters as a generic does, and its arguments are always written:
+  `Grid<int>`.
+- **A value of one** is made as of the type it stands for: `UserId(5)`, `Names{"a"}`, `(UserId)x`.
+- **An alias cannot stand for itself**, as `using Tree = vector<Tree>;` would, nor for a reference or `auto`. Its name
+  cannot be the name of another type, a function or a type that comes with C+.
+- **A C++ type written the C++ way**, such as `using Map = std::unordered_map<std::string, int>;`, is an error that
+  gives the C+ type: `using Map = hashmap<string, int>;`.
+- **`typedef` is left out**: `typedef long UserId;` is an error whose help is the `using` line.
+
 ## Concurrency
 
 `spawn` runs a call on a new thread, and gives a `Task` to get its result from. An [async function](#async-functions) gives one
@@ -3358,6 +3392,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Errors: `throws`, `throw`, `try f()`, `try { } catch (E e) { }`, `catch (...)`, `throw;`, `Error`, `int main() throws` | implemented |
 | Constructors that can fail | planned |
 | Generics: functions, structs, classes and interfaces, type and value parameters, working out arguments in calls | implemented |
+| Type aliases, `using Name = type;`, generic ones, and `export using` | implemented |
+| Type aliases inside a function or a type | planned |
 | Constraints: `Comparable`, `Number`, `Integer`, `Floating`, interfaces and classes, `concept ... = requires` | implemented |
 | Default template arguments, `requires` clauses, generic methods, working out a generic type's arguments | planned |
 | Pointers into vectors and strings | planned |
