@@ -14,6 +14,7 @@ struct SourceFile {
     std::string path;
     std::string text;
     std::vector<size_t> lineStarts;  // byte offset where each line begins
+    uint32_t id = 0;  // which file of the program it is, which each Loc in it says: see Diagnostics::addFile
 
     SourceFile(std::string path, std::string text);
     std::string_view line(uint32_t lineNo) const;  // 1-based, without the newline
@@ -23,6 +24,7 @@ struct Loc {
     uint32_t line = 0;  // 1-based; 0 means "no location"
     uint32_t col = 0;   // 1-based byte column
     uint32_t len = 1;   // how many columns to underline
+    uint32_t file = 0;  // the SourceFile::id of the file it is in. 0 is the file given to the compiler
 };
 
 // A message as `cplus lsp` passes it to an editor, instead of printing it.
@@ -35,6 +37,10 @@ struct Message {
 class Diagnostics {
 public:
     explicit Diagnostics(const SourceFile& file);
+    // Another file of the program, such as a module it imports, whose `id` is then the number its Locs have.
+    void addFile(SourceFile& file);
+    const SourceFile& fileOf(Loc loc) const { return loc.file < files_.size() ? *files_[loc.file] : file_; }
+    size_t fileCount() const { return files_.size(); }
 
     // From then on, what would be printed is kept in `into`.
     void collectInto(std::vector<Message>* into) { collected_ = into; }
@@ -54,6 +60,9 @@ public:
     void mute() { ++muted_; }
     void unmute() { --muted_; }
     int mutedErrors() const { return mutedErrors_; }
+    // From then on, nothing in the other files is said, and their errors are only counted as muted: for `cplus fmt`, which
+    // reads the modules a file imports for the names in them, and not to check them.
+    void onlyGivenFile() { onlyGiven_ = true; }
 
     bool hasErrors() const { return errorCount_ > 0; }
     int errorCount() const { return errorCount_; }
@@ -63,6 +72,7 @@ private:
                 const std::string& help, const std::string& spec);
 
     const SourceFile& file_;
+    std::vector<const SourceFile*> files_;  // by id; the first is file_
     bool color_ = false;
     int errorCount_ = 0;
     bool suppressed_ = false;
@@ -74,6 +84,8 @@ private:
     std::vector<Message>* collected_ = nullptr;
     int muted_ = 0;
     int mutedErrors_ = 0;
+    bool onlyGiven_ = false;
+    bool inOtherFile_ = false;  // the last error was in another file, and its notes are not said either
 };
 
 }  // namespace cplus

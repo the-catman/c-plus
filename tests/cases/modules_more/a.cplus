@@ -1,0 +1,32 @@
+import b;
+
+export int ping(int n) {
+    if (n <= 0) return 0;
+    return 1 + b::pong(n - 1);
+}
+
+export class Node {
+public:
+    string name;
+    Node? next;
+    Node(string n) : name(n) {}
+};
+
+export template<typename T> struct Wrapper {
+    T inner;
+};
+
+export template<typename T> Wrapper<T> wrap(T x) {
+    return Wrapper<T>{twice(x)};
+}
+
+template<typename T> T twice(T x) { return x; }
+
+export class Problem : public Error {
+public:
+    Problem(string m) : Error(m) {}
+};
+
+export void risky(bool fail) throws {
+    if (fail) throw Problem("bad");
+}

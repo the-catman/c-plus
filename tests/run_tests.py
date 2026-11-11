@@ -25,6 +25,13 @@ in the file:
                        must stop, with this in its report
   // no-race: <why>     the program has `spawn`, but is not built with --race
 
+A program of more than one file is a folder in tests/cases, with its main file named
+main.cplus, and its modules in the folder too: `import net.server;` in it reads
+tests/cases/<folder>/net/server.cplus. The compiler is given the folder, as `cplus build
+tests/cases/<folder>`, and the directives can be in any of its files, as an error can be in
+any of them. Those of main.cplus come first, then those of the others, in the order of
+their paths.
+
 A program with `spawn` is also built with --race, without and with -O, which must find
 nothing wrong, as a wrong answer from a race can take a very long time to show up. This
 is left out, with a note, if the C compiler has no ThreadSanitizer.
@@ -68,6 +75,7 @@ import os
 import pathlib
 import re
 import resource
+import shutil
 import signal
 import subprocess
 import sys
@@ -174,6 +182,19 @@ def spec_code_problems(cplus, text, workdir):
         code = block.group(1)
         if code.startswith(SPEC_SKETCHES):
             continue
+        named = re.match(r"// ([\w/]+\.cplus)\n", code)  # a file of a program of several, which the block of its main.cplus comes after
+        if named:
+            path = workdir / "spec_program" / named.group(1)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(code)
+            if named.group(1) != "main.cplus":
+                continue
+            run = subprocess.run([cplus, "check", str(path)], capture_output=True, text=True)
+            real = [line for line in run.stderr.splitlines() if line.startswith("error:") and "could not compile" not in line]
+            if run.returncode != 0:
+                problems.append(f"line {text.count(chr(10), 0, block.start()) + 2}: {real[0] if real else 'exit code ' + str(run.returncode)}")
+            shutil.rmtree(workdir / "spec_program")
+            continue
         if not re.search(r"\bint main\b", code):
             declarations, statements = [], []
             lines = code.splitlines()
@@ -240,7 +261,7 @@ def errors_without_help(stderr):
 
 def check_examples(cplus):
     ok = True
-    for path in sorted((ROOT / "examples").glob("*.cplus")):
+    for path in [*sorted((ROOT / "examples").glob("*.cplus")), *case_folders(ROOT / "examples")]:
         run = subprocess.run([cplus, "check", str(path.relative_to(ROOT))], cwd=ROOT, capture_output=True, text=True)
         if run.returncode != 0 or "warning:" in run.stderr:
             print(f"FAIL {path.relative_to(ROOT)}\n  " + run.stderr.replace("\n", "\n  "))
@@ -501,8 +522,10 @@ M = "int main() {\n%s\nreturn 0;\n}\n"
 
 # What the spec's status table and the cheat sheet's table of planned things name, each as a program that asks for it.
 PLANNED_FEATURES = [
-    ("more than one file", 'import other;\n' + M % ""),
-    ("your own modules", 'import net.server;\n' + M % ""),
+    ("export blocks", 'export { int f() { return 1; } }\n' + M % ""),
+    ("export import", 'export import json;\n' + M % ""),
+    ("export extern", 'export extern "C" int abs(int n);\n' + M % ""),
+    ("aliases of modules", 'import json;\nnamespace j = json;\n' + M % ""),
     ("constexpr methods", 'struct P { int x = 0; constexpr int f() { return 1; } };\n' + M % ""),
     ("constexpr structs", 'constexpr struct P { int x = 0; };\n' + M % ""),
     ("constexpr of a struct", 'struct P { int x = 0; };\nconstexpr P ORIGIN = {1};\n' + M % ""),
@@ -657,7 +680,7 @@ SHEET_VARIANTS = [
 # What the cheat sheet writes that is not code to compile: what is left out, what is typed at a shell, what a program prints.
 SHEET_NOT_CODE = {"<cmath>", "<cctype>", "std::", "std::weak_ptr", "std::string", "0x...", "--debug", "-Wno-new-delete", "-lname", "import x;", "long double", "/0",
                   "http::fetch", "cplus check", "cplus run app.cplus --race", "cplus run app.cplus -- arg1 arg2", "cplus run app.cplus --debug",
-                  'import "mine.h";', "-I dir"}
+                  'import "mine.h";', "-I dir", "cplus run app"}
 # Habits that the left side of the table only names a part of, which is fine on its own. The rest of its row says what is wrong.
 SHEET_HABITS_THAT_COMPILE = {"int count = 0;", "x", "*p", "u", "if (flag)", "Node? next", "u1 == u2", "v[i]", "m[k]", "n", "s[s.size()]", "'\\0'", "s.substr(pos)",
                              "int x;", "int* p = new int;", "User u;", "array<int, 10000000> a;"}
@@ -701,7 +724,8 @@ def check_cheat_sheet(cplus, workdir):
     text = (ROOT / "docs" / "CHEATSHEET.md").read_text()
     works = text.split("## Works today")[1].split("## Different from C++")[0]
     different = text.split("## Different from C++")[1].split("## Planned")[0]
-    forms = "\n".join(path.read_text() for path in sorted((ROOT / "tests" / "cases").glob("cheatsheet_forms*.cplus")))
+    forms = "\n".join(path.read_text() for path in sorted((ROOT / "tests" / "cases").glob("cheatsheet_forms*.cplus")) +
+                      sorted((ROOT / "tests" / "cases").glob("cheatsheet_forms*/**/*.cplus")))
     def rows(part):
         return re.findall(r"^\| (.+?) \| (.+) \|$", part, re.M)
     def is_word(span):
@@ -777,6 +801,10 @@ SPEC_NOT_CODE = {
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
+    "server::address": "server::address(1);", "json.stringify(x)": "int x = 1; json.stringify(x);", "module net.server;": "^module net.server;",
+    "export module net.server;": "^export module net.server;", "int net::server::extra()": "^int net::server::extra() { return 1; }",
+    "export { ... }": "^export { int f() { return 1; } }", "export import": "^export import json;", 'export extern "C"': '^export extern "C" int abs(int n);',
+    "namespace srv = net::server;": "^namespace srv = net::server;",
     "#include": "^#include <vector>", "#define": "^#define X 1", "#ifdef": "^#ifdef X", "0'10": "int a = 0'10;", "'ab'": "char a = 'ab';", "'é'": "char a = 'é';",
     "L'a'": "auto a = L'a';", "u'a'": "auto a = u'a';", "U'a'": "auto a = U'a';", 'u8"text"': 'auto a = u8"text";', "long long": "long long a = 1;",
     "long double": "long double a = 1;", "0x1.8p3": "double a = 0x1.8p3;", "int n = true;": "int n = true;", "unsigned char": "unsigned char a = 1;",
@@ -854,8 +882,8 @@ def check_spec_spans(cplus, workdir):
             at += 1
         return out
     running = []
-    for path in list((ROOT / "tests" / "cases").glob("*.cplus")) + list((ROOT / "examples").rglob("*.cplus")):
-        source = path.read_text()
+    for path in list((ROOT / "tests" / "cases").glob("*.cplus")) + list((ROOT / "examples").rglob("*.cplus")) + case_folders(CASES):
+        source = case_text(path) if path.is_dir() else path.read_text()
         if not re.search(r"//[ \t]*error:", source):
             running.append("\n".join(code_of(line) for line in source.splitlines()))
     running = "\n".join(running)
@@ -940,6 +968,7 @@ def check_command_line(cplus, workdir):
         (["build", g, "-g"], 2, "'-g' is not an option of cplus"), (["build", g, "-fsanitize=thread"], 2, "is not an option of cplus"),
         (["build", g, "--debug", "--race"], 2, "--debug and --race cannot be used together"), (["explain", "a", "b"], 2, "explain takes one topic"),
         (["check", str(text)], 2, "is not a C+ source file"), (["check", str(workdir / "gone.cplus")], 1, "cannot read"),
+        (["check", str(ROOT / "examples" / "features")], 1, "it is a folder, with no main.cplus in it"),
         (["build", g, "-o", str(missing_dir / "out")], 1, "cannot write"), (["build", g, "-o", str(workdir / "out"), "-lno_such_library_here"], 1, "linking failed"),
         (["fmt"], 2, "fmt needs the files to format"), (["fmt", g, "--nope"], 2, "unknown option '--nope' for `cplus fmt`"),
         (["fmt", str(text)], 2, "is not a C+ source file"), (["fmt", str(workdir / "gone.cplus")], 1, "cannot read"),
@@ -1044,6 +1073,10 @@ def check_format(cplus, workdir):
     copies.mkdir()
     for path in CASES.glob("*.cplus"):
         (copies / path.name).write_bytes(path.read_bytes())
+    for folder in case_folders(CASES):  # a program of several files, whose modules fmt reads for the names of their types
+        for path in folder.rglob("*.cplus"):
+            (copies / path.relative_to(CASES)).parent.mkdir(parents=True, exist_ok=True)
+            (copies / path.relative_to(CASES)).write_bytes(path.read_bytes())
     run = fmt([str(copies)])
     bugs = [line for line in run.stderr.decode().splitlines() if "bug in cplus fmt" in line]
     if bugs:
@@ -1296,12 +1329,50 @@ int main() {
             code, _ = lsp.finish()
             expect("the server ends as it should", code == 0, code)
 
+        # A program of several files: the modules a file imports are read as the editor has them, what is wrong in one is said
+        # at its import, a name goes to its declaration in another file, and a module is checked as one, with no `main`.
+        with tempfile.TemporaryDirectory() as folder:
+            (pathlib.Path(folder) / "net").mkdir()
+            main_uri, server_uri, util_uri = (pathlib.Path(folder, name).as_uri() for name in ("main.cplus", "net/server.cplus", "util.cplus"))
+            main_text = "import net.server;\n\nint main() {\n    println(\"{}\", net::server::port());\n    return 0;\n}\n"
+            server_text = "import util;\n\n// The port it listens on.\nexport int port() { return util::twice(4040); }\n"
+            util_text = "export int twice(int n) { return n * 2; }\nint broken() { return \"no\"; }\n"
+            (pathlib.Path(folder) / "util.cplus").write_text(util_text)  # on disk only, as the editor does not have it open
+            lsp = LspClient(cplus)
+            lsp.request("initialize", {"capabilities": {}, "workspaceFolders": [{"uri": pathlib.Path(folder).as_uri(), "name": "app"}]})
+            lsp.send("textDocument/didOpen", {"textDocument": {"uri": server_uri, "languageId": "cplus", "version": 1, "text": server_text}}, request=False)
+            found = lsp.diagnostics(server_uri)
+            errors = (found or {}).get("diagnostics", [])
+            expect("a module is checked from the folder its imports are found in, with no `main`, and an error in what it imports is said at the import",
+                   len(errors) == 1 and errors[0]["message"].startswith("the module 'util' has 1 error") and errors[0]["range"]["start"] == {"line": 0, "character": 0}, found)
+            lsp.send("textDocument/didOpen", {"textDocument": {"uri": main_uri, "languageId": "cplus", "version": 1, "text": main_text}}, request=False)
+            found = lsp.diagnostics(main_uri)
+            errors = (found or {}).get("diagnostics", [])
+            expect("an error in a module that an import brings in is said at the import", len(errors) == 1
+                   and errors[0]["message"].startswith("the module 'util', which 'net.server' imports, has 1 error"), found)
+            place = {"textDocument": {"uri": main_uri}, "position": {"line": 3, "character": 31}}
+            answer = lsp.request("textDocument/hover", place)
+            expect("hovering over a module's function shows the comment above it, in its own file",
+                   hover(answer) == "```cplus\nint net::server::port()\n```\n\nThe port it listens on.", answer)
+            answer = lsp.request("textDocument/definition", place)
+            expect("the definition of a module's function is in its file", (answer or {}).get("result") == {
+                "uri": server_uri, "range": {"start": {"line": 3, "character": 11}, "end": {"line": 3, "character": 15}}}, answer)
+            lsp.send("textDocument/didOpen", {"textDocument": {"uri": util_uri, "languageId": "cplus", "version": 1, "text": util_text.replace('"no"', "0")}},
+                     request=False)
+            found = lsp.diagnostics(main_uri)
+            expect("a change to a module the editor has open, which is not saved, checks the files again that import it",
+                   found and found.get("diagnostics") == [], found)
+            lsp.request("shutdown")
+            lsp.send("exit", request=False)
+            code, _ = lsp.finish()
+            expect("the server ends as it should", code == 0, code)
+
         # Every example, with a hover and a definition asked for at each word: no check crashes, and the names have meanings.
         lsp = LspClient(cplus)
         lsp.request("initialize", {"capabilities": {}})
         meanings = 0
         for path in sorted((ROOT / "examples").rglob("*.cplus")):
-            file_uri = "file:///" + str(path.relative_to(ROOT))
+            file_uri = path.as_uri()
             text = path.read_text()
             lsp.send("textDocument/didOpen", {"textDocument": {"uri": file_uri, "languageId": "cplus", "version": 1, "text": text}}, request=False)
             found = lsp.diagnostics(file_uri)
@@ -1491,8 +1562,21 @@ def build_c_library(source, workdir):
     return None
 
 
+def case_text(path):
+    """A test's text, which for a folder is that of all of its files, main.cplus first."""
+    if not path.is_dir():
+        return path.read_text()
+    others = sorted(p for p in path.rglob("*.cplus") if p != path / "main.cplus")
+    return "\n".join(p.read_text() for p in [path / "main.cplus", *others])
+
+
+def case_folders(folder):
+    """The programs of more than one file in a folder: each folder in it with a main.cplus."""
+    return sorted(p for p in folder.iterdir() if p.is_dir() and (p / "main.cplus").exists())
+
+
 def imports_http(path):
-    return re.search(r"^import http;", path.read_text(), re.M) is not None
+    return re.search(r"^import http;", case_text(path), re.M) is not None
 
 
 def compiler_has_http(cplus, workdir):
@@ -1504,7 +1588,7 @@ def compiler_has_http(cplus, workdir):
 
 def runs_async(path):
     """A program that runs async code, which needs libuv. A test of errors only needs the compiler."""
-    text = path.read_text()
+    text = case_text(path)
     return re.search(r"\basync\b|\bawait\b|\bdelay\(", text) is not None and not re.search(r"//[ \t]*error:", text)
 
 
@@ -1534,7 +1618,7 @@ def start_http_server():
 
 
 def run_case(cplus, path, workdir):
-    text = path.read_text()
+    text = case_text(path)
     expect = re.findall(r"//[ \t]*expect:[ \t]?(.*)$", text, re.M)
     errors = re.findall(r"//[ \t]*error:[ \t]*(.*?)[ \t]*$", text, re.M)
     traps = re.findall(r"//[ \t]*trap:[ \t]*(.*?)[ \t]*$", text, re.M)
@@ -1644,7 +1728,7 @@ def main():
         ok = check_example_for_each_section() and ok
         ok = check_explain(cplus) and ok
     passed = failed = 0
-    paths = [p for p in [*sorted(CASES.glob("*.cplus")), *sorted(FEATURES.glob("*.cplus"))] if name_filter in p.name]
+    paths = [p for p in [*sorted(CASES.glob("*.cplus")), *case_folders(CASES), *sorted(FEATURES.glob("*.cplus"))] if name_filter in p.name]
     server = None
     with tempfile.TemporaryDirectory(prefix="cplus-tests-") as tmp:
         HAS_RACE[0] = compiler_has_race(cplus, pathlib.Path(tmp))

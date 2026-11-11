@@ -1,0 +1,13 @@
+export struct Config {
+    int port = 80;
+    string host = "localhost";
+};
+
+int helper(int x) { return x * 2; }
+
+export string start(Config c) {
+    int helper = 3;   // a local with the name of the function
+    return format("{}:{} {}", c.host, c.port, helper + twice(c.port));
+}
+
+int twice(int n) { return helper(n); }

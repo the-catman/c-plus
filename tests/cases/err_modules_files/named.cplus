@@ -1,0 +1,5 @@
+export module named;
+
+export int one() { return 1; }
+
+// error: remove this line. This file is the module 'named' already, which other files import with `import named;`

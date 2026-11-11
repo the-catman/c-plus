@@ -1,0 +1,6 @@
+// How a task is written out. Other files call `text::style::line`, and the constants are this file's own.
+
+const string DONE = "[x]";
+const string OPEN = "[ ]";
+
+export string line(bool done, string title) { return (done ? DONE : OPEN) + " " + title; }

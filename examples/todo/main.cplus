@@ -1,0 +1,15 @@
+// A to-do list in three files: this one, which has `main`, and the modules it imports by their paths from this folder,
+// tasks.cplus and text/style.cplus. `cplus run examples/todo` runs it.
+import tasks;
+import text.style;
+
+int main() {
+    tasks::List list;
+    list = tasks::add(list, "write the parser");
+    list = tasks::add(list, "test the parser");
+    list = tasks::add(list, "ship it");
+    list = tasks::finish(list, 0);
+    for (auto item : list.items) println("{}", text::style::line(item.done, item.title));
+    println("{} of {} done", tasks::doneCount(list), list.items.size());
+    return 0;
+}

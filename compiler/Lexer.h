@@ -14,7 +14,8 @@ namespace cplus {
     X(Async, "async") X(Auto, "auto") X(Await, "await") X(Bool, "bool") X(Break, "break")         \
     X(Case, "case") X(Catch, "catch") X(Char, "char") X(Class, "class") X(Const, "const")         \
     X(Constexpr, "constexpr") X(Continue, "continue") X(Default, "default") X(Delete, "delete")   \
-    X(Do, "do") X(Double, "double") X(Else, "else") X(Enum, "enum") X(Extern, "extern")           \
+    X(Do, "do") X(Double, "double") X(Else, "else") X(Enum, "enum") X(Export, "export")           \
+    X(Extern, "extern")                                                                           \
     X(False, "false") X(Float, "float") X(For, "for") X(If, "if") X(Import, "import")             \
     X(Int, "int") X(Interface, "interface") X(Long, "long") X(Namespace, "namespace")             \
     X(New, "new") X(Null, "null") X(Operator, "operator") X(Override, "override")                 \
@@ -62,6 +63,7 @@ struct Token {
     double floatValue = 0;    // for FloatLit
     bool floatSuffix = false; // FloatLit written with f, e.g. 1.5f
     size_t begin = 0, end = 0;  // where its spelling is in the source, as byte offsets
+    bool moduleName = false;  // a name of its file's module, which Modules wrote with the module's path in front: `net::server::start`
 };
 
 // A comment as it is written, for `cplus fmt`, which keeps them. The compiler itself drops them.
@@ -93,7 +95,7 @@ private:
     Token lexIdentOrKeyword();
     char peek(size_t ahead = 0) const;
     char advance();
-    Loc locHere(uint32_t len = 1) const { return Loc{line_, col_, len}; }
+    Loc locHere(uint32_t len = 1) const { return Loc{line_, col_, len, file_}; }
 
     const std::string& src_;
     Diagnostics& diags_;
@@ -101,6 +103,7 @@ private:
     size_t pos_ = 0;
     uint32_t line_ = 1;
     uint32_t col_ = 1;
+    uint32_t file_ = 0;  // the SourceFile's id, which each Loc gets
 };
 
 }  // namespace cplus

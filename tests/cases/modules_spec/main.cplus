@@ -1,0 +1,17 @@
+// The example of "Modules" in docs/SPEC.md, as it is written there, and the module with a `log` it tells of.
+import net.server;
+import logger;
+
+int main() {
+    net::server::Config c = {.port = 80};
+    println("{}", net::server::address(c));  // localhost:8080
+    logger::log("started");
+    logger::twice("again");
+    println("{}", log(1.0));
+    return 0;
+}
+// expect: localhost:8080
+// expect: log: started
+// expect: log: again
+// expect: log: again
+// expect: 0

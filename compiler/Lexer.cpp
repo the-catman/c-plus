@@ -49,7 +49,7 @@ std::string describeToken(const Token& t) {
     return std::string("'") + tokSpelling(t.kind) + "'";
 }
 
-Lexer::Lexer(const SourceFile& file, Diagnostics& diags) : src_(file.text), diags_(diags) {}
+Lexer::Lexer(const SourceFile& file, Diagnostics& diags) : src_(file.text), diags_(diags), file_(file.id) {}
 
 char Lexer::peek(size_t ahead) const { return pos_ + ahead < src_.size() ? src_[pos_ + ahead] : '\0'; }
 
@@ -483,7 +483,7 @@ Token Lexer::lexRawString(Loc loc) {
 // The escape after a backslash, which has been read: `\n`, `\x41`, ... Its byte is
 // added to `value`. Returns false, after reporting it, for an unknown escape.
 bool Lexer::lexEscape(std::string& value, const char* anchor) {
-    Loc escLoc{line_, col_ - 1, 2};
+    Loc escLoc{line_, col_ - 1, 2, file_};
     char e = pos_ < src_.size() && peek() != '\n' ? advance() : '\0';
     switch (e) {
         case 'n': value += '\n'; return true;

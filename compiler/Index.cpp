@@ -13,7 +13,7 @@ namespace {
 
 class Indexer {
 public:
-    explicit Indexer(const SourceFile& file) : file_(file) {}
+    explicit Indexer(const SourceFile& file, std::vector<const SourceFile*> files = {}) : file_(file), files_(std::move(files)) {}
 
     std::vector<Reference> refs;
 
@@ -33,11 +33,14 @@ public:
 
 private:
     const SourceFile& file_;
+    std::vector<const SourceFile*> files_;  // of the program, by id, when it has more than one
     std::set<std::pair<uint32_t, uint32_t>> places_;
+
+    const SourceFile& fileOf(Loc loc) const { return loc.file < files_.size() && files_[loc.file] ? *files_[loc.file] : file_; }
     std::set<const void*> walked_;
 
     void add(Loc at, std::string what, Loc declared) {
-        if (at.line == 0 || what.empty() || !places_.insert({at.line, at.col}).second) return;
+        if (at.line == 0 || at.file != file_.id || what.empty() || !places_.insert({at.line, at.col}).second) return;
         refs.push_back({at, std::move(what), declared});
     }
 
@@ -48,11 +51,12 @@ private:
     // The `//` lines just above a declaration, which say what it is for, when it is the first on its line: the comment above
     // `struct P { int x; };` is about P, and the one above `int f(int a)` about f.
     std::string commentAbove(Loc declared) const {
-        std::string_view before = file_.line(declared.line).substr(0, declared.col ? declared.col - 1 : 0);
+        const SourceFile& in = fileOf(declared);
+        std::string_view before = in.line(declared.line).substr(0, declared.col ? declared.col - 1 : 0);
         if (before.find_first_of("{;(") != std::string_view::npos) return "";
         std::vector<std::string> lines;
         for (uint32_t n = declared.line; n > 1; --n) {
-            std::string_view line = file_.line(n - 1);
+            std::string_view line = in.line(n - 1);
             const size_t start = line.find_first_not_of(" \t");
             if (start == std::string_view::npos || line.compare(start, 2, "//") != 0) break;
             std::string_view text = line.substr(start + 2);
@@ -354,6 +358,12 @@ private:
 
 std::vector<Reference> indexProgram(const Program& program, const SourceFile& file) {
     Indexer indexer(file);
+    indexer.program(program);
+    return std::move(indexer.refs);
+}
+
+std::vector<Reference> indexProgram(const Program& program, const SourceFile& file, const std::vector<const SourceFile*>& files) {
+    Indexer indexer(file, files);
     indexer.program(program);
     return std::move(indexer.refs);
 }

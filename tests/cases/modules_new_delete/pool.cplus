@@ -1,0 +1,8 @@
+export int made() {
+    int* p = new int(7);
+    int n = *p;
+    delete p;
+    return n;
+}
+// warning: memory from 'new' must be freed by hand
+// warning: 'delete' frees memory

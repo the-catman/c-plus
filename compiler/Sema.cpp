@@ -1166,7 +1166,44 @@ static std::string suggestField(const StructDecl& sd, const std::string& name) {
     return closest(name, candidates);
 }
 
+std::string Sema::resolved(const std::string& name, Loc used) const {
+    return parser_.modules() ? parser_.modules()->resolve(name, used.file) : name;
+}
+
+// The main file's own names are not seen by other files, which only see their own, those of the modules they import, and
+// what comes with the language. What the language has under a name the main file can replace is the main file's for all of them.
+bool Sema::hiddenFrom(const std::string& name, Loc declared, Loc used) const {
+    const Modules* m = parser_.modules();
+    if (!m || declared.line == 0 || !m->isMain(declared.file) || m->isMain(used.file)) return false;
+    for (const char* shared : {"Error", "hashmap", "Task", "Mutex", "LockGuard", "delay"})
+        if (name == shared) return false;
+    return true;
+}
+
+std::string Sema::elsewhere(const std::string& name, Loc used) const {
+    const Modules* m = parser_.modules();
+    if (!m || name.find("::") != std::string::npos || used.line == 0) return "";
+    if (!m->isMain(used.file) && !m->files.empty() && m->files[0].name.empty() && m->files[0].members.count(name))
+        return q(name) + " is declared in the main file, which other files cannot use. Move it into a module, with `export` before it, and import that module in each file that uses it";
+    for (const ModuleFile& f : m->files) {
+        if (f.name.empty() || (used.file < m->files.size() && &f == &m->files[used.file])) continue;
+        auto it = f.members.find(name);
+        if (it == f.members.end() || !isExported(it->second)) continue;
+        return q(name) + " is in the module '" + f.name + "', and other files write it `" + f.prefix + "::" + name + "`" +
+               (m->imports(used.file, f) ? std::string("") : ", after `import " + f.name + ";`");
+    }
+    return "";
+}
+
+bool Sema::reportElsewhere(const std::string& name, Loc used, const char* what) {
+    std::string help = elsewhere(name, used);
+    if (help.empty()) return false;
+    diags_.error(used, q(name) + " is not " + what + " in this file", help, spec::Modules);
+    return true;
+}
+
 void Sema::reportUnknownName(const NameExpr& n) {
+    if (reportElsewhere(n.name, n.loc, "declared")) return;
     std::string help;
     if (auto s = structs_.find(n.name); s != structs_.end()) {
         diags_.error(n.loc, q(n.name) + " is a type, not a value",
@@ -1260,10 +1297,7 @@ void Sema::reportUnknownName(const NameExpr& n) {
 
 void Sema::check(Program& program) {
     program_ = &program;
-    for (auto& imp : program.imports) {
-        if (!isBuiltinModule(imp.path))
-            diags_.error(imp.loc, "this compiler does not support modules yet, except for `http`, `json` and `reflect`, so '" + imp.path + "' cannot be imported",
-                         "remove the import for now; built-ins like println need no import", spec::Status);
+    for (auto& imp : program.imports) {  // a program's own modules, Modules has read, or said why it cannot
 #ifndef CPLUS_CURL_LINK
         if (imp.path == "http")
             diags_.error(imp.loc, "this compiler was built without libcurl, which `http` is written on",
@@ -1298,6 +1332,16 @@ void Sema::check(Program& program) {
             continue;
         }
         auto [it, inserted] = funcs_.emplace(fn->name, fn.get());
+        if (!inserted && fn->isExtern && it->second->isExtern && fn->nameLoc.file != it->second->nameLoc.file) {  // one C function, in two files
+            bool same = it->second->params.size() == fn->params.size() && it->second->retType == fn->retType;
+            for (size_t i = 0; same && i < fn->params.size(); ++i) same = it->second->params[i]->declType == fn->params[i]->declType;
+            if (!same) {
+                diags_.error(fn->nameLoc, "the C function " + q(fn->name) + " is declared differently in another file",
+                             "make the two declarations the same, as they are one function of C", spec::Modules);
+                diags_.note(it->second->nameLoc, "the other declaration is here");
+            }
+            continue;
+        }
         if (!inserted) {
             bool sameParams = it->second->params.size() == fn->params.size();
             for (size_t i = 0; sameParams && i < fn->params.size(); ++i) sameParams = it->second->params[i]->declType == fn->params[i]->declType;
@@ -1311,7 +1355,8 @@ void Sema::check(Program& program) {
 
     auto mainIt = funcs_.find("main");
     if (mainIt == funcs_.end()) {
-        if (!diags_.hasErrors()) diags_.error(Loc{}, "this program has no main function",
+        const bool isModule = parser_.modules() && !parser_.modules()->isMain(0);  // `cplus lsp` on a module's file, which has none
+        if (!diags_.hasErrors() && !isModule) diags_.error(Loc{}, "this program has no main function",
                      "every program starts at `int main() { ... return 0; }`", spec::MainFunction);
     } else {
         FuncDecl* m = mainIt->second;
@@ -2184,6 +2229,10 @@ ConstHooks Sema::constHooks() {
     hooks.constraint = [this](const ConstraintExpr& c) { return constraintHolds(c); };
     hooks.sizeOf = [](const Type* t, Loc) { return sizeOfType(t); };
     hooks.prepare = [this](const FuncDecl& f) { checkNow(const_cast<FuncDecl&>(f)); };
+    hooks.resolve = [this](const std::string& name, Loc at) {
+        const VarDecl* local = lookup(name);
+        return (local && !local->isTopLevel) || fieldHides(name) ? name : resolved(name, at);
+    };
     return hooks;
 }
 
@@ -3444,6 +3493,15 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     if (e.kind == Expr::Kind::Name) {
         auto& n = static_cast<NameExpr&>(e);
         n.decl = lookup(n.name);
+        if ((!n.decl || n.decl->isTopLevel) && !fieldHides(n.name) && parser_.modules()) {  // a constant of the file's module
+            const std::string full = resolved(n.name, n.loc);
+            if (VarDecl* own = full != n.name ? lookup(full) : nullptr; own && own->isTopLevel) {
+                n.name = full;
+                n.decl = own;
+            } else if (n.decl && hiddenFrom(n.name, n.decl->loc, n.loc)) {
+                n.decl = nullptr;
+            }
+        }
         // A member of the type hides a constant of the file, as in C++. A local variable hides both.
         if (n.decl && n.decl->isTopLevel && fieldHides(n.name)) n.decl = nullptr;
         if (!n.decl) {
@@ -4801,6 +4859,31 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         }
     }
 
+    if (parser_.modules()) {  // a function of the file's module, or the main file's, which only it can call
+        const std::string full = resolved(call.callee, call.loc);
+        const TemplateDecl* generic = program_->findTemplate(call.callee);
+        if (full != call.callee && (funcs_.count(full) || program_->findTemplate(full))) call.callee = full;
+        else if (auto f = funcs_.find(call.callee); f != funcs_.end() ? !f->second->isExtern && hiddenFrom(call.callee, f->second->nameLoc, call.loc)
+                                                                      : generic && hiddenFrom(call.callee, generic->nameLoc, call.loc)) {
+            for (auto& a : call.args) checkLooseValue(*a, flow);
+            diags_.error(nameLoc, q(call.callee) + " is a function of the main file, which other files cannot use",
+                         "move it into a module, with `export` before it, and import that module in each file that calls it", spec::Modules);
+            return Type::error();
+        } else if (f != funcs_.end() && f->second->isExtern && parser_.modules()->hasModules() && call.loc.file < parser_.modules()->files.size()) {
+            const ModuleFile& here = parser_.modules()->files[call.loc.file];
+            if (!here.cFunctions.count(call.callee) && !here.importsHeader) {
+                const FuncDecl& c = *f->second;
+                std::string params;
+                for (auto& p : c.params) params += (params.empty() ? "" : ", ") + std::string(p->declType->name) + (p->name.empty() ? "" : " " + p->name);
+                diags_.error(nameLoc, q(call.callee) + " is a C function that this file does not declare",
+                             c.nameLoc.line ? "declare it in this file too, as another file does: `extern \"C\" " + std::string(c.retType->name) + " " + c.name + "(" + params +
+                                                  ");`. It is the same function in every file, but each file says which C names it uses"
+                                            : "import the C header that declares it in this file too, as another file does",
+                             spec::Modules);
+            }
+        }
+    }
+
     // `Point(1, 2)` builds a struct or class object.
     if (auto s = structs_.find(call.callee); s != structs_.end()) {
         const StructDecl& sd = *s->second;
@@ -4838,6 +4921,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (it == funcs_.end() && findCharFn(call.callee)) return checkCharFn(call, flow);
     if (it == funcs_.end()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
+        if (reportElsewhere(call.callee, nameLoc, "declared")) return Type::error();
         if (auto why = program_->notImported.find(call.callee); why != program_->notImported.end()) {
             diags_.error(nameLoc, why->second.first, why->second.second, spec::CHeaders);
             return Type::error();
@@ -5804,7 +5888,7 @@ static const char* kAllowNewDelete =
     "at the top of the file";
 
 void Sema::warnManualMemory(Loc loc, const std::string& message, const std::string& alternative) {
-    if (!warnNewDelete_ || program_->allowNewDelete || (fn_ && fn_->allowNewDelete)) return;
+    if (!warnNewDelete_ || program_->allowNewDeleteIn.count(loc.file) || (fn_ && fn_->allowNewDelete)) return;
     diags_.warning(loc, message, alternative + "." + kAllowNewDelete, spec::NewDelete);
 }
 

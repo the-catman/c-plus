@@ -31,7 +31,7 @@ def main():
     def unreached(pattern):
         total = 0
         found = []
-        for name in ["Lexer", "Parser", "Sema", "ConstEval", "main", "Explain", "CHeaders"]:
+        for name in ["Lexer", "Parser", "Sema", "ConstEval", "main", "Explain", "CHeaders", "Modules"]:
             source = (ROOT / "compiler" / f"{name}.cpp").read_text()
             lines = source.split("\n")
             regions = segments.get(name, [])

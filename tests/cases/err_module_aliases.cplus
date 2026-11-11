@@ -1,0 +1,9 @@
+// A module goes by its whole path in every file: there are no shorter names for it yet.
+import json as j;
+namespace js = json;
+
+int main() { return 0; }
+
+// error: this compiler does not support aliases of modules yet
+// error: write `import json;`, and the module's whole path before each of its names: `json::name`
+// error: remove this line, and write the module's whole path before each of its names: `net::server::start()`

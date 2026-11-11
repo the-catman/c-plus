@@ -142,7 +142,7 @@ ConstValue ConstEval::convert(const ConstValue& v, const Type* to, Loc loc) {
 ConstValue ConstEval::evalName(const NameExpr& n) {
     if (Local* local = findLocal(n.name)) return local->value;
     auto& lookup = globalsOnly_ ? hooks_.globalConstant : hooks_.constant;
-    const VarDecl* decl = lookup ? lookup(n.name) : nullptr;
+    const VarDecl* decl = lookup ? lookup(hooks_.resolve ? hooks_.resolve(n.name, n.loc) : n.name) : nullptr;
     if (!decl) throw ConstError{n.loc, "'" + n.name + "' is not a constant"};
     if (!decl->isConst || !decl->init)
         throw ConstError{n.loc, "'" + n.name + "' is a variable, whose value is only known while the program runs"};
@@ -185,7 +185,7 @@ const Type* ConstEval::staticType(const Expr& e) {
             auto& n = static_cast<const NameExpr&>(e);
             if (Local* local = findLocal(n.name)) return local->type;
             auto& lookup = globalsOnly_ ? hooks_.globalConstant : hooks_.constant;
-            const VarDecl* decl = lookup ? lookup(n.name) : nullptr;
+            const VarDecl* decl = lookup ? lookup(hooks_.resolve ? hooks_.resolve(n.name, n.loc) : n.name) : nullptr;
             if (!decl) return nullptr;
             return decl->declType->is(K::Auto) ? (decl->init ? staticType(*decl->init) : nullptr) : decl->declType;
         }
@@ -215,7 +215,7 @@ const Type* ConstEval::staticType(const Expr& e) {
         case Expr::Kind::Call: {
             auto& c = static_cast<const CallExpr&>(e);
             const FuncDecl* f = c.target;
-            if (!f && hooks_.function) f = hooks_.function(c.callee);
+            if (!f && hooks_.function) f = hooks_.function(hooks_.resolve ? hooks_.resolve(c.callee, c.loc) : c.callee);
             return f ? f->retType : nullptr;
         }
         case Expr::Kind::MethodCall: {
@@ -370,7 +370,8 @@ ConstValue ConstEval::evalIncDec(const IncDecExpr& i) {
 ConstValue ConstEval::evalCall(const CallExpr& c) {
     if (c.vectorType || c.constructs) throw ConstError{c.loc, "objects and vectors cannot be built while compiling"};
     const FuncDecl* f = c.target;
-    if (!f && hooks_.function) f = hooks_.function(c.callee);
+    const std::string callee = hooks_.resolve ? hooks_.resolve(c.callee, c.loc) : c.callee;
+    if (!f && hooks_.function) f = hooks_.function(callee);
     if (!f) {
         // The built-in ones that C++ can also work out.
         if (c.callee == "abs" && c.args.size() == 1) {
@@ -385,7 +386,7 @@ ConstValue ConstEval::evalCall(const CallExpr& c) {
             bool pickSecond = isTrue(arith(BinOp::Lt, c.callee == "min" ? y : x, c.callee == "min" ? x : y, c.loc), c.loc);
             return pickSecond ? y : x;
         }
-        if (hooks_.generic && hooks_.generic(c.callee))
+        if (hooks_.generic && hooks_.generic(callee))
             throw ConstError{c.loc, "this compiler does not support a generic function here yet"};
         throw ConstError{c.loc, "'" + c.callee + "' cannot run while compiling. Only functions marked `constexpr` can"};
     }

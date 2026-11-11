@@ -20,6 +20,7 @@
 #include "Format.h"
 #include "Lexer.h"
 #include "Lsp.h"
+#include "Modules.h"
 #include "Parser.h"
 #include "Sema.h"
 
@@ -92,10 +93,11 @@ static int runProcess(const std::vector<std::string>& argv, const std::string& h
     return 1;
 }
 
-// Parses and checks a file. Returns false if it has errors.
-static bool frontEnd(const SourceFile& file, Diagnostics& diags, Program& program, const Options& opts) {
-    Lexer lexer(file, diags);
-    Parser parser(lexer.lexAll(), diags);
+// Parses and checks a program: the file, and the modules it imports, from its folder. Returns false if it has errors.
+static bool frontEnd(const SourceFile& file, Diagnostics& diags, Program& program, const Options& opts, Modules& modules) {
+    modules.load(file, "", diags, Modules::Options{fs::path(file.path).parent_path().string(), {}, false});
+    Parser parser(modules.tokens(), diags);
+    parser.useModules(&modules);
     parser.findHeadersIn(HeaderSearch{fs::path(file.path).parent_path().string(), opts.includeDirs});
     parser.parseProgram(program);
     if (!parser.gaveUp()) {  // otherwise what was read is too little to check
@@ -132,7 +134,8 @@ static int build(const Options& opts, const std::string& exePath) {
     SourceFile file(opts.input, std::move(text));
     Diagnostics diags(file);
     Program program;
-    if (!frontEnd(file, diags, program, opts)) return 1;
+    Modules modules;
+    if (!frontEnd(file, diags, program, opts, modules)) return 1;
     if (opts.command == "check") return 0;
 
     // The tests can only reach these errors by pretending, on a machine that has what they are about.
@@ -150,6 +153,7 @@ static int build(const Options& opts, const std::string& exePath) {
     }
 
     Codegen codegen(file, CodegenOptions{opts.optimize, opts.debug, opts.race});
+    for (size_t i = 1; i < modules.files.size(); ++i) codegen.addFile(*modules.files[i].source);
     std::string error;
     if (!codegen.generate(program, error)) {
         toolError(error, error.find("pass a pointer to the struct") != std::string::npos
@@ -393,15 +397,23 @@ static int compilerMain(int argc, char** argv) {
             opts.input = a;
         } else {
             if (opts.command == "run") return usageError("to pass arguments to the program, put them after `--`: `cplus run " + opts.input + " -- " + a + "`");
-            return usageError("only one source file can be given; multi-file programs are not supported yet");
+            return usageError("only one source file can be given: the main file, whose `import`s bring in the others");
         }
     }
     if (opts.debug && opts.race)
         return usageError("--debug and --race cannot be used together, as each watches the program's memory in its own way; build once with each");
     if (opts.input.empty()) return usageError("no source file given");
-    if (std::error_code isFolder; fs::is_directory(opts.input, isFolder)) {
-        toolError("cannot read " + opts.input + ": it is a folder", "give the path of a .cplus file, such as `" + opts.input + "/main.cplus`");
-        return 2;
+    std::string programName;  // of what is built, when it is not named after the file
+    if (std::error_code isFolder; fs::is_directory(opts.input, isFolder)) {  // a program's folder, which stands for its main.cplus
+        const fs::path main = fs::path(opts.input) / "main.cplus";
+        if (std::error_code ec; !fs::is_regular_file(main, ec)) {
+            toolError("cannot read " + opts.input + ": it is a folder, with no main.cplus in it",
+                      "give the path of the program's main file, the one with `main`, or name that file " + main.string() + ", which is what a folder stands for");
+            return 1;
+        }
+        programName = main.parent_path().filename().string();
+        if (programName.empty() || programName == "." || programName == "..") programName = "main";
+        opts.input = main.string();
     }
     if (fs::path(opts.input).extension() != ".cplus") {
         toolError(opts.input + " is not a C+ source file", "give it a name that ends in .cplus, as C+ source files do");
@@ -409,7 +421,7 @@ static int compilerMain(int argc, char** argv) {
     }
 
     if (opts.command != "run") {
-        std::string out = opts.output.empty() ? fs::path(opts.input).stem().string() : opts.output;
+        std::string out = !opts.output.empty() ? opts.output : !programName.empty() ? programName : fs::path(opts.input).stem().string();
         return build(opts, out);
     }
 

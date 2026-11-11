@@ -1,0 +1,38 @@
+// Modules that import each other in a cycle (a and b), one with a `log` of its own, which is still the built-in here,
+// a value of a type from a module this file does not import (geometry::Point, through shapes), a generic that uses a
+// private function of its module, given a type of this file, and an error class of a module.
+import a;
+import logger;
+import shapes;
+
+struct Item { int n = 1; };
+
+int main() throws {
+    println("{}", a::ping(3));
+    logger::log("hello");
+    println("{}", log(1.0));
+    auto s = shapes::make(2);
+    auto c = shapes::center(s);
+    println("{} {}", c.x, s.side);
+    auto w = a::wrap(Item{5});
+    println("{}", w.inner.n);
+    a::Node n = a::Node("x");
+    println("{}", n.name);
+    try a::risky(false);
+    try {
+        a::risky(true);
+    } catch (a::Problem e) {
+        println("caught {}", e.what());
+    } catch (Error e) {
+        println("caught {}", e.what());
+    }
+    return 0;
+}
+// expect: 3
+// expect: [log] hello 2
+// expect: [log] 1
+// expect: 0
+// expect: 1 2
+// expect: 5
+// expect: x
+// expect: caught bad

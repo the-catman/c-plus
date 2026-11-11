@@ -1,0 +1,17 @@
+// What main.cplus imports, this file does not get.
+export struct Thing { int y = 0; };
+
+export int useServer() { return net::server::start(); }
+
+export int useLast() { return server::start(); }
+
+export int useShape() {
+    Shape s;
+    return 0;
+}
+
+// error: 'net::server::start' is in the module 'net.server', which this file does not import
+// error: write `import net.server;` at the top of this file. What one file imports, another does not get
+// error: write `import net.server;` at the top of the file, then `net::server::Shape`
+// error: 'server::start' is not a name of a module that this file imports
+// error: write `import net.server;` at the top of this file, then `net::server::start`

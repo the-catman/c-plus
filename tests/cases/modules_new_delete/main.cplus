@@ -1,0 +1,12 @@
+// `[[allow(new_delete)]];` at the top of a file is for that file only: the module's `new` still has its warning.
+[[allow(new_delete)]];
+
+import pool;
+
+int main() {
+    int* p = new int(4);
+    println("{} {}", *p, pool::made());
+    delete p;
+    return 0;
+}
+// expect: 4 7

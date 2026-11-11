@@ -986,6 +986,7 @@ struct Program {
     std::vector<std::unique_ptr<VarDecl>> constants;
     std::vector<std::unique_ptr<TemplateDecl>> templates;
     bool allowNewDelete = false;  // `[[allow(new_delete)]];` at the top of the file
+    std::set<uint32_t> allowNewDeleteIn;  // the files that have it at their top, by SourceFile::id
     std::set<std::string> unreadFunctions;  // what could not be read because of an error that has been reported
     // What the program uses from a C header that C+ cannot take, with what to say where it is used. See CHeaders.h.
     std::map<std::string, std::pair<std::string, std::string>> notImported;  // name to message and help

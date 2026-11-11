@@ -1,0 +1,9 @@
+// net/server.cplus
+export struct Config {
+    string host = "localhost";
+    int port = 8080;
+};
+
+int checked(int port) { return port < 1024 ? 8080 : port; }  // only this file can call it
+
+export string address(Config c) { return c.host + ":" + to_string(checked(c.port)); }

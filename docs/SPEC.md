@@ -35,7 +35,7 @@ Reserved, including words for features not implemented yet:
 
 ```
 async auto await bool break case catch char class const constexpr continue default delete
-do double else enum extern false float for if import int interface long namespace new null
+do double else enum export extern false float for if import int interface long namespace new null
 operator override private protected public return sizeof spawn static string struct switch
 template this throw throws true try typename virtual void weak while
 ```
@@ -1634,18 +1634,75 @@ int main() {
 
 ### Modules
 
-Partly planned: the modules that come with the language work, which are [`http`](#http), [`json`](#json) and [`reflect`](#reflection). There are no
-header files of C+, but C's can be [imported](#c-headers). One file is one module.
+One file is one module. The modules that come with the language are [`http`](#http), [`json`](#json) and [`reflect`](#reflection),
+and the other files of a program are its own. There are no header files of C+, but C's can be [imported](#c-headers).
 
 ```cpp
 import json;          // a standard module
-import net.server;    // planned: the file net/server.cplus, relative to the project root
+import net.server;    // the file net/server.cplus, in the folder of the main file
 ```
 
 Members of a module are used with `::`, as in `json::parse<User>(text)`. What a module has is its own: a program
 cannot declare a name such as `json::Mine`. There is no `std::` namespace and no `using`; built-ins need no prefix.
-The compiler only accepts single-file programs so far, and reports an error for any other `import` of a module. Only what a
-program imports is linked into it.
+Only what a program imports is linked into it.
+
+**The project.** The main file is the one given to `cplus run`, `build` or `check`, and the only one with `main`. Its folder is
+the root of the project, and every `import`, in whichever file it is, names a file from there: `import net.server;` is
+net/server.cplus. A folder can be given in place of the main file, for the main.cplus in it. Each module is read once,
+however many files import it. Files can import each other in a cycle, as the whole program is read before any of it is
+checked. The main file cannot be imported. `import http;`, `import json;` and `import reflect;` always mean the modules
+of the language, and a file of the project with one of their names is an error.
+
+**What a module makes visible.** A name declared at the top of a module's file is private to that file, unless `export`,
+as in C++20, is written before its declaration. Any declaration at the top of a file can be exported: a function, a
+constant, a struct, a class, an interface, a generic or a concept.
+
+```cpp
+// net/server.cplus
+export struct Config {
+    string host = "localhost";
+    int port = 8080;
+};
+
+int checked(int port) { return port < 1024 ? 8080 : port; }  // only this file can call it
+
+export string address(Config c) { return c.host + ":" + to_string(checked(c.port)); }
+```
+
+```cpp
+// main.cplus
+import net.server;
+
+int main() {
+    net::server::Config c = {.port = 80};
+    println("{}", net::server::address(c));  // localhost:8080
+    return 0;
+}
+```
+
+**How a file names what it imports.** Other files write a module's names with its whole path, and `::` between the parts:
+`net::server::address`, never `server::address`, and never with dots, as in `json.stringify(x)`. In its own file, a name
+goes by itself. A name written by itself is looked for among the local variables, then the names at the top of its own
+file, then what comes with the language, and never in another file. So a module can have a function `log` of its own,
+which is `logger::log` in other files, while `log` there is still the logarithm. A file uses only the modules it imports
+itself: what they import is not passed on.
+
+A type is one type in the whole program, and its name is printed with its path, as in `net::server::Config`. A file can
+use a value of a type from a module that it does not import, such as what a function of another module returns, but to
+write the name of the type it imports its module. An exported function can take or return a type that is private to its
+file, and other files hold such a value with `auto`.
+
+- `export` in the main file does nothing, as no file can import it.
+- C++20's `module net.server;` and `export module net.server;` are not written: a file is a module by its path.
+- `static` at the top of a file is an error, as a name is private to its file unless it is exported.
+- A file cannot declare a name in a module, such as `int net::server::extra()`; it is declared in the module's own file.
+- C's functions and types are not members of a module: a C name is one thing in the whole program, which each file that
+  uses it declares with [`extern "C"`](#c-functions) or imports with its [header](#c-headers). Two declarations of it must be the same.
+- `[[allow(new_delete)]];` is for the file it is written in.
+- A type or function of the main file named `Error`, `hashmap`, `Task`, `Mutex`, `LockGuard` or `delay` takes the place
+  of the language's own in the whole program. A module cannot declare one of those names.
+- `export { ... }` around several declarations, `export import`, `export extern "C"` and aliases of modules, as
+  `namespace srv = net::server;`, are not supported yet.
 
 Nobody writes header files. For a library, the compiler can generate a `.hplus` interface
 file from a module: a readable summary of its public API, with declarations but no
@@ -2490,6 +2547,9 @@ cplus --version
 | `--emit-llvm` | `build` | prints the LLVM IR instead of building |
 | `--check` | `fmt` | changes nothing, and says which files are not [formatted](#formatting) |
 
+`check`, `build` and `run` take the program's [main file](#modules), whose imports bring in its other files. They also take a
+folder, for the main.cplus in it, and the program `build` makes is then named after the folder.
+
 `cplus explain` with no topic lists them all. A topic is the name of a section, as in the `spec:` line of an error, or a word you know from C++ or JavaScript, such as
 `hashmap`, `spawn` or `try`. `cplus explain cheatsheet` is how C+ differs from C++, on one page. All of it is built into the compiler, so it works away from this repository.
 
@@ -2531,6 +2591,9 @@ where lines break stay as they are written, except where a rule below breaks a l
   says is never changed.
 - Long lines are not wrapped. Lines end with a line feed, and the file ends with one.
 
+A file is formatted by itself, and the [modules](#modules) it imports are read only for the names of their types. What is
+wrong in them is not reported, and a module that is not there does not stop the file from being formatted.
+
 A file with syntax errors is left as it is, and the errors are reported. After formatting a file, `cplus fmt` reads
 what it wrote, and keeps it only if it has the same tokens and comments as the file. If it does not, that is a bug in
 `cplus fmt`, which it reports, and the file is left as it is.
@@ -2552,6 +2615,12 @@ It gives an editor:
 - where a name is declared, for "go to definition"
 - the file in the style of `cplus fmt`, for "format document". A file with syntax errors is left as it is.
 
+For a program of several files, the [modules](#modules) a file imports are read as the editor has them, saved or not, and
+the open files are checked again when any of them changes. What is wrong in another file is one error, at the `import`
+that brings it in, and "go to definition" goes to the file a name is declared in. A file with no `main` is checked as a
+module: its project root is the nearest folder, going up no further than the editor's workspace folder, from which all of
+its imports are found.
+
 A name in generic code only has a meaning once the generic is used, so a hover there shows what it means in the first use,
 and in a generic that nothing uses it shows nothing. What comes with the language, such as `println`, has no declaration to
 go to.
@@ -2565,8 +2634,8 @@ The rules of what can be written, in EBNF. `{ x }` is any number of `x`, `[ x ]`
 reasons, such as the type of a value. What is reported as not supported yet is left out.
 
 ```
-program      = { import | item } ;
-import       = "import" name ";" ;
+program      = { import | [ "export" ] item } ;
+import       = "import" name { "." name } ";" ;
 item         = function | record | generic | constant | extern | attribute ;
 attribute    = "[[" "allow" "(" "new_delete" ")" "]]" [ ";" ] ;
 name         = letter { letter | digit | "_" } ;              (* with `module::name` for what a module has *)
@@ -2691,7 +2760,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | `cplus fmt` | implemented |
 | `cplus lsp`: errors as you type, hover, go to definition, formatting; an extension for VS Code | implemented |
 | Debug builds with `--debug`: AddressSanitizer, stack traces, misaligned pointer and invalid bool checks, leak report | implemented |
-| Programs of more than one file | planned |
+| Programs of more than one file | implemented |
 | `constexpr` values and functions, `if constexpr`, array sizes and template arguments worked out while compiling | implemented |
 | `constexpr` methods and structs; a generic `constexpr` function in an array's size | planned |
 | Variables outside functions; constants of other types | planned |
@@ -2728,7 +2797,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | C callbacks and variables in `extern "C"`; 16-bit integers and unions in C structs; C's macros with arguments and inline functions | planned |
 | Modules `http`, `json` and `reflect`, and raw strings | implemented |
 | `http::fetch` | implemented |
-| Modules of your own | planned |
+| Modules of your own: `import net.server;`, `export`, `net::server::start()` | implemented |
+| `export { ... }`, `export import`, `export extern "C"`, aliases of modules | planned |
 | Threads: `spawn`, `Task`, `Mutex`, `LockGuard`, `--race` | implemented |
 | `async` functions, `await`, `delay` | implemented |
 | Atomic values, condition variables, channels | planned |

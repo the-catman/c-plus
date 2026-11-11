@@ -234,7 +234,7 @@
         },
         {
           "name": "keyword.control.import.cplus",
-          "match": "\\b(?:import)\\b"
+          "match": "\\b(?:import|export)\\b"
         },
         {
           "name": "constant.language.cplus",

@@ -1,0 +1,31 @@
+// The tasks, and what can be done with them. Other files can use only what is marked `export`, and write it as
+// `tasks::add`.
+
+export struct Item {
+    string title;
+    bool done = false;
+};
+
+export struct List {
+    vector<Item> items;
+};
+
+export List add(List list, string title) {
+    list.items.push_back(Item{.title = title});
+    return list;
+}
+
+export List finish(List list, long index) {
+    if (inRange(list, index)) list.items[index].done = true;
+    return list;
+}
+
+export int doneCount(List list) {
+    int n = 0;
+    for (auto item : list.items)
+        if (item.done) n++;
+    return n;
+}
+
+// Private to this file, as it has no `export`.
+bool inRange(List list, long index) { return index >= 0 && index < list.items.size(); }

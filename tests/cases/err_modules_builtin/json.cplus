@@ -1,0 +1,1 @@
+export int parse(string s) { return 1; }

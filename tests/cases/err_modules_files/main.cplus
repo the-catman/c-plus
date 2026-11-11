@@ -1,0 +1,21 @@
+// What each file of a program may have: `main` only here, no line naming the module, every block closed, and the C names it uses.
+import net.server;
+import broken;
+import named;
+import cuse;
+import nothing.more;
+
+extern "C" {
+    struct ldiv_t { long quot; long rem; };
+    ldiv_t ldiv(long a, long b);
+    struct FILE;
+    long atol(string s);
+}
+
+int main() {
+    println("{}", atol("5"));
+    return 0;
+}
+
+// error: there is no module 'nothing.more': the file tests/cases/err_modules_files/nothing/more.cplus is not there
+// error: write the file tests/cases/err_modules_files/nothing/more.cplus, or check the name
