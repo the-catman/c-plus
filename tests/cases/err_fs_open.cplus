@@ -1,0 +1,69 @@
+// The modes fs::open takes are "r", "w" and "a". A literal that is not one of them is an error, with the one that was
+// likely meant. What Node, Python, Rust and std::filesystem call what fs has gets fs's name.
+import fs;
+
+int main() throws {
+    fs::File a = try fs::open("a.txt", "rb");
+    fs::File b = try fs::open("a.txt", "wt");
+    fs::File c = try fs::open("a.txt", "a+");
+    fs::File d = try fs::open("a.txt", "x");
+    fs::File e = try fs::open("a.txt", "");
+    fs::File f = try fs::open("a.txt", 'r');
+    fs::File g = try fs::open("a.txt");
+    try fs::writeFileSync("a.txt", "x");
+    try fs::appendFile("a.txt", "x");
+    bool h = fs::existsSync("a.txt");
+    try fs::mkdir("place");
+    try fs::makedirs("place/inner");
+    try fs::create_dir_all("place/inner");
+    auto i = try fs::readdir(".");
+    auto j = try fs::listdir(".");
+    auto k = try fs::directory_iterator(".");
+    try fs::unlink("a.txt");
+    try fs::rmdir("place");
+    try fs::renameSync("a.txt", "b.txt");
+    bool l = fs::isdir("place");
+    long m = try fs::getsize("a.txt");
+    auto n = try fs::openSync("a.txt", "r");
+    try fs::write_all("a.txt", "x");
+    return 0;
+}
+// error: fs::open() opens a file with the mode "r", "w" or "a", but this is "rb"
+// error: write "r": a file is always read and written as the bytes it has, so there is no "b" or "t"
+// error: spec: docs/SPEC.md#files
+// error: fs::open() opens a file with the mode "r", "w" or "a", but this is "wt"
+// error: write "w": a file is always read and written as the bytes it has
+// error: fs::open() opens a file with the mode "r", "w" or "a", but this is "a+"
+// error: read it with one `fs::open(path, "r")`, and write it with another, with "w" or "a": a file is not open for both
+// error: fs::open() opens a file with the mode "r", "w" or "a", but this is "x"
+// error: write "r" to read it, "w" to write it from its start, or "a" to add to its end
+// error: fs::open() opens a file with the mode "r", "w" or "a", but this is ""
+// error: expected 'string' for parameter 'mode' of 'fs::open', but this is 'char'
+// error: 'fs::open' takes 2 arguments but 1 was given
+// error: there is no function named 'fs::writeFileSync'
+// error: write `try fs::write(path, text)`
+// error: there is no function named 'fs::appendFile'
+// error: write `try fs::append(path, text)`
+// error: there is no function named 'fs::existsSync'
+// error: write `fs::exists(path)`
+// error: there is no function named 'fs::mkdir'
+// error: write `try fs::create_directory(path)`
+// error: there is no function named 'fs::makedirs'
+// error: write `try fs::create_directories(path)`
+// error: there is no function named 'fs::create_dir_all'
+// error: there is no function named 'fs::readdir'
+// error: write `try fs::list(dir)`
+// error: there is no function named 'fs::listdir'
+// error: there is no function named 'fs::directory_iterator'
+// error: there is no function named 'fs::unlink'
+// error: write `try fs::remove(path)`
+// error: there is no function named 'fs::rmdir'
+// error: there is no function named 'fs::renameSync'
+// error: write `try fs::rename(from, to)`
+// error: there is no function named 'fs::isdir'
+// error: write `fs::is_directory(path)`
+// error: there is no function named 'fs::getsize'
+// error: write `try fs::file_size(path)`
+// error: there is no function named 'fs::openSync'
+// error: write `try fs::open(path, mode)`
+// error: there is no function named 'fs::write_all'

@@ -1,0 +1,11 @@
+// A mode that is not a literal is checked when the program runs. One that is not "r", "w" or "a" is a mistake in the
+// program, not something about the file, so it stops the program rather than throwing.
+import fs;
+
+int main() throws {
+    string mode = "rw";
+    fs::File f = try fs::open("a.txt", mode);
+    println("not reached");
+    return 0;
+}
+// trap: fs::open() was given the mode "rw", which is not "r", "w" or "a"

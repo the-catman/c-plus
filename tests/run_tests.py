@@ -543,15 +543,8 @@ PLANNED_FEATURES = [
     ("unsigned literals", M % "int x = 10u;"),
     ("overloading", 'int f(int a) { return a; }\nint f(long a) { return 1; }\n' + M % ""),
     ("stoul", M % 'long n = stoul("1");'),
-    ("writing files", 'import fs;\n' + M % 'fs::write("a.txt", "x");'),
-    ("appending to files", 'import fs;\n' + M % 'fs::append("a.txt", "x");'),
-    ("whether a file exists", 'import fs;\n' + M % 'bool b = fs::exists("a.txt");'),
-    ("removing files", 'import fs;\n' + M % 'fs::remove("a.txt");'),
-    ("listing a folder", 'import fs;\n' + M % 'auto names = fs::list(".");'),
-    ("opening a file", 'import fs;\n' + M % 'auto f = fs::open("a.txt");'),
     ("reading a file in an async function", 'import fs;\n' + M % 'auto t = fs::readFile("a.txt");'),
     ("writing a file in an async function", 'import fs;\n' + M % 'auto t = fs::writeFile("a.txt", "x");'),
-    ("ofstream", M % 'ofstream out("a.txt");'),
     ("erasing a range of a vector", M % "vector<int> v; v.erase(0, 1);"),
     ("vector iterators", M % "vector<int> v; auto b = v.begin();"),
     ("find on a hashmap", M % "hashmap<int, int> m; auto x = m.find(1);"),
@@ -782,7 +775,7 @@ SPEC_NOT_CODE = {
     "break cplus_trap", "uncaught error:", "--race", "--debug", "cplus build", "cplus.", "-fsanitize=address", "llvm-symbolizer", "libclang-rt-18-dev", "exit()",
     "cplus run app.cplus --race", "-l<name>", "-L<dir>", "--emit-llvm", "cplus explain", "spec:", "cplus explain cheatsheet", "{ x }", "[ x ]", "value_or()", "new[]",
     "cplus fmt", "--check", "cplus lsp", "editors/vscode", 'import "mine.h";', "-I", "-I<dir>", "cplus build app.cplus -I include", "-lsqlite3",
-    "static inline", "const unsigned char*", "const T&", "T&",
+    "static inline", "const unsigned char*", "const T&", "T&", "std::filesystem",
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
@@ -805,8 +798,7 @@ SPEC_REJECTED = {
     "(int*)0x1000": "int* p = (int*)0x1000;", "int* p = 0;": "int* p = 0;", "T&": "^template<typename T> void f2(T& x) {}", "int* a, b;": "int* a, b;",
     "new int[3]{1, 2, 3}": "auto p = new int[3]{1, 2, 3};", "new (buffer) T": "int buffer = 0; auto p = new (buffer) int;", "new auto(x)": "int x = 1; auto p = new auto(x);",
     "[[nodiscard]]": "^[[nodiscard]] int f2() { return 1; }", "int x{5}": "int x{5};", "int x(5)": "int x(5);", "int f(int x);": "^int f2(int x);", "int values[]": '^extern "C" void f2(int values[]);',
-    "fs::exists": 'bool b = fs::exists("a.txt");', "fs::remove": 'fs::remove("a.txt");', "fs::list": 'auto names = fs::list(".");',
-    "fs::open": 'auto f = fs::open("a.txt");', "fs::readFile": 'auto t = fs::readFile("a.txt");', "fs::writeFile": 'auto t = fs::writeFile("a.txt", "x");',
+    "fs::readFile": 'auto t = fs::readFile("a.txt");', "fs::writeFile": 'auto t = fs::writeFile("a.txt", "x");',
     "std::getline(std::cin, line)": "string line; std::getline(std::cin, line);", 's.replace("a", "b")': 'string s = "a"; s.replace("a", "b");',
     "v.erase(v.begin() + i)": "vector<int> v = {1}; int i = 0; v.erase(v.begin() + i);", "v.erase(first, last)": "vector<int> v = {1}; int first = 0; int last = 1; v.erase(first, last);", "std::cin >> n": "int n = 0; std::cin >> n;",
     "char name[64];": '^extern "C" { struct S2 { char name[64]; }; }', "typedef struct { ... } name;": "^typedef struct { int a; } name;", "struct FILE*": "struct FILE* f = null;",
@@ -1419,7 +1411,7 @@ def check_reflect_alone(cplus, workdir):
 
 def check_library_alone(cplus, workdir):
     """What fs, readLine(), stoi and the string methods of runtime/strings.c are written on is only in a program that uses them, and
-    each only for itself."""
+    each only for itself. A program that imports fs has all of it, as the module is written in C+."""
     source = workdir / "library_alone.cplus"
     names = ["cplus_fs_read", "cplus_read_line", "cplus_parse_int", "cplus_parse_long", "cplus_parse_double", "cplus_parse_float", "cplus_str_split",
              "cplus_str_join", "cplus_str_trim", "cplus_str_splice"]

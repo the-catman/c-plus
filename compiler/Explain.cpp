@@ -53,6 +53,8 @@ constexpr Alias kAliases[] = {
     {"include", "c-headers"},        {"header", "c-headers"},        {"headers", "c-headers"},
     {"libclang", "c-headers"},       {"macro", "c-headers"},         {"define", "c-headers"},
     {"fs", "files"},                 {"file", "files"},              {"read", "files"},
+    {"write", "files"},              {"folder", "files"},            {"directory", "files"},
+    {"filesystem", "files"},         {"ifstream", "files"},          {"ofstream", "files"},
     {"readline", "reading-input"},   {"input", "reading-input"},     {"stdin", "reading-input"},
     {"getline", "reading-input"},    {"cin", "reading-input"},       {"stoi", "parsing-numbers"},
     {"stol", "parsing-numbers"},     {"stod", "parsing-numbers"},    {"stof", "parsing-numbers"},

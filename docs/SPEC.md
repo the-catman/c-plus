@@ -1197,12 +1197,15 @@ Not yet: reading or changing a field through its `reflect::Field`, methods, and 
 
 ### Files
 
-`import fs;` reads files. `fs::read(path)` gives all that is in a file as a string, and waits until it has read it.
+`import fs;` reads and writes files, and the folders they are in. `fs::read(path)` gives all that is in a file as a
+string, and `fs::write(path, text)` makes a file of one. Each function waits until it is done.
 
 ```cpp
 import fs;
 
 try {
+    try fs::write("notes.txt", "milk\neggs\n");
+    try fs::append("notes.txt", "bread\n");
     string notes = try fs::read("notes.txt");
     println("{} bytes", notes.size());
 } catch (fs::Error e) {
@@ -1210,26 +1213,82 @@ try {
 }
 ```
 
-- The path is relative to the working directory, as in C, unless it starts with `/`.
-- The string holds the bytes of the file as they are. Line endings are not changed, a byte order mark stays, the text does
-  not have to be UTF-8, and zero bytes are kept. An empty file gives `""`.
+| Function | What it does |
+|----------|--------------|
+| `fs::read(path)` | gives all that is in the file, as a `string` |
+| `fs::write(path, text)` | makes the file, or replaces what it had, with `text` |
+| `fs::append(path, text)` | adds `text` at the end of the file, and makes the file if it is not there |
+| `fs::exists(path)` | whether there is a file or a folder at the path. It never throws, and is false when it cannot tell |
+| `fs::is_directory(path)` | whether there is a folder at the path. It never throws |
+| `fs::remove(path)` | removes a file, or a folder with nothing in it. It gives false if nothing was there, as in C++ |
+| `fs::list(dir)` | the names of what is in the folder, as a `vector<string>` |
+| `fs::create_directory(path)` | makes a folder. It gives false if there was one already, as in C++ |
+| `fs::create_directories(path)` | makes a folder, and the folders before it that are not there |
+| `fs::rename(from, to)` | gives a file or a folder another name, and replaces a file that had that name |
+| `fs::file_size(path)` | the size of the file in bytes, as a `long` |
+| `fs::open(path, mode)` | an `fs::File`, which reads or writes the file a part at a time |
+
+- The names, and what they do, are those of C++'s `std::filesystem` where it has the function.
+- The path is relative to the working directory, as in C, unless it starts with `/`. Symbolic links are followed.
+- The string `fs::read` gives holds the bytes of the file as they are. Line endings are not changed, a byte order mark
+  stays, the text does not have to be UTF-8, and zero bytes are kept. An empty file gives `""`.
 - Reading goes on until the file ends, however long it is, and not only as far as the size the file says it has, so a
   pipe is read whole, and so is a file that the system writes as it is read.
-- `fs::read` is not async: an [async function](#async-functions) that calls it holds up its thread until it returns.
+- `fs::write` and `fs::append` write the bytes of the string as they are. A folder on the path that is not there is an
+  error, of the kind `"not-found"`; `fs::create_directories` makes it.
+- `fs::list(dir)` gives the names only, without the folder before them, and without `"."` and `".."`, in the order of
+  their bytes, so `"B.txt"` comes before `"a.txt"`.
+- None of these is async: an [async function](#async-functions) that calls one holds up its thread until it returns.
 
-What goes wrong is an `fs::Error`, with `what()`, `kind`, which is one of these, and `path`, the path as it was given.
+`fs::open(path, mode)` opens a file to read it a line or a part at a time, with the mode `"r"`, or to write it a part at a
+time, from its start with `"w"` or at its end with `"a"`. Any other mode is an error while compiling when it is written
+as a literal, and stops the program when it is not. There is no `"b"`, as a file is always read and written as the
+bytes it has.
+
+```cpp
+import fs;
+
+fs::File out = try fs::open("log.txt", "a");
+try out.write("started\n");
+try out.close();
+
+fs::File in = try fs::open("log.txt", "r");
+while (auto line = try in.readLine()) println("{}", line);
+```
+
+| Method | What it does |
+|--------|--------------|
+| `f.readLine()` | the next line, as a `string?` that is null at the end of the file, by the rules of [`readLine()`](#reading-input) |
+| `f.read(n)` | the next `n` bytes, or what is left when that is fewer, and `""` at the end |
+| `f.readAll()` | the rest of the file |
+| `f.write(text)` | writes `text` after what was written before |
+| `f.flush()` | gives what was written to the system now, which C's stdio may hold back until then. On a file opened with `"r"` it does nothing |
+| `f.close()` | closes the file, and reports a write that failed |
+
+- Each method can throw an `fs::Error`. One called after `close()` throws one of the kind `"closed"`, and so does a
+  second `close()`. Reading a file opened to write it, or writing one opened to read it, throws one of the kind `"io"`.
+- An `fs::File` is a class object, and the file is closed when the last one that refers to it goes away, without a
+  word if that fails. Call `close()` to know that what was written is there.
+- It [prints](#printing) as `fs::File {...}`, as what holds something of the runtime's does.
+
+What goes wrong is an `fs::Error`, with `what()`, `kind`, which is one of these, and `path`, the path as it was given,
+or the first of the two for `fs::rename`.
 
 | `kind` | What happened |
 |--------|---------------|
-| `"not-found"` | there is no file at that path, or a part of the path before its end is a file and not a folder |
-| `"permission"` | the program is not allowed to read it |
-| `"is-directory"` | it is a folder |
+| `"not-found"` | there is no file at that path, a folder on it is not there, or a part of the path before its end is a file and not a folder |
+| `"permission"` | the program is not allowed to do it, or the disk can only be read |
+| `"is-directory"` | it is a folder, where a file was wanted |
+| `"not-directory"` | it is a file, where a folder was wanted: `fs::list` of a file, a folder made inside one, or `fs::rename` of a folder onto a file |
+| `"not-empty"` | `fs::remove` of a folder with something in it, or `fs::rename` onto one |
+| `"exists"` | `fs::create_directory` or `fs::create_directories` where there is a file of that name |
+| `"no-space"` | the disk is full |
+| `"closed"` | a method of an `fs::File` after its `close()` |
 | `"bad-path"` | the path is empty or too long, goes through too many symbolic links, or has a zero byte in it, which no name of a file can have |
 | `"io"` | anything else, such as a disk that fails while it is read |
 
-Not yet: writing and appending, `fs::exists`, `fs::remove`, `fs::list`, `fs::open` for reading a file in parts, and
-`fs::readFile` and `fs::writeFile`, which an async function waits for with `await`. Until then, C's `fopen`, `fputs` and
-`fclose` write a file, declared with [`extern "C"`](#c-functions).
+Not yet: `fs::readFile` and `fs::writeFile`, which an async function waits for with `await`, copying a file, and
+the times and permissions of a file.
 
 ### Pointers
 
@@ -2050,7 +2109,7 @@ println("{{literal braces}}");
   `User {...}`, so an object that refers back to itself does not print forever.
 - A method named `toString` is an ordinary method for now, which printing does not call.
 - What holds something of the runtime's prints as its name: `Task<int> {...}`, `Mutex {...}`, `LockGuard {...}`,
-  `http::WebSocket {...}`, `reflect::Type {...}`. Its fields would only show addresses that change, or a secret in a URL.
+  `http::WebSocket {...}`, `reflect::Type {...}`, `fs::File {...}`. Its fields would only show addresses that change, or a secret in a URL.
 - There is no `printf`, `cout` or `std::`.
 
 `format` takes the same arguments as `print` and returns the text as a string instead of
@@ -2949,7 +3008,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Modules `http`, `json` and `reflect`, and raw strings | implemented |
 | `http::fetch` | implemented |
 | `import fs;` and `fs::read`; `readLine()` | implemented |
-| Files: writing, `fs::exists`, `fs::remove`, `fs::list`, `fs::open`, `fs::readFile`, `fs::writeFile` | planned |
+| Files: `fs::write`, `fs::append`, `fs::exists`, `fs::remove`, `fs::list`, folders, `fs::rename`, `fs::file_size`, `fs::open` and `fs::File` | implemented |
+| Files: `fs::readFile` and `fs::writeFile`, for `await` | planned |
 | Modules of your own | planned |
 | Threads: `spawn`, `Task`, `Mutex`, `LockGuard`, `--race` | implemented |
 | `async` functions, `await`, `delay` | implemented |

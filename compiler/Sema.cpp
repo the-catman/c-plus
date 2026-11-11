@@ -5038,23 +5038,31 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         bool importsFs = false;
         for (auto& imp : program_->imports) importsFs = importsFs || imp.path == "fs";
         const std::string readingFile = std::string(importsFs ? "write " : "write `import fs;` at the top of the file, then ") + "`string text = try fs::read(path);`";
-        if (name == "fs::readFile" || name == "fs::writeFile" || name == "fs::write" || name == "fs::append" || name == "fs::exists" || name == "fs::remove" ||
-            name == "fs::list" || name == "fs::open") {
-            const std::string what = name.substr(4);
-            const std::string writing = "declare C's for now: `extern \"C\" { struct FILE; FILE* fopen(string path, string mode); int fputs(string text, FILE* f); int fclose(FILE* f); }`, then `fopen(path, \"";
+        if (name == "fs::readFile" || name == "fs::writeFile") {  // Node's names for the async forms, which wait for libuv
             diags_.error(nameLoc, "this compiler does not support `" + name + "` yet",
-                         what == "readFile"                             ? "write `try fs::read(path)`, which waits for all of the file. The async `fs::readFile`, for `await`, comes later"
-                         : what == "writeFile" || what == "write"       ? writing + "w\")`"
-                         : what == "append"                             ? writing + "a\")`"
-                         : what == "exists"                             ? "declare C's for now: `extern \"C\" int access(string path, int mode);`, then `access(path, 0) == 0`"
-                         : what == "remove"                             ? "declare C's for now: `extern \"C\" int remove(string path);`, then `remove(path) == 0`"
-                         : what == "list"                               ? "pass the names of the files to the program as arguments: `cplus run app.cplus -- a.txt b.txt`"
-                                                                        : "read all of the file with `try fs::read(path)`, then go through the text",
+                         name == "fs::readFile" ? "write `try fs::read(path)`, which waits for all of the file. The async `fs::readFile`, for `await`, comes later"
+                                                : "write `try fs::write(path, text)`, which waits until it is written. The async `fs::writeFile`, for `await`, comes later",
                          spec::Files);
             return Type::error();
         }
-        if (name.starts_with("fs::") && (name.find("read") != std::string::npos || name.find("Read") != std::string::npos)) {
-            help = "to read all of a file, write `try fs::read(path)`";
+        // What Node, Python and std::filesystem call what fs has
+        static const std::pair<const char*, const char*> kFsNames[] = {
+            {"fs::writeFileSync", "try fs::write(path, text)"}, {"fs::appendFile", "try fs::append(path, text)"}, {"fs::appendFileSync", "try fs::append(path, text)"},
+            {"fs::existsSync", "fs::exists(path)"}, {"fs::mkdir", "try fs::create_directory(path)"}, {"fs::mkdirSync", "try fs::create_directory(path)"},
+            {"fs::makedirs", "try fs::create_directories(path)"}, {"fs::create_dir", "try fs::create_directory(path)"}, {"fs::create_dir_all", "try fs::create_directories(path)"},
+            {"fs::readdir", "try fs::list(dir)"}, {"fs::readdirSync", "try fs::list(dir)"}, {"fs::listdir", "try fs::list(dir)"}, {"fs::read_dir", "try fs::list(dir)"},
+            {"fs::directory_iterator", "try fs::list(dir)"}, {"fs::unlink", "try fs::remove(path)"}, {"fs::unlinkSync", "try fs::remove(path)"},
+            {"fs::rm", "try fs::remove(path)"}, {"fs::rmdir", "try fs::remove(path)"}, {"fs::remove_file", "try fs::remove(path)"}, {"fs::renameSync", "try fs::rename(from, to)"},
+            {"fs::isDirectory", "fs::is_directory(path)"}, {"fs::isdir", "fs::is_directory(path)"}, {"fs::stat", "try fs::file_size(path)"}, {"fs::getsize", "try fs::file_size(path)"},
+            {"fs::openSync", "try fs::open(path, mode)"}, {"fs::write_all", "try fs::write(path, text)"},
+        };
+        const char* fsName = nullptr;
+        for (auto& [habit, instead] : kFsNames)
+            if (name == habit) fsName = instead;
+        if (fsName) {
+            help = "write `" + std::string(fsName) + "`";
+        } else if (name.starts_with("fs::") && (name.find("read") != std::string::npos || name.find("Read") != std::string::npos)) {
+            help = "to read all of a file, write `try fs::read(path)`. For one line at a time, `fs::File f = try fs::open(path, \"r\");`, then `try f.readLine()`";
         } else if (name.find("::") != std::string::npos) {
             const std::string module = name.substr(0, name.find("::"));
             help = "`cplus explain " + module + "` says what the module '" + module + "' has";
@@ -5117,6 +5125,17 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (&call != spawned_) checkCanFail(*fn, nameLoc);
     checkArgs(call.args, *fn, flow, call.loc, q(fn->name));
     checkTaskKept(*fn, call, nameLoc);
+    if (fn->name == "fs::open" && fn->nameLoc.line == 0 && call.args.size() == 2 && call.args[1]->kind == Expr::Kind::StringLit) {
+        const std::string& mode = static_cast<const StringLitExpr&>(*call.args[1]).value;
+        if (mode != "r" && mode != "w" && mode != "a") {  // as C's fopen and Python's open take them
+            const char* instead = mode.find('+') != std::string::npos ? nullptr : mode.find('r') != std::string::npos ? "r" : mode.find('w') != std::string::npos ? "w" : mode.find('a') != std::string::npos ? "a" : nullptr;
+            diags_.error(call.args[1]->loc, "fs::open() opens a file with the mode \"r\", \"w\" or \"a\", but this is " + (plainKey(*call.args[1]).empty() ? std::string("another") : plainKey(*call.args[1])),
+                         instead ? "write \"" + std::string(instead) + "\": a file is always read and written as the bytes it has, so there is no \"b\" or \"t\""
+                         : mode.find('+') != std::string::npos ? std::string("read it with one `fs::open(path, \"r\")`, and write it with another, with \"w\" or \"a\": a file is not open for both")
+                                                               : std::string("write \"r\" to read it, \"w\" to write it from its start, or \"a\" to add to its end"),
+                         spec::Files);
+        }
+    }
     return fn->retType;
 }
 

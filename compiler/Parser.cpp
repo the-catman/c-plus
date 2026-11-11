@@ -1917,11 +1917,17 @@ void Parser::failStd(Loc loc, const Token& name) {
     if (n == "cin")
         fail(loc, "C+ has no std:: namespace", "read a line with `readLine()`, which is null at the end of the input, and a number from it with `try stoi(line)`",
              spec::ReadingInput);
-    if (n == "ifstream" || n == "fstream" || n == "fs" || n == "filesystem")
+    if (n == "ifstream" || n == "fstream" || n == "fs")
         fail(loc, "C+ has no std:: namespace", "to read all of a file, write `import fs;` at the top of the file, then `string text = try fs::read(path);`", spec::Files);
+    if (n == "filesystem")
+        fail(loc, "C+ has no std:: namespace",
+             "write `import fs;` at the top of the file, then the same name with `fs::`, as in `fs::exists(path)` or `try fs::create_directories(path)`, as fs names "
+             "its functions as std::filesystem does",
+             spec::Files);
     if (n == "ofstream")
         fail(loc, "C+ has no std:: namespace",
-             "writing files is planned. Until then, declare C's: `extern \"C\" { struct FILE; FILE* fopen(string path, string mode); int fputs(string text, FILE* f); int fclose(FILE* f); }`",
+             "to write a file, write `import fs;` at the top of the file, then `try fs::write(path, text);`. To write it a part at a time, `fs::File f = try "
+             "fs::open(path, \"w\");`, then `try f.write(text);`",
              spec::Files);
     if (n == "weak_ptr")
         fail(loc, "C+ has no std:: namespace", "write `weak<Node>`, which works like std::weak_ptr", spec::Weak);
@@ -2264,7 +2270,10 @@ void Parser::checkUnknownType() {
     else if (t.text == "ifstream" || t.text == "fstream")
         fail(t.loc, "unknown type '" + t.text + "'", "to read all of a file, write `import fs;` at the top of the file, then `string text = try fs::read(path);`", spec::Files);
     else if (t.text == "ofstream")
-        notYet(t.loc, "writing files", "declare C's for now: `extern \"C\" { struct FILE; FILE* fopen(string path, string mode); int fputs(string text, FILE* f); int fclose(FILE* f); }`");
+        fail(t.loc, "unknown type 'ofstream'",
+             "to write a file, write `import fs;` at the top of the file, then `try fs::write(path, text);`. To write it a part at a time, `fs::File f = try "
+             "fs::open(path, \"w\");`, then `try f.write(text);`",
+             spec::Files);
     else
         help = "write one of the types: int, long, double, float, bool, char, string, void, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the "
                "structs and classes of the program";

@@ -1,0 +1,112 @@
+// Writing, appending, listing, folders, renaming and sizes, in the test's own folder. The program runs more than once
+// there, so it first takes away what a run before left.
+import fs;
+
+void clear(string path) throws {
+    if (fs::is_directory(path)) {
+        for (auto name : try fs::list(path)) try clear(path + "/" + name);
+    }
+    try fs::remove(path);
+}
+
+void forms(string path, string text, string dir, string from, string to) throws {
+    try fs::write(path, text);
+    try fs::append(path, text);
+    bool there = fs::exists(path);
+    bool folder = fs::is_directory(path);
+    long size = try fs::file_size(path);
+    try fs::rename(from, to);
+    vector<string> names = try fs::list(dir);
+    bool removed = try fs::remove(path);
+    bool made = try fs::create_directory(path);
+    bool all = try fs::create_directories(path);
+}
+
+int main() throws {
+    try clear("work");
+    bool made = try fs::create_directory("work");
+    println("{} {}", made, try fs::create_directory("work"));
+    // expect: true false
+
+    try fs::write("work/notes.txt", "milk\neggs\n");
+    try fs::append("work/notes.txt", "bread\n");
+    println("{}", try fs::read("work/notes.txt"));
+    // expect: milk
+    // expect: eggs
+    // expect: bread
+    // expect:
+    println("{}", try fs::file_size("work/notes.txt"));
+    // expect: 16
+
+    // write replaces what was there, and append makes a file that is not
+    try fs::write("work/notes.txt", "x");
+    println("{}", try fs::read("work/notes.txt"));
+    // expect: x
+    try fs::append("work/new.txt", "made");
+    println("{}", try fs::read("work/new.txt"));
+    // expect: made
+
+    // The bytes go in as they are, zero bytes and all
+    string bytes = "a" + string(1, '\0') + "b\r\n";
+    try fs::write("work/bytes.bin", bytes);
+    string back = try fs::read("work/bytes.bin");
+    println("{} {} {}", back.size(), back == bytes, try fs::file_size("work/bytes.bin"));
+    // expect: 5 true 5
+    try fs::write("work/empty.txt", "");
+    println("{} {}", (try fs::read("work/empty.txt")).size(), try fs::file_size("work/empty.txt"));
+    // expect: 0 0
+
+    println("{} {} {}", fs::exists("work"), fs::exists("work/new.txt"), fs::exists("work/gone.txt"));
+    // expect: true true false
+    println("{} {} {}", fs::is_directory("work"), fs::is_directory("work/new.txt"), fs::is_directory("work/gone"));
+    // expect: true false false
+    println("{} {}", fs::exists(""), fs::is_directory(""));
+    // expect: false false
+
+    // Names only, without "." and "..", in the order of their bytes
+    try fs::write("work/B.txt", "");
+    try fs::write("work/a.txt", "");
+    try fs::create_directory("work/sub");
+    println("{}", try fs::list("work"));
+    // expect: ["B.txt", "a.txt", "bytes.bin", "empty.txt", "new.txt", "notes.txt", "sub"]
+    println("{}", try fs::list("work/sub"));
+    // expect: []
+    println("{}", (try fs::list(".")).size() >= 1);
+    // expect: true
+
+    // create_directories makes each folder on the way, and says whether it made the last
+    println("{}", try fs::create_directories("work/sub/one/two/three"));
+    // expect: true
+    println("{}", try fs::create_directories("work/sub/one/two/three/"));
+    // expect: false
+    println("{}", try fs::create_directories("work/sub/one"));
+    // expect: false
+    println("{}", fs::is_directory("work/sub/one/two/three"));
+    // expect: true
+
+    // rename moves a file, replaces a file of the new name, and moves a folder
+    try fs::rename("work/new.txt", "work/moved.txt");
+    println("{} {}", fs::exists("work/new.txt"), try fs::read("work/moved.txt"));
+    // expect: false made
+    try fs::rename("work/moved.txt", "work/notes.txt");
+    println("{}", try fs::read("work/notes.txt"));
+    // expect: made
+    try fs::rename("work/sub/one", "work/two");
+    println("{}", try fs::list("work/two"));
+    // expect: ["two"]
+
+    // remove takes away a file or an empty folder, and gives false when nothing was there
+    println("{} {}", try fs::remove("work/a.txt"), try fs::remove("work/a.txt"));
+    // expect: true false
+    println("{}", try fs::remove("work/sub"));
+    // expect: true
+    println("{}", try fs::remove("work/no/such/thing"));
+    // expect: false
+    println("{}", try fs::remove("work/notes.txt/inside"));
+    // expect: false
+
+    try clear("work");
+    println("{}", fs::exists("work"));
+    // expect: false
+    return 0;
+}
