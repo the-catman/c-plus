@@ -3040,8 +3040,22 @@ void Parser::parseRecord(StructDecl* into) {
 }
 
 void Parser::parseMemberInits(FuncDecl& ctor) {
+    const std::string& ownName = ctor.owner->templateName.empty() ? ctor.owner->name : ctor.owner->templateName;
     do {
         const Token& field = expect(Tok::Ident, "for the field name in the initializer list");
+        if (field.text == ownName && check(Tok::LParen)) {  // `User(n, 0)`: another constructor builds it
+            FuncDecl::BaseInit other{ctor.owner->name, field.loc, {}};
+            advance();
+            if (!check(Tok::RParen)) {
+                do other.args.push_back(parseExpr());
+                while (match(Tok::Comma));
+            }
+            expect(Tok::RParen, "to close the values for the other constructor");
+            if (ctor.delegation)
+                diags_.error(field.loc, "a constructor can hand its work to one other constructor", "keep one `" + ownName + "(...)`", spec::Overloading);
+            ctor.delegation = std::move(other);
+            continue;
+        }
         std::string baseName;  // the whole name, also for `Source(x)` or `Source<int>(x)` when it is `Source<int>`
         for (auto& base : ctor.owner->baseNames)
             if (base.name == field.text || base.name.rfind(field.text + "<", 0) == 0) baseName = base.name;
@@ -3079,6 +3093,9 @@ void Parser::parseMemberInits(FuncDecl& ctor) {
         }
         ctor.memberInits.push_back(std::move(init));
     } while (match(Tok::Comma));
+    if (ctor.delegation && (!ctor.memberInits.empty() || !ctor.baseInits.empty()))
+        diags_.error(ctor.delegation->loc, "a constructor that hands its work to another one has nothing else in its list",
+                     "set the other fields in the body, `{ ... }`, or in the constructor it calls", spec::Overloading);
 }
 
 void Parser::parseMember(StructDecl& sd, Access& access) {
@@ -3239,12 +3256,8 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         if (check(Tok::Ident) && peek().text == "noexcept")
             fail(peek().loc, "C+ has no noexcept", "remove it: a constructor cannot fail", spec::Errors);
         ctor->body = parseBlock(ctor.get());
-        if (sd.constructor) {
-            diags_.error(ctor->nameLoc, "this compiler does not support more than one constructor yet",
-                         "keep one, and give the fields default values for what it does not set", spec::Overloading);
-            return;
-        }
-        sd.constructor = ctor.get();
+        if (!sd.constructor) sd.constructor = ctor.get();
+        sd.constructors.push_back(ctor.get());
         sd.methods.push_back(std::move(ctor));
         return;
     }

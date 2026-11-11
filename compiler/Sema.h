@@ -193,8 +193,8 @@ private:
     // Checks arguments against parameters; `what` names the callee in messages.
     void checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow, Loc loc, const std::string& what);
     // Overloading: the function a call means, of those with its name, and its arguments checked against it.
-    FuncDecl* chooseOverload(const std::string& name, const std::string& calledAs, const StructDecl* owner, const std::vector<FuncDecl*>& candidates, std::vector<ExprPtr>& args, Flow& flow, Loc loc);
-    void checkChosenArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow);
+    FuncDecl* chooseOverload(const std::string& name, const std::string& calledAs, const StructDecl* owner, const std::vector<FuncDecl*>& candidates, const std::vector<Expr*>& args, Flow& flow, Loc loc);
+    void checkChosenArgs(const std::vector<Expr*>& args, const FuncDecl& fn, Flow& flow);
     void checkOverloadPair(const FuncDecl& first, const FuncDecl& second, bool& sameParams);
     // One value given when building a struct or class: `Type(args)` or a `{ }` list.
     struct ConstructArg {
@@ -205,7 +205,8 @@ private:
         bool checked = false;  // its type is already known
     };
     // `asBase` when a constructor is building its base class, not a new object.
-    void checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc, bool asBase = false);
+    // Checks the values that build a `sd`, and gives the constructor that takes them, if it has constructors.
+    const FuncDecl* checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc, bool asBase = false);
     // Whether the code being checked can use a member `sd` declares, reached through a value
     // of type `through`. As in C++, a deriving class sees protected members of its own objects.
     bool canAccess(const StructDecl& sd, Access access, const StructDecl* through) const;

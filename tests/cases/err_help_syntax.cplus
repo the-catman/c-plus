@@ -12,7 +12,6 @@ struct TwoConstructors {
     int x = 0;
     TwoConstructors() {}
     TwoConstructors(int a) : x(a) {}
-    // error: keep one, and give the fields default values for what it does not set
 };
 struct AutoField {
     auto x = 1;

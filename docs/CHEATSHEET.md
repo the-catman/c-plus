@@ -186,7 +186,7 @@ long square(long n) { return n * n; }
 | `const User u` freezes the object | `const` only stops `u` from referring to another object |
 | `u1 == u2` compares two objects' fields | it is true only for the same object, like `===` in JS. Compare fields instead |
 | `bool operator==(...) = default` | not needed: every struct already has `==` |
-| several constructors | one per type for now; leave it out and use field defaults instead |
+| several constructors | as in C++, chosen as overloads are, and one can hand its work to another in its list, as in C++. There are no copy constructors: a struct copies field by field, and a class object is shared |
 | `auto p = {1, 2};` | `auto p = Point{1, 2};`, since a bare `{ }` needs a known type |
 | `int n = v.size();` | error: `size()` is a `long`, since there are no unsigned types. Write `long n` or `auto n`; `i < v.size()` with an `int i` is fine |
 | `v[i]` past the end is UB | every index is checked and a bad one **stops the program** with file:line; so do `pop_back()`, `front()`, `back()` on an empty vector |
@@ -246,7 +246,7 @@ long square(long n) { return n * n; }
 | Reflection | reading a field through its `reflect::Field`, methods |
 | Memory | pointers into vectors and strings |
 | Types | unions, unsigned integers, `const` fields, types nested in a type or a function, `short` and other small integers, enums held in them |
-| Functions | more than one constructor, default arguments, `auto` parameters and return types, lambdas |
+| Functions | default arguments, `auto` parameters and return types, lambdas |
 | Statements | a declaration before a switch's value: `switch (auto k = f(); k)` |
 | Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
 | Containers | iterators, and erasing a range, on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |

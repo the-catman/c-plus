@@ -1,0 +1,54 @@
+// Constructors that cannot be told apart, copy constructors, delegation that goes nowhere, and calls that fit none or two.
+class User {
+public:
+    string name = "";
+    User(string n) : name(n) {}
+    User(const string& n) : name(n) {}
+    User(int a) {}
+    User(int b) {}
+    User(const User& other) {}
+};
+
+struct P {
+    int x = 0;
+    P(P other) {}
+    P(int a, long b) {}
+    P(long a, int b) {}
+};
+
+class Base {
+public:
+    Base(int a) {}
+    Base(string s) {}
+};
+class Derived : public Base {
+public:
+    int k = 0;
+};
+
+class Loop {
+public:
+    int n = 0;
+    Loop(int a) : Loop(a) {}
+    Loop(string s) : Loop(1), n(2) {}
+    Loop(long a) : Loop(true) {}
+    Loop(bool b) : Loop(long(1)) {}
+};
+
+int main() {
+    P p = P(1, 2);
+    User u = User(1.5);
+    return 0;
+}
+// error: `User(const string& n)` and `User(string n)` would fit every call as well as each other
+// error: 'User' already has a constructor that takes these parameters
+// error: C+ has no copy constructors
+// error: remove it: a class object is shared, never copied. For a separate copy, write a method that makes one, such as `User clone() const`
+// error: remove it: a struct is copied field by field, always
+// error: the constructors of 'Base' need arguments, so 'Derived' must pass them
+// error: this constructor hands its work to itself
+// error: a constructor that hands its work to another one has nothing else in its list
+// error: these constructors hand their work to each other, round and round
+// error: these arguments fit the constructors `P(int a, long b)` and `P(long a, int b)` as well as each other
+// error: convert an argument so that one fits better, as in `P(1, long(2))`
+// error: no constructor of 'User' takes (double)

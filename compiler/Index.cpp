@@ -157,6 +157,10 @@ private:
                     if (base && (base->type.name == init.name || base->name == init.name)) add(init.loc, describe(*base), base->nameLoc);
             for (auto& a : init.args) expr(a.get());
         }
+        if (f.delegation) {  // `User(n, 0)`: the constructor it hands its work to
+            if (f.delegation->ctor) add(f.delegation->loc, describe(*f.delegation->ctor), f.delegation->ctor->nameLoc);
+            for (auto& a : f.delegation->args) expr(a.get());
+        }
         if (f.body) stmt(f.body.get());
     }
 

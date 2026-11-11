@@ -421,6 +421,7 @@ struct CallExpr : Expr {
     BasePath path;                           // set with method: from the class of `this` to the one declaring it
     std::vector<TemplateArg> templateArgs;   // `max<long>(a, b)`
     const StructDecl* constructs = nullptr;  // set by Sema for `TypeName(...)`
+    const FuncDecl* ctor = nullptr;          // set by Sema: the constructor of `constructs` that runs, if it has any
     bool copies = false;                     // set by Sema for `Point(p)` where `p` is a Point
     bool clears = false;                     // `__move(x)`, which always leaves x empty
     const Type* uniqueType = nullptr;        // `unique<Node>(args)`, which builds a new Node
@@ -494,6 +495,7 @@ struct InitListExpr : Expr {
     };
     const Type* explicitType = nullptr;  // `Point{...}`, `vector<int>{...}` or `array<int, 3>{...}`
     FuncDecl* mapFill = nullptr;         // set by Sema for `{{"a", 1}}` as a hashmap: puts the entries in it
+    const FuncDecl* ctor = nullptr;      // set by Sema: the constructor that the elements are the arguments of, if the type has any
     std::vector<Element> elements;
     explicit InitListExpr(Loc l) : Expr(Kind::InitList, l) {}
 };
@@ -770,8 +772,10 @@ struct FuncDecl {
         std::string name;
         Loc loc;
         std::vector<ExprPtr> args;
+        const FuncDecl* ctor = nullptr;  // set by Sema: the base class's constructor that runs, if it has any
     };
     std::vector<BaseInit> baseInits;
+    std::optional<BaseInit> delegation;  // `User(string n) : User(n, 0) {}`: another constructor of its type builds the object
     std::unique_ptr<VarDecl> thisDecl;  // stands for `this` in definite assignment; set by Sema
 
     // What the body returns, which for an async function is not what a call gives.
@@ -831,8 +835,17 @@ struct StructDecl {
     std::vector<FuncDecl*> vtable;
     std::vector<FieldDecl> fields;
     std::vector<std::unique_ptr<FuncDecl>> methods;
-    FuncDecl* constructor = nullptr;
+    FuncDecl* constructor = nullptr;         // the first of its constructors, if it has any
+    std::vector<FuncDecl*> constructors;     // all of them, in the order written, which are overloads of each other
     FuncDecl* destructor = nullptr;
+    // The constructor that takes no arguments, which builds a value where none is given, or null.
+    const FuncDecl* defaultConstructor() const {
+        for (const FuncDecl* c : constructors)
+            if (c->params.empty()) return c;
+        return nullptr;
+    }
+    // Whether it has constructors, none of which takes no arguments, so that a value of it cannot be made without them.
+    bool needsConstructorArgs() const { return !constructors.empty() && !defaultConstructor(); }
     // `enum class Color : long { Red = 1, Green };`. An enum is never `defined`, so what is said about
     // structs and classes passes it by; its type has Kind::Enum.
     bool isEnum = false;

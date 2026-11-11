@@ -1,0 +1,53 @@
+// More than one constructor, chosen as functions are, and one that hands its work to another.
+class User {
+public:
+    string name = "";
+    int age = 0;
+    User() : name("nobody") {}
+    User(string n) : User(n, 0) {}  // the other one builds it, then this body runs
+    User(string n, int a) : name(n), age(a) {}
+};
+
+class Admin : public User {
+public:
+    int level = 1;
+    Admin(string n) : User(n, 99) {}
+    Admin(int l) : User("root"), level(l) {}
+};
+
+class Guest : public User {};  // built with User's constructor that takes nothing
+
+struct Size {
+    long w = 0;
+    long h = 0;
+    Size() {}
+    Size(long side) : w(side), h(side) {}
+    Size(long a, long b) : w(a), h(b) {}
+    Size(const string& text) : Size(text.size()) { w += 1; }
+};
+
+int main() {
+    User a = User();
+    User b = User("ada");
+    User c = User("bob", 30);
+    println("{} {}/{} {}/{}", a.name, b.name, b.age, c.name, c.age);
+    // expect: nobody ada/0 bob/30
+    Admin x = Admin("eve");
+    Admin y = Admin(5);
+    println("{} {} {} {} {}", x.name, x.age, y.name, y.age, y.level);
+    // expect: eve 99 root 0 5
+    Guest g = Guest();
+    println("{}", g.name);
+    // expect: nobody
+    Size s = Size(3);
+    Size t = Size{2, 5};
+    Size u;
+    Size w = Size("four");
+    vector<Size> sizes = {{1, 2}, {7}};
+    println("{}x{} {}x{} {}x{} {}x{} {}", s.w, s.h, t.w, t.h, u.w, u.h, w.w, w.h, sizes[1].h);
+    // expect: 3x3 2x5 0x0 5x4 7
+    array<Size, 2> pair;
+    println("{}", pair[1].w);
+    // expect: 0
+    return 0;
+}

@@ -142,6 +142,11 @@ static bool showsAsWritten(const std::string& text) {
 
 static std::string spelled(const Expr& e, const std::string& fallback = "opt");
 static std::vector<FuncDecl*> methodsNamed(const StructDecl& at, const std::string& name);
+static std::vector<Expr*> exprsOf(const std::vector<ExprPtr>& args) {
+    std::vector<Expr*> out;
+    for (auto& a : args) out.push_back(a.get());
+    return out;
+}
 
 // A char as a literal would write it: `'a'`, `'\n'`, `'\''`, or `char(7)` for one that has no escape.
 static std::string charLiteral(unsigned char c) {
@@ -853,8 +858,7 @@ static bool needsValue(const Type* t, int depth = 0) {
     if (t->isEnum()) return t->decl->zeroEnumerator() < 0;  // what a value of it starts as, without one
 
     if (t->isArray()) {  // its elements are made one by one, which may take a value or a constructor's arguments
-        const FuncDecl* ctor = t->elem->isStruct() ? t->elem->decl->constructor : nullptr;
-        return t->length > 0 && depth <= 32 && ((ctor && !ctor->params.empty()) || needsValue(t->elem, depth + 1));
+        return t->length > 0 && depth <= 32 && ((t->elem->isStruct() && t->elem->decl->needsConstructorArgs()) || needsValue(t->elem, depth + 1));
     }
     if (!t->isStruct() || depth > 32) return false;
     for (auto& f : t->decl->fields)
@@ -1679,6 +1683,27 @@ void Sema::checkConstant(VarDecl& c) {
 void Sema::checkMembers(StructDecl& sd) {
     if (!sd.constructor)
         for (const StructDecl* base : sd.bases) checkBaseWithoutValues(sd, *base, sd.nameLoc);
+    for (size_t i = 0; i < sd.constructors.size(); ++i) {
+        FuncDecl& c = *sd.constructors[i];
+        if (c.params.size() == 1 && c.params[0]->declType == &sd.type) {  // `Point(const Point& p)`, which C+ would never call
+            diags_.error(c.nameLoc, "C+ has no copy constructors",
+                         sd.isClass ? "remove it: a class object is shared, never copied. For a separate copy, write a method that makes one, such as `" + sd.name + " clone() const`"
+                                    : "remove it: a struct is copied field by field, always",
+                         spec::Overloading);
+            continue;
+        }
+        bool clash = false;
+        for (size_t j = 0; j < i && !clash; ++j) {
+            bool same = false;
+            checkOverloadPair(*sd.constructors[j], c, same);
+            if (same) {
+                diags_.error(c.nameLoc, q(sd.name) + " already has a constructor that takes these parameters", "remove one of them, or give them different parameters", spec::Overloading);
+                diags_.note(sd.constructors[j]->nameLoc, "the first one is here");
+                clash = true;
+            }
+        }
+        if (sd.constructors.size() > 1) c.overloaded = true;
+    }
     std::unordered_map<std::string, FuncDecl*> seen;
     for (auto& m : sd.methods) {
         if (m->role != FuncDecl::Role::Method) continue;
@@ -1949,9 +1974,11 @@ void Sema::checkOverrides(StructDecl& sd) {
 }
 
 void Sema::checkBaseWithoutValues(const StructDecl& sd, const StructDecl& base, Loc loc) {
-    if (const FuncDecl* ctor = base.constructor) {
-        if (!ctor->params.empty())
-            diags_.error(loc, "the constructor of " + q(base.name) + " needs arguments, so " + q(sd.name) + " must pass them",
+    if (base.constructor) {
+        const FuncDecl* ctor = base.defaultConstructor();
+        if (!ctor)
+            diags_.error(loc, std::string(base.constructors.size() > 1 ? "the constructors of " : "the constructor of ") + q(base.name) + " need" +
+                                  (base.constructors.size() > 1 ? "" : "s") + " arguments, so " + q(sd.name) + " must pass them",
                          "write a constructor that does: `" + sd.name + "(...) : " + base.name + "(...) { }`",
                          spec::Inheritance);
         else if (ctor->access == Access::Private)
@@ -2260,7 +2287,7 @@ void Sema::foldConstexpr(VarDecl& v) {
 // Whether a value of type `t` can be made without being given one: what `vector<T>(n)`
 // fills its elements with.
 static bool hasDefault(const Type* t) {
-    if (t->isStruct()) return !needsValue(t) && (!t->decl->constructor || t->decl->constructor->params.empty());
+    if (t->isStruct()) return !needsValue(t) && !t->decl->needsConstructorArgs();
     return !t->isClass() && !needsValue(t);
 }
 
@@ -2431,7 +2458,21 @@ void Sema::checkFunction(FuncDecl& fn) {
         fn_ = nullptr;
         return;
     }
-    if (isCtor) {
+    if (isCtor && fn.delegation) {  // `User(string n) : User(n, 0)`: the other one builds it all, before the body runs
+        const StructDecl& sd = *fn.owner;
+        std::vector<ConstructArg> args;
+        for (auto& a : fn.delegation->args) args.push_back({"", a->loc, a.get(), nullptr});
+        const FuncDecl* target = checkConstruction(sd, std::move(args), flow, fn.delegation->loc, true);
+        for (const FuncDecl* t = target; t; t = t->delegation ? t->delegation->ctor : nullptr)
+            if (t == &fn) {
+                diags_.error(fn.delegation->loc, target == &fn ? "this constructor hands its work to itself" : "these constructors hand their work to each other, round and round",
+                             "make one of them build the object itself, from its fields", spec::Overloading);
+                target = nullptr;
+                break;
+            }
+        fn.delegation->ctor = target;
+        for (const FieldDecl* f : allFields(sd)) markAssigned(flow, fn.thisDecl.get(), f->name);
+    } else if (isCtor) {
         // Fields are initialized in the order they are declared, whatever the order of
         // the list, as in C++, so a value in the list can only read the fields before its own.
         const StructDecl& sd = *fn.owner;
@@ -2448,7 +2489,7 @@ void Sema::checkFunction(FuncDecl& fn) {
             std::vector<ConstructArg> args;
             for (auto& a : given->args) args.push_back({"", a->loc, a.get(), nullptr});
             buildingBase_ = base;
-            checkConstruction(*base, std::move(args), flow, given->loc, true);
+            given->ctor = checkConstruction(*base, std::move(args), flow, given->loc, true);
             buildingBase_ = nullptr;
         }
         for (auto& init : fn.baseInits)  // a name that turned out not to be a base class was reported
@@ -3756,10 +3797,10 @@ void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
     }
     std::vector<ConstructArg> args;
     for (auto& el : list.elements) args.push_back({el.designator, el.loc, el.value.get(), &el.fieldIndex});
-    checkConstruction(*type->decl, std::move(args), flow, list.loc);  // `unique<Node>{...}` builds a Node
+    list.ctor = checkConstruction(*type->decl, std::move(args), flow, list.loc);  // `unique<Node>{...}` builds a Node
 }
 
-void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc, bool asBase) {
+const FuncDecl* Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc, bool asBase) {
     auto loose = [&](const ConstructArg& a) {
         if (!a.checked) checkLooseValue(*a.value, flow);
     };
@@ -3772,11 +3813,10 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
         diags_.error(loc, "cannot create a " + q(sd.name) + " object, because its method " + q(pure->name) +
                               (pure->owner == &sd ? "" : " from " + q(pure->owner->name)) + " has no body",
                      "create an object of a class that derives from it and overrides " + q(pure->name), spec::Inheritance);
-        return;
+        return nullptr;
     }
     // With a constructor, the values are its arguments, in order.
     if (const FuncDecl* ctor = sd.constructor) {
-        if (!canAccess(sd, ctor->access, asBase ? owner() : nullptr)) reportAccess(sd, sd.name + "(...)", true, ctor->access, loc);
         for (auto& a : args)
             if (!a.designator.empty()) {
                 diags_.error(a.loc, q(sd.name) + " has a constructor, so its values are passed in order",
@@ -3784,13 +3824,25 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
                              spec::Classes);
                 break;
             }
+        if (sd.constructors.size() > 1) {  // the one the arguments fit best, as with functions
+            std::vector<Expr*> values;
+            for (auto& a : args) values.push_back(a.value);
+            ctor = chooseOverload(sd.name, sd.name, &sd, sd.constructors, values, flow, loc);
+            if (!ctor) return nullptr;
+            if (!canAccess(sd, ctor->access, asBase ? owner() : nullptr)) reportAccess(sd, sd.name + "(...)", true, ctor->access, loc);
+            for (size_t i = 0; i < args.size(); ++i)
+                if (args[i].fieldIndex) *args[i].fieldIndex = (int)i;
+            checkChosenArgs(values, *ctor, flow);
+            return ctor;
+        }
+        if (!canAccess(sd, ctor->access, asBase ? owner() : nullptr)) reportAccess(sd, sd.name + "(...)", true, ctor->access, loc);
         if (args.size() != ctor->params.size()) {
             for (auto& a : args) loose(a);
             diags_.error(loc, "the constructor of " + q(sd.name) + " takes " + std::to_string(ctor->params.size()) +
                                   " argument" + (ctor->params.size() == 1 ? "" : "s") + " but " +
                                   std::to_string(args.size()) + (args.size() == 1 ? " was" : " were") + " given",
                          "its signature is `" + signature(*ctor).substr(sd.name.size() + 1) + "`", spec::Classes);
-            return;
+            return nullptr;
         }
         for (size_t i = 0; i < args.size(); ++i) {
             if (args[i].fieldIndex) *args[i].fieldIndex = (int)i;
@@ -3802,7 +3854,7 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
             if (ctor->params[i]->isRef && !ctor->params[i]->isConst)
                 checkRefBinding(*args[i].value, ctor->params[i]->declType, "parameter " + q(ctor->params[i]->name) + " of the " + q(sd.name) + " constructor");
         }
-        return;
+        return ctor;
     }
 
     if (!sd.bases.empty() && !args.empty()) {
@@ -3811,7 +3863,7 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
                      sd.bases[0]->isInterface ? "write one: `" + sd.name + "(...) { ... }`"
                                               : "write one: `" + sd.name + "(...) : " + sd.bases[0]->name + "(...) { }`, with `: " + sd.bases[0]->name + "(...)` if the base class needs values",
                      spec::Inheritance);
-        return;
+        return nullptr;
     }
 
     // Without one, the values fill the fields, by position or by name.
@@ -3858,7 +3910,7 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
             loose(a);
         }
     }
-    if (anyNamed && anyPositional) return;
+    if (anyNamed && anyPositional) return nullptr;
     for (size_t i = 0; i < sd.fields.size(); ++i) {
         const FieldDecl& f = sd.fields[i];
         if (seen[i] || f.defaultValue || !needsValue(f.type)) continue;
@@ -3866,6 +3918,7 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
                      "give it a value here, or give the field a default in " + q(sd.name) + cycleHelp(f.type, f.name, sd),
                      spec::Classes);
     }
+    return nullptr;
 }
 
 const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::string& path) {
@@ -5329,7 +5382,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         call.constructs = call.uniqueType->decl;
         std::vector<ConstructArg> args;
         for (auto& a : call.args) args.push_back({"", a->loc, a.get(), nullptr});
-        checkConstruction(*call.constructs, std::move(args), flow, call.loc);
+        call.ctor = checkConstruction(*call.constructs, std::move(args), flow, call.loc);
         return call.uniqueType;
     }
     if (call.vectorType) return checkVectorConstruction(call, flow);
@@ -5345,7 +5398,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         if (FuncDecl* m = found.empty() ? nullptr : found.back()->ownMethod(call.callee)) {
             const std::vector<FuncDecl*> named = methodsNamed(*found.back(), call.callee);
             const bool chosen = named.size() > 1;
-            if (chosen && !(m = chooseOverload(call.callee, call.callee, found.back(), named, call.args, flow, nameLoc))) return Type::error();
+            if (chosen && !(m = chooseOverload(call.callee, call.callee, found.back(), named, exprsOf(call.args), flow, nameLoc))) return Type::error();
             call.method = m;
             call.path = std::move(found);
             requestMethod(m);
@@ -5355,7 +5408,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             if (!m->isConst && fn_->isConst)
                 diags_.error(nameLoc, "const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
                              "remove `const` from " + q(fn_->name) + ", or mark " + q(m->name) + " `const` if it does not change any field", spec::Methods);
-            if (chosen) checkChosenArgs(call.args, *m, flow);
+            if (chosen) checkChosenArgs(exprsOf(call.args), *m, flow);
             else checkArgs(call.args, *m, flow, call.loc, q(m->name));
             checkTaskKept(*m, call, nameLoc);
             return m->retType;
@@ -5398,8 +5451,8 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         if (call.args.size() == 1 && call.args[0]->kind != Expr::Kind::InitList) {
             const Type* given = checkExpr(*call.args[0], flow);
             checked = true;
-            bool ctorTakes = sd.constructor && sd.constructor->params.size() == 1 &&
-                             canConvert(given, sd.constructor->params[0]->declType);
+            bool ctorTakes = false;
+            for (const FuncDecl* c : sd.constructors) ctorTakes = ctorTakes || (c->params.size() == 1 && canConvert(given, c->params[0]->declType));
             bool fieldTakes = !sd.constructor && sd.bases.empty() && !sd.fields.empty() && canConvert(given, sd.fields[0].type);
             if (!given->isError() && !ctorTakes && !fieldTakes && canConvert(given, &sd.type)) {
                 rejectCopy(*call.args[0]);
@@ -5409,7 +5462,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         }
         std::vector<ConstructArg> args;
         for (auto& a : call.args) args.push_back({"", a->loc, a.get(), nullptr, checked});
-        checkConstruction(sd, std::move(args), flow, call.loc);
+        call.ctor = checkConstruction(sd, std::move(args), flow, call.loc);
         return &sd.type;
     }
 
@@ -5541,11 +5594,11 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     }
     FuncDecl* fn = it->second;
     if (fn->overloaded) {
-        fn = chooseOverload(call.callee, call.callee, nullptr, overloads_.at(call.callee), call.args, flow, nameLoc);
+        fn = chooseOverload(call.callee, call.callee, nullptr, overloads_.at(call.callee), exprsOf(call.args), flow, nameLoc);
         if (!fn) return Type::error();
         call.target = fn;
         if (&call != spawned_) checkCanFail(*fn, nameLoc);
-        checkChosenArgs(call.args, *fn, flow);
+        checkChosenArgs(exprsOf(call.args), *fn, flow);
         checkTaskKept(*fn, call, nameLoc);
         return fn->retType;
     }
@@ -5620,7 +5673,8 @@ void Sema::checkOverloadPair(const FuncDecl& first, const FuncDecl& second, bool
         return;
     }
     if (!alwaysBoth) return;
-    diags_.error(second.nameLoc, "`" + signature(second) + "` and `" + signature(first) + "` would fit every call as well as each other",
+    auto sig = [](const FuncDecl& f) { return f.role == FuncDecl::Role::Constructor ? signature(f).substr(f.owner->name.size() + 1) : signature(f); };
+    diags_.error(second.nameLoc, "`" + sig(second) + "` and `" + sig(first) + "` would fit every call as well as each other",
                  "keep one of them: a `const T&` parameter takes all that a `T` does", spec::Overloading);
     diags_.note(first.nameLoc, "the other one is here");
 }
@@ -5628,10 +5682,12 @@ void Sema::checkOverloadPair(const FuncDecl& first, const FuncDecl& second, bool
 // The function of a name that a call's arguments fit best (see Fit), or null after an error that says why there is none.
 // `calledAs` is the call as written up to its arguments, as `describe` or `p.scale`, and `owner` the type of a method's.
 FuncDecl* Sema::chooseOverload(const std::string& name, const std::string& calledAs, const StructDecl* owner, const std::vector<FuncDecl*>& candidates,
-                               std::vector<ExprPtr>& args, Flow& flow, Loc loc) {
+                               const std::vector<Expr*>& args, Flow& flow, Loc loc) {
     bool broken = false;
-    for (auto& a : args)
-        if (!typelessList(*a)) broken = checkExpr(*a, flow)->isError() || broken;
+    for (Expr* a : args)  // what is already checked, as `Point(p)` may be, is not checked again
+        if (!typelessList(*a)) broken = (a->type ? a->type : checkExpr(*a, flow))->isError() || broken;
+    const bool ctor = !candidates.empty() && candidates[0]->role == FuncDecl::Role::Constructor;
+    auto sig = [&](const FuncDecl& f) { return ctor ? signature(f).substr(f.owner->name.size() + 1) : signature(f); };  // `Point(int x)`
     auto fitOf = [&](const Expr& arg, const VarDecl& param) -> std::optional<Fit> {
         const Type* to = param.declType;
         const bool changes = param.isRef && !param.isConst;
@@ -5678,7 +5734,7 @@ FuncDecl* Sema::chooseOverload(const std::string& name, const std::string& calle
         for (auto& [g, other] : fitting) best = best && (g == f || beats(fits, other));
         if (best) return f;
     }
-    for (auto& a : args)
+    for (Expr* a : args)
         if (typelessList(*a)) checkLooseValue(*a, flow);
     if (broken) {  // already said; the first that takes as many arguments keeps what follows quiet
         for (FuncDecl* f : candidates)
@@ -5691,10 +5747,12 @@ FuncDecl* Sema::chooseOverload(const std::string& name, const std::string& calle
     if (fitting.empty()) {
         std::string list;
         for (size_t i = 0; i < candidates.size(); ++i)
-            list += (i == 0 ? "" : i + 1 == candidates.size() ? " and " : ", ") + std::string("`") + signature(*candidates[i]) + "`";
-        diags_.error(loc, owner ? q(owner->name) + " has no method " + q(name) + " that takes " + given : "no function named " + q(name) + " takes " + given,
+            list += (i == 0 ? "" : i + 1 == candidates.size() ? " and " : ", ") + std::string("`") + sig(*candidates[i]) + "`";
+        diags_.error(loc, ctor    ? "no constructor of " + q(owner->name) + " takes " + given
+                          : owner ? q(owner->name) + " has no method " + q(name) + " that takes " + given
+                                  : "no function named " + q(name) + " takes " + given,
                      "there are " + std::to_string(candidates.size()) + ": " + list + ". Give one of them what it takes, or add one that takes these", spec::Overloading);
-        for (FuncDecl* f : candidates) diags_.note(f->nameLoc, "`" + signature(*f) + "` is here");
+        for (FuncDecl* f : candidates) diags_.note(f->nameLoc, "`" + sig(*f) + "` is here");
         return nullptr;
     }
     // The ones that no other beats: two of them are named, with the argument that would choose between them.
@@ -5723,15 +5781,16 @@ FuncDecl* Sema::chooseOverload(const std::string& name, const std::string& calle
         example += (i ? ", " : "") + text;
     }
     example += ")";
-    diags_.error(loc, "this call to " + q(name) + " fits `" + signature(a) + "` and `" + signature(b) + "` as well as each other",
+    diags_.error(loc, (ctor ? "these arguments fit the constructors `" : "this call to " + q(name) + " fits `") + sig(a) + "` and `" + sig(b) + "` as well as each other",
                  converted ? "convert an argument so that one fits better, as in `" + example + "`" : "rename one of them",
                  spec::Overloading);
-    for (auto* one : top) diags_.note(one->first->nameLoc, "`" + signature(*one->first) + "` is here");
+    for (auto* one : top) diags_.note(one->first->nameLoc, "`" + sig(*one->first) + "` is here");
     return nullptr;
 }
 
 // The arguments of a call to an overloaded function, already checked while choosing it, against what it takes.
-void Sema::checkChosenArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow) {
+void Sema::checkChosenArgs(const std::vector<Expr*>& args, const FuncDecl& fn, Flow& flow) {
+    const std::string of = fn.role == FuncDecl::Role::Constructor ? "the " + q(fn.owner->name) + " constructor" : q(fn.name);
     for (size_t i = 0; i < args.size(); ++i) {
         const VarDecl& p = *fn.params[i];
         Expr& a = *args[i];
@@ -5741,9 +5800,9 @@ void Sema::checkChosenArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow&
         }
         const Expr* bound = boundByRef_;
         if (p.isRef) boundByRef_ = &a;
-        requireConvertible(a, p.declType, "for parameter " + q(p.name) + " of " + q(fn.name));
+        requireConvertible(a, p.declType, "for parameter " + q(p.name) + " of " + of);
         boundByRef_ = bound;
-        if (p.isRef && !p.isConst) checkRefBinding(a, p.declType, "parameter " + q(p.name) + " of " + q(fn.name));
+        if (p.isRef && !p.isConst) checkRefBinding(a, p.declType, "parameter " + q(p.name) + " of " + of);
     }
 }
 
@@ -6013,7 +6072,7 @@ static std::string jsonProblem(const Program& program, const Type* t, bool readi
     seen.push_back(&sd);
     if (reading) {
         if (sd.isInterface || sd.firstPure()) return where + " has methods without a body, so nothing can be made from JSON for it. Use a class that has them all";
-        if (sd.constructor && !sd.constructor->params.empty())
+        if (sd.needsConstructorArgs())
             return where + " has a constructor that needs arguments, which JSON does not know. Give it a constructor without parameters, or none";
     }
     std::vector<std::pair<const FieldDecl*, bool>> fields;  // each with whether a constructor can give it its value
@@ -6270,7 +6329,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     const bool chosen = named.size() > 1;
     if (chosen) {
         const std::string calledAs = (call.receiver ? asBase(spelled(*call.receiver, "x")) + "." : "") + call.name;
-        m = chooseOverload(call.name, calledAs, found.back(), named, call.args, flow, call.loc);
+        m = chooseOverload(call.name, calledAs, found.back(), named, exprsOf(call.args), flow, call.loc);
         if (!m) return Type::error();
     }
     if (!m) {
@@ -6409,7 +6468,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
             diags_.error(call.loc, "cannot call " + q(m->name) + " on const " + q(holder->name) + ", because it may change fields",
                          "declare " + q(holder->name) + " without `const`, or " + markConst, spec::Methods);
     }
-    if (chosen) checkChosenArgs(call.args, *m, flow);
+    if (chosen) checkChosenArgs(exprsOf(call.args), *m, flow);
     else checkArgs(call.args, *m, flow, call.loc, q(m->name));
     checkTaskKept(*m, call, call.loc);
     return m->retType;

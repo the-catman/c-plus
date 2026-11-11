@@ -1,15 +1,8 @@
-// What overloading does not reach yet: constructors, a template beside a function, and a const pair of methods.
+// What overloading does not reach yet: a template beside a function, and a const pair of methods.
 struct Point {
     int x = 0;
     int get(int n) { return x; }
     int get(int n) const { return x; }
-};
-
-class Box {
-public:
-    int size = 0;
-    Box(int n) : size(n) {}
-    Box(long n) : size(1) {}
 };
 
 template <typename T>
@@ -20,5 +13,4 @@ int main() {
     return 0;
 }
 // error: this compiler does not support a `const` and a non-const method that take the same parameters yet
-// error: this compiler does not support more than one constructor yet
 // error: this compiler does not support a template function and another function of the same name yet

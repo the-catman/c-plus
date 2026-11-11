@@ -30,8 +30,6 @@ int main() {
     println("{}", q->x);
     return 0;
 }
-// error: this compiler does not support more than one constructor yet
-// error: keep one, and give the fields default values for what it does not set
 // error: write the method body here
 // error: 'Point' already has a field named 'x'
 // error: 'Point' already has a method named 'area'

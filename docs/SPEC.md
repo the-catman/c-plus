@@ -554,8 +554,11 @@ println("{}", a);              // User {name: "Alice", age: 31}
   still change, as with `const` in JavaScript.
 - Members are private by default in a class and public in a struct, as in C++. `public:`,
   `private:` and `protected:` work as in C++; see [Inheritance](#inheritance).
-- A class has at most one constructor until constructors can be overloaded. To let a caller leave
-  out values, leave out the constructor and give the fields defaults.
+- A class can have several constructors that take different parameters, chosen as
+  [overloads](#overloading) are. One can hand its work to another, as in C++:
+  `User(string n) : User(n, 0) {}`, with nothing else in its list. There are no copy
+  constructors: a class object is shared, never copied, and `User(const User& other)` is an
+  error.
 - `a == b` is true when `a` and `b` refer to the same object, like `===` on objects in
   JavaScript or `==` on `shared_ptr` in C++. Two objects with equal fields are still two
   objects, so `User("Ann") == User("Ann")` is false. To compare contents, compare the
@@ -1768,8 +1771,13 @@ grow(5);                         // 5 is not a variable, so it stays
 - **Methods overload the same way.** A class that overrides one of the methods of a name it
   inherits keeps the others, which C++ would hide. It cannot add to them: a method with an
   inherited name must override one of them.
-- Constructors, a template beside a function of its name, and a `const` and a non-const
-  method that take the same parameters are not supported yet.
+- **So do constructors**, of structs and classes. `Size(3)`, `Size{2, 5}` and a base class's
+  values each go to the constructor they fit best, and a variable declared without a value,
+  such as `Size u;`, uses the one that takes nothing. A constructor that takes its own type,
+  a copy constructor, is an error, since C+ copies a struct field by field and never copies
+  a class object.
+- A template beside a function of its name, and a `const` and a non-const method that take
+  the same parameters, are not supported yet.
 
 ### The main function
 
@@ -3244,8 +3252,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | C functions with variable arguments; vectors passed to or from C | planned |
 | Unsigned types | planned |
 | Format options for width, alignment and `{:x}`; math constants | planned |
-| Overloading functions and methods | implemented |
-| Overloading constructors, a template beside a function of its name, a `const` and a non-const method that take the same parameters | planned |
+| Overloading functions, methods and constructors; constructors that hand their work to another | implemented |
+| A template beside a function of its name, a `const` and a non-const method that take the same parameters | planned |
 | Strings: `append`, `insert`, `erase`, `replace`, `rfind`, `compare`, `split`, `trim`, `join`, `replace_all` | implemented |
 | Reading numbers from strings: `stoi`, `stol`, `stod`, `stof` | implemented |
 | `hashmap<K, V>` | implemented |

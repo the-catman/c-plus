@@ -1833,7 +1833,7 @@ struct Codegen::Impl {
             case K::Float: case K::Double: return llvm::ConstantFP::get(llvmType(t), 0.0);
             case K::String: return llvm::Constant::getNullValue(stringTy);
             case K::Struct:
-                if (const FuncDecl* ctor = t->decl->constructor; ctor && ctor->params.empty()) return construct(*t->decl, {});
+                if (const FuncDecl* ctor = t->decl->defaultConstructor()) return construct(*t->decl, {}, ctor);
                 return buildAggregate(*t->decl, {});
             case K::Class: case K::Vector: case K::Pointer: case K::Weak: case K::Unique: case K::Local:
                 return llvm::ConstantPointerNull::get(b.getPtrTy());
@@ -1849,7 +1849,7 @@ struct Codegen::Impl {
     bool defaultIsZero(const Type* t) {
         if (t->isArray()) return t->length == 0 || defaultIsZero(t->elem);
         if (!t->isStruct()) return true;
-        if (const FuncDecl* ctor = t->decl->constructor) return !ctor->params.empty();
+        if (t->decl->constructor) return t->decl->needsConstructorArgs();
         for (auto& f : t->decl->fields)
             if (f.defaultValue || !defaultIsZero(f.type)) return false;
         return true;
@@ -1874,7 +1874,7 @@ struct Codegen::Impl {
     void fillElement(llvm::Value* addr, const Type* t) {
         size_t mark = temps.size();
         if (t->isStruct() && t->decl->constructor) {
-            if (t->decl->constructor->params.empty()) storeValue(construct(*t->decl, {}), t, addr);
+            if (const FuncDecl* ctor = t->decl->defaultConstructor()) storeValue(construct(*t->decl, {}, ctor), t, addr);
         } else {
             fillDefault(addr, t);
         }
@@ -1936,17 +1936,19 @@ struct Codegen::Impl {
             // Where a count would be, a part other than the first holds how far back to look for
             // it, as a negative number. It is there before anything can use the part.
             if (i > 0) b.CreateStore(b.getInt64(-(int64_t)offset), part);
-            const std::vector<ExprPtr>* args = nullptr;
+            const FuncDecl::BaseInit* given = nullptr;
             if (ctor)
                 for (auto& init : ctor->baseInits)
-                    if (init.name == base.name) args = &init.args;
-            buildBase(part, base, args);
+                    if (init.name == base.name) given = &init;
+            buildBase(part, base, given);
         }
     }
 
     // Builds one base class, from its constructor's arguments, or else its fields, in order.
-    void buildBase(llvm::Value* part, const StructDecl& base, const std::vector<ExprPtr>* args) {
-        if (const FuncDecl* ctor = base.constructor) {
+    void buildBase(llvm::Value* part, const StructDecl& base, const FuncDecl::BaseInit* init) {
+        const std::vector<ExprPtr>* args = init ? &init->args : nullptr;
+        if (base.constructor) {  // the one Sema chose for the values given, or the one that takes none
+            const FuncDecl* ctor = init && init->ctor ? init->ctor : base.defaultConstructor();
             std::vector<llvm::Value*> values{part};
             for (size_t i = 0; args && i < args->size(); ++i) values.push_back(genOwned(*(*args)[i], ctor->params[i]->type));
             b.CreateCall(funcs.at(ctor), values);
@@ -1999,9 +2001,9 @@ struct Codegen::Impl {
         }
     }
 
-    // Calls the constructor of `sd`, returning the new owned value.
-    llvm::Value* construct(const StructDecl& sd, const std::vector<const Expr*>& args) {
-        const FuncDecl& ctor = *sd.constructor;
+    // Calls the constructor `ctor` of `sd`, returning the new owned value.
+    llvm::Value* construct(const StructDecl& sd, const std::vector<const Expr*>& args, const FuncDecl* chosen) {
+        const FuncDecl& ctor = *chosen;
         std::vector<llvm::Value*> values{nullptr};  // `this`, set below
         std::vector<ArgSpec> specs;
         for (size_t i = 0; i < args.size(); ++i) specs.push_back(argSpec(*args[i], *ctor.params[i]));
@@ -2035,7 +2037,7 @@ struct Codegen::Impl {
         if (sd.constructor) {  // the values are the constructor's arguments
             std::vector<const Expr*> args;
             for (auto& el : list.elements) args.push_back(el.value.get());
-            return construct(sd, args);
+            return construct(sd, args, list.ctor);
         }
         std::vector<llvm::Value*> given(sd.fields.size(), nullptr);
         size_t mark = pending.size();
@@ -3362,7 +3364,7 @@ struct Codegen::Impl {
             if (sd.constructor) {
                 std::vector<const Expr*> args;
                 for (auto& a : call.args) args.push_back(a.get());
-                return construct(sd, args);
+                return construct(sd, args, call.ctor);
             }
             std::vector<llvm::Value*> given;
             size_t mark = pending.size();
@@ -3481,7 +3483,7 @@ struct Codegen::Impl {
             endLineTable();
         }
 
-        llvm::Value* task = construct(*s.task, {});
+        llvm::Value* task = construct(*s.task, {}, s.task->defaultConstructor());
         retainValue(task, taskType);  // one for the thread, and one for this expression
         llvm::Value* closure = b.CreateCall(rtAlloc, {b.getInt64(mod->getDataLayout().getTypeAllocSize(closureTy))}, "closure");
         b.CreateStore(task, b.CreateStructGEP(closureTy, closure, 2));
@@ -4472,7 +4474,17 @@ struct Codegen::Impl {
             else b.CreateStore(fn->getArg(first + i), allocaFor(*f.params[i]));
             if (isManaged(f.params[i]->type)) scopes.back().push_back(f.params[i].get());
         }
-        if (f.role == FuncDecl::Role::Constructor) {
+        if (f.role == FuncDecl::Role::Constructor && f.delegation) {  // the other constructor builds the object, with these values
+            const FuncDecl& target = *f.delegation->ctor;
+            std::vector<llvm::Value*> values{thisPtr};
+            std::vector<ArgSpec> specs;
+            for (size_t i = 0; i < f.delegation->args.size(); ++i) specs.push_back(argSpec(*f.delegation->args[i], *target.params[i]));
+            std::vector<Hold> held;
+            for (llvm::Value* v : genArguments(specs, held)) values.push_back(v);
+            b.CreateCall(funcs.at(&target), values);
+            checkHeld(held, specs, f.owner->name, f.delegation->loc);
+            flushTemps();
+        } else if (f.role == FuncDecl::Role::Constructor) {
             if (f.owner->isClass) {
                 // The base classes come first. While the constructor of one runs, the object is
                 // only that class, and a virtual call finds its version, as in C++.
@@ -4511,7 +4523,7 @@ struct Codegen::Impl {
         thisPtr = nullptr;
         b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
         startLineTable(f.nameLoc);
-        llvm::Value* task = construct(*taskType->decl, {});
+        llvm::Value* task = construct(*taskType->decl, {}, taskType->decl->defaultConstructor());
         retainValue(task, taskType);
         callFunction(*f.taskBind, {task});
         std::vector<llvm::Value*> args{task};
@@ -4762,7 +4774,7 @@ struct Codegen::Impl {
     llvm::Constant* makeFunction(const Type* t) {
         llvm::Constant* none = llvm::ConstantPointerNull::get(b.getPtrTy());
         bool object = t->isClass();
-        if (object && (t->decl->isInterface || t->decl->firstPure() || (t->decl->constructor && !t->decl->constructor->params.empty()))) return none;
+        if (object && (t->decl->isInterface || t->decl->firstPure() || t->decl->needsConstructorArgs())) return none;
         if (!object && !t->isStruct() && !t->isArray()) return none;
         auto* f = internalFunction(std::string("cplus.") + t->name + "#make", b.getVoidTy(), {b.getPtrTy()});
         SavedPoint saved(*this);
@@ -4770,7 +4782,7 @@ struct Codegen::Impl {
         if (object) {
             size_t mark = temps.size();
             const StructDecl& sd = *t->decl;
-            llvm::Value* made = sd.constructor ? construct(sd, {}) : buildAggregate(sd, {});
+            llvm::Value* made = sd.constructor ? construct(sd, {}, sd.defaultConstructor()) : buildAggregate(sd, {});
             b.CreateStore(made, f->getArg(0));
             flushTemps(mark);
         } else {
