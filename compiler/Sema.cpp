@@ -883,7 +883,7 @@ static std::string cycleHelp(const Type* fieldType, const std::string& field, co
 static std::string signature(const FuncDecl& fn) {
     std::string sig = (fn.owner ? fn.owner->name + "." : "") + fn.name + "(";
     for (size_t i = 0; i < fn.params.size(); ++i)
-        sig += (i ? ", " : "") + std::string(fn.params[i]->isRef ? "const " : "") + fn.params[i]->declType->name + (fn.params[i]->isRef ? "&" : "") +
+        sig += (i ? ", " : "") + std::string(fn.params[i]->isRef && fn.params[i]->isConst ? "const " : "") + fn.params[i]->declType->name + (fn.params[i]->isRef ? "&" : "") +
                (fn.params[i]->name.empty() ? "" : " " + fn.params[i]->name);
     return sig + ")";
 }
@@ -2657,6 +2657,8 @@ void Sema::checkTry(TryStmt& st, Flow& flow) {
 
 void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
     checkStorable(v.declType, v.typeLoc);
+    const Expr* bound = boundByRef_;
+    if (v.isRef && v.init) boundByRef_ = v.init.get();  // a reference is not a copy
     if (v.init) {
         if (v.declType->is(K::Auto)) {
             const Type* t = checkExpr(*v.init, flow);
@@ -2681,6 +2683,8 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
                          spec::Variables);
         v.type = v.declType->is(K::Auto) ? Type::error() : v.declType;
     }
+    boundByRef_ = bound;
+    if (v.isRef && !v.isConst && v.init) checkRefBinding(*v.init, v.type, "reference " + q(v.name));
     if (v.isConstexpr) foldConstexpr(v);
     declare(v);  // after the initializer: `int x = x;` refers to an outer x, as in C++
     if (v.init) {
@@ -3415,6 +3419,8 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
             value(args[i], ctor->params[i]->declType,
                   "for parameter " + q(ctor->params[i]->name) + " of the " + q(sd.name) + " constructor");
             boundByRef_ = bound;
+            if (ctor->params[i]->isRef && !ctor->params[i]->isConst)
+                checkRefBinding(*args[i].value, ctor->params[i]->declType, "parameter " + q(ctor->params[i]->name) + " of the " + q(sd.name) + " constructor");
         }
         return;
     }
@@ -4678,6 +4684,55 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
     return result;
 }
 
+// What a `T&` is given, as a parameter's argument or a variable's initial value, is a place that can be changed, of its own type:
+// through the reference, what is there can be replaced with any `T`. A place in a vector, a string or a hashmap moves when the
+// container grows, so it waits for a way to keep it where it is.
+void Sema::checkRefBinding(const Expr& e, const Type* type, const std::string& what) {
+    if (!e.type || e.type->isError() || type->isError()) return;
+    const std::string name = type->name;
+    if (!isPlaceKind(e)) {
+        diags_.error(e.loc, what + " can change what it refers to, so it needs a variable, a field or an element of an array, but this is a value",
+                     "store it in a variable first, and give it that. If it only reads it, make it `const " + name + "&`, which takes any value",
+                     spec::References);
+        return;
+    }
+    if (e.type != type) {
+        diags_.error(e.loc, what + " refers to " + q(type) + ", but this is " + q(e.type),
+                     e.type->isClass() && type->isClass()
+                         ? "store it in a variable of type " + q(type) + " first, since any " + q(type) + " could be put there through the reference"
+                         : "give it a variable of type " + q(type) + ". If it only reads it, make it `const " + name + "&`, which takes a converted copy",
+                     spec::References);
+        return;
+    }
+    if (insideContainer(e)) {
+        diags_.error(e.loc, "this compiler does not support references to the elements of vectors, strings and hashmaps yet",
+                     "they move when the container grows. Change the element itself, `v[i] = ...`, or pass the container and the index",
+                     spec::Status);
+        return;
+    }
+    // The variable and the fields of it that the place is, for the messages: `n` inside a method is `this.n`.
+    const VarDecl* var = nullptr;
+    std::string path;
+    const Expr* at = &e;
+    while (at->kind == Expr::Kind::Member) {
+        auto& m = static_cast<const MemberExpr&>(*at);
+        path = path.empty() ? m.field : m.field + "." + path;
+        at = m.base.get();
+    }
+    if (at->kind == Expr::Kind::This) {
+        var = thisVar();
+    } else if (at->kind == Expr::Kind::Name) {
+        auto& n = static_cast<const NameExpr&>(*at);
+        if (n.implicitField >= 0) {
+            var = thisVar();
+            path = path.empty() ? n.name : n.name + "." + path;
+        } else {
+            var = n.decl;
+        }
+    }
+    checkChangeable(e, "changed through a reference", var, path);
+}
+
 void Sema::checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow, Loc loc, const std::string& what) {
     if (args.size() != fn.params.size()) {
         for (auto& a : args) checkLooseValue(*a, flow);
@@ -4695,6 +4750,7 @@ void Sema::checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow,
         checkValue(*args[i], flow, fn.params[i]->declType,
                    (n.empty() ? "for argument " + std::to_string(i + 1) : "for parameter " + q(n)) + " of " + q(fn.name));
         boundByRef_ = bound;
+        if (fn.params[i]->isRef && !fn.params[i]->isConst) checkRefBinding(*args[i], fn.params[i]->declType, "parameter " + q(n) + " of " + q(fn.name));
     }
 }
 
@@ -5225,6 +5281,7 @@ const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow)
         if (fn->params[i]->isRef) boundByRef_ = &a;
         requireConvertible(a, fn->params[i]->declType, "for parameter " + q(fn->params[i]->name) + " of " + q(fn->name));
         boundByRef_ = bound;
+        if (fn->params[i]->isRef && !fn->params[i]->isConst) checkRefBinding(a, fn->params[i]->declType, "parameter " + q(fn->params[i]->name) + " of " + q(fn->name));
     }
     checkTaskKept(*fn, call, nameLoc);
     return fn->retType;

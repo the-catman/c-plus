@@ -87,7 +87,7 @@ private:
         std::string params;
         for (auto& p : f.params) {
             const Type* t = typeOf(*p);
-            params += (params.empty() ? "" : ", ") + std::string(p->isRef ? "const " : "") + (t ? t->name : "?") + (p->isRef ? "& " : " ") + p->name;
+            params += (params.empty() ? "" : ", ") + std::string(p->isRef && p->isConst ? "const " : "") + (t ? t->name : "?") + (p->isRef ? "& " : " ") + p->name;
         }
         std::string owner = f.owner ? std::string(f.owner->type.name) : "";
         std::string text;

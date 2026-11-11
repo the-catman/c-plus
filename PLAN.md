@@ -623,7 +623,7 @@ program and never dangles, but when its container is resized, replaced or was sh
   is an error where the compiler sees it and stops the program where it does not. This replaces the trap of §6 for methods on
   elements, and lets `v.back()`, `v.front()`, `m.at(k)` and `?:` of two places be places, which changes §2.17 and §2.24.
 - Aliasing follows C++: `swap(v[0], v[1])` and `f(x, x)` are allowed.
-- Order: `const T&` first, with no change to the runtime (done 2026-11-11). Then `T&` to variables and fields, then the pins,
+- Order: `const T&` first, with no change to the runtime, then `T&` to variables and fields (both done 2026-11-11), then the pins,
   then `T&` returns with item 6. Until the pins, `const auto& e = v[i];` holds a copy of the element.
 
 ## 3. Compiler architecture
@@ -760,7 +760,7 @@ will confidently write C++ wherever the two differ.
     this where it can tell, and the running program where it cannot, so a reference never dangles or changes a copy.
   - Plain C++ references were turned down. Copies share a buffer until one is written (§2.12, §2.17), so writing through a
     reference could change another variable's value, silently, where C++ would at worst crash under `--debug`.
-  - The details are in §2.31. `const T&` works; `T&` is an error that points to `const T&` or a pointer.
+  - The details are in §2.31. `const T&`, and `T&` to variables and fields, work.
 - A scheduler that shares async work between threads, which the rules in 2.9 allow
   (decided 2026-11-10), when real workloads need more than one loop per thread.
 - A runtime error stops the whole program, as in Swift. A server may want to end only the request that failed, which

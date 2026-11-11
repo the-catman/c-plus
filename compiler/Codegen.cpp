@@ -1419,8 +1419,8 @@ struct Codegen::Impl {
         return v;
     }
 
-    // `const T& x` is passed as the address of a place. A class object is already a reference, so a `const C&` is the object.
-    static bool passedByRef(const VarDecl& p) { return p.isRef && !p.type->isClass(); }
+    // A reference is passed as the address of a place. A class object is already a reference, so a `const C&` is the object.
+    static bool passedByRef(const VarDecl& p) { return p.isRef && (!p.isConst || !p.type->isClass()); }
 
     // Whether a place stays where it is while the variable it lies in lives: it is reached from the variable, or from `this`,
     // through fields of structs and elements of arrays only.
@@ -1457,8 +1457,8 @@ struct Codegen::Impl {
 
     // What a reference parameter is given: the address of the argument, if it is a place of the parameter's type, and otherwise of
     // a temporary that lives until the statement ends, as in C++. What holds the place is kept alive meanwhile.
-    llvm::Value* refArgument(const Expr& e, const Type* to) {
-        if (isPlace(e) && e.type == to) return addressOf(e, /*hold=*/true, /*write=*/false);
+    llvm::Value* refArgument(const Expr& e, const Type* to, bool write = false) {
+        if (isPlace(e) && e.type == to) return addressOf(e, /*hold=*/true, write);
         llvm::Value* v = genOwned(e, to);
         llvm::Value* slot = v;  // a value handled through its address already has its place
         if (!inMemory(to)) {
@@ -1470,7 +1470,7 @@ struct Codegen::Impl {
     }
 
     llvm::Value* argument(const Expr& e, const VarDecl& param) {
-        return passedByRef(param) ? refArgument(e, param.type) : holdOwned(e, param.type);
+        return passedByRef(param) ? refArgument(e, param.type, !param.isConst) : holdOwned(e, param.type);
     }
 
     // Keeps the temporaries made since `mark` until the current scope ends, instead of the statement.
@@ -3350,7 +3350,7 @@ struct Codegen::Impl {
                 // container copy it. Any other value is a temporary that lives as long as the reference, as in C++.
                 if (passedByRef(v) && isPlace(*v.init) && v.init->type == v.type && !inContainerElement(*v.init)) {
                     size_t mark = temps.size();
-                    locals[&v] = addressOf(*v.init, /*hold=*/true, /*write=*/false);
+                    locals[&v] = addressOf(*v.init, /*hold=*/true, /*write=*/!v.isConst);
                     keepTempsForScope(mark);
                     flushTemps();
                     return;

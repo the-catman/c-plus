@@ -548,8 +548,8 @@ struct VarDecl : Stmt {
     bool isConstexpr = false;  // its value must be known while compiling
     bool isParam = false;
     bool isTopLevel = false;  // a constant outside any function
-    // `const T& x`: it names another place instead of holding a value of its own. Set for a parameter, a local and the
-    // variable of a range-based for loop. A `const T&` of a class type is the reference itself, so it is not set for one.
+    // `T& x` or `const T& x`: it names another place instead of holding a value of its own. Set for a parameter, a local and
+    // the variable of a range-based for loop. Codegen passes a `const C&` of a class type as the object itself.
     bool isRef = false;
     ExprPtr init;
     const Type* type = nullptr;  // resolved by Sema

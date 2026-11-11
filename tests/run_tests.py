@@ -555,9 +555,9 @@ PLANNED_FEATURES = [
     ("queue", M % "queue<int> d;"),
     ("pair", M % "pair<int, int> d;"),
     ("tuple", M % "tuple<int, int> d;"),
-    ("reference parameters", 'void f(int& n) {}\n' + M % ""),
     ("references in loops", M % "vector<int> v; for (auto& x : v) {}"),
-    ("reference variables", M % "int a = 1; int& b = a;"),
+    ("references to elements of vectors", 'void f(int& n) {}\n' + M % "vector<int> v = {1}; f(v[0]);"),
+    ("functions that return references", 'int& f(int& n) { return n; }\n' + M % ""),
     ("bindings in loops", M % 'hashmap<string, int> m; for (auto [k, v] : m) {}'),
     ("bindings", 'struct P { int x; int y; };\n' + M % "auto [a, b] = P{1, 2};"),
     ("final classes", 'class A final { public: int x = 0; };\n' + M % ""),
@@ -655,7 +655,7 @@ SHEET_VARIANTS = [
 ]
 
 # What the cheat sheet writes that is not code to compile: what is left out, what is typed at a shell, what a program prints.
-SHEET_NOT_CODE = {"<cmath>", "<cctype>", "std::", "std::weak_ptr", "std::string", "0x...", "--debug", "-Wno-new-delete", "-lname", "import x;", "long double", "/0",
+SHEET_NOT_CODE = {"T&", "const T&", "<cmath>", "<cctype>", "std::", "std::weak_ptr", "std::string", "0x...", "--debug", "-Wno-new-delete", "-lname", "import x;", "long double", "/0",
                   "http::fetch", "cplus check", "cplus run app.cplus --race", "cplus run app.cplus -- arg1 arg2", "cplus run app.cplus --debug",
                   'import "mine.h";', "-I dir"}
 # Habits that the left side of the table only names a part of, which is fine on its own. The rest of its row says what is wrong.
@@ -810,7 +810,7 @@ SPEC_REJECTED = {
     "for (auto [k, v] : m)": "hashmap<string, int> m; for (auto [k, v] : m) {}",
     "return &x;": "^int* f() { int x = 1; return &x; }", "return a.data();": "^int* f() { array<int, 2> a = {1, 2}; return a.data(); }",
     "T&&": "^void f(vector<int>&& v) {}", "auto&&": "vector<int> v = {1}; for (auto&& x : v) {}",
-    "void bump(int& n)": "^void bump(int& n) { n += 1; }", "int& at(int i)": "^struct G { int c = 0; int& at(int i) { return c; } };", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
+"int& at(int i)": "^struct G { int c = 0; int& at(int i) { return c; } };", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
 }
 SPEC_REJECT_PRELUDE = """struct Settable { int x = 0; void set() { x = 1; } };
 struct HoldsSettable { Settable p; };

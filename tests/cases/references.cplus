@@ -1,0 +1,91 @@
+// `T&` refers to a place and can change it, as in C++: variables, fields and elements of arrays.
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+class Box {
+public:
+    Point at;
+    string label = "box";
+};
+class Animal {
+public:
+    virtual string sound() const { return "..."; }
+};
+class Dog : public Animal {
+public:
+    string sound() const override { return "woof"; }
+};
+void bump(int& n) { n += 1; }
+void swapInts(int& a, int& b) {
+    int t = a;
+    a = b;
+    b = t;
+}
+void rename(string& s, const string& other) {
+    s = other + "!";
+    println("{}", other);  // the same string as s when given twice
+}
+void shift(Point& p, int dx) { p.x += dx; }
+void replace(Animal& a) { a = Dog(); }
+template<typename T>
+void exchange(T& a, T& b) {
+    T t = a;
+    a = b;
+    b = t;
+}
+void grow(array<int, 3>& a) { a[0] = 100; }
+void fill(Point& p) { p = Point{7, 8}; }
+int main() {
+    int n = 1;
+    bump(n);
+    bump(n);
+    println("{}", n);
+    int a = 1, b = 2;
+    swapInts(a, b);
+    println("{} {}", a, b);
+    string s = "x";
+    rename(s, s);
+    println("{}", s);
+    Point p;
+    shift(p, 5);
+    println("{}", p.x);
+    Box box = Box();
+    shift(box.at, 3);
+    println("{}", box.at.x);
+    Animal pet = Animal();
+    replace(pet);
+    println("{}", pet.sound());
+    string l = "l", r = "r";
+    exchange(l, r);
+    println("{} {}", l, r);
+    array<int, 3> arr = {1, 2, 3};
+    grow(arr);
+    bump(arr[1]);
+    println("{}", arr);
+    fill(p);
+    println("{} {}", p.x, p.y);
+    int& alias = n;
+    alias = 50;
+    println("{}", n);
+    auto& lab = box.label;
+    lab += "!";
+    println("{}", box.label);
+    Point& q = p;
+    q.y = 99;
+    println("{}", p.y);
+    return 0;
+}
+// expect: 3
+// expect: 2 1
+// expect: x!
+// expect: x!
+// expect: 5
+// expect: 3
+// expect: woof
+// expect: r l
+// expect: [100, 3, 3]
+// expect: 7 8
+// expect: 50
+// expect: box!
+// expect: 99

@@ -1,10 +1,12 @@
-// `const T&` reads a value where it is, without copying it, as in C++.
+// `const T&` reads a value where it is, without copying it, and `T&` can change it, as in C++.
 struct Point {
     int x = 0;
     int y = 0;
 };
 
 bool same(const Point& a, const Point& b) { return a.x == b.x && a.y == b.y; }
+
+void bump(int& n) { n += 1; }
 
 int total(const vector<int>& v) {
     int sum = 0;
@@ -23,6 +25,10 @@ int main() {
     p.x = 7;
     println("{}", here.x);
     // expect: 7
+    int count = 1;
+    bump(count);  // changes count itself
+    println("{}", count);
+    // expect: 2
     const int& n = 3 + 4;  // a value that is not a place lives as long as the reference
     println("{}", n);
     // expect: 7

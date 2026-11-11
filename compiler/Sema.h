@@ -210,6 +210,7 @@ private:
     bool checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path, const std::string& change = " = ...", const std::string& before = "");
     const VarDecl* rootVariable(const Expr& root);
     const Expr* boundByRef_ = nullptr;  // the argument being given to a reference parameter, which is not copied
+    void checkRefBinding(const Expr& e, const Type* type, const std::string& what);
     // The local variable or parameter of this function that the pointer `e` may point into, or null.
     const VarDecl* localPointee(const Expr& e, const Flow& flow);
     // Keeps track of what the pointer variable `var` holds once it is given `value`.

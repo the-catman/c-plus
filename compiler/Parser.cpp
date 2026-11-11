@@ -49,8 +49,7 @@ void Parser::notYet(Loc loc, const std::string& feature, const std::string& help
     fail(loc, "this compiler does not support " + feature + " yet", help, spec::Status);
 }
 
-// The `&` or `&&` after the type of a parameter, a variable, a loop variable or a catch. Returns whether this is a reference,
-// which only `const T&` can be so far.
+// The `&` or `&&` after the type of a parameter, a variable or a catch. Returns whether this is a reference.
 bool Parser::parseReferenceMark(const Type* ty, bool isConst, ReferencePlace place) {
     const std::string name = ty->name;
     Loc at = peek().loc;
@@ -64,15 +63,6 @@ bool Parser::parseReferenceMark(const Type* ty, bool isConst, ReferencePlace pla
     if (place == ReferencePlace::Constant)
         fail(at, "a constant holds its own value, not a reference", "write `const " + name + " " + (peek(1).kind == Tok::Ident ? peek(1).text : "X") + " = ...;`",
              spec::Constants);
-    if (!isConst) {
-        if (place == ReferencePlace::Parameter)
-            notYet(at, "references that can change what they refer to, `" + name + "&`",
-                   "to read the value without copying it, write `const " + name + "&`. To let the function change the caller's "
-                   "variable, pass a pointer: `" + name + "* x`, called as `f(&n)`");
-        notYet(at, "references that can change what they refer to, `" + name + "&`",
-               "to read the value without copying it, write `const " + name + "& x = ...;`. To change another variable, use a "
-               "pointer: `" + name + "* p = &n;`");
-    }
     advance();
     if (check(Tok::Amp) || check(Tok::AmpAmp))
         fail(peek().loc, "a reference cannot refer to a reference", "write one `&`: `const " + name + "&`", spec::References);
@@ -1909,6 +1899,7 @@ bool Parser::isTypeStart(size_t ahead) const {
             while (peek(ahead + 1).kind == Tok::Star || (peek(ahead + 1).kind == Tok::KwConst &&
                                                           peek(ahead).kind == Tok::Star))
                 ++ahead;  // `Point* p`, `Node** head`, `Point* const p`
+            if (peek(ahead + 1).kind == Tok::Amp || peek(ahead + 1).kind == Tok::AmpAmp) ++ahead;  // `Point& p`
             return peek(ahead + 1).kind == Tok::Ident;
         case Tok::KwString: return peek(ahead + 1).kind != Tok::ColonColon;  // not `string::npos`
         case Tok::KwInt: case Tok::KwLong: case Tok::KwBool:
