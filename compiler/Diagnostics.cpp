@@ -21,13 +21,19 @@ std::string_view SourceFile::line(uint32_t lineNo) const {
     return std::string_view(text).substr(start, end - start);
 }
 
-Diagnostics::Diagnostics(const SourceFile& file) : file_(file) { color_ = isatty(STDERR_FILENO); }
+Diagnostics::Diagnostics(const SourceFile& file) : file_(file), files_{&file} { color_ = isatty(STDERR_FILENO); }
+
+void Diagnostics::addFile(SourceFile& file) {
+    file.id = (uint32_t)files_.size();
+    files_.push_back(&file);
+}
 
 static constexpr int kMaxErrors = 50;
 
 void Diagnostics::error(Loc loc, const std::string& message, const std::string& help,
                         const std::string& spec) {
-    if (muted_) {
+    inOtherFile_ = onlyGiven_ && loc.file != 0;
+    if (muted_ || inOtherFile_) {
         ++mutedErrors_;
         return;
     }
@@ -43,12 +49,13 @@ void Diagnostics::error(Loc loc, const std::string& message, const std::string& 
 
 void Diagnostics::warning(Loc loc, const std::string& message, const std::string& help,
                           const std::string& spec) {
-    if (suppressed_ || muted_) return;
+    inOtherFile_ = onlyGiven_ && loc.file != 0;
+    if (suppressed_ || muted_ || inOtherFile_) return;
     report("warning", "\x1b[1;33m", loc, message, help, spec);
 }
 
 void Diagnostics::note(Loc loc, const std::string& message) {
-    if (suppressed_ || muted_) return;
+    if (suppressed_ || muted_ || inOtherFile_) return;
     report("note", "\x1b[1;36m", loc, message, "", "");
 }
 
@@ -65,9 +72,10 @@ void Diagnostics::report(const char* level, const char* color, Loc loc, const st
 
     std::string gutter = loc.line ? std::string(std::to_string(loc.line).size(), ' ') : "";
     if (loc.line) {
-        std::fprintf(stderr, "%s%s -->%s %s:%u:%u\n", gutter.c_str(), blue, reset, file_.path.c_str(),
+        const SourceFile& file = fileOf(loc);
+        std::fprintf(stderr, "%s%s -->%s %s:%u:%u\n", gutter.c_str(), blue, reset, file.path.c_str(),
                      loc.line, loc.col);
-        std::string_view src = file_.line(loc.line);
+        std::string_view src = file.line(loc.line);
         std::fprintf(stderr, "%s%s |%s\n", gutter.c_str(), blue, reset);
         std::fprintf(stderr, "%s%u |%s %.*s\n", blue, loc.line, reset, (int)src.size(), src.data());
         // Copy tabs from the source so the caret lines up however tabs render.

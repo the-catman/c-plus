@@ -98,10 +98,20 @@ bool Parser::parseReturnReference(const Type* ret, bool isConst, bool member) {
 const Token& Parser::expectNewName(const std::string& context) {
     if (check(Tok::KwOperator)) notYet(peek().loc, "operator overloading", operatorHelp());
     if (check(Tok::KwConst)) fail(peek().loc, "C+ writes `const` before the type", "write `const int x`, or `const char* s`", spec::Variables);
-    if (check(Tok::Ident) && peek().loc.line && peek().text.find("::") != std::string::npos) {
-        const std::string module = peek().text.substr(0, peek().text.find("::"));
+    if (check(Tok::Ident) && peek().loc.line && peek().text.find("::") != std::string::npos && !peek().moduleName) {
+        std::string module = peek().text.substr(0, peek().text.find("::"));
+        std::string path = module;
+        if (const ModuleFile* m = modules_ ? modules_->ownerOf(peek().text) : nullptr) module = m->name, path = m->prefix;
         fail(peek().loc, "'" + peek().text + "' would add to the module '" + module + "', which a program cannot do",
-             "leave out the `" + module + "::`, and use the name by itself", spec::Modules);
+             "leave out the `" + path + "::`, and use the name by itself", spec::Modules);
+    }
+    if (modules_ && check(Tok::Ident) && peek().text != "std" && peek(1).kind == Tok::ColonColon && peek(2).kind == Tok::Ident && !isTypeName(peek()) &&
+        !classTemplate(peek().text)) {  // the same, in a module that is not there
+        std::string path = peek().text, dotted = peek().text;
+        size_t j = 2;
+        for (; peek(j + 1).kind == Tok::ColonColon && peek(j + 2).kind == Tok::Ident; j += 2) path += "::" + peek(j).text, dotted += "." + peek(j).text;
+        fail(peek().loc, "'" + path + "::" + peek(j).text + "' would add to the module '" + dotted + "', which a program cannot do",
+             "leave out the `" + path + "::`, and use the name by itself", spec::Modules);
     }
     return expect(Tok::Ident, context);
 }
@@ -190,6 +200,15 @@ void Parser::joinModuleNames(const std::set<std::string>& modules) {
     std::vector<Token> joined;
     joined.reserve(toks_.size());
     for (size_t i = 0; i < toks_.size(); ++i) {
+        if (size_t parts = programModuleAt(i)) {  // `net::server::start`, of a program's own module, and no more of what follows
+            Token name = toks_[i];
+            const Token& last = toks_[i + 2 * parts];
+            for (size_t k = 1; k <= parts; ++k) name.text += "::" + toks_[i + 2 * k].text;
+            if (last.loc.line == name.loc.line && last.loc.file == name.loc.file) name.loc.len = last.loc.col + last.loc.len - name.loc.col;
+            joined.push_back(std::move(name));
+            i += 2 * parts;
+            continue;
+        }
         // `delete` is a word of the language, but HTTP has a method by that name.
         if (toks_[i].kind == Tok::Ident && modules.count(toks_[i].text) && i + 2 < toks_.size() && toks_[i + 1].kind == Tok::ColonColon &&
             (toks_[i + 2].kind == Tok::Ident || (toks_[i].text == "http" && toks_[i + 2].kind == Tok::KwDelete))) {
@@ -203,6 +222,126 @@ void Parser::joinModuleNames(const std::set<std::string>& modules) {
         joined.push_back(std::move(toks_[i]));
     }
     toks_ = std::move(joined);
+}
+
+// The longest path of a program's module at `i`, `net :: server`, that a `:: name` follows, as its number of parts.
+size_t Parser::programModuleAt(size_t i) const {
+    if (!modules_ || toks_[i].kind != Tok::Ident || toks_[i].moduleName || toks_[i].loc.line == 0) return 0;
+    std::string dotted = toks_[i].text;
+    size_t best = 0;
+    for (size_t j = i, parts = 1; j + 2 < toks_.size() && toks_[j + 1].kind == Tok::ColonColon && toks_[j + 2].kind == Tok::Ident; j += 2, ++parts) {
+        if (modules_->byName(dotted)) best = parts;
+        dotted += "." + toks_[j + 2].text;
+    }
+    return best;
+}
+
+// A name of another file's module, `net::server::start`, can be used where the file imports the module, and the module
+// exports the name. Each is said once in a file.
+void Parser::checkModuleNames() {
+    if (!modules_ || !modules_->hasModules()) return;
+    std::set<std::pair<uint32_t, std::string>> said;
+    int depth = 0;           // of brackets of all kinds, in the file
+    bool inValue = false;    // after the `=` of a declaration at the top of the file
+    for (size_t i = 0; i < toks_.size(); ++i) {
+        const Token& t = toks_[i];
+        if (i > 0 && t.loc.file != toks_[i - 1].loc.file) depth = 0, inValue = false;
+        if (t.kind == Tok::LBrace || t.kind == Tok::LParen || t.kind == Tok::LBracket) ++depth;
+        else if ((t.kind == Tok::RBrace || t.kind == Tok::RParen || t.kind == Tok::RBracket) && depth > 0) --depth;
+        if (depth == 0 && (t.kind == Tok::Semi || t.kind == Tok::RBrace)) inValue = false;
+        else if (depth == 0 && t.kind == Tok::Assign) inValue = true;
+        if (t.kind != Tok::Ident || t.moduleName || t.loc.line == 0 || t.text.find("::") == std::string::npos) continue;
+        if (i > 0 && i + 1 < toks_.size() && depth == 0 && !inValue) {  // `int net::server::x()`, which expectNewName says would add to the module
+            const Tok before = toks_[i - 1].kind, after = toks_[i + 1].kind;
+            const bool typeBefore = before == Tok::KwInt || before == Tok::KwLong || before == Tok::KwBool || before == Tok::KwString || before == Tok::KwVoid ||
+                                    before == Tok::KwAuto || before == Tok::KwDouble || before == Tok::KwFloat || before == Tok::KwChar || before == Tok::Ident ||
+                                    before == Tok::Star || before == Tok::Greater || before == Tok::Question || before == Tok::KwStruct || before == Tok::KwClass;
+            if (typeBefore && (after == Tok::LParen || after == Tok::Assign || after == Tok::Semi || after == Tok::LBrace || after == Tok::Colon)) continue;
+        }
+        std::string member;
+        const ModuleFile* m = modules_->ownerOf(t.text, &member);
+        if (!m || t.loc.file >= modules_->files.size() || &modules_->files[t.loc.file] == m || !said.insert({t.loc.file, t.text}).second) continue;
+        const std::string path = modules_->pathOf(m->name);
+        if (!modules_->imports(t.loc.file, *m)) {
+            diags_.error(t.loc, "'" + t.text + "' is in the module '" + m->name + "', which this file does not import",
+                         "write `import " + m->name + ";` at the top of this file. What one file imports, another does not get", spec::Modules);
+            continue;
+        }
+        auto it = m->members.find(member);
+        if (it == m->members.end()) {
+            std::string exported;
+            for (auto& [name, other] : m->members)
+                if (isExported(other)) exported += (exported.empty() ? "`" : ", `") + m->prefix + "::" + name + "`";
+            diags_.error(t.loc, "the module '" + m->name + "' has no '" + member + "'",
+                         exported.empty() ? "it exports nothing yet. Declare '" + member + "' in " + path + ", with `export` before it"
+                                          : "what it exports is " + exported + ". Declare '" + member + "' in " + path + ", with `export` before it",
+                         spec::Modules);
+            prog_->unreadFunctions.insert(t.text);  // said here, and not again where it is used
+            continue;
+        }
+        if (isExported(it->second)) continue;
+        std::string line(m->source->line(it->second.loc.line));
+        line = line.substr(std::min(line.size(), line.find_first_not_of(" \t")));
+        diags_.error(t.loc, "'" + member + "' is not exported by the module '" + m->name + "'",
+                     "write `export` before its declaration, in " + path + " on line " + std::to_string(it->second.loc.line) + ": `export " + line + "`",
+                     spec::Modules);
+        diags_.note(it->second.loc, "'" + member + "' is declared here, without `export`, so only its own file can use it");
+    }
+}
+
+// What a name written at the top of a declaration means, when it is no local variable: see Modules::resolve.
+std::string Parser::resolvedName(const Token& t) const {
+    if (!modules_) return t.text;
+    for (auto& scope : localScopes_)
+        if (scope.count(t.text)) return t.text;
+    return modules_->resolve(t.text, t.loc.file);
+}
+
+// `export` before a declaration: Modules has read which name it makes visible to other files, so here it is passed over, and
+// what follows is read as it would be without it.
+void Parser::passExport() {
+    const Loc at = advance().loc;
+    if (check(Tok::Ident) && peek().text == "module") failModuleLine(at);
+    if (check(Tok::LBrace)) notYet(at, "`export { ... }`", "write `export` before each declaration in the braces, and remove them");
+    if (check(Tok::KwImport))
+        notYet(at, "`export import`", "remove `export`, and import the module in each file that uses it. What a file imports is not passed on");
+    if (check(Tok::KwExtern))
+        notYet(at, "`export extern \"C\"`", "remove `export`. A C name is not a module's own: each file that uses it declares it, or imports its header");
+    if (check(Tok::KwExport)) fail(peek().loc, "`export` is written twice", "remove one of them", spec::Modules);
+    if (check(Tok::KwStatic)) fail(at, "a name cannot be both `export` and `static`", "remove `static`, as C+ has none outside a type. A name is private to its file unless it is marked `export`", spec::Modules);
+    if (check(Tok::Eof) || check(Tok::Semi) || check(Tok::RBrace) || peek().loc.file != at.file || peek().loc.line == 0)  // the last word of its file, before the next one or what comes with C+
+        fail(at, "`export` goes before a declaration", "write it before a function, a type or a constant: `export int start() { ... }`", spec::Modules);
+}
+
+// `module net.server;` or `export module net.server;`, as C++20 starts a module's file.
+void Parser::failModuleLine(Loc at) {
+    const std::string name = modules_ && at.file < modules_->files.size() ? modules_->files[at.file].name : "";
+    fail(at, "C+ has no module declarations: a file is a module by its path",
+         name.empty() ? std::string("remove this line. This is the main file, which other files cannot import. A file such as net/server.cplus, next to it, is the module `net.server`")
+                      : "remove this line. This file is the module '" + name + "' already, which other files import with `import " + name + ";`",
+         spec::Modules);
+}
+
+// `net::server::start`, or `net::server::Config`, where no module of that path has been read: the import is missing.
+void Parser::failNoModule(size_t at) {
+    std::vector<std::string> parts{toks_[at].text};
+    for (size_t j = at; j + 2 < toks_.size() && toks_[j + 1].kind == Tok::ColonColon && toks_[j + 2].kind == Tok::Ident; j += 2) parts.push_back(toks_[j + 2].text);
+    std::string written = parts[0], dotted = parts[0], file = parts[0], path = parts[0] + "::";
+    for (size_t k = 1; k < parts.size(); ++k) written += "::" + parts[k];
+    for (size_t k = 1; k + 1 < parts.size(); ++k) path += parts[k] + "::";
+    for (size_t k = 1; k + 1 < parts.size(); ++k) dotted += "." + parts[k], file += "/" + parts[k];
+    if (const ModuleFile* m = modules_ ? modules_->importedEndingIn(toks_[at].loc.file, parts[0]) : nullptr)
+        fail(toks_[at].loc, "'" + written + "' names the module '" + m->name + "' by the last part of its path",
+             "write `" + m->prefix + "::" + parts[1] + "`, with the whole path of the module", spec::Modules);
+    if (modules_)
+        for (const ModuleFile& m : modules_->files)
+            if (!m.name.empty() && (m.name == parts[0] || (m.name.size() > parts[0].size() + 1 && m.name.compare(m.name.size() - parts[0].size() - 1, std::string::npos, "." + parts[0]) == 0)))
+                fail(toks_[at].loc, "'" + written + "' is not a name of a module that this file imports",
+                     "write `import " + m.name + ";` at the top of this file, then `" + m.prefix + "::" + parts[1] + "`", spec::Modules);
+    fail(toks_[at].loc, "there is no module '" + dotted + "' in this program, so '" + written + "' is not known",
+         "write the name without `" + path + "` for one of this file's own, as built-ins need no prefix. For a module of your own, write the file " + file +
+             ".cplus next to the main file, and `import " + dotted + ";` at the top of this file",
+         spec::Modules);
 }
 
 // `Task<int, throws>` is the generic `__TaskThrows<int>`, as a task that can fail differs in what `wait()` can do. The empty
@@ -390,7 +529,8 @@ void Parser::addBuiltins() {
         addBuiltinSource(builtin);
     }
     for (const SourceFile* source : library) addBuiltinSource(*source);
-    if (!modules.empty()) joinModuleNames(modules);
+    if (!modules.empty() || (modules_ && modules_->hasModules())) joinModuleNames(modules);
+    checkModuleNames();
 }
 
 // `import fs;`, and the functions that need no import, each when the program uses it, as `readLine()`, and has no function or
@@ -543,6 +683,10 @@ void Parser::parseProgram(Program& prog) {
     pos_ = 0;
     while (!check(Tok::Eof)) {
         fileAttr_ = false;
+        if (peek().loc.line && peek().loc.file != fileNow_) {  // the next file: `[[allow(new_delete)]];` can be at its top
+            fileNow_ = peek().loc.file;
+            declSeen_ = false;
+        }
         const size_t declaration = pos_;
         try {
             parseTopLevel(prog);
@@ -595,7 +739,8 @@ size_t Parser::afterBraces(size_t i) const {
 void Parser::scanTemplate(Program& prog, size_t& i) {
     size_t first = i;
     auto t = std::make_unique<TemplateDecl>();
-    t->allowNewDelete = i >= 2 && toks_[i - 1].kind == Tok::RBracket && toks_[i - 2].kind == Tok::RBracket;
+    const size_t before = i >= 1 && toks_[i - 1].kind == Tok::KwExport ? i - 1 : i;  // `[[allow(new_delete)]] export template<...>`
+    t->allowNewDelete = before >= 2 && toks_[before - 1].kind == Tok::RBracket && toks_[before - 2].kind == Tok::RBracket;
     pos_ = i;
     try {
         parseTemplateHeader(*t);
@@ -853,6 +998,12 @@ ConstHooks Parser::constHooks() {
         return it == constexprFunctions_.end() ? nullptr : it->second.get();
     };
     hooks.generic = [this](const std::string& name) { return functionTemplate(name) != nullptr; };
+    hooks.resolve = [this](const std::string& name, Loc at) {
+        Token written;
+        written.text = name;
+        written.loc = at;
+        return resolvedName(written);
+    };
     hooks.constraint = [](const ConstraintExpr& c) {
         std::optional<bool> holds = builtinConstraint(c.name, c.first, c.second);
         if (!holds) throw ConstError{c.loc, "'" + c.name + "' can only be asked where everything has been read, such as in `if constexpr`"};
@@ -1441,7 +1592,11 @@ void Parser::rejectOtherLanguages() {
                                     : "write the type itself wherever `" + peek(1).text + "` is used, as C+ writes it: `cplus explain cheatsheet` shows what takes the place of each C++ type",
              spec::Variables);
     }
-    if (w == "using") fail(t.loc, "C+ has no 'using' declarations", "built-ins like println, string and vector need no std:: prefix, so `using` has nothing to do", spec::Modules);
+    if (w == "using")
+        fail(t.loc, "C+ has no 'using' declarations",
+             "built-ins like println, string and vector need no std:: prefix, so `using` has nothing to do. A module's names are written with its path, "
+             "such as `net::server::start()`",
+             spec::Modules);
     if (w == "inline") fail(t.loc, "C+ has no 'inline'", "remove it: with -O, the compiler decides what to inline", spec::Functions);
     if (w == "goto") fail(t.loc, "C+ has no goto", "use a loop with `break` or `continue`, or a function with `return`", spec::ControlFlow);
     if (w == "register") fail(t.loc, "C+ has no 'register'", "remove it: the compiler decides", spec::Variables);
@@ -1464,6 +1619,7 @@ void Parser::rejectOtherLanguages() {
 }
 
 void Parser::parseTopLevel(Program& prog) {
+    if (check(Tok::KwExport)) passExport();
     rejectOtherLanguages();
     const Token& t = peek();
     switch (t.kind) {
@@ -1476,6 +1632,11 @@ void Parser::parseTopLevel(Program& prog) {
             }
             std::string path = expect(Tok::Ident, "after 'import'").text;
             while (match(Tok::Dot)) path += "." + expect(Tok::Ident, "after '.' in the module name").text;
+            if (check(Tok::Ident) && peek().text == "as") {  // `import net.server as srv;`, as Python has it
+                std::string prefix;
+                for (char c : path) prefix += c == '.' ? std::string("::") : std::string(1, c);
+                notYet(peek().loc, "aliases of modules", "write `import " + path + ";`, and the module's whole path before each of its names: `" + prefix + "::name`");
+            }
             expect(Tok::Semi, "after the import");
             loc.len = prev().loc.col + prev().loc.len - loc.col;
             prog.imports.push_back(ImportDecl{path, loc});
@@ -1506,7 +1667,8 @@ void Parser::parseTopLevel(Program& prog) {
                                  "move it to the top of the file, or write `[[allow(new_delete)]]`, without the ';', "
                                  "just before a function that uses new and delete",
                                  spec::NewDelete);
-                prog.allowNewDelete = true;
+                if (attr.file == 0) prog.allowNewDelete = true;
+                prog.allowNewDeleteIn.insert(attr.file);
                 fileAttr_ = true;
                 return;
             }
@@ -1567,13 +1729,18 @@ void Parser::parseTopLevel(Program& prog) {
                 ++end;
             const bool isFunction = peek(end).kind == Tok::LParen;
             fail(t.loc, "C+ has no 'static' outside a type",
-                 isConstant || isFunction ? std::string("remove it, which leaves a constant or a function as it was")
-                                          : "remove it, and make it a constant if it never changes: `const ... = ...;`. A variable that changes is not supported outside functions yet, so pass it to the functions that use it",
+                 isConstant || isFunction ? std::string("remove it, which leaves a constant or a function as it was. A name is already private to its file unless it is marked `export`")
+                                          : "remove it, and make it a constant if it never changes: `const ... = ...;`. A variable that changes is not supported outside functions yet, so pass it to the functions that use it. A name is already private to its file unless it is marked `export`",
                  spec::Constants);
         }
         case Tok::KwExtern: parseExtern(prog); return;
         case Tok::KwNamespace:
-            fail(t.loc, "C+ has no namespaces; each file is a module", "remove the `namespace ... {` line and its closing `}`, and keep what is inside", spec::Modules);
+            if (peek(1).kind == Tok::Ident && peek(2).kind == Tok::Assign)  // `namespace srv = net::server;`
+                notYet(t.loc, "aliases of modules", "remove this line, and write the module's whole path before each of its names: `net::server::start()`");
+            fail(t.loc, "C+ has no namespaces; each file is a module",
+                 "remove the `namespace ... {` line and its closing `}`, and keep what is inside. For names that other files write as `geometry::area`, "
+                 "put them in a file geometry.cplus, with `export` before each, and write `import geometry;` in the files that use them",
+                 spec::Modules);
         case Tok::Ident:
             if (peek(1).kind == Tok::ColonColon && (isTypeName(t) || classTemplate(t.text)))
                 fail(t.loc, "methods and constructors are defined inside their " +
@@ -1582,6 +1749,7 @@ void Parser::parseTopLevel(Program& prog) {
                      "separate declaration to match",
                      spec::Classes);
             if (t.text == "std" && peek(1).kind == Tok::ColonColon) failStd(t.loc, peek(2));
+            if (t.text == "module" && !isTypeName(t) && (peek(1).kind == Tok::Ident || peek(1).kind == Tok::Semi || peek(1).kind == Tok::Colon)) failModuleLine(t.loc);
             break;
         default: break;
     }
@@ -1610,6 +1778,7 @@ void Parser::parseTopLevel(Program& prog) {
         fail(asyncAt_, "only a function can be async", "remove `async`, or write a function: `async int f() { ... }`", spec::Async);
     if (isConst && check(Tok::Ident) && peek(1).kind != Tok::LParen) return parseConstants(prog, ret, retLoc, false);
     if (ret->is(Type::Kind::Auto) && (!check(Tok::Ident) || peek(1).kind == Tok::LParen)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `int`");
+    if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && peek(2).kind == Tok::Ident) expectNewName("for the name");  // `int net::server::extra()`
     if (check(Tok::Ident) && peek(1).kind != Tok::LParen)
         notYet(peek().loc, "global variables",
                ret->is(Type::Kind::Auto)
@@ -1701,6 +1870,10 @@ void Parser::parseOpaqueStruct() {
             explicit Inside(bool& f) : flag(f) { flag = true; }
             ~Inside() { flag = false; }
         } inside(inExternStruct_);
+        if (StructDecl* first = prog_->findStruct(name.text); first && first->externC && first->nameLoc.file != name.loc.file) {
+            sameCStruct(*first, name);  // one C struct, declared in two files
+            return;
+        }
         parseRecord();
         prog_->findStruct(name.text)->externC = true;
         return;
@@ -1712,6 +1885,7 @@ void Parser::parseOpaqueStruct() {
              spec::CTypes);
     advance();
     StructDecl* sd = prog_->findStruct(name.text);  // created by the scan in parseProgram
+    if (sd->opaque && sd->nameLoc.file != name.loc.file) return;  // one C type, declared in two files
     if (sd->defined || sd->opaque || sd->isClass) {
         diags_.error(name.loc, "the name '" + name.text + "' is already used by another struct or class",
                      "rename one of them", spec::Structs);
@@ -1721,6 +1895,19 @@ void Parser::parseOpaqueStruct() {
     sd->opaque = true;
     sd->nameLoc = name.loc;
     sd->type.kind = Type::Kind::Opaque;
+}
+
+// A C struct that another file declared first is read again, and must have the same fields, as it is one C type.
+void Parser::sameCStruct(const StructDecl& first, const Token& name) {
+    StructDecl again(name.text, false);
+    parseRecord(&again);
+    bool same = again.fields.size() == first.fields.size();
+    for (size_t i = 0; same && i < again.fields.size(); ++i)
+        same = again.fields[i].name == first.fields[i].name && std::string(again.fields[i].type->name) == first.fields[i].type->name;
+    if (same) return;
+    diags_.error(name.loc, "the C struct '" + name.text + "' is declared differently in another file",
+                 "declare it with the same fields, in the same order, in every file: it is one C type", spec::CStructs);
+    diags_.note(first.nameLoc, "the other declaration is here");
 }
 
 // `int abs(int n);` inside `extern "C"`. Parameter names are optional, as in C.
@@ -2200,6 +2387,7 @@ void Parser::checkUnknownType() {
         if (isBuiltinModule(peek().text) && peek(2).kind == Tok::Ident)
             fail(peek().loc, "'" + peek().text + "::" + peek(2).text + "' is in the module '" + peek().text + "', which this program does not import",
                  "write `import " + peek().text + ";` at the top of the file", spec::Modules);
+        if (modules_ && peek(2).kind == Tok::Ident && !isTypeName(peek()) && !classTemplate(peek().text)) failNoModule(pos_);
     }
     checkUnknownPointerType();
     if (check(Tok::Ident) && peek(1).kind == Tok::Less) {
@@ -2212,7 +2400,7 @@ void Parser::checkUnknownType() {
                  "a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`", spec::Classes);
     }
     // `Foo<int> x;`, which would otherwise be read as a comparison. A variable of that name means it is one.
-    if (check(Tok::Ident) && peek(1).kind == Tok::Less && !classTemplate(peek().text) && !functionTemplate(peek().text) && !isOtherContainer(peek().text)) {
+    if (check(Tok::Ident) && peek(1).kind == Tok::Less && !classTemplate(peek().text) && !functionTemplate(resolvedName(peek())) && !isOtherContainer(peek().text)) {
         bool isVariable = false;
         for (auto& scope : localScopes_) isVariable = isVariable || scope.count(peek().text);
         size_t at = 2;
@@ -3986,6 +4174,23 @@ ExprPtr Parser::parsePrimary() {
         }
         case Tok::LBrace: return parseInitList(t.loc, nullptr);
         case Tok::Ident: {
+            if ((check(Tok::Dot) || check(Tok::ColonColon)) && !isTypeName(t)) {  // `net.server.start()` and `json.parse`, as other languages name them
+                bool isLocal = false;
+                for (auto& scope : localScopes_) isLocal = isLocal || scope.count(t.text);
+                std::string dotted = t.text, written = t.text;
+                for (size_t at = 0; !isLocal; at += 2) {
+                    const ModuleFile* m = modules_ ? modules_->byName(dotted) : nullptr;
+                    // `json.stringify`, of a module that comes with the language, is Sema's to explain, as it knows whether it is imported.
+                    const std::string prefix = m ? m->prefix : "";
+                    const bool next = (peek(at).kind == Tok::Dot || peek(at).kind == Tok::ColonColon) && peek(at + 1).kind == Tok::Ident;
+                    if (!prefix.empty() && next && (at > 0 || peek(at).kind == Tok::Dot))
+                        fail(t.loc, "'" + written + tokSpelling(peek(at).kind) + peek(at + 1).text + "' is not how the members of a module are named",
+                             "write `" + prefix + "::" + peek(at + 1).text + "`: the parts of a module's path, and the name after it, are joined with `::`", spec::Modules);
+                    if (peek(at).kind != Tok::Dot || peek(at + 1).kind != Tok::Ident) break;
+                    dotted += "." + peek(at + 1).text;
+                    written += "." + peek(at + 1).text;
+                }
+            }
             if ((t.text == "static_cast" || t.text == "reinterpret_cast" || t.text == "dynamic_cast") && check(Tok::Less)) {  // `static_cast<int>(x)`
                 advance();
                 Loc typeLoc;
@@ -4021,7 +4226,7 @@ ExprPtr Parser::parsePrimary() {
                 if (isBuiltinModule(t.text))
                     fail(t.loc, "'" + t.text + "::" + peek(1).text + "' is in the module '" + t.text + "', which this program does not import",
                          "write `import " + t.text + ";` at the top of the file", spec::Modules);
-                notYet(t.loc, "module members like '" + t.text + "::" + peek(1).text + "'", "write the name without `" + t.text + "::`. The modules today are `fs`, `http`, `json` and `reflect`, each with its `import`. Built-ins need no prefix");
+                failNoModule(pos_ - 1);
             }
             if (t.loc.line == 0 && (t.text == "__zero" || t.text == "__type_of")) {  // see Builtins.h
                 expect(Tok::LParen, "after " + t.text);
@@ -4073,7 +4278,7 @@ ExprPtr Parser::parsePrimary() {
                 expect(Tok::RParen, "to close the argument list of '" + std::string(ty->name) + "'");
                 return std::make_unique<CallExpr>(loc, ty->name, std::move(args));
             }
-            if (TemplateDecl* tmpl = functionTemplate(t.text);
+            if (TemplateDecl* tmpl = functionTemplate(resolvedName(t));
                 tmpl && check(Tok::Less) && afterAngles(0) && peek(afterAngles(0)).kind == Tok::LParen) {  // `max<long>(a, b)`
                 std::vector<TemplateArg> templateArgs = parseTemplateArgs(*tmpl, t.loc, true);
                 expect(Tok::LParen, "after the template arguments");
@@ -4083,7 +4288,7 @@ ExprPtr Parser::parsePrimary() {
                     while (match(Tok::Comma));
                 }
                 expect(Tok::RParen, "to close the argument list of '" + t.text + "'");
-                auto call = std::make_unique<CallExpr>(t.loc, t.text, std::move(args));
+                auto call = std::make_unique<CallExpr>(t.loc, tmpl->name, std::move(args));
                 call->templateArgs = std::move(templateArgs);
                 return call;
             }

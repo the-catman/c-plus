@@ -1,0 +1,19 @@
+import main;
+import gone;
+
+int main() { return 0; }
+
+export struct Mutex { int x = 0; };
+
+export class Error {
+public:
+    string why;
+};
+
+// error: the main file cannot be imported
+// error: move what other files need from tests/cases/err_modules_files/main.cplus into a module of its own
+// error: there is no module 'gone': the file tests/cases/err_modules_files/gone.cplus is not there
+// error: 'main' can only be in the main file, the one given to `cplus run`, and not in the module 'net.server'
+// error: 'Mutex' is the name of what comes with C+, and only the main file can have its own
+// error: rename it, such as to `MyMutex`: this module uses the built-in one by its name
+// error: rename it, such as to `ServerError`. A class of errors can derive from the built-in one: `class ServerError : public Error { ... };`

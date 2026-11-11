@@ -62,7 +62,9 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtRetainClass, rtReleaseClass, rtFreeClass, rtDestructorHold, rtReferences;
     llvm::FunctionCallee rtWeakRetain, rtWeakRelease, rtWeakLock, rtWeakAlive, rtUncaught;
     llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
-    llvm::Constant* fileName = nullptr;
+    llvm::Constant* fileName = nullptr;  // of the code being generated, which setLine keeps up to date
+    std::vector<const SourceFile*> files;  // by SourceFile::id
+    std::vector<llvm::Constant*> fileNames;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
 
     // In a debug build, the line table that lets a stack trace name files and lines.
@@ -70,6 +72,9 @@ struct Codegen::Impl {
     std::unique_ptr<llvm::DIBuilder> di;
     llvm::DIFile* diFile = nullptr;
     llvm::DISubprogram* diFunction = nullptr;
+    std::vector<llvm::DIFile*> diFiles;  // by SourceFile::id
+    uint32_t diFunctionFile = 0;         // the file `diFunction` is in
+    std::map<std::pair<llvm::DISubprogram*, uint32_t>, llvm::DILexicalBlockFile*> diInOtherFile;  // a field's default from another file
 
     // How one value travels to a C function. A struct is passed in the values `parts`,
     // read from its bytes; on the stack, where the callee finds a copy; or as a pointer to
@@ -210,7 +215,7 @@ struct Codegen::Impl {
     // place holding the vector and the buffer held.
     std::vector<std::pair<llvm::Value*, llvm::Value*>>* heldBuffers = nullptr;
 
-    Impl(const SourceFile& f, CodegenOptions o) : file(f), opts(o), b(ctx) {}
+    Impl(const SourceFile& f, CodegenOptions o) : file(f), opts(o), b(ctx) { files.push_back(&f); }
 
     // ---- Setup -------------------------------------------------------------
 
@@ -239,14 +244,23 @@ struct Codegen::Impl {
         mod->addModuleFlag(llvm::Module::Warning, "Dwarf Version", 5);
         di = std::make_unique<llvm::DIBuilder>(*mod);
         diFile = di->createFile(file.path, "");  // as given, so a trace shows the path the user typed
+        for (const SourceFile* f : files) diFiles.push_back(f == &file ? diFile : di->createFile(f->path, ""));
         di->createCompileUnit(llvm::dwarf::DW_LANG_C_plus_plus, diFile, "cplus", opts.optimize, "", 0, "",
                               llvm::DICompileUnit::LineTablesOnly);
     }
 
     // Code generated from here on belongs to `loc`, in a stack trace.
     void setLine(Loc loc) {
+        if (loc.line && loc.file < fileNames.size()) fileName = fileNames[loc.file];
         // Line 0 is what LLVM calls no line: code written in C+ that comes with the language. See Builtins.h.
-        if (diFunction) b.SetCurrentDebugLocation(llvm::DILocation::get(ctx, loc.line, loc.col, diFunction));
+        if (!diFunction) return;
+        llvm::DIScope* scope = diFunction;
+        if (loc.line && loc.file != diFunctionFile && loc.file < diFiles.size()) {  // code of another file in this function
+            llvm::DILexicalBlockFile*& block = diInOtherFile[{diFunction, loc.file}];
+            if (!block) block = di->createLexicalBlockFile(diFunction, diFiles[loc.file]);
+            scope = block;
+        }
+        b.SetCurrentDebugLocation(llvm::DILocation::get(ctx, loc.line, loc.col, scope));
     }
 
     // The same, until the end of a scope: an expression's operands have their own places,
@@ -254,14 +268,21 @@ struct Codegen::Impl {
     struct AtLine {
         Impl& g;
         llvm::DebugLoc saved;
-        AtLine(Impl& impl, Loc loc) : g(impl), saved(impl.b.getCurrentDebugLocation()) { g.setLine(loc); }
-        ~AtLine() { g.b.SetCurrentDebugLocation(saved); }
+        llvm::Constant* savedFile;
+        AtLine(Impl& impl, Loc loc) : g(impl), saved(impl.b.getCurrentDebugLocation()), savedFile(impl.fileName) { g.setLine(loc); }
+        ~AtLine() {
+            g.b.SetCurrentDebugLocation(saved);
+            g.fileName = savedFile;
+        }
     };
 
     void startLineTable(Loc loc) {
+        if (loc.line && loc.file < fileNames.size()) fileName = fileNames[loc.file];
         if (!di) return;
         auto* type = di->createSubroutineType(di->getOrCreateTypeArray({}));
-        diFunction = di->createFunction(diFile, fn->getName(), "", diFile, loc.line, type, loc.line,
+        diFunctionFile = loc.line && loc.file < diFiles.size() ? loc.file : 0;
+        llvm::DIFile* in = diFiles.empty() ? diFile : diFiles[diFunctionFile];
+        diFunction = di->createFunction(in, fn->getName(), "", in, loc.line, type, loc.line,
                                         llvm::DINode::FlagZero, llvm::DISubprogram::SPFlagDefinition);
         fn->setSubprogram(diFunction);
         setLine(loc);
@@ -4688,6 +4709,7 @@ struct Codegen::Impl {
         }
         declareRuntime();
         fileName = cstring(file.path);
+        for (const SourceFile* f : files) fileNames.push_back(f == &file ? fileName : cstring(f->path));
         if (const StructDecl* error = program.findStruct("Error"); error && error->isClass) errorTy = &error->type;
 
         const FuncDecl* userMain = nullptr;
@@ -4818,6 +4840,8 @@ struct Codegen::Impl {
 
 Codegen::Codegen(const SourceFile& file, CodegenOptions options) : impl_(std::make_unique<Impl>(file, options)) {}
 Codegen::~Codegen() = default;
+
+void Codegen::addFile(const SourceFile& file) { impl_->files.push_back(&file); }
 
 bool Codegen::generate(const Program& program, std::string& error) { return impl_->generate(program, error); }
 

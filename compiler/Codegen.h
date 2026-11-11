@@ -18,6 +18,8 @@ class Codegen {
 public:
     Codegen(const SourceFile& file, CodegenOptions options);
     ~Codegen();
+    // Another file of the program, a module, in the order of their ids, for the names of files that traps and stack traces show.
+    void addFile(const SourceFile& file);
 
     // Returns false and fills `error` if the target machine cannot be set up.
     bool generate(const Program& program, std::string& error);

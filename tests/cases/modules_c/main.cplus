@@ -1,0 +1,21 @@
+// The same C functions, struct and type declared in two files, which is one of each in the program: a C name is no
+// member of a module, and each file that uses one declares it.
+import cside;
+
+extern "C" {
+    struct ldiv_t { long quot; long rem; };
+    ldiv_t ldiv(long a, long b);
+    struct FILE;
+    FILE* fopen(string path, string mode);
+}
+extern "C" long labs(long n);
+
+int main() {
+    ldiv_t d = ldiv(7, 2);
+    println("{} {} {}", d.quot, labs(-3), cside::quot(9, 4));
+    FILE* none = fopen("tests/cases/modules_c/not-there", "r");
+    println("{}", cside::isNull(none));
+    return 0;
+}
+// expect: 3 3 3
+// expect: true

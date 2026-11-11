@@ -1,0 +1,22 @@
+// `export` goes before one declaration at the top of a file. In the main file it does nothing, and it is allowed.
+export module app;
+export export int a() { return 1; }
+export static int b() { return 2; }
+export { int c() { return 3; } }
+export import json;
+export extern "C" int abs(int n);
+module app;
+static int d() { return 4; }
+
+export int main() { return 0; }
+
+export
+// error: C+ has no module declarations: a file is a module by its path
+// error: remove this line. This is the main file, which other files cannot import
+// error: `export` is written twice
+// error: a name cannot be both `export` and `static`
+// error: this compiler does not support `export { ... }` yet
+// error: this compiler does not support `export import` yet
+// error: this compiler does not support `export extern "C"` yet
+// error: A name is already private to its file unless it is marked `export`
+// error: `export` goes before a declaration

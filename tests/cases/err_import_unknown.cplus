@@ -2,4 +2,5 @@ import nothing;
 int main() {
     return 0;
 }
-// error: this compiler does not support modules yet, except for `fs`, `http`, `json` and `reflect`, so 'nothing' cannot be imported
+// error: there is no module 'nothing': the file tests/cases/nothing.cplus is not there
+// error: write the file tests/cases/nothing.cplus, or check the name

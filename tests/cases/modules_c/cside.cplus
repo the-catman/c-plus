@@ -1,0 +1,10 @@
+extern "C" {
+    struct ldiv_t { long quot; long rem; };
+    ldiv_t ldiv(long a, long b);
+    struct FILE;
+    long labs(long n);
+}
+
+export long quot(long a, long b) { return ldiv(a, b).quot + labs(-1); }
+
+export bool isNull(FILE* f) { return f == null; }

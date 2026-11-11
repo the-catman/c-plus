@@ -1,0 +1,18 @@
+// The C names that main.cplus declares, which this file uses without declaring, or declares otherwise.
+extern "C" {
+    struct ldiv_t { long rem; long quot; };
+    int atol(string s);
+}
+
+export long twice(long a) {
+    FILE* f = null;
+    return ldiv(a, 1).quot * 2;
+}
+
+// error: 'FILE' is a C type that this file does not declare
+// error: declare it in this file too, as the other file does: `extern "C" struct FILE;`
+// error: 'ldiv' is a C function that this file does not declare
+// error: declare it in this file too, as another file does: `extern "C" ldiv_t ldiv(long a, long b);`
+// error: the C function 'atol' is declared differently in another file
+// error: the C struct 'ldiv_t' is declared differently in another file
+// error: declare it with the same fields, in the same order, in every file: it is one C type

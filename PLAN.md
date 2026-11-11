@@ -316,8 +316,11 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
   hand. It summarizes a library's public API and lets a library ship compiled without its
   source. Built together with multi-file modules.
 - A single `cplus build` command compiles a directory. No package manager in v1.
-- None of this is built yet, except that a file can import the modules that come with the language (§2.15). A program cannot
-  add names to one of those: `struct json::Mine` is an error.
+- Built 2026-11-11, except `.hplus` files. Decided then: a name at the top of a module is private to its file unless
+  `export` is written before it. Other files name it with the module's whole path, `net::server::start()`, and its own file
+  by its name alone. The root is the folder of the main file, which cannot be imported. Imports are not transitive, and
+  cycles are allowed. A program cannot add names to another module, its own or one that comes with the language:
+  `struct json::Mine` is an error. `export { }`, `export import` and aliases of modules wait.
 
 ### 2.14 Reflection — DECIDED
 Compile-time generated type descriptors: field names, offsets, types. Emitted only for
@@ -655,7 +658,7 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, the core
-language, is under way, then servers, then platforms. Of Phase 7, item 1 is done, and so are references except those into
+language, is under way, then servers, then platforms. Of Phase 7, items 1 and 2 are done, and so are references except those into
 vectors, strings and hashmaps and the functions that return them. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
@@ -753,7 +756,9 @@ will confidently write C++ wherever the two differ.
   program when `X` is used, and `constexpr` reports it while compiling. They could become one rule.
 - Printing still goes by a function the compiler writes for each type, while 2.14 says it is built on descriptors. It works, and
   it costs a program nothing it does not print. Moving it would give one way of walking a value, at the cost of a slower `println`.
-- What a module has is one token with `::` in it, not a scope, which is what `joinModuleNames` makes. A program cannot tell, since it cannot declare such a name (`err_module_add`). Real scopes come with a program's own modules, which need them.
+- What a module has is one token with `::` in it, not a scope, which is what `joinModuleNames` makes, and a program's own
+  modules are named the same way: their names get the module's path in front before parsing (`Modules::qualify`). A program
+  cannot tell, since it cannot declare such a name (`err_module_add`). Real scopes would come with nested namespaces.
 - `main` takes its arguments as in C++, through raw pointers. A checked form,
   `int main(vector<string> args)`, comes in Phase 7.
 - References (`T&`), in Phase 7. The direction was decided on 2026-11-11: C++'s syntax and meaning, for references that

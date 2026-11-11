@@ -13,6 +13,8 @@ enum class FormatResult {
     WouldChange,  // what it would write has other tokens or comments than the file, which is a bug in the formatter
 };
 
-FormatResult formatSource(const SourceFile& file, Diagnostics& diags, std::string& out);
+// The modules that the file imports are read for the names in them, from its project root, which is found going up no
+// further than `top`: see Modules::placeOf. What is wrong in them is not said, and one that is not there stops nothing.
+FormatResult formatSource(const SourceFile& file, Diagnostics& diags, std::string& out, const std::string& top = "");
 
 }  // namespace cplus

@@ -1,0 +1,7 @@
+import a;
+
+export int pong(int n) {
+    if (n <= 0) return 0;
+    a::Node node = a::Node("b");
+    return 1 + a::ping(n - 1) + int(node.name.size()) - 1;
+}

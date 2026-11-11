@@ -39,6 +39,7 @@ struct ConstHooks {
     std::function<bool(const ConstraintExpr&)> constraint;        // `Number<T>`; may throw a ConstError
     std::function<int64_t(const Type*, Loc)> sizeOf;              // may throw a ConstError
     std::function<void(const FuncDecl&)> prepare;                 // before a function runs, if there is anything to do
+    std::function<std::string(const std::string&, Loc)> resolve;  // what a name written there means at the top of its file: Modules::resolve
 };
 
 // `Comparable`, `Number`, `Integer`, `Floating`, `same_as` and `derived_from`, when `name` is one of them.

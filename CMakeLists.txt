@@ -155,6 +155,7 @@ add_executable(cplus
   compiler/Format.cpp
   compiler/Index.cpp
   compiler/Lsp.cpp
+  compiler/Modules.cpp
   compiler/CHeaders.cpp
   compiler/Parser.cpp
   compiler/Sema.cpp

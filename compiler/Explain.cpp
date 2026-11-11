@@ -57,6 +57,7 @@ constexpr Alias kAliases[] = {
     {"getline", "reading-input"},    {"cin", "reading-input"},       {"stoi", "parsing-numbers"},
     {"stol", "parsing-numbers"},     {"stod", "parsing-numbers"},    {"stof", "parsing-numbers"},
     {"atoi", "parsing-numbers"},     {"number", "parsing-numbers"},
+    {"export", "modules"},           {"module", "modules"},          {"namespace", "modules"},
 };
 
 std::string slug(std::string_view heading) {

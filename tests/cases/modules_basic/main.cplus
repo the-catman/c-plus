@@ -1,0 +1,26 @@
+// A program of three files: this one, net/server.cplus and geo.cplus, which it imports by their paths.
+import net.server;
+import geo;
+
+int main() {
+    net::server::Config c = {.port = 8080};
+    println("{}", net::server::start(c));
+    geo::Point p = geo::origin();
+    auto q = geo::shift(p, 3);
+    println("{} {}", q.x, geo::LIMIT);
+    println("{}", geo::largest(3, 9));
+    geo::Box<int> b = geo::Box<int>(4);
+    println("{}", b.get());
+    println("{}", p);
+    println("{}", geo::largest<long>(2, 7));
+    array<int, geo::LIMIT> room;
+    println("{}", room.size());
+    return 0;
+}
+// expect: localhost:8080 16163
+// expect: 45 42
+// expect: 9
+// expect: 4
+// expect: {x: 0, y: 0}
+// expect: 7
+// expect: 42

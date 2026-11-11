@@ -19,6 +19,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <optional>
@@ -29,8 +31,10 @@
 #include "Format.h"
 #include "Index.h"
 #include "Lexer.h"
+#include "Modules.h"
 #include "Parser.h"
 #include "Sema.h"
+#include "SpecRefs.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -116,9 +120,9 @@ std::string serialize(const json::Value& value) {
     return out;
 }
 
-// The folder of a file the editor has open, for headers in quotes: `file:///work/my%20app/x.cplus` is in /work/my app. Nothing for
-// a file that is not on disk.
-std::string folderOf(const std::string& uri) {
+// The path of a file the editor has open: `file:///work/my%20app/x.cplus` is /work/my app/x.cplus. Nothing for a file that is
+// not on disk.
+std::string pathOfUri(const std::string& uri) {
     if (uri.rfind("file://", 0) != 0) return "";
     std::string path;
     for (size_t i = 7; i < uri.size(); ++i) {
@@ -127,19 +131,66 @@ std::string folderOf(const std::string& uri) {
             i += 2;
         } else path += uri[i];
     }
+    return path;
+}
+
+// The folder of a file the editor has open, for headers in quotes.
+std::string folderOf(const std::string& uri) {
+    const std::string path = pathOfUri(uri);
     const size_t slash = path.rfind('/');
     return slash == std::string::npos ? "" : path.substr(0, slash == 0 ? 1 : slash);
 }
 
-std::string checkText(const std::string& uri, const std::string& text, Units units) {
+std::string uriOfPath(const std::string& path) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string uri = "file://";
+    for (unsigned char c : std::filesystem::absolute(path).lexically_normal().string()) {
+        if (std::isalnum(c) || c == '/' || c == '-' || c == '.' || c == '_' || c == '~') uri += (char)c;
+        else uri += std::string("%") + hex[c >> 4] + hex[c & 15];
+    }
+    return uri;
+}
+
+// The files the editor has open, by their paths, which are read as they are there rather than from disk: a module the program
+// imports may have changes that are not saved yet.
+struct OpenFile {
+    std::string uri, text;
+};
+using OpenFiles = std::map<std::string, OpenFile>;
+
+std::string normalPath(const std::string& path) { return std::filesystem::path(path).lexically_normal().string(); }
+
+// The file, with the modules it imports, which are found from the folder of the main file. A module that the editor has open
+// on its own is checked from the nearest folder from which its imports are found, going up as far as the workspace folder.
+// What is wrong in another file is said once, at the import that brings it in.
+std::string checkText(const std::string& uri, const std::string& text, Units units, const OpenFiles& open, const std::string& workspace) {
     if (std::getenv("CPLUS_LSP_CRASH_FOR_TESTS")) std::abort();  // so the tests reach what a crash in the compiler does
-    SourceFile file(uri, text);
+    const std::string path = pathOfUri(uri);
+    SourceFile file(path.empty() ? uri : path, text);
     Diagnostics diags(file);
     std::vector<Message> messages;
     diags.collectInto(&messages);
-    Lexer lexer(file, diags);
-    Parser parser(lexer.lexAll(), diags);
-    parser.findHeadersIn(HeaderSearch{folderOf(uri), {}});
+    Modules modules;
+    Modules::Options options;
+    options.read = [&](const std::string& name, std::string& out) {
+        if (path.empty()) return false;  // a file that is not on disk has no folder to find modules in
+        if (auto it = open.find(normalPath(name)); it != open.end()) {
+            out = it->second.text;
+            return true;
+        }
+        std::error_code ec;
+        if (std::filesystem::is_directory(name, ec)) return false;
+        std::ifstream in(name, std::ios::binary);
+        if (!in) return false;
+        out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        return true;
+    };
+    const Modules::Place place = path.empty() ? Modules::Place{} : Modules::placeOf(file, workspace, options);
+    options.root = place.root;
+    modules.load(file, place.moduleName, diags, options);
+    Parser parser(modules.tokens(), diags);
+    parser.useModules(&modules);
+    parser.findHeadersIn(HeaderSearch{path.empty() ? folderOf(uri) : place.root, {}});
     Program program;
     parser.parseProgram(program);
     const bool checked = !parser.gaveUp();  // otherwise what was read is too little to check, as for `cplus check`
@@ -147,15 +198,28 @@ std::string checkText(const std::string& uri, const std::string& text, Units uni
         Sema sema(diags, parser, true);
         sema.check(program);
     }
+    auto uriOf = [&](Loc loc) {
+        if (loc.file == 0) return uri;
+        const std::string other = normalPath(diags.fileOf(loc).path);
+        auto it = open.find(other);
+        return it != open.end() ? it->second.uri : uriOfPath(other);
+    };
 
     json::Array diagnostics;
+    std::vector<int> errorsIn(diags.fileCount(), 0);
+    bool said = false;  // the message before, which a note adds to
     for (const Message& m : messages) {
         if (m.level == "note") {  // more about the one before
-            if (diagnostics.empty()) continue;
+            if (diagnostics.empty() || !said) continue;
             json::Object& last = *diagnostics.back().getAsObject();
             if (m.loc.line) last.getArray("relatedInformation")->push_back(json::Object{
-                    {"location", json::Object{{"uri", uri}, {"range", range(file, m.loc, units)}}}, {"message", m.message}});
+                    {"location", json::Object{{"uri", uriOf(m.loc)}, {"range", range(diags.fileOf(m.loc), m.loc, units)}}}, {"message", m.message}});
             else last["message"] = last.getString("message")->str() + "\nnote: " + m.message;
+            continue;
+        }
+        said = m.loc.file == 0;
+        if (!said) {
+            if (m.level == "error" && m.loc.file < errorsIn.size()) ++errorsIn[m.loc.file];
             continue;
         }
         std::string message = m.message;
@@ -166,23 +230,53 @@ std::string checkText(const std::string& uri, const std::string& text, Units uni
         if (!m.spec.empty()) d["code"] = m.spec;
         diagnostics.push_back(std::move(d));
     }
+    // An import that brings in a file with errors, which is the module or one that it imports.
+    for (const ModuleImport& i : modules.files.empty() ? std::vector<ModuleImport>{} : modules.files[0].imports) {
+        if (i.file <= 0) continue;
+        std::vector<bool> seen(modules.files.size(), false);
+        std::vector<int> next{i.file};
+        int count = 0;
+        std::string first;  // the module of the first of them
+        while (!next.empty()) {
+            const int f = next.back();
+            next.pop_back();
+            if (f <= 0 || (size_t)f >= modules.files.size() || seen[f]) continue;
+            seen[f] = true;
+            if ((size_t)f < errorsIn.size() && errorsIn[f] > 0) {
+                count += errorsIn[f];
+                if (first.empty() || f == i.file) first = modules.files[f].name;
+            }
+            for (const ModuleImport& j : modules.files[f].imports) next.push_back(j.file);
+        }
+        if (count == 0) continue;
+        const std::string errors = std::to_string(count) + (count == 1 ? " error" : " errors");
+        const std::string message = (first == i.name ? "the module '" + i.name + "' has " + errors
+                                                     : "the module '" + first + "', which '" + i.name + "' imports, has " + errors) +
+                                    "\nhelp: open " + modules.pathOf(first) + " to see what is wrong there, or run `cplus check` on the main file\nspec: docs/SPEC.md#" + std::string(spec::Modules) + ", or run `cplus explain " + spec::Modules + "`";
+        diagnostics.push_back(json::Object{{"range", range(file, i.loc, units)}, {"severity", 1}, {"source", "cplus"}, {"message", message},
+                                           {"code", spec::Modules}, {"relatedInformation", json::Array{}}});
+    }
     json::Array references;
+    std::vector<const SourceFile*> files;
+    for (const ModuleFile& f : modules.files) files.push_back(f.source);
     if (checked)
-        for (const Reference& r : indexProgram(program, file)) {
+        for (const Reference& r : indexProgram(program, file, files)) {
             json::Object o{{"range", range(file, r.at, units)}, {"what", r.what}};
-            if (r.declared.line) o["declared"] = range(file, r.declared, units);
+            if (r.declared.line) o["declared"] = range(diags.fileOf(r.declared), r.declared, units);
+            if (r.declared.line && r.declared.file != 0) o["declaredUri"] = uriOf(r.declared);
             references.push_back(std::move(o));
         }
     return serialize(json::Object{{"diagnostics", std::move(diagnostics)}, {"references", std::move(references)}});
 }
 
-std::string formatText(const std::string& uri, const std::string& text) {
-    SourceFile file(uri, text);
+std::string formatText(const std::string& uri, const std::string& text, const std::string& workspace) {
+    const std::string path = pathOfUri(uri);
+    SourceFile file(path.empty() ? uri : path, text);
     Diagnostics diags(file);
     std::vector<Message> messages;
     diags.collectInto(&messages);
     std::string out;
-    switch (formatSource(file, diags, out)) {
+    switch (formatSource(file, diags, out, workspace)) {
     case FormatResult::Formatted: return serialize(json::Object{{"result", "formatted"}, {"text", out}});
     case FormatResult::HasErrors: return serialize(json::Object{{"result", "errors"}});
     case FormatResult::WouldChange: break;
@@ -334,6 +428,7 @@ struct Ref {
     int64_t line = 0, start = 0, end = 0;
     std::string what;
     std::optional<json::Value> declared;
+    std::optional<std::string> declaredUri;  // when it is declared in another file
 };
 
 struct Document {
@@ -382,6 +477,7 @@ private:
     bool initialized_ = false;
     bool shutdown_ = false;
     std::map<std::string, Document> documents_;
+    std::string workspace_;  // the folder the editor has open, as far up as a module's project root is looked for
 
     void send(json::Object message) {
         message["jsonrpc"] = "2.0";
@@ -410,6 +506,9 @@ private:
                         for (const json::Value& e : *encodings)
                             if (e.getAsString() && *e.getAsString() == "utf-8") units_ = Units::Utf8;
             initialized_ = true;
+            if (const json::Array* folders = params.getArray("workspaceFolders"); folders && !folders->empty() && (*folders)[0].getAsObject())
+                workspace_ = pathOfUri((*folders)[0].getAsObject()->getString("uri").value_or("").str());
+            if (workspace_.empty() && params.getString("rootUri")) workspace_ = pathOfUri(params.getString("rootUri")->str());
             json::Object capabilities{
                 {"positionEncoding", units_ == Units::Utf8 ? "utf-8" : "utf-16"},
                 {"textDocumentSync", json::Object{{"openClose", true}, {"change", 1}}},
@@ -434,7 +533,7 @@ private:
                 return reply(id, json::Object{{"contents", json::Object{{"kind", "markdown"}, {"value", ref->what}}}, {"range", std::move(range)}});
             }
             if (!ref->declared) return reply(id, nullptr);
-            return reply(id, json::Object{{"uri", uriOf(params)}, {"range", *ref->declared}});
+            return reply(id, json::Object{{"uri", ref->declaredUri ? *ref->declaredUri : uriOf(params)}, {"range", *ref->declared}});
         }
         if (method == "textDocument/formatting") return formatting(id, params);
         replyError(id, -32601, "cplus lsp does not have the method `" + method + "`");
@@ -476,6 +575,7 @@ private:
         } else if (method == "textDocument/didClose") {
             if (documents_.erase(uri)) notify("textDocument/publishDiagnostics", json::Object{{"uri", uri}, {"diagnostics", json::Array{}}});
         }
+        for (auto& [other, d] : documents_) d.dirty = true;  // a file can import any other, which is then read as it is now
     }
 
     void checkAll() {
@@ -488,7 +588,10 @@ private:
         d.refs.clear();
         std::string why;
         const Units units = units_;
-        std::optional<std::string> found = isolated([&] { return checkText(uri, d.text, units); }, why);
+        OpenFiles open;
+        for (const auto& [other, doc] : documents_)
+            if (const std::string path = pathOfUri(other); !path.empty()) open[normalPath(path)] = OpenFile{other, doc.text};
+        std::optional<std::string> found = isolated([&] { return checkText(uri, d.text, units, open, workspace_); }, why);
         json::Array diagnostics;
         const std::optional<json::Value> parsed = readJson(found);
         const json::Object* result = parsed ? parsed->getAsObject() : nullptr;
@@ -505,6 +608,7 @@ private:
                     ref.end = r->getObject("end")->getInteger("character").value_or(0);
                     ref.what = o->getString("what")->str();
                     if (const json::Value* declared = o->get("declared")) ref.declared = *declared;
+                    if (o->getString("declaredUri")) ref.declaredUri = o->getString("declaredUri")->str();
                     d.refs.push_back(std::move(ref));
                 }
         } else {
@@ -545,7 +649,7 @@ private:
         if (!d) return reply(id, nullptr);
         std::string why;
         const std::string uri = uriOf(params);
-        std::optional<std::string> found = isolated([&] { return formatText(uri, d->text); }, why);
+        std::optional<std::string> found = isolated([&] { return formatText(uri, d->text, workspace_); }, why);
         const std::optional<json::Value> parsed = readJson(found);
         const json::Object* result = parsed ? parsed->getAsObject() : nullptr;
         const std::optional<llvm::StringRef> kind = result ? result->getString("result") : std::nullopt;

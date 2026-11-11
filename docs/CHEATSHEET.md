@@ -76,6 +76,7 @@ long square(long n) { return n * n; }
 | constexpr | `constexpr int MAX = square(4);`, `constexpr int square(int n) { return n * n; }`, worked out while compiling, so `1 / 0` there is a compile error. `array<int, MAX * 2> a;`, `Buffer<int, MAX>`, also with a plain `const` |
 | if constexpr | `if constexpr (Integer<T>) { ... } else { ... }`: only the branch taken is checked. Also `Number<T>`, `Floating<T>`, `Comparable<T>`, `same_as<T, int>`, `derived_from<T, Base>`, your own `Addable<T>`, and `N == 0` |
 | Program | `int main()`, or `int main(int argc, char** argv)`, with `string(argv[1])` for the first argument. `cplus run app.cplus -- arg1 arg2` |
+| Modules | each file is one. `import geometry;` reads geometry.cplus, and `import net.server;` net/server.cplus, from the folder of the main file, which is the one with `main`. There, `export int area(int w, int h) { ... }` makes a name visible, and other files write it with the module's path: `geometry::area(2, 3)`, `net::server::start()`. What has no `export` is private to its file. `cplus run app` runs app/main.cplus |
 | Literals | `42`, `0xFF`, `0o755` (octal), `0b1010`, `1'000'000`, `1L` (long), `1.5`, `1e-9`, `2.5f` (float), `'a'`, `'\n'` (char) |
 | Conditions | `bool`, a number, a pointer or an optional, as in C++: `if (n)`, `while (n--)`, `!n`, `if (p)` (not null), `if (opt)` (holds a value). Not a `char`: write `c != '\0'` |
 
@@ -190,6 +191,10 @@ long square(long n) { return n * n; }
 | `nlohmann::json`, `JSON.parse(text)`, `JSON.stringify(x)` | `import json;`, then `try json::parse<User>(text)` or `try json::parse<json::Value>(text)`, and `json::stringify(x)` |
 | `NLOHMANN_DEFINE_TYPE_...`, `to_json`, `from_json` | not needed: the compiler knows the fields of every type |
 | `struct json::Mine { ... };`, `namespace json { ... }` | a module's names are its own, and a program cannot add to them: `struct Mine { ... };` |
+| `namespace geometry { ... }`, `using namespace geometry;` | a file is a module: put the names in geometry.cplus, with `export` before each that other files use, and they write `import geometry;`, then `geometry::area(2, 3)` |
+| `static int helper() { ... }` at the top of a file | `int helper() { ... }`: a name is private to its file unless it is marked `export` |
+| `server::start()`, `json.stringify(x)` | the module's whole path, joined with `::`: `net::server::start()` for net/server.cplus, `json::stringify(x)` |
+| `export module geometry;`, `#include "geometry.h"` | nothing: a file is a module by its path, and `import geometry;` reads geometry.cplus |
 | `fetch(url)`, `await fetch(url)`, `curl_easy_perform` | `import http;`, then `try await http::fetch(url)` in an async function, or `try http::get(url)`, which waits for the answer |
 | `res.text()`, `res.json()`, `res.headers.get(x)` | `r.body`, `try json::parse<T>(r.body)`, `r.header(x)` |
 | `http::get(url, options)`, `fetch(url, {method: "PUT"})` | one function per name for now: `try http::send({.method = "PUT", .url = url})`, or `try await http::fetchWith({.method = "PUT", .url = url})` |
@@ -226,7 +231,7 @@ long square(long n) { return n * n; }
 | Classes | `final`, covariant return types, private and protected base classes |
 | Operators | operator overloading with C++ syntax, after function overloading |
 | Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments |
-| Modules | your own, `import net.server;` |
+| Modules | `export { ... }` around several declarations, `export import`, `export extern "C"`, aliases such as `namespace srv = net::server;` |
 | HTTP | a body in pieces instead of all at once; keeping cookies; async WebSockets |
 | JSON | other names for fields, marking a field to leave out |
 | Reflection | reading a field through its `reflect::Field`, methods |

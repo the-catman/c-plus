@@ -1,0 +1,3 @@
+int helper() { return 8000; }
+
+export int start() { return helper() + 80; }

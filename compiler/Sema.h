@@ -216,6 +216,11 @@ private:
     // Keeps track of what the pointer variable `var` holds once it is given `value`.
     void notePointer(Flow& flow, const VarDecl* var, const Expr& value);
     void reportUnknownName(const NameExpr& n);
+    // A program of more than one file: see Modules.h.
+    bool hiddenFrom(const std::string& name, Loc declared, Loc used) const;  // the main file's own, used in another file
+    std::string elsewhere(const std::string& name, Loc used) const;  // where a name not found here is, as a help, or ""
+    bool reportElsewhere(const std::string& name, Loc used, const char* what);  // says so, if it is
+    std::string resolved(const std::string& name, Loc used) const;
 
     VarDecl* lookup(const std::string& name);
     // The variable of each `for (auto x : list)`, which is a copy of the element

@@ -16,6 +16,7 @@
 
 #include "AST.h"
 #include "Lexer.h"
+#include "Modules.h"
 #include "Parser.h"
 
 namespace cplus {
@@ -98,6 +99,11 @@ public:
         tail_.assign(n, false);
     }
 
+    void knowModuleNames(std::set<std::string> types, std::set<std::string> templates) {
+        moduleTypes_ = std::move(types);
+        moduleTemplates_ = std::move(templates);
+    }
+
     std::string run() {
         findNames();
         findRoles();
@@ -120,6 +126,7 @@ private:
     std::vector<bool> kept_;       // `{` of a declaration's body, on one line with its `}`, which stays on one line
     std::vector<bool> tail_;       // `(` of the `while` that ends a `do`
     std::set<std::string> types_, templates_;
+    std::set<std::string> moduleTypes_, moduleTemplates_;  // of the modules the file imports, with their paths: `geo::Box`
     std::vector<Line> lines_;
 
     std::string text(size_t i) const { return src_.substr(toks_[i].begin, toks_[i].end - toks_[i].begin); }
@@ -217,7 +224,15 @@ private:
         const std::string& name = toks_[p].text;
         if (templates_.count(name) || kTemplates.count(name)) return true;
         const bool qualified = p >= 2 && kind(p - 1) == Tok::ColonColon && kind(p - 2) == Tok::Ident;
+        if (qualified && moduleTemplates_.count(pathTo(p))) return true;
         return qualified && ((name == "parse" && toks_[p - 2].text == "json") || (name == "type" && toks_[p - 2].text == "reflect"));
+    }
+
+    // `net::server::Config`, of the name at `i` and what is before it.
+    std::string pathTo(size_t i) const {
+        std::string path = toks_[i].text;
+        for (size_t j = i; j >= 2 && kind(j - 1) == Tok::ColonColon && kind(j - 2) == Tok::Ident; j -= 2) path = toks_[j - 2].text + "::" + path;
+        return path;
     }
 
     // What can come before the `*` or `?` of a type.
@@ -228,6 +243,7 @@ private:
         if (k == Tok::Ident) {
             const std::string& name = toks_[i].text;
             if (types_.count(name) || kTypes.count(name)) return true;
+            if (i >= 2 && kind(i - 1) == Tok::ColonColon && moduleTypes_.count(pathTo(i))) return true;
             return i >= 1 && kind(i - 1) == Tok::ColonColon && std::isupper((unsigned char)name[0]);  // `http::Response`
         }
         return role_[i] == Role::TemplateClose || (k == Tok::Star && role_[i] == Role::Pointer) || (k == Tok::Question && role_[i] == Role::Optional);
@@ -797,19 +813,37 @@ std::string trimmed(std::string s) {
 
 }  // namespace
 
-FormatResult formatSource(const SourceFile& file, Diagnostics& diags, std::string& out) {
+FormatResult formatSource(const SourceFile& file, Diagnostics& diags, std::string& out, const std::string& top) {
     std::vector<Comment> comments;
     std::vector<Token> toks = lexWithComments(file, diags, comments);
     if (diags.hasErrors()) return FormatResult::HasErrors;
+    std::set<std::string> moduleTypes, moduleTemplates;  // `geo::Point`, `geo::Box`, as other files write them
     {
-        Parser parser(toks, diags);
+        Modules modules;
+        Modules::Options options;
+        options.quiet = true;
+        const Modules::Place place = Modules::placeOf(file, top, options);
+        options.root = place.root;
+        diags.onlyGivenFile();
+        modules.load(file, place.moduleName, diags, options);
+        for (size_t f = 1; f < modules.files.size(); ++f)
+            for (const auto& [name, member] : modules.files[f].members) {
+                if (member.isTemplate) moduleTemplates.insert(modules.files[f].prefix + "::" + name);
+                else if (member.isType) moduleTypes.insert(modules.files[f].prefix + "::" + name);
+            }
+        if (modules.incomplete) diags.mute();  // what the module that is not there has is not known, which is not the file's error
+        Parser parser(modules.tokens(), diags);
+        parser.useModules(&modules);
         parser.findHeadersIn(HeaderSearch{std::filesystem::path(file.path).parent_path().string(), {}});
         parser.quietHeaders();
         Program program;
         parser.parseProgram(program);
+        if (modules.incomplete) diags.unmute();
         if (diags.hasErrors() || parser.gaveUp()) return FormatResult::HasErrors;
     }
-    out = Formatter(file.text, toks, comments).run();
+    Formatter formatter(file.text, toks, comments);
+    formatter.knowModuleNames(moduleTypes, moduleTemplates);
+    out = formatter.run();
     if (std::getenv("CPLUS_FMT_BUG_FOR_TESTS")) out += "0\n";  // so the tests reach what a bug in the formatter does
 
     // What it wrote is the same program, with the same comments.

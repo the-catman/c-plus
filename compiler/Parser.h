@@ -10,6 +10,7 @@
 #include "CHeaders.h"
 #include "ConstEval.h"
 #include "Lexer.h"
+#include "Modules.h"
 
 namespace cplus {
 
@@ -22,6 +23,9 @@ public:
     // taken to be there.
     void quietHeaders() { quietHeaders_ = true; }
     bool gaveUp() const { return gaveUp_; }  // the program was too deeply nested to read to its end
+    // The files of a program of more than one, whose tokens these are. See Modules.h.
+    void useModules(const Modules* modules) { modules_ = modules; }
+    const Modules* modules() const { return modules_; }
 
     // Reads a generic again with its parameters standing for `args`, which makes an ordinary
     // function. The same arguments give the same one. Null after reporting an error.
@@ -81,6 +85,14 @@ private:
     void addBuiltins();  // what is written in C+ itself, for a program that uses it. See Builtins.h
     void joinThrowingTasks();
     void joinModuleNames(const std::set<std::string>& modules);
+    size_t programModuleAt(size_t i) const;  // how many parts the path of a program's module has that starts there, or 0
+    void checkModuleNames();  // `net::server::start`: imported, there, and exported
+    const Modules* modules_ = nullptr;
+    std::string resolvedName(const Token& t) const;  // see Modules::resolve
+    void passExport();  // `export` before a declaration
+    [[noreturn]] void failModuleLine(Loc at);  // `module x;`
+    [[noreturn]] void failNoModule(size_t at);  // `net::server::start` with no such module read
+    uint32_t fileNow_ = 0;  // the file of the declaration being read
     void addBuiltinSource(const SourceFile& source);
     // What a program uses of `import fs;`, `readLine()`, `stoi` and its kind. `thrower` is the first of them that throws an Error.
     std::vector<const SourceFile*> librarySources(const std::set<std::string>& modules, bool canThrow, std::string& thrower, Loc& throwerLoc) const;
@@ -105,6 +117,7 @@ private:
     bool atAttribute() const { return check(Tok::LBracket) && peek(1).kind == Tok::LBracket; }
     ExprPtr parseNew();
     void parseRecord(StructDecl* into = nullptr);  // struct or class; `into` when the type is made from a generic
+    void sameCStruct(const StructDecl& first, const Token& name);
     // Generics
     struct TemplateBinding {
         const Type* type = nullptr;  // a type parameter; null for a value parameter

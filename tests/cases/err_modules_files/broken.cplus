@@ -1,0 +1,9 @@
+module broken;
+
+// error: C+ has no module declarations: a file is a module by its path
+// error: remove this line. This file is the module 'broken' already, which other files import with `import broken;`
+// error: expected '}' to close the block, found end of file
+// not-error: can reach its end
+
+export int open() {
+    return 1;

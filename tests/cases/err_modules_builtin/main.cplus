@@ -1,0 +1,9 @@
+// `import json;` is always the module that comes with the language, so a file of the project named json.cplus is an error.
+import json;
+
+int main() {
+    println("{}", json::stringify(1));
+    return 0;
+}
+// error: the file tests/cases/err_modules_builtin/json.cplus has the name of the module 'json', which comes with C+
+// error: rename the file, such as to `myjson.cplus`, and import it by that name: `import myjson;`

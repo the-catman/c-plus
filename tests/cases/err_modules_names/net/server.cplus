@@ -1,0 +1,18 @@
+struct Hidden { int x = 0; };
+
+int helper() { return 2; }
+int secret() { return 1; }
+const int SECRET = 4;
+
+export int start() {
+    Mine m;
+    return ownHelper() + OWN;
+}
+
+export struct Shape { int side = 1; };
+export int area(int x) { return x; }
+
+// error: 'Mine' is declared in the main file, which other files cannot use
+// error: 'ownHelper' is a function of the main file, which other files cannot use
+// error: 'OWN' is not declared in this file
+// error: 'OWN' is declared in the main file, which other files cannot use

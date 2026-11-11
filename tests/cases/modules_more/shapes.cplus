@@ -1,0 +1,9 @@
+import geometry;
+
+struct Square {
+    int side = 1;
+};
+
+export Square make(int side) { return Square{side}; }
+
+export geometry::Point center(Square s) { return geometry::Point{s.side / 2, s.side / 2}; }

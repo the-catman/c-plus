@@ -1,0 +1,23 @@
+export const int LIMIT = BASE * 2;
+const int BASE = 21;
+
+export struct Point {
+    int x = 0;
+    int y = 0;
+};
+
+export Point origin() { return Point{}; }
+
+export Point shift(Point p, int by) {
+    array<int, LIMIT> a;
+    return Point{p.x + by + int(a.size()), p.y};
+}
+
+export template<typename T> T largest(T a, T b) { return a > b ? a : b; }
+
+export template<typename T> class Box {
+    T value;
+public:
+    Box(T v) : value(v) {}
+    T get() const { return largest(value, value); }
+};

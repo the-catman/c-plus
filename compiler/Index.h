@@ -17,5 +17,8 @@ struct Reference {
 
 // Every name in `file` that the checks found the meaning of, the first meaning only where generic code has several.
 std::vector<Reference> indexProgram(const Program& program, const SourceFile& file);
+// The same for a program of several files, `files` by their ids, in which the comment above a declaration is read from the
+// file it is in.
+std::vector<Reference> indexProgram(const Program& program, const SourceFile& file, const std::vector<const SourceFile*>& files);
 
 }  // namespace cplus

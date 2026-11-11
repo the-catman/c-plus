@@ -1,0 +1,44 @@
+// How one file names what another has: only what is exported, with the whole path of a module this file imports.
+import net.server;
+import other;
+
+struct Mine { int a = 0; };
+int ownHelper() { return 1; }
+const int OWN = 3;
+const int TOP = 2 * net::server::SECRET;
+
+int main() {
+    net::server::helper();
+    net::server::Hidden h;
+    net::server::nothing();
+    server::start();
+    net.server.start();
+    net.server::start();
+    other::Thing t;
+    Shape s;
+    area(2);
+    bool b = true;
+    int k = b ? net::server::secret() : 0;
+    return 0;
+}
+
+int net::server::extra() { return 1; }
+
+// error: 'helper' is not exported by the module 'net.server'
+// error: write `export` before its declaration, in tests/cases/err_modules_names/net/server.cplus on line 3: `export int helper() { return 2; }`
+// error: 'Hidden' is not exported by the module 'net.server'
+// error: the module 'net.server' has no 'nothing'
+// error: what it exports is `net::server::Shape`, `net::server::area`, `net::server::start`
+// error: 'server::start' names the module 'net.server' by the last part of its path
+// error: 'net.server.start' is not how the members of a module are named
+// error: 'net.server::start' is not how the members of a module are named
+// error: write `net::server::start`: the parts of a module's path, and the name after it, are joined with `::`
+// error: 'Shape' is in the module 'net.server', and outside its file it is written `net::server::Shape`
+// error: 'area' is not declared in this file
+// error: 'area' is in the module 'net.server', and other files write it `net::server::area`
+// error: 'net::server::extra' would add to the module 'net.server', which a program cannot do
+// error: leave out the `net::server::`, and use the name by itself
+// error: 'SECRET' is not exported by the module 'net.server'
+// error: 'secret' is not exported by the module 'net.server'
+// not-error: unknown type 'Shape'
+// not-error: has no 'extra'

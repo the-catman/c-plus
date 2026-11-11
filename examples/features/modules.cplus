@@ -1,8 +1,12 @@
-// `import x;` adds a module that comes with the language. There are no headers, and its members are used with `::`.
+// `import x;` adds a module: one that comes with the language, as here, or a file of the program, as in examples/todo,
+// where `import tasks;` reads tasks.cplus. There are no headers, and the members of a module are used with `::`.
 import json;
 
+// `export` makes a name visible to the files that import this one. The main file, which none can import, may have it too.
+export int twice(int n) { return n * 2; }
+
 int main() {
-    println("{}", json::stringify(vector<int>{1, 2}));
+    println("{}", json::stringify(vector<int>{1, twice(1)}));
     // expect: [1,2]
     return 0;
 }

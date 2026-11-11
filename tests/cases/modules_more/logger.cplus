@@ -1,0 +1,7 @@
+export void log(string message) {
+    println("[log] {} {}", message, sqrt(4.0));
+    double d = 1.0;
+    report(d);
+}
+
+void report(double d) { println("[log] {}", d); }
