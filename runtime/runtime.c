@@ -1181,6 +1181,13 @@ _Noreturn void cplus_trap_narrow(int64_t value, const char* file, int32_t line, 
     cplus_trap(message, file, line, column);
 }
 
+// `Color(n)` given a number that is not the value of any enumerator of the enum.
+_Noreturn void cplus_trap_enum(int64_t value, const char* type, const char* file, int32_t line, int32_t column) {
+    char message[320];
+    snprintf(message, sizeof message, "%s(n) was given %" PRId64 ", which is not the value of any enumerator of '%s'", type, value, type);
+    cplus_trap(message, file, line, column);
+}
+
 // `int(x)` or `long(x)` given NaN, an infinity, or a value too large for the type.
 _Noreturn void cplus_trap_float_cast(double value, const char* type, const char* file, int32_t line, int32_t column) {
     cplus_string text = {NULL, 0, NULL};

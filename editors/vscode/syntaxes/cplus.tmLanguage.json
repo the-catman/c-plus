@@ -162,6 +162,20 @@
     "declarations": {
       "patterns": [
         {
+          "match": "\\b(enum)\\s+(class|struct)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.cplus"
+            },
+            "2": {
+              "name": "storage.type.cplus"
+            },
+            "3": {
+              "name": "entity.name.type.enum.cplus"
+            }
+          }
+        },
+        {
           "match": "\\b(struct|class|interface|concept)\\s+([A-Za-z_]\\w*)",
           "captures": {
             "1": {

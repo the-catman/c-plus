@@ -165,7 +165,7 @@ SPEC_SKETCHES = (
 
 
 def spec_code_problems(cplus, text, workdir):
-    declaration = re.compile(r"^\s*(import\b|struct\b|class\b|interface\b|template\b|extern\b|constexpr\b|\[\[allow\(new_delete\)\]\];|const\s+\w+\s+[A-Z_]+\s*=)")
+    declaration = re.compile(r"^\s*(import\b|struct\b|class\b|interface\b|enum\b|template\b|extern\b|constexpr\b|\[\[allow\(new_delete\)\]\];|const\s+\w+\s+[A-Z_]+\s*=)")
     function = re.compile(r"^\s*(?:[\w:<>,\s\*\?]+?)\s+\**\w+\s*\([^;]*\)\s*(const\s*)?(throws\s*)?\{")
     needs_context = re.compile(r"is not declared|unknown type|there is no function named|there is no class named|has no field named|has no method named")
     source = workdir / "spec_block.cplus"
@@ -509,9 +509,9 @@ PLANNED_FEATURES = [
     ("a generic constexpr function in an array's size", 'template<typename T> constexpr int size(T x) { return 2; }\n' + M % "array<int, size<int>(1)> a;"),
     ("variables outside functions", 'int count = 0;\n' + M % ""),
     ("constants of other types", 'struct P { int x = 0; };\nconst P ORIGIN = {1};\n' + M % ""),
-    ("enums", 'enum Color { Red, Blue };\n' + M % ""),
-    ("enum classes", 'enum class Color { Red, Blue };\n' + M % ""),
-    ("switch", M % "int n = 1; switch (n) { case 1: break; }"),
+    ("enums held in other integer types", 'enum class Color : char { Red, Blue };\n' + M % ""),
+    ("enumerator values that use enumerators", 'enum class Color { Red, Blue = Red };\n' + M % ""),
+    ("a switch with an initializer", M % "int n = 1; switch (int k = n; k) { case 1: break; }"),
     ("lambdas", M % "auto f = [](int x) { return x; };"),
     ("default arguments", 'int f(int a = 1) { return a; }\n' + M % ""),
     ("auto parameters", 'int f(auto a) { return 1; }\n' + M % ""),
@@ -773,7 +773,7 @@ SPEC_NOT_CODE = {
     "break cplus_trap", "uncaught error:", "--race", "--debug", "cplus build", "cplus.", "-fsanitize=address", "llvm-symbolizer", "libclang-rt-18-dev", "exit()",
     "cplus run app.cplus --race", "-l<name>", "-L<dir>", "--emit-llvm", "cplus explain", "spec:", "cplus explain cheatsheet", "{ x }", "[ x ]", "value_or()", "new[]",
     "cplus fmt", "--check", "cplus lsp", "editors/vscode", 'import "mine.h";', "-I", "-I<dir>", "cplus build app.cplus -I include", "-lsqlite3",
-    "static inline", "const unsigned char*",
+    "static inline", "const unsigned char*", "case value:",
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
@@ -808,6 +808,8 @@ SPEC_REJECTED = {
     "v.back().p.set()": "vector<HoldsSettable> v = {HoldsSettable{}}; v.back().p.set();",
     "(f ? a : b).set()": "Settable a = {}; Settable b = {}; bool f = true; (f ? a : b).set();",
     "for (auto [k, v] : m)": "hashmap<string, int> m; for (auto [k, v] : m) {}", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
+    "enum struct": "^enum struct Hue { Red };", "using enum": "^enum class Hue { Red };\nusing enum Hue;", "case 1, 2:": "int n = 1; switch (n) { case 1, 2: break; }",
+    "case 1 ... 5:": "int n = 1; switch (n) { case 1 ... 5: break; }", "switch (auto k = f(); k)": "switch (auto k = f(); k) { default: break; }",
 }
 SPEC_REJECT_PRELUDE = """struct Settable { int x = 0; void set() { x = 1; } };
 struct HoldsSettable { Settable p; };
@@ -1295,6 +1297,32 @@ int main() {
             lsp.send("exit", request=False)
             code, _ = lsp.finish()
             expect("the server ends as it should", code == 0, code)
+
+        # An enum has a meaning where it is declared and where it is used, and so does each enumerator, in a case label too.
+        enum_uri = "file:///work/lights.cplus"
+        text = ("// What a light shows.\nenum class Light { Red, Green };\nint main() {\n    Light l = Light::Green;\n    switch (l) {\n"
+                "        case Light::Red: return 1;\n        default: break;\n    }\n    return int(l) + int(Light(0));\n}\n")
+        lsp = LspClient(cplus)
+        lsp.request("initialize", {"capabilities": {}})
+        lsp.send("textDocument/didOpen", {"textDocument": {"uri": enum_uri, "languageId": "cplus", "version": 1, "text": text}}, request=False)
+        found = lsp.diagnostics(enum_uri)
+        expect("a program with an enum is checked without errors", found and found.get("diagnostics") == [], found)
+        place = lambda line, character: {"textDocument": {"uri": enum_uri}, "position": {"line": line, "character": character}}
+        light = "```cplus\nenum class Light\n```\n\nWhat a light shows."
+        for (line, character), shows in [((1, 12), light), ((3, 5), light), ((3, 15), light), ((8, 25), light),
+                                         ((1, 20), "```cplus\nLight::Red = 0\n```\n\nAn enumerator of `Light`."),
+                                         ((3, 22), "```cplus\nLight::Green = 1\n```\n\nAn enumerator of `Light`."),
+                                         ((5, 21), "```cplus\nLight::Red = 0\n```\n\nAn enumerator of `Light`.")]:
+            answer = lsp.request("textDocument/hover", place(line, character))
+            expect(f"hovering at {line}:{character} of an enum shows {shows!r}", hover(answer) == shows, answer)
+        answer = lsp.request("textDocument/definition", place(3, 22))
+        expect("the definition of an enumerator is where its enum lists it", ((answer or {}).get("result") or {}).get("range", {}).get("start") == {"line": 1, "character": 24}, answer)
+        answer = lsp.request("textDocument/definition", place(8, 25))
+        expect("the definition of the enum in `Light(0)` is the enum", ((answer or {}).get("result") or {}).get("range", {}).get("start") == {"line": 1, "character": 11}, answer)
+        lsp.request("shutdown")
+        lsp.send("exit", request=False)
+        code, _ = lsp.finish()
+        expect("the server ends as it should after an enum", code == 0, code)
 
         # Every example, with a hover and a definition asked for at each word: no check crashes, and the names have meanings.
         lsp = LspClient(cplus)

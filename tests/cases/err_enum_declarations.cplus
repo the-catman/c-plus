@@ -1,0 +1,46 @@
+// How an enum is declared: only `enum class`, with a name, its enumerators in braces, and `};` at the end.
+enum { A, B };
+enum Plain { Red, Green };
+enum struct Scoped { Up, Down };
+enum class Shape;
+enum class Empty {};
+enum class Twice { One, Two, One };
+enum class Spaced { First Second };
+enum class Unended { X, Y }
+enum class Small : char { Little };
+enum class Floaty : double { Point };
+enum class Unsigned : unsigned { Positive };
+struct Taken { int x = 0; };
+enum class Taken { Again };
+enum class Shape2 { Square };
+enum class Shape2 { Circle };
+class Shape3 {};
+enum class Shape3 { Oval };
+enum class Fruit { Apple };
+struct Fruit { int x = 0; };
+
+int main() {
+    Plain p = Plain::Red;
+    Scoped s = Scoped::Up;
+    println("{} {}", p, s);
+    return 0;
+}
+// error: C+ has no enums without a name
+// error: for numbers with names, write constants: `const int A = 0, B = 1;`
+// error: C+ has only scoped enums, written `enum class`
+// error: write `enum class Plain { Red, ... };`, and name each value with its enum: `Plain::Red`
+// error: C+ writes `enum class`, not `enum struct`
+// error: write `enum class Scoped { Up, ... };`
+// error: an enum is declared with its enumerators
+// error: list them in braces: `enum class Shape { A, B };`
+// error: the enum 'Empty' has no enumerators
+// error: the enum 'Twice' has two enumerators named 'One'
+// error: expected ',' between the enumerators of 'Spaced', found identifier 'Second'
+// error: expected ';' after the definition of enum 'Unended', found keyword 'enum'
+// error: this compiler does not support enums held in 'char' yet
+// error: an enum is held in an integer type, not in keyword 'double'
+// error: this compiler does not support enums held in 'unsigned' yet
+// error: the name 'Taken' is already used by another type
+// error: the name 'Shape2' is already used by another type
+// error: the name 'Shape3' is already used by another type
+// error: the name 'Fruit' is already used by another type

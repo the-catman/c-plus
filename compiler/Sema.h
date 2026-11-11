@@ -37,6 +37,7 @@ private:
     struct LoopContext {
         std::vector<Flow> breaks;     // state at each `break`
         std::vector<Flow> continues;  // state at each `continue`
+        bool isSwitch = false;        // a switch, which a `break` leaves and a `continue` passes through
     };
 
     // Definite assignment
@@ -85,6 +86,10 @@ private:
     void checkVarDecl(VarDecl& v, Flow& flow);
     void checkLoopBody(Stmt& body, Flow& flow);
     void checkForEach(ForEachStmt& st, Flow& flow);
+    void checkSwitch(SwitchStmt& st, Flow& flow);
+    const Type* checkEnumValue(EnumValueExpr& e);
+    const Type* checkEnumCast(CastExpr& c, const Type* from, const Type* to);
+    void reportEnumOperator(const BinaryExpr& b, const Type* l, const Type* r);
     void checkIfConstexpr(IfStmt& st, Flow& flow);
     // `move(x)`, which leaves a variable with no value.
     const Type* checkMove(CallExpr& call, Flow& flow);

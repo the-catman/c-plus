@@ -64,6 +64,37 @@ static void write_string(writer* w, const char* data, int64_t size) {
 
 static void write_value(writer* w, const cplus_type* t, const char* place);
 
+// An enum is written and read as the name of its enumerator. Its descriptor has them as fields, each with its value as
+// the offset, and its size says whether it is held in an int or a long.
+static int64_t enum_value(const cplus_type* t, const char* place) { return t->size == 8 ? *(const int64_t*)place : *(const int32_t*)place; }
+
+static void enum_store(const cplus_type* t, char* place, int64_t value) {
+    if (t->size == 8) *(int64_t*)place = value;
+    else *(int32_t*)place = (int32_t)value;
+}
+
+// The first enumerator with this value, which is what it is called, or null for a value that is none.
+static const char* enum_name(const cplus_type* t, int64_t value) {
+    for (int64_t i = 0; i < t->field_count; i++)
+        if (t->fields[i].offset == value) return t->fields[i].name;
+    return NULL;
+}
+
+// The name, as a JSON string. A value that is no enumerator is written as it prints, `"Color(7)"`, which reads back as nothing.
+static void write_enum(writer* w, const cplus_type* t, const char* place) {
+    int64_t value = enum_value(t, place);
+    const char* name = enum_name(t, value);
+    if (name) {
+        write_string(w, name, (int64_t)strlen(name));
+        return;
+    }
+    char number[40];
+    snprintf(number, sizeof number, "(%" PRId64 ")\"", value);
+    put(w, "\"");
+    put(w, t->name);
+    put(w, number);
+}
+
 _Noreturn static void stop_too_deep(void) {
     cplus_stop("a value is nested too deeply to write as JSON",
                "more than 512 levels may mean a very long chain of objects. Write it as a vector, which takes one level");
@@ -128,6 +159,8 @@ static void write_map(writer* w, const cplus_type* t, const char* place) {
         if (key->type->kind == CPLUS_KIND_STRING) {
             const cplus_string* text = (const cplus_string*)(entry + key->offset);
             write_string(w, text->data, text->length);
+        } else if (key->type->kind == CPLUS_KIND_ENUM) {
+            write_enum(w, key->type, entry + key->offset);
         } else {  // a number, which an object can only have as a string
             char number[32];
             int64_t n = key->type->kind == CPLUS_KIND_INT ? *(const int32_t*)(entry + key->offset) : *(const int64_t*)(entry + key->offset);
@@ -234,6 +267,7 @@ static void write_value(writer* w, const cplus_type* t, const char* place) {
         case CPLUS_KIND_MAP: write_map(w, t, place); return;
         case CPLUS_KIND_JSON_VALUE: write_json_value(w, t, place); return;
         case CPLUS_KIND_WEAK: put(w, "null"); return;
+        case CPLUS_KIND_ENUM: write_enum(w, t, place); return;
         default:
             cplus_stop("a pointer cannot be written as JSON, since it only means something to this program",
                        "make it a private field, which is left out of JSON");
@@ -329,6 +363,9 @@ static void path_add_key(reader* r, const cplus_field* key, const char* entry) {
     if (key->type->kind == CPLUS_KIND_STRING) {
         const cplus_string* text = (const cplus_string*)(entry + key->offset);
         wrote = snprintf(r->path + r->path_size, room, "[\"%.*s\"]", text->length > 40 ? 40 : (int)text->length, text->data);
+    } else if (key->type->kind == CPLUS_KIND_ENUM) {
+        const char* name = enum_name(key->type, enum_value(key->type, entry + key->offset));
+        wrote = snprintf(r->path + r->path_size, room, "[\"%s\"]", name ? name : "?");
     } else {
         int64_t n = key->type->kind == CPLUS_KIND_INT ? *(const int32_t*)(entry + key->offset) : *(const int64_t*)(entry + key->offset);
         wrote = snprintf(r->path + r->path_size, room, "[%" PRId64 "]", n);
@@ -781,10 +818,34 @@ static bool read_array(reader* r, const cplus_type* t, char* place) {
 }
 
 // A key is what an object has as a string, and a map of numbers has them written as numbers inside it.
+// A string naming an enumerator of `t`, whose value goes in `place`. Anything else says what the names are.
+static bool read_enum(reader* r, const cplus_type* t, char* place, const char* what) {
+    const char* begin = r->at;
+    char names[256] = "";
+    size_t used = 0;
+    for (int64_t i = 0; i < t->field_count && used + 1 < sizeof names; i++) {
+        int wrote = snprintf(names + used, sizeof names - used, "%s\"%s\"", i == 0 ? "" : i + 1 == t->field_count ? " or " : ", ", t->fields[i].name);
+        if (wrote > 0) used += (size_t)wrote < sizeof names - used ? (size_t)wrote : sizeof names - used - 1;
+    }
+    if (r->at == r->end || *r->at != '"')
+        return fail_at(r, begin, "expected %s, the name of an enumerator of '%s': %s, but found %s", what, t->name, names, next_thing(r));
+    cplus_string text = {NULL, 0, NULL};
+    bool ok = read_string_into(r, &text);
+    if (ok) {
+        int64_t i = 0;
+        while (i < t->field_count && !((int64_t)strlen(t->fields[i].name) == text.length && memcmp(t->fields[i].name, text.data, (size_t)text.length) == 0)) i++;
+        if (i < t->field_count) enum_store(t, place, t->fields[i].offset);
+        else ok = fail_at(r, begin, "\"%.*s\" is not an enumerator of '%s', which has %s", text.length > 40 ? 40 : (int)text.length, text.data, t->name, names);
+    }
+    cplus_str_release(text.owner);
+    return ok;
+}
+
 static bool read_map_key(reader* r, const cplus_field* key, char* entry) {
     const char* begin = r->at;
     cplus_string* text = (cplus_string*)(entry + key->offset);
     if (key->type->kind == CPLUS_KIND_STRING) return read_string_into(r, text);
+    if (key->type->kind == CPLUS_KIND_ENUM) return read_enum(r, key->type, entry + key->offset, "a key");
     cplus_string digits = {NULL, 0, NULL};
     bool ok = read_string_into(r, &digits);
     if (ok) {
@@ -1015,6 +1076,7 @@ static bool read_value(reader* r, const cplus_type* t, char* place) {
             start_value(t, place);
             return read_json_value(r, t, place);
         case CPLUS_KIND_WEAK: return skip_value(r);
+        case CPLUS_KIND_ENUM: return read_enum(r, t, place, "a string");
         default: return fail_at(r, r->at, "a '%s' cannot be read from JSON", t->name);
     }
 }
@@ -1138,6 +1200,11 @@ static void build_map(builder* b, const cplus_type* t, const char* place, char* 
                 else append_utf8(clean, 0xFFFD);
                 at += length ? length : 1;
             }
+        } else if (key->type->kind == CPLUS_KIND_ENUM) {
+            const char* name = enum_name(key->type, enum_value(key->type, from + key->offset));
+            char number[32];
+            int size = name ? 0 : snprintf(number, sizeof number, "%" PRId64, enum_value(key->type, from + key->offset));
+            entry = name ? start_entry(b, name, (int64_t)strlen(name)) : start_entry(b, number, size);
         } else {
             char number[32];
             int64_t n = key->type->kind == CPLUS_KIND_INT ? *(const int32_t*)(from + key->offset) : *(const int64_t*)(from + key->offset);
@@ -1225,6 +1292,17 @@ static void build_value(builder* b, const cplus_type* t, const char* place, char
             if (t->retain) t->retain(out);
             return;
         case CPLUS_KIND_WEAK: return;
+        case CPLUS_KIND_ENUM: {  // the name of its enumerator, as it is written
+            const char* name = enum_name(t, enum_value(t, place));
+            if (name) {
+                build_text(b, out, name, (int64_t)strlen(name));
+            } else {
+                char text[300];
+                int size = snprintf(text, sizeof text, "%s(%" PRId64 ")", t->name, enum_value(t, place));
+                build_text(b, out, text, size < (int)sizeof text ? size : (int)sizeof text - 1);
+            }
+            return;
+        }
         default:
             cplus_stop("a pointer cannot be made into a json::Value, since it only means something to this program",
                        "make it a private field, which is left out of JSON");

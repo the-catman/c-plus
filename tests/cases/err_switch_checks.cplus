@@ -1,0 +1,170 @@
+// What a switch can choose by, what its labels can be, and how its sections end.
+enum class Color { Red, Green, Blue };
+enum class Many { A, B, C, D, E, F, G, H, I, J, K };
+enum class Shape { Circle, Square };
+
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+
+class Node {
+public:
+    string name = "n";
+};
+
+int next() { return 1; }
+
+void kinds(bool flag, double d, int? maybe, Point p, Node node, Color c) {
+    switch (flag) { default: break; }
+    switch (d) { default: break; }
+    switch (maybe) { default: break; }
+    switch (p) { default: break; }
+    switch (node) { default: break; }
+}
+
+void labels(int n, Color c, string s, char ch) {
+    int k = 2;
+    Color other = Color::Blue;
+    switch (n) {
+        case 1: break;
+        default: break;
+        case 2: break;
+        default: break;
+    }
+    switch (n) {
+        case "one": break;
+        case 1.5: break;
+        case k: break;
+        case next(): break;
+        case Color::Red: break;
+        case 3: break;
+        case 1 + 2: break;
+        case 3000000000: break;
+    }
+    switch (c) {
+        case Color::Red: break;
+        case Shape::Circle: break;
+        case 1: break;
+        case other: break;
+        case Color::Red: break;
+        default: break;
+    }
+    switch (s) {
+        case "a": break;
+        case 'b': break;
+        case "a": break;
+        default: break;
+    }
+    switch (ch) {
+        case 'a': break;
+        case 98: break;
+        default: break;
+    }
+}
+
+void coverage(Color c, Many m) {
+    switch (c) {
+        case Color::Red: break;
+    }
+    switch (m) {
+        case Many::A: break;
+    }
+    switch (c) {
+        case Color::Green: break;
+        case Color::Blue: break;
+    }
+}
+
+void endings(int n) {
+    switch (n) {
+        case 1:
+            println("one");
+        case 2:
+            println("two");
+            break;
+        case 3:
+            if (n > 0) {
+                [[fallthrough]];
+            }
+            break;
+        case 4:
+            println("four");
+            [[fallthrough]];
+    }
+}
+
+int returns(int n) {
+    switch (n) {
+        case 1: return 1;
+        case 2: return 2;
+    }
+}
+
+int assigned(int n) {
+    int x;
+    switch (n) {
+        case 1:
+            x = 1;
+            [[fallthrough]];
+        case 2:
+            return x;
+        default: x = 0;
+    }
+    return x;
+}
+
+int partly(Color c) {
+    int x;
+    switch (c) {
+        case Color::Red: x = 1; break;
+        case Color::Green: break;
+        case Color::Blue: x = 3; break;
+    }
+    return x;
+}
+
+void loops(int n) {
+    switch (n) {
+        case 1: continue;
+        default: break;
+    }
+}
+
+int main() {
+    break;
+    return 0;
+}
+// error: a switch chooses by an int, a long, a char, an enum or a string, but this is 'bool'
+// error: write `if (flag) { ... } else { ... }`
+// error: a switch chooses by an int, a long, a char, an enum or a string, but this is 'double'
+// error: a floating-point number is seldom exactly a case. Compare it with `if (d < 1.5) ... else if ...`, or switch on `int(d)`
+// error: a switch chooses by an int, a long, a char, an enum or a string, but this is 'int?'
+// error: switch on the value inside, if there is one: `if (auto v = maybe) { switch (v) { ... } }`
+// error: a switch chooses by an int, a long, a char, an enum or a string, but this is 'Point'
+// error: switch on one of its fields, such as `switch (p.x)`, or use `if` and `else if`
+// error: a switch chooses by an int, a long, a char, an enum or a string, but this is 'Node'
+// error: switch on one of its fields, such as `switch (node.name)`, or use `if` and `else if`
+// error: this switch has two `default` labels
+// error: remove one of them. Statements for both go under one
+// error: as a case of a switch on 'int'
+// error: a case label must be known while compiling, but
+// error: write a literal or a constant, such as `case 1:`. To compare with a variable, use `if (x == y)`
+// error: this switch has two cases for 3
+// error: remove one of them, or put their statements together under one
+// error: write an enumerator, such as `case Color::Red:`. To compare with a variable, use `if (x == y)`
+// error: this switch has two cases for Color::Red
+// error: this switch has two cases for "a"
+// error: this switch on 'Color' has no case for `Color::Green` and `Color::Blue`
+// error: add `case Color::Green:` and the others, or `default:` for what the cases leave out
+// error: this switch on 'Many' has no case for `Many::B`, `Many::C`, `Many::D`, `Many::E`, `Many::F`, `Many::G`, `Many::H`, `Many::I` and 2 more
+// error: this switch on 'Color' has no case for `Color::Red`
+// error: add `case Color::Red:`, or `default:` for what the cases leave out
+// error: the section before this label reaches its end, and a case does not run on into the next one by itself
+// error: end it with `break;`, or `[[fallthrough]];` if the next case should run too
+// error: `[[fallthrough]];` must be the last statement of a section of a switch, just before the next case label
+// error: `[[fallthrough]];` runs on into the next case, but this is the last section of the switch
+// error: function 'returns' can reach its end without returning a value
+// error: 'x' is used before it is given a value
+// error: 'continue' can only be used inside a loop
+// error: 'break' can only be used inside a loop or a switch

@@ -1,0 +1,12 @@
+// An enum with no enumerator for 0 has no default value, so a hashmap has none to add for a missing key.
+enum class Level { Low = 1, High = 2 };
+
+int main() {
+    hashmap<string, Level> levels;
+    levels["a"] = Level::High;
+    println("{} {}", levels["a"], levels.get("b") ?? Level::Low);
+    // expect: High Low
+    println("{}", levels["b"]);
+    return 0;
+}
+// trap: the key "b" is not in this hashmap

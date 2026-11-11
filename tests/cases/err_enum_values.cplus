@@ -1,0 +1,30 @@
+// An enumerator's value is an integer constant that fits the enum.
+int f() { return 1; }
+
+enum class Unknown { A = f() };
+enum class Fraction { A = 1.5 };
+enum class Text { A = "a" };
+enum class Truth { A = true };
+enum class TooBig { A = 3000000000 };
+enum class Last { A = 2147483647, B };
+enum class LongLast : long { A = 9223372036854775807, B };
+enum class FromOther { A, B = A + 1 };
+enum class Itself { A = int(Itself::A) };
+enum class Overflow { A = 2147483647 + 1 };
+enum class Divided { A = 1 / 0 };
+
+int main() { return 0; }
+// error: the value of an enumerator must be known while compiling, but 'f' cannot run while compiling
+// error: write a number, or numbers and constants, such as `1 << 4`
+// error: the value of an enumerator is an integer, not a 'double'
+// error: the value of an enumerator is an integer, not a 'string'
+// error: the value of an enumerator is an integer, not a 'bool'
+// error: the value 3000000000 does not fit in 'int', which holds the enum 'TooBig'
+// error: hold the enum in a long: `enum class TooBig : long { ... }`
+// error: the value of 'B', one more than the enumerator before it, does not fit in 'int'
+// error: the value of 'B', one more than the enumerator before it, does not fit in 'long'
+// error: this compiler does not support an enumerator's value that uses an enumerator yet
+// error: write the number itself, such as `B = 2`
+// error: write the number itself, such as `A = 2`
+// error: the value of an enumerator must be known while compiling, but integer overflow: the result of '+' does not fit in 'int'
+// error: the value of an enumerator must be known while compiling, but division by zero

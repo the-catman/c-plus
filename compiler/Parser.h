@@ -223,6 +223,20 @@ private:
     size_t splitShr_ = SIZE_MAX;  // the `>>` whose first half closed an angle bracket
     bool declSeen_ = false;  // a declaration came before; `[[allow(new_delete)]];` must be first
     bool fileAttr_ = false;  // the item just parsed was `[[allow(new_delete)]];`
+
+    // Enums and switch
+    void readEnums();  // the enums of the file, before anything else, as their values can be used anywhere
+    void parseEnum();  // at `enum`: `enum class Color : long { Red = 1, Green };`
+    int64_t enumeratorValue(const Expr& e, const StructDecl& en, int64_t fallback);
+    // After the name of an enum in an expression: `Color::Red`, or `Color(n)`. Null for anything else.
+    ExprPtr parseEnumUse(const Token& t, const StructDecl& en);
+    StmtPtr parseSwitch();
+    void parseCaseLabel(SwitchSection& section);  // `case value:` or `default:`, added to the section
+    StmtPtr parseFallthrough();  // at `[[fallthrough]]`
+    [[noreturn]] void failStrayLabel(const Token& t);  // `case` or `default` that is not directly in a switch
+    std::vector<size_t> enumStarts_;  // where `enum` begins outside any function
+    std::unordered_map<size_t, size_t> enumEnds_;  // the enums read before the rest, by where they start: where they end
+    int switchDepth_ = 0;  // the switches whose sections are being read
 };
 
 }  // namespace cplus

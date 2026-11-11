@@ -108,7 +108,7 @@ void strayElse() {
 }
 void strayCase() {
     case 1:
-    // error: this compiler does not support switch statements yet
+    // error: a `case` label is only written inside a switch
 }
 void newOnAClass() {
     Node* n = new Node();

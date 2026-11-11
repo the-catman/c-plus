@@ -1,4 +1,4 @@
-// The one attribute C+ has is [[allow(new_delete)]]: before a function or a method, or
+// The attribute [[allow(new_delete)]] goes before a function or a method, or
 // alone at the top of the file.
 [[nodiscard]] int f() { return 1; }
 [[allow(unused)]] int g() { return 1; }
@@ -13,7 +13,7 @@ struct T {
 };
 int main() { return 0; }
 // error: C+ has no attribute 'nodiscard'
-// error: The one attribute C+ has is `[[allow(new_delete)]]`, which turns off the warning for new and delete
+// error: The attributes C+ has are `[[allow(new_delete)]]`, which turns off the warning for new and delete, and `[[fallthrough]];` in a switch
 // error: 'unused' is not a warning that can be allowed
 // error: [[allow(new_delete)]] is written before a function or a method, not a struct
 // error: `[[allow(new_delete)]];` applies to the whole file, so it is written at the top, before the first declaration

@@ -1,0 +1,190 @@
+// switch on ints, longs, chars, strings and enums: labels, fallthrough, break and continue, scopes, and enum switches
+// that cover every enumerator.
+enum class Light { Red, Amber, Green };
+enum class Big : long { Low = -5000000000, High = 5000000000 };
+
+const int TEN = 10;
+
+string advice(Light light) {
+    switch (light) {
+        case Light::Red:
+        case Light::Amber:
+            return "stop";
+        case Light::Green:
+            return "go";
+    }
+}
+
+// A switch that covers every enumerator gives the variable a value on every path.
+int number(Light light) {
+    int n;
+    switch (light) {
+        case Light::Red: n = 1; break;
+        case Light::Amber: n = 2; break;
+        case Light::Green: n = 3; break;
+    }
+    return n;
+}
+
+constexpr int weight(Light light) {
+    switch (light) {
+        case Light::Red: return 4;
+        case Light::Amber:
+            [[fallthrough]];
+        case Light::Green: return 1;
+    }
+}
+
+string named(string text, int* calls) {
+    (*calls)++;
+    return text + "";
+}
+
+string kind(int n) {
+    switch (n) {
+        default:
+            return "many";
+        case 0:
+            return "none";
+        case TEN / 10:
+            return "one";
+        case -1:
+            return "minus one";
+        case 'a':
+            return "ninety-seven";
+    }
+}
+
+int main() {
+    for (int n = 0; n < 6; n++) {
+        switch (n) {
+            case 0:
+                continue;
+            case 1:
+                println("one");
+                break;
+            case 2:
+                println("two");
+                [[fallthrough]];
+            case 3: {
+                int inside = n * 10;
+                println("two or three: {}", inside);
+                break;
+            }
+            default:
+                println("{} is more", n);
+        }
+        println("after {}", n);
+    }
+    // expect: one
+    // expect: after 1
+    // expect: two
+    // expect: two or three: 20
+    // expect: after 2
+    // expect: two or three: 30
+    // expect: after 3
+    // expect: 4 is more
+    // expect: after 4
+    // expect: 5 is more
+    // expect: after 5
+    println("{} {} {} {} {} {}", kind(0), kind(1), kind(-1), kind(97), kind(5), kind(TEN));
+    // expect: none one minus one ninety-seven many many
+
+    // A switch with no case for the value does nothing.
+    int nothing = 7;
+    switch (nothing) {
+        case 1: nothing = 0; break;
+    }
+    switch (nothing) {}
+    println("{}", nothing);
+    // expect: 7
+
+    // Longs, chars and enums held in a long.
+    long big = 5000000000;
+    switch (big) {
+        case 5000000000: println("five billion"); break;
+        case 1: println("one"); break;
+    }
+    // expect: five billion
+    for (char c : string("a1 ")) {
+        switch (c) {
+            case 'a': case 'b': println("a letter"); break;
+            case '0': case '1': println("a digit"); break;
+            default: println("something else");
+        }
+    }
+    // expect: a letter
+    // expect: a digit
+    // expect: something else
+    Big b = Big::Low;
+    switch (b) {
+        case Big::High: println("high"); break;
+        case Big::Low: println("low"); break;
+    }
+    // expect: low
+
+    // Strings, compared in order. The value is worked out once.
+    int calls = 0;
+    for (string word : vector<string>{"add", "remove", "other", ""}) {
+        switch (named(word, &calls)) {
+            case "add": println("adding"); break;
+            case "remove": println("removing"); break;
+            case "": println("empty"); break;
+            default: println("what is {}?", word);
+        }
+    }
+    println("{}", calls);
+    // expect: adding
+    // expect: removing
+    // expect: what is other?
+    // expect: empty
+    // expect: 4
+
+    // Enums.
+    println("{} {} {}", advice(Light::Red), advice(Light::Amber), advice(Light::Green));
+    // expect: stop stop go
+    println("{} {} {}", number(Light::Red), number(Light::Amber), number(Light::Green));
+    // expect: 1 2 3
+    array<int, weight(Light::Red) + weight(Light::Amber)> sized;
+    println("{}", sized.size());
+    // expect: 5
+
+    // Nested switches, and a break in a loop in a switch.
+    for (int i = 0; i < 2; i++) {
+        switch (i) {
+            case 0:
+                for (int j = 0; j < 5; j++) {
+                    if (j == 2) break;
+                    switch (j) {
+                        case 0: println("inner zero"); break;
+                        default: println("inner {}", j);
+                    }
+                }
+                break;
+            default:
+                println("outer {}", i);
+        }
+    }
+    // expect: inner zero
+    // expect: inner 1
+    // expect: outer 1
+
+    // A variable declared in a case is its own, and holds what it is given there.
+    vector<string> held;
+    for (int i = 0; i < 3; i++) {
+        switch (i % 2) {
+            case 0: {
+                string s = "even " + to_string(i);
+                held.push_back(s);
+                break;
+            }
+            case 1:
+                string s = "odd " + to_string(i);
+                held.push_back(s);
+                break;
+        }
+    }
+    println("{}", held);
+    // expect: ["even 0", "odd 1", "even 2"]
+    return 0;
+}

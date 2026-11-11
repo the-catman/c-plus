@@ -1,0 +1,71 @@
+// JSON writes an enum as the name of its enumerator, and reads only such a name. reflect says it is an enum.
+import json;
+import reflect;
+
+enum class Color { Red, Green, Blue };
+enum class Status : long { Ok = 200, Far = 5000000000 };
+enum class Twins { First = 1, Second = 1 };
+
+struct Pixel {
+    Color color = Color::Blue;
+    Status status = Status::Ok;
+    vector<Color> others;
+    Color? maybe;
+    hashmap<Color, int> counts;
+};
+
+struct Need {
+    Twins twins;
+};
+
+void read(string text) throws {
+    try {
+        Pixel p = json::parse<Pixel>(text);
+        println("{}", p);
+    } catch (json::Error e) {
+        println("{}", e.what());
+    }
+}
+
+int main() throws {
+    Pixel p;
+    p.others.push_back(Color::Green);
+    p.counts[Color::Red] = 2;
+    println("{}", json::stringify(p));
+    // expect: {"color":"Blue","status":"Ok","others":["Green"],"maybe":null,"counts":{"Red":2}}
+    try read(R"({"color": "Red", "status": "Far", "others": ["Blue", "Red"], "maybe": "Green", "counts": {"Blue": 4}})");
+    // expect: {color: Red, status: Far, others: [Blue, Red], maybe: Green, counts: {Blue: 4}}
+    try read(R"({"color": "Purple"})");
+    // expect: line 1, column 11: in color: "Purple" is not an enumerator of 'Color', which has "Red", "Green" or "Blue"
+    try read(R"({"color": 1})");
+    // expect: line 1, column 11: in color: expected a string, the name of an enumerator of 'Color': "Red", "Green" or "Blue", but found a number
+    try read(R"({"counts": {"Pink": 1}})");
+    // expect: line 1, column 13: in counts: "Pink" is not an enumerator of 'Color', which has "Red", "Green" or "Blue"
+    try read(R"({"status": "ok"})");
+    // expect: line 1, column 12: in status: "ok" is not an enumerator of 'Status', which has "Ok" or "Far"
+    Need n = try json::parse<Need>(R"({"twins": "Second"})");
+    println("{} {}", n, json::stringify(n));
+    // expect: {twins: First} {"twins":"First"}
+    try {
+        Need missing = json::parse<Need>("{}");
+        println("{}", missing);
+    } catch (json::Error e) {
+        println("{}", e.what());
+    }
+    // expect: line 1, column 2: this 'Need' has no "twins", which it needs. A field that can be left out has a default value, or is optional
+    Color c = try json::parse<Color>(R"("Green")");
+    println("{} {}", c, json::stringify(Color::Blue));
+    // expect: Green "Blue"
+    json::Value v = json::of(Status::Far);
+    println("{} {}", v, v.text() ?? "?");
+    // expect: "Far" Far
+    hashmap<Color, int> back = try json::parse<hashmap<Color, int>>(json::stringify(p.counts));
+    println("{}", back);
+    // expect: {Red: 2}
+    auto t = reflect::type<Color>();
+    println("{}: kind {}, {} bytes, {} fields", t.name(), t.kind(), t.size(), t.fields().size());
+    // expect: Color: kind enum, 4 bytes, 0 fields
+    println("{} {}", reflect::type<Status>().size(), reflect::of(c).kind());
+    // expect: 8 enum
+    return 0;
+}

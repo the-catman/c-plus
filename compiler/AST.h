@@ -20,12 +20,12 @@ struct TemplatePattern;
 
 struct Type {
     enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, Struct, Class, Vector, Optional, Null,
-                      Pointer, Opaque, Array, Weak, Unique, Local,
+                      Pointer, Opaque, Array, Weak, Unique, Local, Enum,
                       // Only while a generic definition is read, to learn its shape; never in checked code.
                       TypeParam, Dependent };
     Kind kind;
     const char* name;
-    const StructDecl* decl = nullptr;  // for Kind::Struct, Kind::Class, Kind::Unique, Kind::Local and Kind::Opaque
+    const StructDecl* decl = nullptr;  // for Kind::Struct, Kind::Class, Kind::Unique, Kind::Local, Kind::Opaque and Kind::Enum
     const Type* elem = nullptr;        // for Kind::Vector and Kind::Array, the value type of Kind::Optional, what a Kind::Pointer points to, the class of Kind::Weak
     bool constElem = false;            // for Kind::Pointer: `const int*`, which only reads what it points to
     int64_t length = 0;                // for Kind::Array: the N of `array<T, N>`; for Kind::TypeParam: which parameter it is
@@ -43,6 +43,8 @@ struct Type {
     bool isObjectRef() const { return isClass() || isUnique() || isLocal(); }  // at run time, these are the same pointer
     // A C type known only by name, `extern "C" struct sqlite3;`, which C+ only points to.
     bool isOpaque() const { return kind == Kind::Opaque; }
+    // `enum class Color { Red, Green };`: a value that is one of a list of names, held as an int or a long.
+    bool isEnum() const { return kind == Kind::Enum; }
     bool isError() const { return kind == Kind::Error; }
     bool isInteger() const { return kind == Kind::Int || kind == Kind::Long; }
     bool isFloating() const { return kind == Kind::Float || kind == Kind::Double; }
@@ -183,7 +185,7 @@ struct TemplatePattern {
 struct Expr {
     enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
                       Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof, New,
-                      Delete, Try, Constraint, Borrow, Spawn, Await };
+                      Delete, Try, Constraint, Borrow, Spawn, Await, EnumValue };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -528,11 +530,21 @@ struct CoalesceExpr : Expr {
     CoalesceExpr(Loc l, ExprPtr a, ExprPtr b) : Expr(Kind::Coalesce, l), lhs(std::move(a)), rhs(std::move(b)) {}
 };
 
+// `Color::Red`: an enumerator, named with its enum. Sema finds which one it is.
+struct EnumValueExpr : Expr {
+    const StructDecl* decl;
+    std::string name;
+    Loc typeLoc, nameLoc;  // of `Color` and of `Red`; `loc` covers both
+    int index = -1;        // set by Sema: which of the enum's enumerators
+    EnumValueExpr(Loc l, Loc tl, const StructDecl* d, std::string n, Loc nl)
+        : Expr(Kind::EnumValue, l), decl(d), name(std::move(n)), typeLoc(tl), nameLoc(nl) {}
+};
+
 // ---- Statements ------------------------------------------------------------
 
 struct Stmt {
     enum class Kind { VarDecl, DeclGroup, Expr, Block, If, While, DoWhile, For, ForEach, Return, Break, Continue, Try, Throw,
-                      Error };
+                      Error, Switch, Fallthrough };
     const Kind kind;
     Loc loc;
     Stmt(Kind k, Loc l) : kind(k), loc(l) {}
@@ -647,6 +659,44 @@ struct BreakStmt : Stmt {
 
 struct ContinueStmt : Stmt {
     explicit ContinueStmt(Loc l) : Stmt(Kind::Continue, l) {}
+};
+
+// `case 1:`, `case Color::Red:` or `default:`.
+struct CaseLabel {
+    Loc loc;
+    ExprPtr value;          // null for `default`
+    int64_t folded = 0;     // set by Sema: the value, for any type but string
+    std::string text;       // set by Sema: the value, for a string
+};
+
+// The labels of a switch that come together, and the statements after them up to the next label.
+// The statements are a scope of their own, as if they were in braces.
+struct SwitchSection {
+    std::vector<CaseLabel> labels;
+    std::unique_ptr<BlockStmt> body;  // its `endLoc` is where the next label or the switch's `}` is
+};
+
+// `switch (value) { case 1: ... }`. As in C++, a section runs into the next unless it ends with a
+// `break`, but here only where it says `[[fallthrough]];`.
+struct SwitchStmt : Stmt {
+    ExprPtr value;
+    std::vector<SwitchSection> sections;
+    Loc endLoc;  // the closing '}'
+    // Set by Sema: an enum switch with no `default` that has a case for every enumerator. Its
+    // hidden default, which only a value that is no enumerator reaches, stops the program.
+    bool exhaustive = false;
+    SwitchStmt(Loc l, ExprPtr v) : Stmt(Kind::Switch, l), value(std::move(v)) {}
+    const CaseLabel* defaultLabel() const {
+        for (auto& section : sections)
+            for (auto& label : section.labels)
+                if (!label.value) return &label;
+        return nullptr;
+    }
+};
+
+// `[[fallthrough]];`, the last statement of a switch section whose end runs into the next one.
+struct FallthroughStmt : Stmt {
+    explicit FallthroughStmt(Loc l) : Stmt(Kind::Fallthrough, l) {}
 };
 
 // `catch (NotFound e) { ... }`, `catch (NotFound) { ... }` or `catch (...) { ... }`.
@@ -775,13 +825,40 @@ struct StructDecl {
     std::vector<std::unique_ptr<FuncDecl>> methods;
     FuncDecl* constructor = nullptr;
     FuncDecl* destructor = nullptr;
+    // `enum class Color : long { Red = 1, Green };`. An enum is never `defined`, so what is said about
+    // structs and classes passes it by; its type has Kind::Enum.
+    bool isEnum = false;
+    bool valuesKnown = false;  // its enumerators have been read, with their values
+    bool enumFailed = false;   // what could not be read of it has been reported, so a name it lacks is not
+    const Type* underlying = nullptr;  // for an enum: int, or long
+    struct Enumerator {
+        std::string name;
+        Loc loc;
+        int64_t value = 0;
+    };
+    std::vector<Enumerator> enumerators;
     Type type;  // the type this declaration defines
 
     StructDecl(std::string n, bool cls)
         : name(std::move(n)), isClass(cls), type{cls ? Type::Kind::Class : Type::Kind::Struct, nullptr, this} {
         type.name = name.c_str();
     }
-    const char* keyword() const { return isInterface ? "interface" : isClass ? "class" : "struct"; }
+    const char* keyword() const { return isEnum ? "enum class" : isInterface ? "interface" : isClass ? "class" : "struct"; }
+    // For an enum: the enumerator with this name, or -1.
+    int enumeratorIndex(const std::string& enumeratorName) const {
+        for (size_t i = 0; i < enumerators.size(); ++i)
+            if (enumerators[i].name == enumeratorName) return (int)i;
+        return -1;
+    }
+    // For an enum: the first enumerator with this value, whose name the value prints as, or -1.
+    int enumeratorWithValue(int64_t value) const {
+        for (size_t i = 0; i < enumerators.size(); ++i)
+            if (enumerators[i].value == value) return (int)i;
+        return -1;
+    }
+    // For an enum: the enumerator whose value is 0, which a variable without a value starts as, or -1. Without
+    // one, the enum has no default value.
+    int zeroEnumerator() const { return enumeratorWithValue(0); }
     // The method with this name that this type declares itself.
     FuncDecl* ownMethod(const std::string& methodName) const {
         for (auto& m : methods)
@@ -961,6 +1038,7 @@ inline bool isJsonValue(const Type* t) { return t->isStruct() && t->decl->role =
 inline bool isHashable(const Type* t, std::vector<const StructDecl*>& seen) {
     if (t->isOptional() || t->isVector() || t->isArray()) return isHashable(t->elem, seen);
     if (t->isNumber() || t->is(Type::Kind::Bool) || t->is(Type::Kind::Char) || t->is(Type::Kind::String) || t->isPointer() || t->isClass()) return true;
+    if (t->isEnum()) return true;
     if (!t->isStruct() || isHashmap(t)) return false;
     for (const StructDecl* d : seen)
         if (d == t->decl) return true;

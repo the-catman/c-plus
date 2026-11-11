@@ -61,6 +61,8 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtDynamicCast, rtRetainObject, rtObjectStart;
     llvm::FunctionCallee rtRetainClass, rtReleaseClass, rtFreeClass, rtDestructorHold, rtReferences;
     llvm::FunctionCallee rtWeakRetain, rtWeakRelease, rtWeakLock, rtWeakAlive, rtUncaught;
+    llvm::FunctionCallee rtTrapEnum;
+    std::unordered_map<const StructDecl*, llvm::Function*> enumPrinters;  // see enumPrinter
     llvm::GlobalVariable* charTable = nullptr;  // the 256 bytes, so a char can be a one-byte string
     llvm::Constant* fileName = nullptr;
     std::unordered_map<std::string, llvm::Constant*> cstrings;
@@ -360,6 +362,12 @@ struct Codegen::Impl {
         rtVecNew = decl("cplus_vec_new", ptrTy, {i64, i64});
         rtVecRelease = decl("cplus_vec_release", voidTy, {ptrTy, i64, ptrTy});
         rtVecReserve = decl("cplus_vec_reserve", ptrTy, {ptrTy, i64, i64, ptrTy, ptrTy});
+        rtTrapEnum = decl("cplus_trap_enum", voidTy, {i64, ptrTy, ptrTy, i32, i32});
+        if (auto* f = llvm::dyn_cast<llvm::Function>(rtTrapEnum.getCallee())) {
+            f->addFnAttr(llvm::Attribute::NoReturn);
+            f->addFnAttr(llvm::Attribute::Cold);
+            f->addFnAttr(llvm::Attribute::NoUnwind);
+        }
     }
 
     llvm::Type* llvmType(const Type* t) {
@@ -375,6 +383,7 @@ struct Codegen::Impl {
             case K::Struct: return types.at(t->decl).layout;
             case K::Array: return llvm::ArrayType::get(llvmType(t->elem), (uint64_t)t->length);
             case K::Class: case K::Vector: case K::Null: case K::Pointer: case K::Weak: case K::Unique: case K::Local: return b.getPtrTy();
+            case K::Enum: return llvmType(t->decl->underlying);  // its number
             // An optional class reference is a pointer that may be null. Any other
             // optional is { i1 has, T value }, and its value is all zero bytes when it
             // has none, so retaining or releasing it is harmless either way.
@@ -1459,6 +1468,7 @@ struct Codegen::Impl {
             case K::Class: case K::Vector: case K::Pointer: case K::Weak: case K::Unique: case K::Local:
                 return llvm::ConstantPointerNull::get(b.getPtrTy());
             case K::Optional: return zeroValue(t);  // null
+            case K::Enum: return llvm::ConstantInt::get(llvmType(t), 0);  // the enumerator whose value is 0: Sema makes sure there is one
             default: llvm_unreachable("no default value for this type");
         }
     }
@@ -1705,6 +1715,7 @@ struct Codegen::Impl {
             case Expr::Kind::FloatLit: case Expr::Kind::CharLit: case Expr::Kind::Name: case Expr::Kind::This:
             case Expr::Kind::OptValue: case Expr::Kind::Sizeof: case Expr::Kind::Constraint:
                 return false;
+            case Expr::Kind::EnumValue: return false;
             case Expr::Kind::Spawn: case Expr::Kind::Await: return true;
             case Expr::Kind::Cast: {
                 auto& c = static_cast<const CastExpr&>(e);
@@ -1981,6 +1992,10 @@ struct Codegen::Impl {
             case Expr::Kind::Cast: return genCast(static_cast<const CastExpr&>(e));
             case Expr::Kind::Try: return genRaw(*static_cast<const TryExpr&>(e).operand, owned);
             case Expr::Kind::Constraint: return b.getInt1(static_cast<const ConstraintExpr&>(e).value);
+            case Expr::Kind::EnumValue: {
+                auto& ev = static_cast<const EnumValueExpr&>(e);
+                return llvm::ConstantInt::getSigned(llvmType(e.type), ev.decl->enumerators.at((size_t)ev.index).value);
+            }
             case Expr::Kind::Borrow: {  // the object a unique reference owns
                 auto& borrow = static_cast<const BorrowExpr&>(e);
                 llvm::Value* object = isPlace(*borrow.operand) ? loadPlace(*borrow.operand, "object") : genRaw(*borrow.operand, owned);
@@ -2065,6 +2080,10 @@ struct Codegen::Impl {
                     llvm::Value* r = gen(*bin.rhs);
                     llvm::Value* order = b.CreateCall(rtStrCompare, {strData(l), strLength(l), strData(r), strLength(r)}, "order");
                     return arith(bin.op, order, b.getInt32(0), Type::intTy(), bin.loc);
+                }
+                if (bin.operandType->isEnum()) {  // compared by their numbers
+                    llvm::Value* l = gen(*bin.lhs);
+                    return arith(bin.op, l, gen(*bin.rhs), bin.operandType->decl->underlying, bin.loc);
                 }
                 if (!bin.operandType->isNumber()) {  // == or != on bools, strings, structs, objects, optionals
                     llvm::Value* l = genComparedSide(*bin.lhs, bin.operandType, mayRunCode(*bin.rhs));
@@ -2321,6 +2340,7 @@ struct Codegen::Impl {
             case K::Bool: case K::Char: return hashWord(b.CreateZExt(v, b.getInt64Ty()));
             case K::Int: return hashWord(b.CreateSExt(v, b.getInt64Ty()));
             case K::Long: return hashWord(v);
+            case K::Enum: return hashWord(b.CreateSExt(v, b.getInt64Ty()));  // its number
             case K::Class: case K::Pointer: return hashWord(b.CreatePtrToInt(v, b.getInt64Ty()));
             case K::Float: v = b.CreateFPExt(v, b.getDoubleTy()); [[fallthrough]];
             case K::Double:  // -0.0 == 0.0, and adding 0.0 makes them one value
@@ -2366,6 +2386,7 @@ struct Codegen::Impl {
             case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer: case K::Unique: case K::Local:
                 return b.CreateICmpEQ(l, r);
             case K::Float: case K::Double: return b.CreateFCmpOEQ(l, r);
+            case K::Enum: return b.CreateICmpEQ(l, r);
             case K::String: {
                 llvm::Value* eq = b.CreateCall(rtStrEq, {b.CreateExtractValue(l, 0), b.CreateExtractValue(l, 1),
                                                          b.CreateExtractValue(r, 0), b.CreateExtractValue(r, 1)});
@@ -2475,6 +2496,7 @@ struct Codegen::Impl {
                 break;
             }
             case K::Pointer: b.CreateCall(rtPrintPtr, {out, v}); break;  // the address, as std::format prints a void*
+            case K::Enum: b.CreateCall(enumPrinter(*t->decl), {v, out}); break;
             case K::Optional: {
                 auto* someBB = llvm::BasicBlock::Create(ctx, "print.value", fn);
                 auto* noneBB = llvm::BasicBlock::Create(ctx, "print.null", fn);
@@ -2552,6 +2574,7 @@ struct Codegen::Impl {
             return part;
         }
         if (from == to) return v;
+        if (from->isEnum() || to->isEnum()) return genEnumCast(c, v);
         if (to->isClass() || to->isOptional() || to->isWeak()) return convert(v, from, to);  // to a base class, or a weak reference
         Loc loc = c.loc;
         if (to->isPointer()) {
@@ -2632,6 +2655,138 @@ struct Codegen::Impl {
         b.CreateUnreachable();
         b.SetInsertPoint(okBB);
         return b.CreateFPToSI(v, target);
+    }
+
+    // ---- Enums and switch --------------------------------------------------
+
+    // `int(c)` is an enum's number, as an int or a long, and `Color(n)` the enumerator whose value is n.
+    // A number that no enumerator has stops the program, as one too large for an int does.
+    llvm::Value* genEnumCast(const CastExpr& c, llvm::Value* v) {
+        const Type* from = c.operand->type;
+        const Type* to = c.target;
+        const Loc loc = c.loc;
+        auto weights = llvm::MDBuilder(ctx).createBranchWeights(1u << 20, 1);
+        if (from->isEnum()) {
+            if (to->is(K::Long) || from->decl->underlying->is(K::Int)) return b.CreateSExt(v, llvmType(to));
+            llvm::Value* narrow = b.CreateTrunc(v, b.getInt32Ty());  // a long enum's number, as an int
+            auto* trapBB = llvm::BasicBlock::Create(ctx, "narrow.trap", fn);
+            auto* okBB = llvm::BasicBlock::Create(ctx, "narrow.ok", fn);
+            b.CreateCondBr(b.CreateICmpEQ(b.CreateSExt(narrow, b.getInt64Ty()), v), okBB, trapBB, weights);
+            b.SetInsertPoint(trapBB);
+            b.CreateCall(rtTrapNarrow, {v, fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+            b.CreateUnreachable();
+            b.SetInsertPoint(okBB);
+            return narrow;
+        }
+        const StructDecl& en = *to->decl;
+        llvm::Value* n = from->is(K::Char) ? b.CreateZExt(v, b.getInt64Ty()) : b.CreateSExt(v, b.getInt64Ty());
+        std::set<int64_t> values;
+        for (auto& one : en.enumerators) values.insert(one.value);
+        auto* trapBB = llvm::BasicBlock::Create(ctx, "enum.trap", fn);
+        auto* okBB = llvm::BasicBlock::Create(ctx, "enum.ok", fn);
+        const uint64_t span = values.empty() ? 0 : (uint64_t)*values.rbegin() - (uint64_t)*values.begin();
+        if (!values.empty() && span == values.size() - 1) {  // values one after another: lo <= n <= hi
+            llvm::Value* offset = b.CreateSub(n, b.getInt64((uint64_t)*values.begin()));
+            b.CreateCondBr(b.CreateICmpULE(offset, b.getInt64(span)), okBB, trapBB, weights);
+        } else {
+            llvm::SwitchInst* sw = b.CreateSwitch(n, trapBB, (unsigned)values.size());
+            for (int64_t x : values) sw->addCase(b.getInt64((uint64_t)x), okBB);
+        }
+        b.SetInsertPoint(trapBB);
+        b.CreateCall(rtTrapEnum, {n, cstring(to->name), fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+        b.CreateUnreachable();
+        b.SetInsertPoint(okBB);
+        return b.CreateTrunc(n, llvmType(to));
+    }
+
+    // Prints an enum as the name of the first enumerator with its value, or as `Color(7)` when none has it.
+    llvm::Function* enumPrinter(const StructDecl& en) {
+        auto [it, inserted] = enumPrinters.try_emplace(&en, nullptr);
+        if (!inserted) return it->second;
+        auto* intTy = llvm::cast<llvm::IntegerType>(llvmType(&en.type));
+        auto* f = internalFunction("cplus." + en.name + "#print", b.getVoidTy(), {intTy, b.getPtrTy()});
+        it->second = f;
+        SavedPoint saved(*this);
+        startHelper(f);
+        llvm::Value* v = f->getArg(0);
+        llvm::Value* out = f->getArg(1);
+        auto* otherBB = llvm::BasicBlock::Create(ctx, "other", f);
+        llvm::SwitchInst* sw = b.CreateSwitch(v, otherBB, (unsigned)en.enumerators.size());
+        std::set<int64_t> seen;
+        for (auto& one : en.enumerators) {
+            if (!seen.insert(one.value).second) continue;  // an earlier one has this value
+            auto* nameBB = llvm::BasicBlock::Create(ctx, "name", f);
+            sw->addCase(llvm::ConstantInt::get(intTy, (uint64_t)one.value, true), nameBB);
+            b.SetInsertPoint(nameBB);
+            printText(out, one.name);
+            b.CreateRetVoid();
+        }
+        b.SetInsertPoint(otherBB);
+        printText(out, en.name + "(");
+        printValue(out, v, en.underlying);
+        printText(out, ")");
+        b.CreateRetVoid();
+        return f;
+    }
+
+    // A switch on an integer, a char or an enum is an LLVM switch. One on a string compares the string
+    // with each case in turn, then switches on the number of the section that was found.
+    void genSwitch(const SwitchStmt& st) {
+        const Type* t = st.value->type;
+        const bool text = t->is(K::String);
+        llvm::Value* v = gen(*st.value);
+        if (text) {
+            auto* chosenBB = llvm::BasicBlock::Create(ctx, "switch.chosen", fn);
+            std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> incoming;
+            for (size_t i = 0; i < st.sections.size(); ++i)
+                for (auto& label : st.sections[i].labels) {
+                    if (!label.value) continue;
+                    llvm::Value* same = genEquals(v, stringValue(label.text), t);
+                    auto* nextBB = llvm::BasicBlock::Create(ctx, "switch.next", fn);
+                    incoming.push_back({b.getInt32((uint32_t)i), b.GetInsertBlock()});
+                    b.CreateCondBr(same, chosenBB, nextBB);
+                    b.SetInsertPoint(nextBB);
+                }
+            incoming.push_back({b.getInt32((uint32_t)-1), b.GetInsertBlock()});  // none of them
+            b.CreateBr(chosenBB);
+            b.SetInsertPoint(chosenBB);
+            llvm::PHINode* which = b.CreatePHI(b.getInt32Ty(), (unsigned)incoming.size(), "section");
+            for (auto& [number, from] : incoming) which->addIncoming(number, from);
+            v = which;
+        }
+        flushTemps();
+        auto* endBB = llvm::BasicBlock::Create(ctx, "switch.end", fn);
+        std::vector<llvm::BasicBlock*> bodies;
+        for (size_t i = 0; i < st.sections.size(); ++i) bodies.push_back(llvm::BasicBlock::Create(ctx, "switch.case", fn));
+        llvm::BasicBlock* defaultBB = endBB;
+        llvm::BasicBlock* noneBB = nullptr;
+        if (st.exhaustive) defaultBB = noneBB = llvm::BasicBlock::Create(ctx, "switch.none", fn);
+        for (size_t i = 0; i < st.sections.size(); ++i)
+            for (auto& label : st.sections[i].labels)
+                if (!label.value) defaultBB = bodies[i];
+        llvm::SwitchInst* sw = b.CreateSwitch(v, defaultBB);
+        auto* intTy = llvm::cast<llvm::IntegerType>(v->getType());
+        for (size_t i = 0; i < st.sections.size(); ++i) {
+            bool added = false;
+            for (auto& label : st.sections[i].labels) {
+                if (!label.value || (text && added)) continue;
+                const uint64_t value = text ? i : t->is(K::Char) ? (uint64_t)(label.folded & 0xff) : (uint64_t)label.folded;
+                sw->addCase(llvm::ConstantInt::get(intTy, value, !t->is(K::Char)), bodies[i]);
+                added = true;
+            }
+        }
+        loops.push_back({endBB, nullptr, scopes.size()});  // `break` leaves the switch, and `continue` passes it by
+        for (size_t i = 0; i < st.sections.size(); ++i) {
+            b.SetInsertPoint(bodies[i]);
+            genStmt(*st.sections[i].body);  // a scope of its own
+            b.CreateBr(i + 1 < bodies.size() ? bodies[i + 1] : endBB);  // after `[[fallthrough]];`, or at the end of the last
+        }
+        loops.pop_back();
+        if (noneBB) {  // only a value that is no enumerator, which the program has not made with Color(n) or JSON, comes here
+            b.SetInsertPoint(noneBB);
+            trapHere("the switch on '" + std::string(t->name) + "' was given a value that is not one of its enumerators, so no case is for it", st.loc);
+        }
+        b.SetInsertPoint(endBB);
     }
 
     // isdigit(c), toupper(c), ...: ASCII only, as C's are in the default "C" locale.
@@ -3424,11 +3579,15 @@ struct Codegen::Impl {
                 b.CreateBr(loops.back().breakTo);
                 startDeadBlock();
                 return;
-            case Stmt::Kind::Continue:
-                releaseScopes(loops.back().scopeDepth);
-                b.CreateBr(loops.back().continueTo);
+            case Stmt::Kind::Continue: {
+                // to the loop around any switch it is in, which has nowhere to continue to
+                size_t at = loops.size() - 1;
+                while (!loops[at].continueTo) --at;
+                releaseScopes(loops[at].scopeDepth);
+                b.CreateBr(loops[at].continueTo);
                 startDeadBlock();
                 return;
+            }
             case Stmt::Kind::Try: genTry(static_cast<const TryStmt&>(s)); return;
             case Stmt::Kind::Throw: {
                 auto& st = static_cast<const ThrowStmt&>(s);
@@ -3445,6 +3604,8 @@ struct Codegen::Impl {
                 return;
             }
             case Stmt::Kind::Error: llvm_unreachable("a program with parse errors reached codegen");
+            case Stmt::Kind::Switch: genSwitch(static_cast<const SwitchStmt&>(s)); return;
+            case Stmt::Kind::Fallthrough: return;  // the section's end leads to the next one
         }
     }
 
@@ -4212,6 +4373,18 @@ struct Codegen::Impl {
                 elem = typeDescriptor(t->elem);
                 length = t->elem->isObjectRef() ? -1 : (int64_t)mod->getDataLayout().getStructLayout(llvm::cast<llvm::StructType>(llvmType(t)))->getElementOffset(1);
                 break;
+            case K::Enum: {  // its enumerators, as fields whose offset is the value
+                kind = CPLUS_KIND_ENUM;
+                const StructDecl& en = *t->decl;
+                auto* fieldTy = llvm::StructType::get(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy(), b.getInt64Ty()});
+                std::vector<llvm::Constant*> list;
+                for (auto& one : en.enumerators) list.push_back(llvm::ConstantStruct::get(fieldTy, {cstring(one.name), b.getInt64(one.value), none, b.getInt64(0)}));
+                fieldCount = (int64_t)list.size();
+                auto* arrayTy = llvm::ArrayType::get(fieldTy, list.size());
+                fields = new llvm::GlobalVariable(*mod, arrayTy, true, llvm::GlobalValue::InternalLinkage, llvm::ConstantArray::get(arrayTy, list),
+                                                  "cplus.enumerators." + en.name);
+                break;
+            }
             case K::Struct: case K::Class: {
                 const StructDecl& sd = *t->decl;
                 if (isHashmap(t)) {
@@ -4563,7 +4736,7 @@ struct Codegen::Impl {
         // A C type known only by name has no layout; C+ only points to it.
         std::vector<const StructDecl*> structs;
         for (auto& sd : program.structs)
-            if (!sd->opaque) structs.push_back(sd.get());
+            if (!sd->opaque && !sd->isEnum) structs.push_back(sd.get());  // an enum is a number
         for (const StructDecl* sd : structs)
             types[sd].layout = llvm::StructType::create(ctx, (sd->isClass ? "cplus.class." : "cplus.struct.") + sd->name);
         for (const StructDecl* sd : structs) {

@@ -226,6 +226,7 @@ static std::string spelled(const Expr& e, const std::string& fallback) {
         }
     }
     if (e.kind == Expr::Kind::This) return "this";
+    if (e.kind == Expr::Kind::EnumValue) return std::string(static_cast<const EnumValueExpr&>(e).decl->type.name) + "::" + static_cast<const EnumValueExpr&>(e).name;
     if (e.kind == Expr::Kind::Member) {
         auto& m = static_cast<const MemberExpr&>(e);
         if (m.base->kind == Expr::Kind::Unary && static_cast<const UnaryExpr&>(*m.base).isArrow()) {
@@ -791,6 +792,7 @@ static std::string textHelp(const Type* t, const char* op = "+", const std::stri
     if (t->is(K::Void) || t->isError()) return "this call gives nothing to add. Call it on a line of its own, or have the function return a string";
     if (t->isOptional() && t->elem->is(K::String)) return "it may be null: write `(" + n + " ?? \"none\")`, with the parentheses, which is its value, or \"none\" when it is null";
     if (t->isOptional()) return "it may be null: `to_string(" + n + " ?? 0)` for a number, or `format(\"{}\", " + n + ")`, which gives its value or \"null\"";
+    if (t->isEnum()) return "`format(\"{}\", " + n + ")` gives the name of its enumerator, and `to_string(int(" + n + "))` its number";
     return "`format(\"{}\", value)` turns any value that can be printed into a string";
 }
 
@@ -806,6 +808,14 @@ static std::string placeName(const VarDecl* v, const std::string& path) {
 }
 static bool hasDefault(const Type* t);
 
+// An enumerator of an enum, as it is written, for advice: the one whose value is 0, which is what C++
+// would test it against, or else the first.
+static std::string enumSample(const Type* t) {
+    const StructDecl& en = *t->decl;
+    if (en.enumerators.empty()) return std::string(t->name) + "::...";
+    return std::string(t->name) + "::" + en.enumerators[(size_t)std::max(0, en.zeroEnumerator())].name;
+}
+
 static std::string zeroOf(const Type* t) {
     if (t->isUnique() || t->isLocal()) return std::string(t->name) + "(...)";
     if (t->is(K::Bool)) return "false";
@@ -815,6 +825,7 @@ static std::string zeroOf(const Type* t) {
     if (t->isClass()) return std::string(t->name) + "(...)";
     if (t->isPointer()) return "null";
     if (t->isArray()) return "{...}";
+    if (t->isEnum()) return enumSample(t);
     return "0";
 }
 
@@ -839,6 +850,8 @@ static bool tooDeep(const std::string& path) { return std::count(path.begin(), p
 // struct field) must be given a value when an object is built.
 static bool needsValue(const Type* t, int depth = 0) {
     if (t->isObjectRef()) return true;
+    if (t->isEnum()) return t->decl->zeroEnumerator() < 0;  // what a value of it starts as, without one
+
     if (t->isArray()) {  // its elements are made one by one, which may take a value or a constructor's arguments
         const FuncDecl* ctor = t->elem->isStruct() ? t->elem->decl->constructor : nullptr;
         return t->length > 0 && depth <= 32 && ((ctor && !ctor->params.empty()) || needsValue(t->elem, depth + 1));
@@ -852,10 +865,37 @@ static bool needsValue(const Type* t, int depth = 0) {
 // Whether a value can be copied. What has one owner cannot, nor can what holds one.
 static bool isCopyable(const Type* t) { return !holdsUnique(t); }
 
+// The same, but another enumerator if `written` is that one, to compare it with.
+static std::string enumSampleBesides(const Type* t, const std::string& written) {
+    const std::string sample = enumSample(t);
+    if (sample != written) return sample;
+    for (auto& one : t->decl->enumerators)
+        if (std::string(t->name) + "::" + one.name != written) return std::string(t->name) + "::" + one.name;
+    return sample;
+}
+
+// The enum without an enumerator for 0 that a struct holds, in a field without a default, and no class reference. Null if there is none.
+static const Type* firstEnumNeedingValue(const Type* t, int depth = 0) {
+    if (depth > 32) return nullptr;
+    if (t->isEnum()) return needsValue(t) ? t : nullptr;
+    if (t->isArray()) return firstEnumNeedingValue(t->elem, depth + 1);
+    if (!t->isStruct()) return nullptr;
+    const Type* found = nullptr;
+    for (auto& f : t->decl->fields) {
+        if (f.defaultValue || !needsValue(f.type, depth + 1)) continue;
+        const Type* inner = firstEnumNeedingValue(f.type, depth + 1);
+        if (!inner) return nullptr;  // a class reference, which is what is said
+        if (!found) found = inner;
+    }
+    return found;
+}
+
 // Why a value of type `t` cannot be made without being given one.
 static std::string elementDefaultProblem(const Type* t) {
     if (t->isArray()) return elementDefaultProblem(t->elem);
     if (t->isObjectRef()) return "a " + q(t) + " reference cannot be empty";
+    if (t->isEnum()) return "the enum " + q(t) + " has no enumerator whose value is 0, for it to start as";
+    if (const Type* inner = firstEnumNeedingValue(t)) return q(t) + " holds the enum " + q(inner) + ", which has no enumerator whose value is 0, for it to start as";
     if (needsValue(t)) return q(t) + " holds a class reference that cannot be empty";
     return "the constructor of " + q(t) + " needs arguments";
 }
@@ -1207,6 +1247,30 @@ void Sema::reportUnknownName(const NameExpr& n) {
                      "use it on a type: `template<" + n.name + " T>` for a generic, or `" + n.name + "<int>` in `if constexpr (...)`", spec::Generics);
         return;
     }
+    if (const StructDecl* en = program_->findStruct(n.name); en && en->isEnum) {
+        diags_.error(n.loc, q(n.name) + " is an enum, not a value", "name one of its enumerators, such as `" + enumSample(&en->type) + "`", spec::Enums);
+        return;
+    }
+    for (auto& sd : program_->structs)  // `RED`, which C and C++ name by itself
+        if (sd->isEnum && sd->enumeratorIndex(n.name) >= 0) {
+            diags_.error(n.loc, q(n.name) + " is not declared", "it is an enumerator of " + q(sd->name) + ", which is named with its enum: `" + sd->name + "::" + n.name + "`",
+                         spec::Enums);
+            return;
+        }
+    auto loosely = [](const std::string& name) {  // `RED` and `DARK_BLUE` for `Red` and `DarkBlue`
+        std::string out;
+        for (char ch : name)
+            if (ch != '_') out += (char)std::tolower((unsigned char)ch);
+        return out;
+    };
+    for (auto& sd : program_->structs)
+        if (sd->isEnum)
+            for (auto& one : sd->enumerators)
+                if (loosely(one.name) == loosely(n.name)) {
+                    diags_.error(n.loc, q(n.name) + " is not declared",
+                                 "did you mean the enumerator `" + sd->name + "::" + one.name + "`? An enumerator is named with its enum", spec::Enums);
+                    return;
+                }
     if (const StructDecl* c = program_->findStruct(n.name); c && c->opaque) {
         diags_.error(n.loc, q(n.name) + " is a C type, not a value",
                      "a C type declared by name is only used through pointers: get a `" + n.name + "*` from the C function that makes one", spec::CFunctions);
@@ -1436,7 +1500,7 @@ void Sema::checkTemplateNames(Program& program) {
 static const Expr* notConstant(const Expr& e) {
     switch (e.kind) {
         case Expr::Kind::IntLit: case Expr::Kind::FloatLit: case Expr::Kind::CharLit: case Expr::Kind::BoolLit:
-        case Expr::Kind::StringLit: case Expr::Kind::NullLit: case Expr::Kind::Sizeof:
+        case Expr::Kind::StringLit: case Expr::Kind::NullLit: case Expr::Kind::Sizeof: case Expr::Kind::EnumValue:
             return nullptr;
         case Expr::Kind::Name: {
             auto& n = static_cast<const NameExpr&>(e);
@@ -1514,7 +1578,7 @@ void Sema::checkConstant(VarDecl& c) {
         diags_.error(c.loc, "the constant " + q(c.name) + " needs a value", "write `const " +
                      std::string(c.declType->name) + " " + c.name + " = <value>;`", spec::Constants);
     } else if (const Type* t = c.type; !t->isError() && !t->is(K::Bool) && !t->isNumber() && !t->is(K::Char) &&
-                                       !t->is(K::String) && !t->isPointer()) {
+                                       !t->is(K::String) && !t->isPointer() && !t->isEnum()) {
         diags_.error(c.typeLoc, "this compiler does not support constants of type " + q(t) + " yet",
                      "write a function that returns the value", spec::Status);
     } else if (c.isConstexpr) {
@@ -1833,6 +1897,7 @@ static std::string whatCLacks(const Type* t, std::set<const StructDecl*>& seen) 
     if (t->isUnique()) return "a unique reference";
     if (t->isLocal()) return "a local reference";
     if (t->isOptional()) return "an optional";
+    if (t->isEnum()) return "a C+ enum, whose values C does not check";
     if (t->isArray()) return t->length == 0 ? "an array with no elements" : whatCLacks(t->elem, seen);
     if (t->isPointer()) {
         std::string lacks = t->elem->is(K::Void) ? "" : whatCLacks(t->elem, seen);
@@ -1922,6 +1987,13 @@ void Sema::checkStructs(size_t first) {
 void Sema::checkExternFunction(FuncDecl& fn) {
     auto check = [&](const Type* t, Loc loc, bool isReturn) {
         if (!checkStorable(t, loc)) return;
+        if (t->isEnum()) {
+            diags_.error(loc, std::string("a C function cannot ") + (isReturn ? "return " : "take ") + "an enum, as C would not keep to its values",
+                         std::string(isReturn ? "declare the result as `int`" : "declare the parameter as `int`, and pass `int(c)`") + ". What C gives back becomes a " +
+                             q(t) + " with `" + t->name + "(n)`, which checks that it is one",
+                         spec::Enums);
+            return;
+        }
         if (t->isNumber() || t->is(K::Char) || t->is(K::Bool) || t->is(K::String) || t->isError()) return;
         if (t->isOptional() && t->elem->is(K::String)) return;
         if (isReturn && t->is(K::Void)) return;
@@ -2048,7 +2120,7 @@ bool Sema::evaluate(const Expr& e, ConstValue& out, const std::string& what) {
 
 void Sema::foldConstexpr(VarDecl& v) {
     if (!v.init || !v.type || v.type->isError()) return;
-    if (!v.type->isNumber() && !v.type->is(K::Bool) && !v.type->is(K::Char) && !v.type->is(K::String)) {
+    if (!v.type->isNumber() && !v.type->is(K::Bool) && !v.type->is(K::Char) && !v.type->is(K::String) && !v.type->isEnum()) {
         diags_.error(v.typeLoc, "this compiler does not support constexpr values of type " + q(v.type) + " yet",
                      "a number, a char, a bool or a string can be constexpr. For a pointer, write `int* const P = ...;`. For a local variable of any other type, write `const`", spec::Status);
         return;
@@ -2095,6 +2167,13 @@ void Sema::putLiteral(VarDecl& v, const ConstValue& value) {
         case ConstValue::Kind::Bool: literal = std::make_unique<BoolLitExpr>(loc, value.i != 0); break;
         case ConstValue::Kind::Char: literal = std::make_unique<CharLitExpr>(loc, (uint8_t)value.i); break;
         case ConstValue::Kind::String: literal = std::make_unique<StringLitExpr>(loc, value.s); break;
+        case ConstValue::Kind::Enum: {  // the enumerator with this value, which a conversion has checked there is
+            const StructDecl& en = *value.enumType->decl;
+            auto named = std::make_unique<EnumValueExpr>(loc, loc, &en, en.enumerators[(size_t)en.enumeratorWithValue(value.i)].name, loc);
+            named->index = en.enumeratorWithValue(value.i);
+            literal = std::move(named);
+            break;
+        }
     }
     literal->type = v.type;
     v.init = std::move(literal);
@@ -2123,7 +2202,7 @@ static bool callsFunction(const Expr& e) {
 
 void Sema::foldConstant(VarDecl& v) {
     if (!v.init || !v.type || v.type->isError()) return;
-    bool holdsLiteral = v.type->isNumber() || v.type->is(K::Bool) || v.type->is(K::Char) || v.type->is(K::String);
+    bool holdsLiteral = v.type->isNumber() || v.type->is(K::Bool) || v.type->is(K::Char) || v.type->is(K::String) || v.type->isEnum();
     try {
         if (!holdsLiteral) throw ConstError{v.init->loc, "a value of type " + q(v.type) + " cannot be worked out while compiling"};
         ConstEval eval(constHooks());
@@ -2701,6 +2780,7 @@ static std::string conditionHelp(const Expr& e, const Type* t, bool negated = fa
         return negated ? "write `" + n + ".empty()`" : std::string("to check whether it has ") + (t->is(K::String) ? "any text" : "elements") + ", write `!" + n + ".empty()`";
     if (t->isArray()) return "an array always has its elements. To test one of them, write e.g. `a[0] != 0`";
     if (t->isClass()) return "a class reference is never empty, so there is nothing to test. For one that can be, make it `" + std::string(t->name) + "?`, which is a condition";
+    if (t->isEnum()) return "an enum is not a condition; compare it, e.g. `" + n + (negated ? " == " : " != ") + enumSample(t) + "`";
     return "write a comparison, or call a method that gives a bool";
 }
 
@@ -2894,16 +2974,165 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
         case Stmt::Kind::Break:
         case Stmt::Kind::Continue: {
             bool isBreak = s.kind == Stmt::Kind::Break;
-            if (loops_.empty())
-                diags_.error(s.loc, std::string(isBreak ? "'break'" : "'continue'") + " can only be used inside a loop", "use it inside `for`, `while` or `do`. To leave a function, write `return`", spec::ControlFlow);
+            LoopContext* target = nullptr;  // a `break` leaves the innermost loop or switch, and a `continue` goes to the loop around a switch
+            for (size_t i = loops_.size(); i-- > 0 && !target;)
+                if (isBreak || !loops_[i].isSwitch) target = &loops_[i];
+            if (!target)
+                diags_.error(s.loc, isBreak ? "'break' can only be used inside a loop or a switch" : "'continue' can only be used inside a loop",
+                             isBreak ? "use it inside `for`, `while`, `do` or `switch`. To leave a function, write `return`"
+                                     : "use it inside `for`, `while` or `do`. To leave a function, write `return`",
+                             spec::ControlFlow);
             else if (isBreak)
-                loops_.back().breaks.push_back(flow);
+                target->breaks.push_back(flow);
             else
-                loops_.back().continues.push_back(flow);
+                target->continues.push_back(flow);
             flow.reachable = false;
             return;
         }
+        case Stmt::Kind::Switch: checkSwitch(static_cast<SwitchStmt&>(s), flow); return;
+        case Stmt::Kind::Fallthrough:  // checkSwitch takes the one at the end of a section
+            diags_.error(s.loc, "`[[fallthrough]];` must be the last statement of a section of a switch, just before the next case label",
+                         "move it to the end of the section, after everything else, right before the next `case`", spec::Switch);
+            return;
     }
+}
+
+// What a switch on a value of this type is written as instead, when it cannot be one.
+static std::string switchHelp(const Expr& value, const Type* t) {
+    const std::string n = spelled(value, "x");
+    if (t->is(K::Bool)) return "write `if (" + n + ") { ... } else { ... }`";
+    if (t->isFloating()) return "a floating-point number is seldom exactly a case. Compare it with `if (" + n + " < 1.5) ... else if ...`, or switch on `int(" + n + ")`";
+    if (t->isOptional()) return "switch on the value inside, if there is one: `if (auto v = " + n + ") { switch (v) { ... } }`";
+    if (t->hasFields() && !isHashmap(t))
+        for (auto& f : t->decl->fields)
+            if (f.access == Access::Public && (f.type->isInteger() || f.type->is(K::Char) || f.type->isEnum() || f.type->is(K::String)))
+                return "switch on one of its fields, such as `switch (" + asBase(n) + "." + f.name + ")`, or use `if` and `else if`";
+    return "use `if` and `else if`, which can compare any values";
+}
+
+// A case, as it is written, for messages.
+static std::string caseText(const Type* t, const CaseLabel& label) {
+    if (t->isEnum()) {
+        const StructDecl& en = *t->decl;
+        int at = en.enumeratorWithValue(label.folded);
+        return at < 0 ? std::string(t->name) + "(" + std::to_string(label.folded) + ")" : std::string(t->name) + "::" + en.enumerators[(size_t)at].name;
+    }
+    if (t->is(K::Char)) return charLiteral((unsigned char)label.folded);
+    if (t->is(K::String)) return stringLiteral(label.text);
+    return std::to_string(label.folded);
+}
+
+// `switch (x) { case 1: ... }`. A section runs from the head when one of its labels is the value, and from
+// the section before it when that one ends with `[[fallthrough]];`. A section that could run on into the
+// next one by itself is an error, as is an enum switch without `default` that leaves out an enumerator.
+void Sema::checkSwitch(SwitchStmt& st, Flow& flow) {
+    const Type* t = checkExpr(*st.value, flow);
+    bool ok = !t->isError();
+    if (ok && !t->isInteger() && !t->is(K::Char) && !t->isEnum() && !t->is(K::String)) {
+        diags_.error(st.value->loc, "a switch chooses by an int, a long, a char, an enum or a string, but this is " + q(t), switchHelp(*st.value, t), spec::Switch);
+        ok = false;
+    }
+    // The labels: values of the switch's type, known while compiling, each in one case only.
+    const CaseLabel* firstDefault = nullptr;
+    std::map<int64_t, const CaseLabel*> values;
+    std::map<std::string, const CaseLabel*> texts;
+    for (auto& section : st.sections)
+        for (auto& label : section.labels) {
+            if (!label.value) {
+                if (firstDefault) {
+                    diags_.error(label.loc, "this switch has two `default` labels", "remove one of them. Statements for both go under one", spec::Switch);
+                    diags_.note(firstDefault->loc, "the first one is here");
+                } else {
+                    firstDefault = &label;
+                }
+                continue;
+            }
+            Flow labelFlow = flow;
+            const Type* lt = checkExpr(*label.value, labelFlow);
+            if (!ok || lt->isError()) continue;
+            if (!canConvert(lt, t)) {
+                requireConvertible(*label.value, t, "as a case of a switch on " + q(t));
+                continue;
+            }
+            ConstValue v;
+            ConstEval eval(constHooks());
+            try {
+                v = eval.convert(eval.eval(*label.value), t, label.value->loc);
+            } catch (ConstError& error) {
+                diags_.error(label.value->loc, "a case label must be known while compiling, but " + error.message,
+                             t->isEnum() ? "write an enumerator, such as `case " + enumSample(t) + ":`. To compare with a variable, use `if (x == y)`"
+                                         : "write a literal or a constant, such as `case 1:`. To compare with a variable, use `if (x == y)`",
+                             spec::Switch);
+                continue;
+            }
+            label.folded = v.i;
+            label.text = v.s;
+            const CaseLabel*& first = t->is(K::String) ? texts[v.s] : values[v.i];
+            if (first) {
+                diags_.error(label.value->loc, "this switch has two cases for " + caseText(t, label), "remove one of them, or put their statements together under one", spec::Switch);
+                diags_.note(first->loc, "the first one is here");
+            } else {
+                first = &label;
+            }
+        }
+    // An enum switch without `default` has a case for each enumerator, or it would do nothing for one.
+    if (ok && t->isEnum() && !firstDefault) {
+        std::vector<std::string> missing;
+        std::set<int64_t> named;
+        for (auto& en : t->decl->enumerators)
+            if (!values.count(en.value) && named.insert(en.value).second) missing.push_back(std::string(t->name) + "::" + en.name);
+        if (!missing.empty() && !t->decl->enumFailed) {
+            std::string list;
+            for (size_t i = 0; i < missing.size() && i < 8; ++i) list += (i ? (i + 1 == missing.size() ? " and " : ", ") : "") + std::string("`") + missing[i] + "`";
+            if (missing.size() > 8) list += " and " + std::to_string(missing.size() - 8) + " more";
+            diags_.error(st.loc, "this switch on " + q(t) + " has no case for " + list,
+                         "add `case " + missing[0] + ":`" + (missing.size() > 1 ? " and the others" : "") + ", or `default:` for what the cases leave out",
+                         spec::Switch);
+        }
+        st.exhaustive = true;  // its hidden default stops the program, so nothing comes out of it
+    }
+    // Each section, with what is known where it starts.
+    loops_.emplace_back();
+    loops_.back().isSwitch = true;
+    Flow head = flow, fallInto, end;
+    fallInto.reachable = false;
+    end.reachable = false;
+    for (size_t i = 0; i < st.sections.size(); ++i) {
+        SwitchSection& section = st.sections[i];
+        const bool last = i + 1 == st.sections.size();
+        Flow at = section.labels.empty() ? fallInto : merge(head, fallInto);  // after a fallthrough, only what both paths assign counts
+        auto& stmts = section.body->stmts;
+        const bool fallsThrough = !stmts.empty() && stmts.back()->kind == Stmt::Kind::Fallthrough;
+        scopes_.emplace_back();
+        for (size_t j = 0; j < stmts.size(); ++j) {
+            if (j + 1 == stmts.size() && fallsThrough) {
+                if (last)
+                    diags_.error(stmts[j]->loc, "`[[fallthrough]];` runs on into the next case, but this is the last section of the switch",
+                                 "remove it: the switch ends here", spec::Switch);
+                break;
+            }
+            checkStmt(*stmts[j], at);
+        }
+        scopes_.pop_back();
+        if (last) {
+            end = at;
+        } else if (fallsThrough) {
+            fallInto = at;
+        } else if (at.reachable) {
+            const Loc next = st.sections[i + 1].labels.empty() ? section.body->endLoc : st.sections[i + 1].labels.front().loc;
+            diags_.error(next, "the section before this label reaches its end, and a case does not run on into the next one by itself",
+                         "end it with `break;`, or `[[fallthrough]];` if the next case should run too", spec::Switch);
+            fallInto = at;  // as if it said so, to go on
+        } else {
+            fallInto = Flow{};
+            fallInto.reachable = false;
+        }
+    }
+    Flow after = st.sections.empty() ? head : end;
+    if (!firstDefault && !st.exhaustive) after = merge(after, head);  // no case may be the value
+    for (auto& b : loops_.back().breaks) after = merge(after, b);
+    loops_.pop_back();
+    flow = after;
 }
 
 // `for (T x : range)`: the body runs once for each element, possibly never.
@@ -3199,6 +3428,17 @@ void Sema::requireConvertible(const Expr& e, const Type* to, const std::string& 
         help = "write each entry as `{key, value}`, in braces of its own, as in `{{\"a\", 1}, {\"b\", 2}}`";
     if (help.empty() && isJsonValue(to) && !from->isError())
         help = "make one with `json::of`: `json::of(" + (spelled(e, "").empty() || spelled(e, "").find("...") != std::string::npos ? std::string("x") : spelled(e, "")) + ")`";
+    if (help.empty() && (from->isEnum() || target->isEnum()) && !from->isError()) {
+        const std::string n = spelled(e, "x");
+        help = from->isEnum() && target->isEnum() ? "these are different enums. Write an enumerator of " + q(target) + ", such as `" + enumSample(target) + "`"
+               : from->isEnum() && target->isNumber() ? "an enum does not turn into a number by itself. Write `" + std::string(target->is(K::Long) ? "long" : "int") + "(" + n + ")` for its number"
+               : from->isEnum() && target->is(K::String) ? "write `format(\"{}\", " + n + ")` for the name of its enumerator"
+               : from->isEnum() && target->is(K::Bool) ? "an enum is not a bool; compare it, e.g. `" + n + " != " + enumSampleBesides(from, n) + "`"
+               : target->isEnum() && (from->isInteger() || from->is(K::Char)) ? "a number does not turn into an enum by itself. Write an enumerator, such as `" + enumSample(target) + "`, or `" +
+                                                                                     std::string(target->name) + "(" + n + ")`, which stops the program unless it is the value of one"
+               : target->isEnum() ? "write an enumerator, such as `" + enumSample(target) + "`"
+                                  : "";
+    }
     if (help.empty() && to->is(K::String) && from->isNumber()) help = "turn it into a string: `to_string(x)`";
     if (help.empty() && to->is(K::String) && from->is(K::Bool)) help = "turn it into a string: `format(\"{}\", b)`";
     if (help.empty() && from->is(K::String) && to->isNumber()) help = "this compiler cannot read a number from a string yet: " + readingNumberHelp(to);
@@ -3430,9 +3670,7 @@ void Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> arg
     for (size_t i = 0; i < sd.fields.size(); ++i) {
         const FieldDecl& f = sd.fields[i];
         if (seen[i] || f.defaultValue || !needsValue(f.type)) continue;
-        diags_.error(loc, "field " + q(f.name) + " of " + q(sd.name) + " needs a value, because " +
-                              (f.type->isClass() ? "a " + q(f.type) + " reference cannot be empty"
-                                                 : q(f.type) + " holds a class reference that cannot be empty"),
+        diags_.error(loc, "field " + q(f.name) + " of " + q(sd.name) + " needs a value, because " + elementDefaultProblem(f.type),
                      "give it a value here, or give the field a default in " + q(sd.name) + cycleHelp(f.type, f.name, sd),
                      spec::Classes);
     }
@@ -3963,6 +4201,7 @@ Layout layoutOf(const Type* t, std::unordered_map<const StructDecl*, Layout>& se
     switch (t->kind) {
         case K::Bool: case K::Char: return {1, 1};
         case K::Int: case K::Float: return {4, 4};
+        case K::Enum: return t->decl->underlying && t->decl->underlying->is(K::Long) ? Layout{8, 8} : Layout{4, 4};
         case K::String: return {24, 8};
         case K::Array: {
             Layout elem = layoutOf(t->elem, seen);
@@ -4189,6 +4428,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             result = static_cast<FloatLitExpr&>(e).isFloat ? Type::floatTy() : Type::doubleTy();
             break;
         case Expr::Kind::Cast: result = checkCast(static_cast<CastExpr&>(e), flow); break;
+        case Expr::Kind::EnumValue: result = checkEnumValue(static_cast<EnumValueExpr&>(e)); break;
         case Expr::Kind::Borrow: result = e.type; break;  // its operand was checked when it was made
         case Expr::Kind::Constraint: {
             auto& c = static_cast<ConstraintExpr&>(e);
@@ -4267,6 +4507,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                                      ", but this is " + q(t),
                                  u.op == UnOp::BitNot && t->isFloating() ? std::string("use it on an integer, as it flips bits. Convert first: `~long(x)`")
                                  : t->is(K::Bool) ? std::string("convert it first: `") + sym + "int(b)`"
+                                 : t->isEnum() ? std::string("an enum is not a number. Use its number: `") + sym + "int(" + spelled(*u.operand, "c") + ")`"
                                  : t->isOptional() ? unwrapHelp(spelled(*u.operand))
                                  : std::string("'") + sym + "' only works on numbers. Use it on a number", spec::Operators);
                     break;
@@ -4338,6 +4579,12 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                              "compare it with a value of type " + q(opt->elem) + ", or with null",
                              spec::Optionals);
                 result = Type::boolTy();
+                break;
+            }
+            if (l->isEnum() || r->isEnum()) {  // compared with a value of the same enum, and nothing else
+                if (comparison && l == r) b.operandType = l;
+                else reportEnumOperator(b, l, r);
+                if (comparison) result = Type::boolTy();
                 break;
             }
             // Strings are joined with + and ordered by their bytes, as in C++.
@@ -4541,6 +4788,12 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 if (var) requireAssigned(flow, var, path, t, i.target->loc);
                 if (t->isPointer()) {
                     if (!pointsToKnownType(t)) reportUnknownPointee(i.loc, t, sym);
+                } else if (t->isEnum()) {
+                    const std::string n = spelled(*i.target, "c");
+                    diags_.error(i.target->loc, std::string("'") + sym + "' needs a number, a char or a pointer, but this is " + q(t),
+                                 "to step to the " + std::string(i.increment ? "next" : "previous") + " enumerator, write `" + n + " = " + t->name + "(int(" + n + ") " +
+                                     (i.increment ? "+" : "-") + " 1)`, which stops the program if there is none",
+                                 spec::Enums);
                 } else if (!t->isNumber() && !t->is(K::Char)) {
                     diags_.error(i.target->loc, std::string("'") + sym + "' needs a number, a char or a pointer, but this is " + q(t), "use it on a number, a char or a pointer. A string grows with `s += text`", spec::Operators);
                 }
@@ -5150,13 +5403,13 @@ bool Sema::checkConstraints(TemplateDecl& t, const std::vector<TemplateArg>& arg
 // at a struct or class already looked at, since a type can lead back to itself. A private field is left out of JSON.
 static std::string jsonProblem(const Program& program, const Type* t, bool reading, const std::string& path, std::vector<const StructDecl*>& seen, bool inList = false) {
     std::string where = path.empty() ? q(t) : inList ? "each element of " + q(path) + ", a " + q(t) + "," : q(path) + ", a " + q(t) + ",";
-    if (t->isNumber() || t->is(K::Bool) || t->is(K::Char) || t->is(K::String) || t->isWeak()) return "";
+    if (t->isNumber() || t->is(K::Bool) || t->is(K::Char) || t->is(K::String) || t->isWeak() || t->isEnum()) return "";
     if (t->isOptional() || t->isVector() || t->isArray() || t->isUnique() || t->isLocal()) return jsonProblem(program, t->elem, reading, path, seen, inList || t->isVector() || t->isArray());
     if (isJsonValue(t)) return "";
     if (isHashmap(t)) {
         const Type* key = t->decl->templateArgs[0].type;
-        if (!key->is(K::String) && !key->is(K::Int) && !key->is(K::Long))
-            return where + " has keys of type " + q(key) + ", while a JSON object has strings. Use a string, an int or a long for the key, which is written as a string";
+        if (!key->is(K::String) && !key->is(K::Int) && !key->is(K::Long) && !key->isEnum())
+            return where + " has keys of type " + q(key) + ", while a JSON object has strings. Use a string, an int, a long or an enum for the key, which is written as a string";
         return jsonProblem(program, t->decl->templateArgs[1].type, reading, path.empty() ? "[key]" : path + "[key]", seen, true);
     }
     if (!t->hasFields())
@@ -5251,9 +5504,9 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
         return problem;
     }
     if (constraint == "Comparable")
-        return t->isArithmetic() || t->is(K::String) || t->isPointer()
+        return t->isArithmetic() || t->is(K::String) || t->isPointer() || t->isEnum()
                    ? ""
-                   : q(t) + " has no `<`. Only numbers, chars, strings and pointers do, until operators can be overloaded. Compare a field instead: `a.x < b.x`";
+                   : q(t) + " has no `<`. Only numbers, chars, strings, enums and pointers do, until operators can be overloaded. Compare a field instead: `a.x < b.x`";
     if (constraint == "Number") return t->isNumber() ? "" : q(t) + " is not int, long, float or double. Pass one of those, or change the constraint";
     if (constraint == "Integer") return t->isInteger() ? "" : q(t) + " is not int or long. Use one of those, or convert it with `long(x)`";
     if (constraint == "Floating") return t->isFloating() ? "" : q(t) + " is not float or double. Use one of those, or convert it with `double(x)`";
@@ -5263,7 +5516,7 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
     }
     if (constraint == "Hashable" || constraint == "__Hashable")
         return isHashable(t) ? ""
-                             : "use another type for the key, as " + q(t) + " cannot be one. Numbers, chars, bools, strings, pointers and class references can, and so can "
+                             : "use another type for the key, as " + q(t) + " cannot be one. Numbers, chars, bools, strings, enums, pointers and class references can, and so can "
                                       "optionals, vectors, arrays and structs of those. A unique or weak reference or a hashmap cannot";
     return "";  // unknown, which was reported at the generic
 }
@@ -6034,8 +6287,9 @@ const Type* Sema::checkToString(CallExpr& call, Flow& flow) {
                      : t->is(K::Char) ? "in C++, to_string(c) gives the code of the char, such as \"97\". Write "
                                         "`string(1, c)` for the char itself, or `to_string(int(c))` for its code"
                      : t->is(K::Void) ? "the call gives nothing to turn into text. Call it on a line of its own, and pass `to_string` a number"
+                     : t->isEnum()    ? "write `format(\"{}\", " + spelled(*call.args[0], "c") + ")` for the name of its enumerator, or `to_string(int(" + spelled(*call.args[0], "c") + "))` for its number"
                                       : textHelp(t, "+", spelled(*call.args[0], "x")),
-                     spec::Strings);
+                     t->isEnum() ? spec::Enums : spec::Strings);
     return Type::stringTy();
 }
 
@@ -6099,7 +6353,12 @@ const Type* Sema::checkDynamicCast(CastExpr& c, const Type* from, const Type* to
 
 const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
     if (!c.operand) {  // `T()` where T is not a struct or class: its default value
-        if (needsValue(c.target))
+        if (c.target->isEnum() && needsValue(c.target))
+            diags_.error(c.loc, "the enum " + q(c.target) + " has no enumerator whose value is 0, which " + std::string(c.target->name) + "() would be",
+                         "give " + q(c.target) + " an enumerator whose value is 0, such as `None = 0`, or write a value such as `" +
+                             enumSample(c.target) + "` in its place",
+                         spec::Enums);
+        else if (needsValue(c.target))
             diags_.error(c.loc, "a " + q(c.target) + " has no default value, since it is never empty",
                          "give it a value. For one that can be empty, use `" + std::string(c.target->name) + "?`", spec::Unique);
         return c.target;
@@ -6172,6 +6431,7 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
             return to;
         }
     }
+    if (to->isEnum() || from->isEnum()) return checkEnumCast(c, from, to);
     if (to->isPointer() || (from->isPointer() && !to->is(K::Bool) && !to->is(K::String)))
         return checkPointerCast(c, from, to);
     std::string cast = std::string(to->name) + "(x)";
@@ -6621,6 +6881,106 @@ const Type* Sema::checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Ty
         checkValue(*call.args[0], flow, inner, "for value_or() on " + q(opt));
     }
     return call.optMethod == OptMethod::HasValue ? Type::boolTy() : inner;
+}
+
+// ---- Enums -------------------------------------------------------------------
+
+// The enumerators of an enum, as `Red (0), Green (1) and Blue (2)`, or the first of them.
+static std::string enumeratorList(const StructDecl& en) {
+    std::string out;
+    const size_t shown = std::min<size_t>(en.enumerators.size(), 8);
+    for (size_t i = 0; i < shown; ++i)
+        out += (i ? (i + 1 == shown && shown == en.enumerators.size() ? " and " : ", ") : "") + en.enumerators[i].name + " (" +
+               std::to_string(en.enumerators[i].value) + ")";
+    if (shown < en.enumerators.size()) out += " and " + std::to_string(en.enumerators.size() - shown) + " more";
+    return out;
+}
+
+const Type* Sema::checkEnumValue(EnumValueExpr& e) {
+    const StructDecl& en = *e.decl;
+    e.index = en.enumeratorIndex(e.name);
+    if (e.index >= 0) return &en.type;
+    if (!en.enumFailed) {
+        std::vector<std::string> names;
+        for (auto& one : en.enumerators) names.push_back(one.name);
+        const std::string guess = closest(e.name, names);
+        diags_.error(e.nameLoc, "the enum " + q(en.name) + " has no enumerator " + q(e.name),
+                     !guess.empty() ? "did you mean `" + en.name + "::" + guess + "`?" : "use one of its enumerators: " + enumeratorList(en), spec::Enums);
+    }
+    return Type::error();
+}
+
+// `Color(n)`, `static_cast<int>(c)` and `(Color)n`. An enum turns into its number, as an int or a long, and an
+// integer into the enumerator with that value: a constant must be one, and the program stops for anything else that is not.
+const Type* Sema::checkEnumCast(CastExpr& c, const Type* from, const Type* to) {
+    if (from->isError() || to->isError()) return to;
+    const std::string n = spelled(*c.operand, "x");
+    if (from->isEnum() && to->isEnum()) {
+        diags_.error(c.loc, "a cast cannot turn a " + q(from) + " into a " + q(to),
+                     "go through its number, if that is what is meant: `" + std::string(to->name) + "(int(" + n + "))`", spec::Enums);
+        return to;
+    }
+    if (from->isEnum()) {
+        if (to->isInteger()) return to;
+        diags_.error(c.loc, "an enum converts to its number, an int or a long, but this converts it to " + q(to),
+                     to->is(K::String) ? "write `format(\"{}\", " + n + ")` for the name of its enumerator"
+                     : to->is(K::Bool) ? "compare it instead, e.g. `" + n + " != " + enumSample(from) + "`"
+                     : to->isNumber() || to->is(K::Char) ? "convert its number: `" + std::string(to->name) + "(int(" + n + "))`"
+                                                         : "write `int(" + n + ")` for its number",
+                     spec::Enums);
+        return to;
+    }
+    if (!from->isInteger() && !from->is(K::Char)) {
+        diags_.error(c.operand->loc, "'" + std::string(to->name) + "(n)' turns an integer into an enumerator, but this is " + q(from),
+                     from->isFloating()   ? "convert it to an integer first: `" + std::string(to->name) + "(int(" + n + "))`"
+                     : from->isOptional() ? unwrapHelp(spelled(*c.operand))
+                                          : "give it an int, or write an enumerator, such as `" + enumSample(to) + "`",
+                     spec::Enums);
+        return to;
+    }
+    if (!notConstant(*c.operand)) {  // known while compiling, so it is checked now
+        ConstEval eval(constHooks());
+        try {
+            ConstValue v = eval.eval(*c.operand);
+            if (to->decl->enumeratorWithValue(v.i) < 0 && !to->decl->enumFailed)
+                diags_.error(c.operand->loc, std::to_string(v.i) + " is not the value of any enumerator of " + q(to),
+                             "use the value of one of them, or the enumerator itself: " + enumeratorList(*to->decl), spec::Enums);
+        } catch (ConstError&) {
+            // what cannot be worked out here stops the program then, if it is no enumerator
+        }
+    }
+    return to;
+}
+
+void Sema::reportEnumOperator(const BinaryExpr& b, const Type* l, const Type* r) {
+    const std::string sym = binOpSpelling(b.op);
+    const bool comparison = b.op >= BinOp::Eq && b.op <= BinOp::Ge;
+    const bool leftIsEnum = l->isEnum();
+    const Type* en = leftIsEnum ? l : r;
+    const Type* ot = leftIsEnum ? r : l;
+    const Expr& side = leftIsEnum ? *b.lhs : *b.rhs;
+    const Expr& other = leftIsEnum ? *b.rhs : *b.lhs;
+    const std::string n = spelled(side, "c");
+    if (comparison) {
+        if (ot->isEnum())
+            diags_.error(b.loc, "'" + sym + "' compares two values of one enum, but these are " + q(l) + " and " + q(r),
+                         "compare values of the same enum. To compare their numbers, write `int(a) " + sym + " int(b)`", spec::Enums);
+        else
+            diags_.error(other.loc, "'" + sym + "' compares a " + q(en) + " with a " + q(en) + ", but this is " + q(ot),
+                         ot->is(K::String) ? "compare the name of its enumerator: `format(\"{}\", " + n + ") " + sym + " \"...\"`"
+                         : ot->isArithmetic() ? "compare it with an enumerator, such as `" + n + " " + sym + " " + enumSample(en) + "`, or compare its number: `int(" + n + ") " + sym + " " + spelled(other, "1") + "`"
+                                              : "compare it with an enumerator, such as `" + n + " " + sym + " " + enumSample(en) + "`",
+                         spec::Enums);
+        return;
+    }
+    const bool bits = b.op == BinOp::BitAnd || b.op == BinOp::BitOr || b.op == BinOp::BitXor || b.op == BinOp::Shl || b.op == BinOp::Shr;
+    diags_.error(side.loc, "'" + sym + "' cannot be used with " + q(en) + ", an enum",
+                 b.op == BinOp::Add && ot->is(K::String) ? "turn it into the name of its enumerator first: `format(\"{}\", " + n + ")`"
+                 : bits ? std::string("an enum has no bit operations. For a set of flags, use an int with a constant for each bit, or a struct of bools")
+                 : (b.op == BinOp::Add || b.op == BinOp::Sub) && ot->isArithmetic()
+                     ? "an enum is not a number. To step to another enumerator, go through its number: `" + std::string(en->name) + "(int(" + n + ") " + sym + " 1)`, which stops the program if there is none"
+                     : "an enum is not a number. Use its number: `int(" + n + ")`",
+                 spec::Enums);
 }
 
 }  // namespace cplus

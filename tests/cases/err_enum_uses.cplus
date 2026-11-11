@@ -1,0 +1,128 @@
+// An enumerator is named with its enum, and nothing converts to or from an enum by itself.
+enum class Color { Red, Green, Blue };
+enum class Shape { Circle, Square };
+enum class Level { Low = 1, High = 2 };
+
+struct Row {
+    Level level;
+};
+
+void takesInt(int n) {}
+
+template<typename T> T fresh() { return T(); }
+
+int main() {
+    Color named = RED;
+    Color bare = Red;
+    auto type = Color;
+    Color purple = Color::Purple;
+    Color greem = Color::Greem;
+    Color fromInt = 1;
+    int toInt = Color::Red;
+    long toLong = Color::Blue;
+    string toText = Color::Red;
+    bool toBool = Color::Red;
+    Color fromShape = Shape::Circle;
+    Color fromLevel = Level::Low;
+    takesInt(Color::Green);
+    Color c = Color::Green;
+    if (c) println("yes");
+    while (!c) {}
+    Color sum = c + 1;
+    Color both = c | Color::Red;
+    int shifted = c << 1;
+    c++;
+    --c;
+    int negative = -c;
+    println("{}", c == 1);
+    println("{}", c < 2.5);
+    println("{}", c == "Green");
+    println("{}", c == Shape::Square);
+    println("{}", c < Shape::Square);
+    string text = "is " + c;
+    string again = to_string(c);
+    double d = double(c);
+    bool b = bool(c);
+    char letter = char(c);
+    Shape s = Shape(c);
+    Color fromText = Color("Red");
+    Color fromDouble = Color(1.5);
+    int? maybe = 1;
+    Color fromOptional = Color(maybe);
+    Color seven = Color(7);
+    Color minus = static_cast<Color>(-1);
+    auto levels = vector<Level>(3);
+    Row row = {};
+    Level made = fresh<Level>();
+    return 0;
+}
+
+void written() {
+    Color dotted = Color.Red;
+    Color listed = Color{};
+    Color empty = Color();
+    Color two = Color(1, 2);
+    Color number = Color::2;
+    Level zero = Level();
+}
+// error: 'RED' is not declared
+// error: did you mean the enumerator `Color::Red`? An enumerator is named with its enum
+// error: 'Red' is not declared
+// error: it is an enumerator of 'Color', which is named with its enum: `Color::Red`
+// error: 'Color' is an enum, not a value
+// error: name one of its enumerators, such as `Color::Red`
+// error: the enum 'Color' has no enumerator 'Purple'
+// error: use one of its enumerators: Red (0), Green (1) and Blue (2)
+// error: the enum 'Color' has no enumerator 'Greem'
+// error: did you mean `Color::Green`?
+// error: expected 'Color' to initialize 'fromInt', but this is 'int'
+// error: a number does not turn into an enum by itself. Write an enumerator, such as `Color::Red`, or `Color(1)`, which stops the program unless it is the value of one
+// error: an enum does not turn into a number by itself. Write `int(Color::Red)` for its number
+// error: an enum does not turn into a number by itself. Write `long(Color::Blue)` for its number
+// error: write `format("{}", Color::Red)` for the name of its enumerator
+// error: an enum is not a bool; compare it, e.g. `Color::Red != Color::Green`
+// error: these are different enums. Write an enumerator of 'Color', such as `Color::Red`
+// error: expected 'Color' to initialize 'fromLevel', but this is 'Level'
+// error: expected 'int' for parameter 'n' of 'takesInt', but this is 'Color'
+// error: the if condition must be a bool, a number, a pointer or an optional, but this is 'Color'
+// error: an enum is not a condition; compare it, e.g. `c != Color::Red`
+// error: an enum is not a condition; compare it, e.g. `c == Color::Red`
+// error: '+' cannot be used with 'Color', an enum
+// error: To step to another enumerator, go through its number: `Color(int(c) + 1)`, which stops the program if there is none
+// error: an enum has no bit operations. For a set of flags, use an int with a constant for each bit, or a struct of bools
+// error: '<<' cannot be used with 'Color', an enum
+// error: to step to the next enumerator, write `c = Color(int(c) + 1)`
+// error: to step to the previous enumerator, write `c = Color(int(c) - 1)`
+// error: an enum is not a number. Use its number: `-int(c)`
+// error: '==' compares a 'Color' with a 'Color', but this is 'int'
+// error: compare it with an enumerator, such as `c == Color::Red`, or compare its number: `int(c) == 1`
+// error: '<' compares a 'Color' with a 'Color', but this is 'double'
+// error: compare the name of its enumerator: `format("{}", c) == "..."`
+// error: '==' compares two values of one enum, but these are 'Color' and 'Shape'
+// error: To compare their numbers, write `int(a) < int(b)`
+// error: turn it into the name of its enumerator first: `format("{}", c)`
+// error: write `format("{}", c)` for the name of its enumerator, or `to_string(int(c))` for its number
+// error: an enum converts to its number, an int or a long, but this converts it to 'double'
+// error: convert its number: `double(int(c))`
+// error: compare it instead, e.g. `c != Color::Red`
+// error: convert its number: `char(int(c))`
+// error: a cast cannot turn a 'Color' into a 'Shape'
+// error: go through its number, if that is what is meant: `Shape(int(c))`
+// error: 'Color(n)' turns an integer into an enumerator, but this is 'string'
+// error: convert it to an integer first: `Color(int(x))`
+// error: 'Color(n)' turns an integer into an enumerator, but this is 'int?'
+// error: 7 is not the value of any enumerator of 'Color'
+// error: use the value of one of them, or the enumerator itself: Red (0), Green (1) and Blue (2)
+// error: -1 is not the value of any enumerator of 'Color'
+// error: vector<Level>(n) cannot make its elements on its own, because the enum 'Level' has no enumerator whose value is 0, for it to start as
+// error: field 'level' of 'Row' needs a value, because the enum 'Level' has no enumerator whose value is 0, for it to start as
+// error: an enumerator is named with '::', not '.'
+// error: write `Color::Red`
+// error: a value of an enum is not built with a { } list
+// error: a conversion to 'Color' takes one value
+// error: write an enumerator, such as `Color::Red`, or turn a number into one with `Color(n)`
+// error: write `Color(n)`
+// error: expected the name of an enumerator after 'Color::', found number 2
+// error: write an enumerator, such as `Level::Low`, or turn a number into one with `Level(n)`
+// error: the enum 'Level' has no enumerator whose value is 0, which Level() would be
+// error: give 'Level' an enumerator whose value is 0, such as `None = 0`, or write a value such as `Level::Low` in its place

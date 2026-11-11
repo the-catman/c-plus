@@ -1,0 +1,152 @@
+// Enums: values, casts, comparisons, printing, defaults, constants, and use in other types.
+const int LIMIT = 10;
+constexpr int SHIFT = 4;
+
+// Used before it is defined, as a struct can be.
+Shade darker(Shade s) { return s == Shade::Light ? Shade::Dark : s; }
+
+enum class Color { Red, Green, Blue, };
+enum class Shade { Light = 3, Dark };
+enum class Status : long { Ok = 200, NotFound = 404, Far = 5000000000, Below = -5000000000 };
+enum class Flags { Small = 1, Big = 1 << 20, Last = LIMIT - 1, Shifted = 1 << SHIFT, Negative = -LIMIT, Char = 'a' };
+enum class Twins { First = 1, Second = 1, Zero = 0 };
+enum class Edge { Low = -2147483648, High = 2147483647 };
+
+const Color FAVORITE = Color::Green;
+constexpr Color SECOND = Color(1);
+constexpr int BLUE = int(Color::Blue);
+
+struct Pixel {
+    Color color;
+    Shade shade = Shade::Dark;
+    int x = 0;
+};
+
+class Lamp {
+public:
+    Color color = Color::Red;
+    Color? spare;
+    Lamp(Color c) : color(c) {}
+    Color get() const { return color; }
+};
+
+constexpr int score(Color c) { return int(c) * 2 + 1; }
+
+template<Comparable T>
+T largest(T a, T b) {
+    return a < b ? b : a;
+}
+
+template<typename T>
+T fresh() {
+    return T();
+}
+
+template<Hashable K>
+int countKeys(vector<K> keys) {
+    hashmap<K, int> seen;
+    for (auto k : keys) seen[k]++;
+    return int(seen.size());
+}
+
+int main() {
+    Color c = Color::Green;
+    println("{} {} {}", c, Color::Red, Color::Blue);
+    // expect: Green Red Blue
+    println("{} {} {}", int(c), static_cast<int>(Color::Blue), (int)Color::Red);
+    // expect: 1 2 0
+    println("{} {} {}", long(Status::Far), static_cast<long>(Status::Below), (long)Status::Ok);
+    // expect: 5000000000 -5000000000 200
+    println("{} {}", int(Status::NotFound), Status::Below);
+    // expect: 404 Below
+    println("{} {} {} {} {} {}", int(Flags::Small), int(Flags::Big), int(Flags::Last), int(Flags::Shifted), int(Flags::Negative), int(Flags::Char));
+    // expect: 1 1048576 9 16 -10 97
+    println("{} {} {}", Twins::First, Twins::Second, Twins::Zero);
+    // expect: First First Zero
+    println("{} {}", int(Edge::Low), int(Edge::High));
+    // expect: -2147483648 2147483647
+    println("{} {}", int(Shade::Light), int(Shade::Dark));
+    // expect: 3 4
+
+    // Into an enum, from an int, a long or a char.
+    int two = 2;
+    long four = 4;
+    char a = 'a';
+    println("{} {} {}", Color(two), static_cast<Shade>(four), (Flags)a);
+    // expect: Blue Dark Char
+    println("{} {}", Color(int(c) + 1), Status(404L));
+    // expect: Blue NotFound
+    int n = 1;
+    println("{} {} {}", static_cast<Color>(n), (Color)n, vector<Color>(3));
+    // expect: Green Green [Red, Red, Red]
+
+    // Comparisons, by the number.
+    println("{} {} {} {}", c == Color::Green, c != Color::Green, c < Color::Blue, c >= Color::Blue);
+    // expect: true false true false
+    println("{} {}", Color::Red <= Color::Red, Color::Blue > Color::Red);
+    // expect: true true
+    println("{} {}", Twins::First == Twins::Second, Status::Below < Status::Ok);
+    // expect: true true
+
+    // Constants and constexpr.
+    println("{} {} {}", FAVORITE, SECOND, BLUE);
+    // expect: Green Green 2
+    array<int, score(Color::Blue)> sized;
+    println("{}", sized.size());
+    // expect: 5
+
+    // A default value is the enumerator whose value is 0.
+    Pixel p = {};
+    println("{}", p);
+    // expect: {color: Red, shade: Dark, x: 0}
+    Pixel q = {.color = Color::Blue};
+    q.shade = darker(Shade::Light);
+    println("{}", q);
+    // expect: {color: Blue, shade: Dark, x: 0}
+    auto colors = vector<Color>(2);
+    colors.push_back(Color::Blue);
+    println("{} {}", colors, colors == vector<Color>{Color::Red, Color::Red, Color::Blue});
+    // expect: [Red, Red, Blue] true
+    array<Color, 2> pair = {Color::Green, Color::Blue};
+    println("{}", pair);
+    // expect: [Green, Blue]
+    println("{} {}", fresh<Color>(), fresh<Twins>());
+    // expect: Red Zero
+
+    // Optionals, classes and generics.
+    Color? none;
+    Color? some = Color::Blue;
+    println("{} {} {} {}", none, some, some == Color::Blue, none ?? Color::Green);
+    // expect: null Blue true Green
+    Lamp lamp = Lamp(Color::Blue);
+    lamp.spare = Color::Red;
+    println("{} {}", lamp.get(), lamp);
+    // expect: Blue Lamp {color: Blue, spare: Red}
+    println("{} {}", largest(Color::Red, Color::Blue), largest(Shade::Dark, Shade::Light));
+    // expect: Blue Dark
+    println("{}", countKeys(vector<Color>{Color::Red, Color::Blue, Color::Red}));
+    // expect: 2
+
+    // Hash map keys and values.
+    hashmap<Color, int> votes;
+    votes[Color::Blue] += 2;
+    votes[Color::Red]++;
+    votes[Color::Blue]++;
+    println("{} {} {}", votes, votes.contains(Color::Green), votes.get(Color::Red) ?? 0);
+    // expect: {Blue: 3, Red: 1} false 1
+    hashmap<string, Shade> shades = {{"sky", Shade::Light}};
+    println("{}", shades);
+    // expect: {"sky": Light}
+    hashmap<Status, string> names = {{Status::Far, "far"}, {Status::Ok, "ok"}};
+    println("{}", names[Status::Far]);
+    // expect: far
+
+    // Formatting.
+    string text = format("{}-{}", c, Status::Ok);
+    println("{} {} {}", text, to_string(int(c)), text.size());
+    // expect: Green-Ok 1 8
+    Color chosen = two > 1 ? Color::Blue : Color::Red;
+    println("{}", chosen);
+    // expect: Blue
+    return 0;
+}

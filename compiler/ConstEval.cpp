@@ -20,6 +20,11 @@ ConstValue intValue(int64_t v, VK kind = VK::Int) {
     return out;
 }
 ConstValue boolValue(bool v) { return intValue(v, VK::Bool); }
+ConstValue enumValue(int64_t v, const Type* type) {
+    ConstValue out = intValue(v, VK::Enum);
+    out.enumType = type;
+    return out;
+}
 ConstValue floatValue(double v, VK kind) {
     ConstValue out;
     out.kind = kind;
@@ -41,6 +46,7 @@ const Type* typeOfValue(const ConstValue& v) {
         case VK::Bool: return Type::boolTy();
         case VK::Char: return Type::charTy();
         case VK::String: return Type::stringTy();
+        case VK::Enum: return v.enumType;
     }
     return Type::intTy();
 }
@@ -67,6 +73,7 @@ const char* ConstValue::typeName() const {
         case Kind::Bool: return "bool";
         case Kind::Char: return "char";
         case Kind::String: return "string";
+        case Kind::Enum: return enumType->name;
     }
     return "?";
 }
@@ -77,7 +84,7 @@ bool isBuiltinConstraintName(const std::string& name) {
 }
 
 std::optional<bool> builtinConstraint(const std::string& name, const Type* first, const Type* second) {
-    if (name == "Comparable") return first->isArithmetic() || first->is(K::String) || first->isPointer();
+    if (name == "Comparable") return first->isArithmetic() || first->is(K::String) || first->isPointer() || first->isEnum();
     if (name == "Number") return first->isNumber();
     if (name == "Integer") return first->isInteger();
     if (name == "Floating") return first->isFloating();
@@ -119,6 +126,15 @@ ConstValue ConstEval::convert(const ConstValue& v, const Type* to, Loc loc) {
         return v.i;
     };
     if (to->is(K::Auto)) return v;
+    if (to->isEnum()) {  // `Color(n)`, which only an enumerator's value passes
+        if (v.kind == VK::Enum && v.enumType == to) return v;
+        if (!isIntegerLike(v)) throw ConstError{loc, std::string("a ") + v.typeName() + " cannot become a '" + to->name + "'"};
+        if (to->decl->enumeratorWithValue(v.i) < 0)
+            throw ConstError{loc, "the value " + std::to_string(v.i) + " is not one of the enum '" + to->name + "'"};
+        return enumValue(v.i, to);
+    }
+    if (v.kind == VK::Enum && !to->isInteger())
+        throw ConstError{loc, std::string("a '") + v.typeName() + "' cannot become a '" + to->name + "'"};
     if (to->is(K::String)) {
         if (v.kind == VK::String) return v;
         throw ConstError{loc, std::string("a ") + v.typeName() + " cannot become a string here"};
@@ -190,6 +206,7 @@ const Type* ConstEval::staticType(const Expr& e) {
             return decl->declType->is(K::Auto) ? (decl->init ? staticType(*decl->init) : nullptr) : decl->declType;
         }
         case Expr::Kind::Cast: return static_cast<const CastExpr&>(e).target;
+        case Expr::Kind::EnumValue: return &static_cast<const EnumValueExpr&>(e).decl->type;
         case Expr::Kind::Try: return staticType(*static_cast<const TryExpr&>(e).operand);
         case Expr::Kind::Unary: {
             auto& u = static_cast<const UnaryExpr&>(e);
@@ -263,6 +280,10 @@ ConstValue ConstEval::arith(BinOp op, const ConstValue& l, const ConstValue& r, 
             default: return a >= b;
         }
     };
+    if (l.kind == VK::Enum || r.kind == VK::Enum) {
+        if (comparison && l.kind == r.kind && l.enumType == r.enumType) return boolValue(compared(l.i, r.i));
+        throw ConstError{loc, "'" + sym + "' cannot be used with a '" + l.typeName() + "' and a '" + r.typeName() + "'"};
+    }
     if (l.kind == VK::String || r.kind == VK::String) {
         if (op == BinOp::Add && l.kind == VK::String && r.kind == VK::String) return stringValue(l.s + r.s);
         if (op == BinOp::Add && l.kind == VK::String && r.kind == VK::Char) return stringValue(l.s + (char)r.i);
@@ -496,6 +517,7 @@ ConstValue ConstEval::eval(const Expr& e) {
                     case VK::Int: case VK::Float: return intValue(4, VK::Long);
                     case VK::Long: case VK::Double: return intValue(8, VK::Long);
                     case VK::String: return intValue(24, VK::Long);
+                    case VK::Enum: return intValue(v.enumType->decl->underlying && v.enumType->decl->underlying->is(K::Long) ? 8 : 4, VK::Long);
                 }
             }
             throw ConstError{e.loc, "the size of this type is not known here"};
@@ -505,6 +527,13 @@ ConstValue ConstEval::eval(const Expr& e) {
             auto& c = static_cast<const ConstraintExpr&>(e);
             if (!hooks_.constraint) throw ConstError{e.loc, "this cannot be asked here"};
             return boolValue(hooks_.constraint(c));
+        }
+        case Expr::Kind::EnumValue: {
+            auto& v = static_cast<const EnumValueExpr&>(e);
+            if (!v.decl->valuesKnown) throw ConstError{e.loc, "the values of '" + v.decl->name + "' are not known yet where this is read"};
+            int at = v.index >= 0 ? v.index : v.decl->enumeratorIndex(v.name);
+            if (at < 0) throw ConstError{v.nameLoc, "the enum '" + v.decl->name + "' has no enumerator '" + v.name + "'"};
+            return enumValue(v.decl->enumerators[(size_t)at].value, &v.decl->type);
         }
         case Expr::Kind::NullLit: throw ConstError{e.loc, "null is only a value while the program runs"};
         case Expr::Kind::New: throw ConstError{e.loc, "memory cannot be allocated while compiling"};
@@ -608,9 +637,43 @@ ConstEval::Flow ConstEval::exec(const Stmt& s) {
         case Stmt::Kind::Break: return Flow::Break;
         case Stmt::Kind::Continue: return Flow::Continue;
         case Stmt::Kind::Try: return exec(*static_cast<const TryStmt&>(s).body);  // if nothing fails, nothing else runs
+        case Stmt::Kind::Switch: return execSwitch(static_cast<const SwitchStmt&>(s));
+        case Stmt::Kind::Fallthrough: return Flow::Normal;
         case Stmt::Kind::Throw: throw ConstError{s.loc, "it reached a `throw` while compiling"};
         default: throw ConstError{s.loc, "this kind of statement cannot run while compiling"};
     }
+}
+
+// The section the value has a label for, or the default, and the ones it runs on into.
+ConstEval::Flow ConstEval::execSwitch(const SwitchStmt& s) {
+    ConstValue value = eval(*s.value);
+    size_t start = s.sections.size(), fallback = s.sections.size();
+    for (size_t i = 0; i < s.sections.size() && start == s.sections.size(); ++i)
+        for (auto& label : s.sections[i].labels) {
+            if (!label.value) fallback = i;
+            else if (isTrue(arith(BinOp::Eq, value, eval(*label.value), label.loc), label.loc)) {
+                start = i;
+                break;
+            }
+        }
+    if (start == s.sections.size()) start = fallback;
+    if (start == s.sections.size()) {
+        if (s.exhaustive) throw ConstError{s.value->loc, "the switch has no case for " + std::string(value.typeName()) + "(" + std::to_string(value.i) + ")"};
+        return Flow::Normal;
+    }
+    for (size_t i = start; i < s.sections.size(); ++i) {
+        frames_.back().emplace_back();
+        struct Pop {
+            ConstEval& e;
+            ~Pop() { e.frames_.back().pop_back(); }
+        } pop{*this};
+        for (auto& st : s.sections[i].body->stmts) {
+            Flow flow = exec(*st);
+            if (flow == Flow::Break) return Flow::Normal;
+            if (flow != Flow::Normal) return flow;
+        }
+    }
+    return Flow::Normal;
 }
 
 }  // namespace cplus

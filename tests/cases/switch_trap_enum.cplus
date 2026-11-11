@@ -1,0 +1,22 @@
+// A switch that has a case for each enumerator and no default stops the program for a value that is none of them,
+// which only memory read through a pointer of another type can give.
+enum class Color { Red, Green, Blue };
+
+string name(Color c) {
+    switch (c) {
+        case Color::Red: return "red";
+        case Color::Green: return "green";
+        case Color::Blue: return "blue";
+    }
+}
+
+int main() {
+    int n = 9;
+    void* raw = &n;
+    Color* p = static_cast<Color*>(raw);
+    println("{}", *p);
+    // expect: Color(9)
+    println("{}", name(*p));
+    return 0;
+}
+// trap: the switch on 'Color' was given a value that is not one of its enumerators, so no case is for it

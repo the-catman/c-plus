@@ -1,0 +1,58 @@
+// A switch runs the case that matches. A case that would run into the next one is an error, unless it says
+// [[fallthrough]];, and a switch on an enum without default: has a case for every enumerator.
+enum class Light { Red, Amber, Green };
+
+string advice(Light light) {
+    switch (light) {
+        case Light::Red:
+        case Light::Amber:
+            return "stop";
+        case Light::Green:
+            return "go";
+    }
+}
+
+int main() {
+    for (int n = 0; n < 4; n++) {
+        switch (n) {
+            case 0:
+                continue;
+            case 1:
+                println("one");
+                break;
+            case 2:
+                println("two");
+                [[fallthrough]];
+            default:
+                println("some");
+        }
+    }
+    // expect: one
+    // expect: two
+    // expect: some
+    // expect: some
+    println("{} {}", advice(Light::Amber), advice(Light::Green));
+    // expect: stop go
+    string command = "add";
+    switch (command) {
+        case "add":
+            println("adding");
+            break;
+        case "remove":
+            println("removing");
+            break;
+        default: println("what?");
+    }
+    // expect: adding
+    char grade = 'B';
+    switch (grade) {
+        case 'A':
+        case 'B':
+            println("good");
+            break;
+        default:
+            println("try again");
+    }
+    // expect: good
+    return 0;
+}
