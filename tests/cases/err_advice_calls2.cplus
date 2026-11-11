@@ -77,8 +77,6 @@ void containers() {
     vector<int> v;
     v.reserve(1);
     // error: remove the call: a vector grows by itself
-    v.insert(1, 2);
-    // error: build a new vector with a loop and `push_back`
     println("{}", v.begin());
     // error: go over it with `for (auto x : v)`
     hashmap<string, int> m;

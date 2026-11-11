@@ -5824,8 +5824,84 @@ void Sema::checkChangingReceiver(const Expr& recv, const char* method, const cha
     checkChangeable(recv, "changed", var, path, change);
 }
 
+// `v.begin() + i`, `v.end() - 1` or `v.begin()`, as C++ gives insert() and erase() a position: the index it stands for, as
+// it would be written, or "" if it is none of them. `atEnd` is set for `v.end()` itself.
+static std::string iteratorIndex(const Expr& e, bool& atEnd) {
+    atEnd = false;
+    auto ends = [](const Expr& x, const char* name) {
+        return x.kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr&>(x).name == name && static_cast<const MethodCallExpr&>(x).args.empty();
+    };
+    auto sizeOf = [](const Expr& x) {
+        const auto& call = static_cast<const MethodCallExpr&>(x);
+        return asBase(call.receiver ? spelled(*call.receiver, "v") : "v") + ".size()";
+    };
+    if (ends(e, "begin") || ends(e, "cbegin")) return "0";
+    if (ends(e, "end") || ends(e, "cend")) {
+        atEnd = true;
+        return sizeOf(e);
+    }
+    if (e.kind != Expr::Kind::Binary) return "";
+    auto& bin = static_cast<const BinaryExpr&>(e);
+    const std::string offset = spelled(*bin.rhs, "i");
+    if (bin.op == BinOp::Add && (ends(*bin.lhs, "begin") || ends(*bin.lhs, "cbegin"))) return offset;
+    if (bin.op == BinOp::Sub && (ends(*bin.lhs, "end") || ends(*bin.lhs, "cend"))) return sizeOf(*bin.lhs) + " - " + offset;
+    return "";
+}
+
+// `v.insert(i, x)` and `v.erase(i)`, which take an index, as there are no iterators.
+const Type* Sema::checkVectorInsertErase(MethodCallExpr& call, Flow& flow, const Type* vecType) {
+    const bool insert = call.name == "insert";
+    const std::string v = asBase(spelled(*call.receiver, "v"));
+    bool atEnd = false;
+    const std::string index = call.args.empty() ? "" : iteratorIndex(*call.args[0], atEnd);
+    if (!index.empty()) {  // `v.erase(v.begin() + i)`
+        for (size_t i = 1; i < call.args.size(); ++i) {
+            bool past = false;
+            if (iteratorIndex(*call.args[i], past).empty()) checkLooseValue(*call.args[i], flow);  // an iterator here would only say the same again
+        }
+        const std::string value = insert && call.args.size() == 2 && !plainKey(*call.args[1]).empty() ? plainKey(*call.args[1]) : "x";
+        const bool range = !insert && call.args.size() == 2;
+        bool lastAtEnd = false;
+        const std::string last = range ? iteratorIndex(*call.args[1], lastAtEnd) : "";
+        diags_.error(call.args[0]->loc, std::string(insert ? "insert()" : "erase()") + " takes the index of an element, as there are no iterators",
+                     range ? "erase them one at a time, from the last: `for (long k = " + (last.empty() ? std::string("last") : last) + " - 1; k >= " + index + "; k--) " +
+                                 v + ".erase(k);`"
+                     : insert && call.args.size() != 2 ? "insert them one at a time, each with `" + v + (atEnd ? ".push_back(x)`" : ".insert(" + index + ", x)`")
+                     : insert && atEnd    ? "write `" + v + ".push_back(" + value + ")`, which adds it at the end"
+                     : atEnd              ? "`" + v + ".end()` is past the last element. To remove the last one, write `" + v + ".pop_back()`"
+                     : insert             ? "write `" + v + ".insert(" + index + ", " + value + ")`, which puts it before the element at that index"
+                                          : "write `" + v + ".erase(" + index + ")`",
+                     spec::Vectors);
+        return Type::error();
+    }
+    call.vecMethod = insert ? VecMethod::Insert : VecMethod::Erase;
+    checkChangingReceiver(*call.receiver, call.name.c_str(), "vector", spec::Vectors);
+    const size_t want = insert ? 2 : 1;
+    if (!insert && call.args.size() == 2) {  // `v.erase(first, last)`
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc, "this compiler does not support erase() of a range of a vector yet",
+                     "erase them one at a time, from the last: `for (long k = last - 1; k >= first; k--) " + v + ".erase(k);`", spec::Status);
+        return Type::error();
+    }
+    if (call.args.size() != want) {
+        for (auto& a : call.args) checkLooseValue(*a, flow);
+        diags_.error(call.loc,
+                     call.name + "() takes " + (insert ? "2 arguments, an index and a value," : "one argument, an index,") + " but " +
+                         std::to_string(call.args.size()) + (call.args.size() == 1 ? " was" : " were") + " given",
+                     insert ? "write `" + v + ".insert(i, value)`, which puts the value before the element at index i, or at the end when i is `" + v +
+                                  ".size()`. For more than one, insert each"
+                            : "write `" + v + ".erase(i)`, which removes the element at index i",
+                     spec::Vectors);
+        return Type::error();
+    }
+    checkValue(*call.args[0], flow, Type::longTy(), "as the index for " + call.name + "()");
+    if (insert) checkValue(*call.args[1], flow, vecType->elem, "for insert() on " + q(vecType));
+    return Type::voidTy();
+}
+
 const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type* vecType) {
     if (call.name == "join") return checkJoin(call, flow, vecType);
+    if (call.name == "insert" || call.name == "erase") return checkVectorInsertErase(call, flow, vecType);
     const VectorMethodInfo* info = nullptr;
     for (auto& m : kVectorMethods)
         if (call.name == m.name) info = &m;
@@ -5842,13 +5918,11 @@ const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type
         if (call.name == "emplace_back") help = "write `push_back(value)`";
         else if (call.name == "at") help = "write `v[i]`; indexing is always checked in C+";
         else if (call.name == "length" || call.name == "count") help = "did you mean 'size'?";
-        else if (call.name == "insert" || call.name == "erase" || call.name == "resize" || call.name == "reserve" ||
-                 call.name == "begin" || call.name == "end") {
+        else if (call.name == "resize" || call.name == "reserve" || call.name == "begin" || call.name == "end") {
             diags_.error(call.loc, "this compiler does not support " + call.name + "() on vectors yet",
-                         call.name == "begin" || call.name == "end" ? "go over it with `for (auto x : v)`"
+                         call.name == "begin" || call.name == "end" ? "go over it with `for (auto x : v)`, or with an index: `v.insert(i, x)` and `v.erase(i)` take one"
                          : call.name == "reserve" ? "remove the call: a vector grows by itself"
-                         : call.name == "resize" ? "grow it with `while (v.size() < n) v.push_back(value);`, and shrink it with `pop_back`"
-                                                 : "build a new vector with a loop and `push_back`",
+                                                 : "grow it with `while (v.size() < n) v.push_back(value);`, and shrink it with `pop_back`",
                          spec::Status);
             return Type::error();
         } else {
@@ -5860,7 +5934,7 @@ const Type* Sema::checkVectorMethod(MethodCallExpr& call, Flow& flow, const Type
             std::vector<std::string> names;
             for (auto& m : kVectorMethods) names.push_back(m.name);
             std::string guess = closest(call.name, names);
-            help = guess.empty() ? "use one of the vector methods: size, empty, push_back, pop_back, front, back and clear"
+            help = guess.empty() ? "use one of the vector methods: size, empty, push_back, pop_back, insert, erase, front, back and clear, and join for a vector<string>"
                                  : "did you mean " + q(guess) + "?";
             if (call.receiver && call.receiver->kind == Expr::Kind::Member && static_cast<const MemberExpr&>(*call.receiver).field == "headers") {
                 const Expr& response = *static_cast<const MemberExpr&>(*call.receiver).base;

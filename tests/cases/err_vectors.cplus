@@ -90,7 +90,7 @@ int main() {
 // error: gives a copy. Change it in place
 // error: push_back() takes one argument but 0 were given
 // error: write `push_back(value)`
-// error: this compiler does not support insert() on vectors yet
+// error: insert() takes 2 arguments, an index and a value, but 1 was given
 // error: 'bag' is const, so its fields cannot be changed
 // error: cannot call 'move' on const 'ps', because it may change fields
 // error: an index into a string cannot be negative

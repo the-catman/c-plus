@@ -1,0 +1,14 @@
+// The forms of vector insert and erase that the cheat sheet shows, written as it writes them.
+// check_cheat_sheet in tests/run_tests.py looks for each one here or in the other cheatsheet_forms files.
+int main() {
+    vector<int> v = {1, 3};
+    int i = 1;
+    int x = 2;
+    v.insert(i, x);
+    v.insert(0, x);
+    v.push_back(x);
+    v.erase(i);
+    println("{}", v);
+    // expect: [2, 2, 3, 2]
+    return 0;
+}

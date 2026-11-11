@@ -1,0 +1,8 @@
+// erase() on an empty vector has no element to remove, so it stops the program.
+int main() {
+    vector<string> v;
+    v.erase(0);
+    println("{}", v);
+    return 0;
+}
+// trap: erase() index 0 is out of range for a vector of size 0

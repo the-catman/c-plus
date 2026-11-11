@@ -1,0 +1,122 @@
+// v.insert(i, x) and v.erase(i): the index, the elements that move, what holds references, and copies, which keep what they had.
+class Node {
+public:
+    string name;
+    Node(string n) : name(n) {}
+    ~Node() { println("free {}", name); }
+};
+
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+
+class Counter {
+public:
+    int count = 0;
+    int next() {
+        count += 1;
+        return count;
+    }
+};
+
+int main() {
+    vector<int> v = {1, 2, 3};
+    vector<int> copy = v;
+    v.insert(0, 0);
+    v.insert(v.size(), 9);
+    v.insert(2, 5);
+    println("{} {}", v, copy);
+    // expect: [0, 1, 5, 2, 3, 9] [1, 2, 3]
+    v.erase(0);
+    v.erase(v.size() - 1);
+    v.erase(1);
+    println("{} {}", v, copy);
+    // expect: [1, 2, 3] [1, 2, 3]
+
+    // an empty vector, which has no buffer yet
+    vector<long> none;
+    none.insert(0, 7);
+    println("{}", none);
+    // expect: [7]
+    none.erase(0);
+    println("{} {}", none, none.empty());
+    // expect: [] true
+
+    // the forms the spec writes
+    vector<int> w = {10, 20};
+    int i = 1;
+    int x = 15;
+    w.insert(i, x);
+    println("{}", w);
+    // expect: [10, 15, 20]
+    w.erase(i);
+    println("{}", w);
+    // expect: [10, 20]
+
+    // strings and structs, which are copied in and moved down
+    vector<string> s;
+    s.insert(0, "b");
+    s.insert(0, "a");
+    s.insert(2, "c");
+    s.erase(1);
+    println("{}", s);
+    // expect: ["a", "c"]
+    vector<Point> points = {Point{1, 1}, Point{3, 3}};
+    points.insert(1, Point{2, 2});
+    points[1].y = 20;
+    println("{}", points);
+    // expect: [{x: 1, y: 1}, {x: 2, y: 20}, {x: 3, y: 3}]
+
+    // what a class object is erased with is freed once the vector no longer holds it
+    vector<Node> nodes = {Node("x"), Node("y")};
+    nodes.erase(0);
+    // expect: free x
+    println("{}", nodes.size());
+    // expect: 1
+    Node z = Node("z");
+    nodes.insert(0, z);
+    nodes.erase(0);
+    println("{} still here", z.name);
+    // expect: z still here
+    vector<unique<Node>> owned;
+    owned.push_back(unique<Node>("u1"));
+    owned.insert(0, unique<Node>("u0"));
+    owned.erase(1);
+    // expect: free u1
+    println("{}", owned[0].get().name);
+    // expect: u0
+
+    // a vector in a struct, in a vector, and in a hashmap
+    vector<vector<int>> grid = {{1}, {2}};
+    grid[1].insert(0, 0);
+    grid.insert(0, vector<int>{});
+    println("{}", grid);
+    // expect: [[], [1], [0, 2]]
+    hashmap<string, vector<int>> m;
+    m["a"].insert(0, 1);
+    m["a"].insert(0, 2);
+    m["a"].erase(1);
+    println("{}", m);
+    // expect: {"a": [2]}
+
+    // the index and the value are worked out before the vector is found
+    Counter c = Counter();
+    vector<int> order;
+    order.insert(0, c.next());
+    order.insert(order.size(), c.next());
+    order.insert(0, c.next());
+    println("{}", order);
+    // expect: [3, 1, 2]
+
+    // inserting and erasing many, in the middle
+    vector<int> many;
+    for (int k = 0; k < 1000; k++) many.insert(many.size() / 2, k);
+    for (int k = 0; k < 998; k++) many.erase(0);
+    println("{}", many);
+    // expect: [2, 0]
+    return 0;
+}
+// expect: free u0
+// expect: free z
+// expect: free y

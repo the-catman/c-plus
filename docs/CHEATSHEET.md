@@ -43,7 +43,7 @@ long square(long n) { return n * n; }
 | Threads | `Task<long> t = spawn sum(v);` or `auto t = spawn obj.method(x);`, then `t.wait()`, `t.done()`. `Task<void>` for no result. The function `throws`: `Task<long, throws>`, and `try t.wait()`. Arguments are copied, class references are shared. The program waits for its threads when `main` returns. An error that no `wait()` can see fails the program |
 | Locks | `Mutex m = Mutex();`, `m.lock()`, `m.unlock()`, `m.try_lock()`. `LockGuard g = LockGuard(m);` unlocks at the end of the block. Locking twice on one thread **stops the program**. `cplus run app.cplus --race` finds what is not protected |
 | Async | `async string load(string name) { await delay(10); return name; }`. A call starts it, and gives a `Task<string>`: `auto t = load("a");`, then `await t` in an async function, or `t.wait()` in a plain one. `async int main()`. A function that `throws` gives a `Task<string, throws>`, and is waited for with `try await t`. `await` works on `spawn`'s tasks too. `delay(ms)` waits. A task must be kept or waited for, and the program waits for async work when `main` returns. No `LockGuard` or `local` across an `await` |
-| Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
+| Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v.insert(i, x)` (before index `i`), `v.erase(i)`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
 | Building vectors | `{1, 2, 3}`, `vector<int>{1, 2}`, `vector<int>(n)`, `vector<int>(n, value)`, `vector<vector<int>>` |
 | Hash maps | `hashmap<string, int> m = {{"a", 1}};` is a **value**, copied like a vector, that keeps the order entries were added in. `m["b"] = 2`, `m["b"]++`, `m[k].push_back(x)`. `m[k]` adds a missing key with a default value, as in C++, or **stops the program** if `V` has none. `m.at(k)` (**stops the program** if missing), `m.get(k)` (a `V?`), `m.contains(k)`, `m.count(k)`, `m.insert({k, v})` (keeps what is there), `m.erase(k)`, `m.size()`, `m.empty()`, `m.clear()`, `m.keys()`, `m.values()`. `for (auto e : m)` with `e.first`, `e.second`. Prints as `{"a": 1}`. A key is a number, `char`, `bool`, string, pointer or class reference, or an optional, vector, array or struct of those |
 | JSON | `import json;`. `json::stringify(x)`, `json::pretty(x)`, `User u = try json::parse<User>(text);`, for structs, classes, vectors, arrays, optionals, hashmaps and what they hold. Public fields only. A missing key keeps the field's default, and a key that is not a field is left out. `catch (json::Error e)` has `e.line`, `e.column` and `e.what()` |
@@ -201,6 +201,7 @@ long square(long n) { return n * n; }
 | `obj["a"]["b"]` on JSON | `obj.get("a")?.get("b")`, since any step may not be there |
 | `m.find(k) != m.end()`, `it->second` | `m.contains(k)`, `m.get(k)`, which gives a `V?`. No iterators yet |
 | `m.emplace(k, v)`, `m.insert_or_assign(k, v)` | `m.insert({k, v})`, `m[k] = v` |
+| `v.erase(v.begin() + i)`, `v.insert(v.begin(), x)`, `v.insert(v.end(), x)` | `v.erase(i)`, `v.insert(0, x)`, `v.push_back(x)`: an index, as there are no iterators |
 | `m[k]` on a `const` map | error, as in C++, since it adds a missing key: `m.at(k)` or `m.get(k)` |
 | `std::hash<Point>` for a struct key | not needed: a struct of hashable fields is hashable. Your own hash is planned |
 | `v.emplace_back(x)`, `v.at(i)` | `v.push_back(x)`, `v[i]` (always checked) |
@@ -238,7 +239,7 @@ long square(long n) { return n * n; }
 | Functions | overloading, default arguments, `auto` parameters and return types, lambdas |
 | Statements | `switch` |
 | Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
-| Containers | `insert`, `erase` and iterators on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |
+| Containers | iterators, and erasing a range, on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |
 | References | `T&` to elements of vectors, strings and hashmaps, `for (auto& x : v)`, `T& f()` |
 | Structured bindings | `for (auto [k, v] : m)`, `auto [a, b] = f();` |
 | Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |

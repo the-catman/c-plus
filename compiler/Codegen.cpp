@@ -1275,6 +1275,56 @@ struct Codegen::Impl {
                 releaseValue(old, vt);
                 return nullptr;
             }
+            case VecMethod::Insert:
+            case VecMethod::Erase: {
+                // As for push_back, the vector is found after the arguments, so code they run cannot move it from under the change.
+                const bool insert = call.vecMethod == VecMethod::Insert;
+                llvm::Value* index = nullptr;
+                llvm::Value* value = nullptr;
+                llvm::Value* slot = placeAfter(recv, [&] {
+                    index = genConverted(*call.args[0], Type::longTy());
+                    if (insert) value = genOwned(*call.args[1], vt->elem);
+                });
+                llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "vec");
+                llvm::Value* size = vecSize(buf);
+                // An unsigned compare also catches a negative index. insert() may add at the end, and erase() not.
+                llvm::Value* bad = b.CreateICmpUGT(index, insert ? size : b.CreateSub(size, b.getInt64(1)));
+                if (!insert) bad = b.CreateOr(bad, b.CreateICmpEQ(size, b.getInt64(0)));
+                auto* trapBB = llvm::BasicBlock::Create(ctx, "bad.index", fn);
+                auto* okBB = llvm::BasicBlock::Create(ctx, "ok", fn);
+                b.CreateCondBr(bad, trapBB, okBB, llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
+                b.SetInsertPoint(trapBB);
+                auto* ptrTy = b.getPtrTy();
+                auto* i64 = b.getInt64Ty();
+                auto* i32 = b.getInt32Ty();
+                llvm::FunctionCallee trap = mod->getOrInsertFunction("cplus_trap_vec_position", llvm::FunctionType::get(b.getVoidTy(), {ptrTy, i64, i64, ptrTy, i32, i32}, false));
+                auto* stop = b.CreateCall(trap, {cstring(call.name), index, size, fileName, b.getInt32(call.loc.line), b.getInt32(call.loc.col)});
+                stop->setDoesNotReturn();
+                b.CreateUnreachable();
+                b.SetInsertPoint(okBB);
+                VecInfo& info = vecInfo(vt);
+                llvm::Value* bytes = b.getInt64(info.elemSize);
+                if (insert) {
+                    // The buffer becomes this vector's own, with room for one more, and what is at the index and after it moves up one.
+                    buf = reserve(slot, buf, vt, b.CreateAdd(size, b.getInt64(1)));
+                    llvm::Value* at = elementAt(buf, index, vt);
+                    b.CreateMemMove(elementAt(buf, b.CreateAdd(index, b.getInt64(1)), vt), llvm::MaybeAlign(alignOf(vt->elem)), at,
+                                    llvm::MaybeAlign(alignOf(vt->elem)), b.CreateMul(b.CreateSub(size, index), bytes));
+                    storeValue(value, vt->elem, at);
+                    b.CreateStore(b.CreateAdd(size, b.getInt64(1)), sizeAddress(buf));
+                    return nullptr;
+                }
+                buf = reserve(slot, buf, vt, b.getInt64(0));
+                llvm::Value* at = elementAt(buf, index, vt);
+                llvm::Value* gone = isManaged(vt->elem) ? loadValue(vt->elem, at, "gone") : nullptr;
+                llvm::Value* after = b.CreateAdd(index, b.getInt64(1));
+                b.CreateMemMove(at, llvm::MaybeAlign(alignOf(vt->elem)), elementAt(buf, after, vt), llvm::MaybeAlign(alignOf(vt->elem)),
+                                b.CreateMul(b.CreateSub(size, after), bytes));
+                b.CreateStore(b.CreateSub(size, b.getInt64(1)), sizeAddress(buf));
+                // Released after the vector is updated, in case a destructor looks at it, as for pop_back().
+                if (gone) releaseValue(gone, vt->elem);
+                return nullptr;
+            }
             case VecMethod::Join: {  // `parts.join(sep)`
                 const Expr& sep = *call.args[0];
                 llvm::Value* buf = mayRunCode(sep) ? gen(recv) : vectorForRead(recv);

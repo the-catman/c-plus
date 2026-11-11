@@ -803,6 +803,8 @@ Building a vector:
 | `v.empty()` | whether there are no elements |
 | `v.push_back(x)` | adds `x` at the end |
 | `v.pop_back()` | removes the last element |
+| `v.insert(i, x)` | puts `x` before the element at index `i`, or at the end when `i` is `v.size()` |
+| `v.erase(i)` | removes the element at index `i`, and moves those after it down one |
 | `v.front()`, `v.back()` | a copy of the first or the last element |
 | `v.clear()` | removes every element |
 
@@ -816,6 +818,11 @@ Building a vector:
   `front()` or `back()` on an empty vector, stop the program with an error naming the file
   and line. C++ leaves all of these undefined. A negative literal index such as `v[-1]` is
   a compile error.
+- `insert(i, x)` and `erase(i)` take an index, where C++'s take an iterator, as there are no iterators:
+  `v.erase(v.begin() + i)` is an error that says to write `v.erase(i)`. `insert` takes an index from 0 to `size()`, and
+  `erase` one from 0 to `size() - 1`, and any other stops the program. Each moves the elements after the index, so it
+  takes time that grows with them, as in C++. Erasing a range, `v.erase(first, last)`, waits, since C++'s takes two
+  iterators and a string's `erase(pos, count)` a position and a count.
 - `front()` and `back()` return a copy. To change the last element, write
   `v[v.size() - 1] = x`. Changing what they give, `v.back().x = 1` or a method that changes a struct, `v.back().set()` or `v.back().p.set()`, is an
   error, as in C++ it would change the element, and here it would do nothing. So is changing what `?:` gives when both
@@ -828,7 +835,7 @@ Building a vector:
 - A vector prints as `[1, 2, 3]`, with strings in quotes: `["Ada", "Linus"]`.
 - A `const` vector cannot change at all, like a `const` struct: neither its elements nor
   its size.
-- `push_back`, `pop_back` and `clear` cannot be called on a temporary, such as
+- `push_back`, `pop_back`, `insert`, `erase` and `clear` cannot be called on a temporary, such as
   `makeList().push_back(1)`, because the change would be lost.
 - A vector is not a [condition](#conditions); write `!v.empty()`.
 - A method that changes a struct in a vector, `v[0].move(1)`, works on that element in place,
@@ -837,7 +844,7 @@ Building a vector:
   holding it, the program stops when the method returns, since what the method did to the
   element would be lost. C++ leaves this undefined if `v` moves. Call the method on a copy of
   the element and store it back.
-- Not yet: `insert`, `erase`, `resize`, `reserve`, and iterators (`begin()`, `end()`).
+- Not yet: `resize`, `reserve`, erasing a range, and iterators (`begin()`, `end()`).
 
 **Copies are cheap.** The copies of a vector share one buffer of elements until one of them
 changes; that copy first gets a buffer of its own (copy-on-write). Passing or returning a
@@ -2919,7 +2926,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Strings: `append`, `insert`, `erase`, `replace`, `rfind`, `compare`, `split`, `trim`, `join`, `replace_all` | implemented |
 | Reading numbers from strings: `stoi`, `stol`, `stod`, `stof` | implemented |
 | `hashmap<K, V>` | implemented |
-| Vector `insert`, `erase`, iterators; `find` on a hashmap, sorted maps, sets | planned |
+| Vector `insert(i, x)` and `erase(i)` | implemented |
+| Vector iterators and erasing a range; `find` on a hashmap, sorted maps, sets | planned |
 | References: `T&` and `const T&` parameters and local variables, `for (const auto& x : v)` | implemented |
 | `T&` to elements of vectors, strings and hashmaps, `for (auto& x : v)`, returning `T&` | planned |
 | Structured bindings, `for (auto [k, v] : m)` | planned |

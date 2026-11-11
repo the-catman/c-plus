@@ -1,0 +1,18 @@
+// A method of an element that erases from its own vector would lose what it did to the element, so the program stops.
+struct Counter {
+    int n = 0;
+    vector<Counter>* all = null;
+    void bump() {
+        n += 1;
+        all->erase(1);
+    }
+};
+
+int main() {
+    vector<Counter> list = {Counter{}, Counter{}};
+    list[0].all = &list;
+    list[0].bump();
+    println("{}", list.size());
+    return 0;
+}
+// trap: a vector was changed, copied or freed while a method of one of its elements was running

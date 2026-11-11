@@ -162,6 +162,7 @@ private:
     const Type* checkStringEdit(MethodCallExpr& call, Flow& flow);
     const Type* checkStringHabit(MethodCallExpr& call, Flow& flow);
     const Type* checkJoin(MethodCallExpr& call, Flow& flow, const Type* vecType);
+    const Type* checkVectorInsertErase(MethodCallExpr& call, Flow& flow, const Type* vecType);
     const Type* checkToString(CallExpr& call, Flow& flow);
     const Type* checkCast(CastExpr& c, Flow& flow);
     const Type* checkPointerCast(CastExpr& c, const Type* from, const Type* to);
