@@ -2901,11 +2901,47 @@ void Parser::parseParams(FuncDecl& fn) {
             param->isParam = true;
             param->isConst = isConst;
             param->isRef = isRef;
-            if (check(Tok::Assign)) notYet(peek().loc, "default argument values", "remove `= ...`, and write the value at each call");
+            if (match(Tok::Assign)) {  // `int base = 10`
+                if (currentTemplate_ || dryRun_)
+                    notYet(prev().loc, "default values for the parameters of generics",
+                           "write the value at each call, or add a function without the parameter that calls this one with the value");
+                param->defaultAt = pos_;
+                param->defaultArg = match(Tok::LBrace) ? parseInitList(prev().loc, nullptr) : parseTernary();
+                param->defaultEnd = pos_;
+                param->defaultText = tokensText(param->defaultAt, param->defaultEnd);
+            } else if (!fn.params.empty() && fn.params.back()->defaultArg) {
+                diags_.error(pname.loc, "parameter " + std::string("'") + pname.text + "' has no default value, but one before it does",
+                             "give it one too, or move the parameters that have default values to the end, as only the last ones can have them", spec::DefaultArguments);
+            }
             fn.params.push_back(std::move(param));
         } while (match(Tok::Comma));
     }
     expect(Tok::RParen, "to close the parameter list");
+}
+
+std::string Parser::tokensText(size_t from, size_t to) const {
+    std::string out;
+    for (size_t i = from; i < to && i < toks_.size(); ++i) {
+        const Token& t = toks_[i];
+        const bool tight = i == from || t.kind == Tok::Comma || t.kind == Tok::RParen || t.kind == Tok::RBracket || t.kind == Tok::Dot ||
+                           toks_[i - 1].kind == Tok::LParen || toks_[i - 1].kind == Tok::LBracket || toks_[i - 1].kind == Tok::Dot ||
+                           (t.kind == Tok::LParen && toks_[i - 1].kind == Tok::Ident);
+        const std::string text = t.kind == Tok::StringLit ? "\"" + t.text + "\"" : t.kind == Tok::CharLit ? "'" + t.text + "'" : t.text;
+        out += (tight ? "" : " ") + text;
+    }
+    return out;
+}
+
+ExprPtr Parser::reparseDefault(const VarDecl& p) {
+    const size_t saved = pos_;
+    ExprPtr e;
+    pos_ = p.defaultAt;
+    try {
+        e = match(Tok::LBrace) ? parseInitList(prev().loc, nullptr) : parseTernary();
+    } catch (ParseError&) {
+    }
+    pos_ = saved;
+    return e;
 }
 
 std::unique_ptr<FuncDecl> Parser::parseFunction(const Type* retType, Loc retLoc) {

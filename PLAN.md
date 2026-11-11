@@ -669,7 +669,13 @@ predict:
 - Constructors overload the same way (built the same day). One can hand its work to another, `User(string n) : User(n, 0)
   {}`, with nothing else in its list; a cycle of them is an error. A constructor that takes its own type is an error, as C+
   never copies a class object and copies a struct field by field: its help points to a `clone()` method.
-- Next: default arguments. A template beside a function of its name waits until templates are chosen between too.
+- Default arguments (built the same day): the last parameters only, worked out at each call as if written outside any
+  function, so they see constants and functions but not the other parameters or fields, and cannot fail. A `T&` cannot have
+  one. An override takes the base method's, and may repeat but not change them. A constructor whose parameters all have
+  defaults is the one that builds a value from nothing. Each call gets its own copy of the default, read again from its
+  tokens; generics wait, since that needs their bindings.
+- Not yet: a template beside a function of its name, until templates are chosen between too; `stoi` with a position and a
+  base, and `fs::open` with a default mode, which can now be written.
 
 ## 3. Compiler architecture
 
@@ -782,7 +788,7 @@ will confidently write C++ wherever the two differ.
 ## 6. Open items
 
 - Remaining syntax: lambdas, in Phase 7. Enums and `switch` are in §2.32.
-- Default arguments, in Phase 7 (§2.33).
+- Default arguments in generics, and a template beside a function of its name, in Phase 7 (§2.33).
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, keeps a copy of it or frees it, since the update to the element would be lost (decided
   2026-11-06). Since 2026-11-11 the same goes for a function given a reference to an element (§2.31). The alternative is to pin a buffer separately from its reference count, so that writes

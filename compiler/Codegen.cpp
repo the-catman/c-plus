@@ -1950,7 +1950,8 @@ struct Codegen::Impl {
         if (base.constructor) {  // the one Sema chose for the values given, or the one that takes none
             const FuncDecl* ctor = init && init->ctor ? init->ctor : base.defaultConstructor();
             std::vector<llvm::Value*> values{part};
-            for (size_t i = 0; args && i < args->size(); ++i) values.push_back(genOwned(*(*args)[i], ctor->params[i]->type));
+            for (size_t i = 0; i < ctor->params.size(); ++i)
+                values.push_back(genOwned(args && i < args->size() ? *(*args)[i] : *ctor->params[i]->defaultArg, ctor->params[i]->type));
             b.CreateCall(funcs.at(ctor), values);
             return;
         }
@@ -2002,11 +2003,12 @@ struct Codegen::Impl {
     }
 
     // Calls the constructor `ctor` of `sd`, returning the new owned value.
+    // Arguments left out, where a value is built from nothing, are the default values of its parameters.
     llvm::Value* construct(const StructDecl& sd, const std::vector<const Expr*>& args, const FuncDecl* chosen) {
         const FuncDecl& ctor = *chosen;
         std::vector<llvm::Value*> values{nullptr};  // `this`, set below
         std::vector<ArgSpec> specs;
-        for (size_t i = 0; i < args.size(); ++i) specs.push_back(argSpec(*args[i], *ctor.params[i]));
+        for (size_t i = 0; i < ctor.params.size(); ++i) specs.push_back(argSpec(i < args.size() ? *args[i] : *ctor.params[i]->defaultArg, *ctor.params[i]));
         std::vector<Hold> held;
         for (llvm::Value* v : genArguments(specs, held)) values.push_back(v);
         if (sd.isClass) {

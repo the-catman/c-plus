@@ -142,6 +142,12 @@ static bool showsAsWritten(const std::string& text) {
 
 static std::string spelled(const Expr& e, const std::string& fallback = "opt");
 static std::vector<FuncDecl*> methodsNamed(const StructDecl& at, const std::string& name);
+// The number of arguments a call must give: the parameters before the first that has a default value.
+static size_t requiredArgs(const FuncDecl& fn) {
+    size_t n = 0;
+    while (n < fn.params.size() && !fn.params[n]->defaultArg) ++n;
+    return n;
+}
 static std::vector<Expr*> exprsOf(const std::vector<ExprPtr>& args) {
     std::vector<Expr*> out;
     for (auto& a : args) out.push_back(a.get());
@@ -928,7 +934,7 @@ static std::string signature(const FuncDecl& fn) {
     std::string sig = (fn.owner ? fn.owner->name + "." : "") + fn.name + "(";
     for (size_t i = 0; i < fn.params.size(); ++i)
         sig += (i ? ", " : "") + std::string(fn.params[i]->isRef && fn.params[i]->isConst ? "const " : "") + fn.params[i]->declType->name + (fn.params[i]->isRef ? "&" : "") +
-               (fn.params[i]->name.empty() ? "" : " " + fn.params[i]->name);
+               (fn.params[i]->name.empty() ? "" : " " + fn.params[i]->name) + (fn.params[i]->defaultText.empty() ? "" : " = " + fn.params[i]->defaultText);
     return sig + ")";
 }
 // The fields of a type, the base class's first.
@@ -1249,6 +1255,15 @@ bool Sema::reportElsewhere(const std::string& name, Loc used, const char* what) 
 }
 
 void Sema::reportUnknownName(const NameExpr& n) {
+    if (defaultFn_) {  // `int f(int a, int b = a)`
+        const bool param = std::any_of(defaultFn_->params.begin(), defaultFn_->params.end(), [&](auto& p) { return p->name == n.name; });
+        const bool field = defaultFn_->owner && (defaultFn_->owner->fieldOwner(n.name) || n.name == "this");
+        if (param || field) {
+            diags_.error(n.loc, std::string("a default value cannot use ") + (param ? "the other parameters" : "the object's fields"),
+                         "leave the default out, and have each call give the value, or use a constant", spec::DefaultArguments);
+            return;
+        }
+    }
     if (reportElsewhere(n.name, n.loc, "declared")) return;
     std::string help;
     if (auto s = structs_.find(n.name); s != structs_.end()) {
@@ -1957,6 +1972,31 @@ void Sema::checkOverrides(StructDecl& sd) {
                 fits = false;
                 break;
             }
+            // The default values of the method it replaces: it may repeat them, and leaving them out takes them, but it
+            // cannot change them, as a call chooses the method by the object, and the default would be the variable's.
+            for (size_t i = 0; i < m->params.size(); ++i) {
+                VarDecl& mine = *m->params[i];
+                const VarDecl& theirs = *method->params[i];
+                const std::string& a = mine.defaultText;
+                const std::string& b = theirs.defaultText;
+                if (a == b) continue;
+                if (a.empty()) {
+                    mine.defaultAt = theirs.defaultAt;
+                    mine.defaultEnd = theirs.defaultEnd;
+                    mine.defaultText = theirs.defaultText;
+                    mine.defaultArg = parser_.reparseDefault(theirs);
+                    continue;
+                }
+                diags_.error(mine.defaultArg->loc,
+                             b.empty() ? q(mine.name) + " has a default value, but in the method it replaces it has none"
+                                       : "the default value of " + q(mine.name) + " is not the one of the method it replaces",
+                             b.empty() ? "remove `= " + a + "`, or give the one in " + q(method->owner->name) + " the default value too"
+                                       : "write `= " + b + "`, as " + q(method->owner->name) + " does, or leave it out to take that one",
+                             spec::DefaultArguments);
+                diags_.note(method->nameLoc, "the method it replaces is here");
+                fits = false;
+            }
+            if (!fits) break;
         }
         if (!fits) continue;
         if (!m->isOverride)
@@ -2453,6 +2493,7 @@ void Sema::checkFunction(FuncDecl& fn) {
         declare(*p);
         markAssigned(flow, p.get(), "");
     }
+    checkDefaults(fn);
     if (fn.isPure) {  // no body to check
         scopes_.pop_back();
         fn_ = nullptr;
@@ -2471,6 +2512,7 @@ void Sema::checkFunction(FuncDecl& fn) {
                 break;
             }
         fn.delegation->ctor = target;
+        if (target) addDefaults(fn.delegation->args, *target);
         for (const FieldDecl* f : allFields(sd)) markAssigned(flow, fn.thisDecl.get(), f->name);
     } else if (isCtor) {
         // Fields are initialized in the order they are declared, whatever the order of
@@ -2490,6 +2532,7 @@ void Sema::checkFunction(FuncDecl& fn) {
             for (auto& a : given->args) args.push_back({"", a->loc, a.get(), nullptr});
             buildingBase_ = base;
             given->ctor = checkConstruction(*base, std::move(args), flow, given->loc, true);
+            if (given->ctor) addDefaults(given->args, *given->ctor);
             buildingBase_ = nullptr;
         }
         for (auto& init : fn.baseInits)  // a name that turned out not to be a base class was reported
@@ -2573,6 +2616,12 @@ std::string Sema::whereAnErrorCanGo() const {
 void Sema::checkCanFail(const FuncDecl& callee, Loc loc, const Expr* receiver) {
     if (!callee.callFails()) return;
     ++failPoints_;
+    if (defaultOf_) {
+        diags_.error(loc, "the default value of " + q(defaultOf_->name) + " calls " + q(callee.name) + ", which can fail, and a default value cannot",
+                     "use a value that cannot fail, or leave the default out and have each call give the value, with `try` where it calls " + q(callee.name),
+                     spec::DefaultArguments);
+        return;
+    }
     if (tryBlocks_ == 0 && tryPrefixes_ == 0) {
         diags_.error(loc, q(callee.name) + " can fail, so its call must say what happens then",
                      [&] {
@@ -3798,6 +3847,7 @@ void Sema::checkInitList(InitListExpr& list, Flow& flow, const Type* type) {
     std::vector<ConstructArg> args;
     for (auto& el : list.elements) args.push_back({el.designator, el.loc, el.value.get(), &el.fieldIndex});
     list.ctor = checkConstruction(*type->decl, std::move(args), flow, list.loc);  // `unique<Node>{...}` builds a Node
+    if (list.ctor) addDefaults(list.elements, *list.ctor);
 }
 
 const FuncDecl* Sema::checkConstruction(const StructDecl& sd, std::vector<ConstructArg> args, Flow& flow, Loc loc, bool asBase) {
@@ -3836,9 +3886,10 @@ const FuncDecl* Sema::checkConstruction(const StructDecl& sd, std::vector<Constr
             return ctor;
         }
         if (!canAccess(sd, ctor->access, asBase ? owner() : nullptr)) reportAccess(sd, sd.name + "(...)", true, ctor->access, loc);
-        if (args.size() != ctor->params.size()) {
+        if (args.size() < requiredArgs(*ctor) || args.size() > ctor->params.size()) {
             for (auto& a : args) loose(a);
-            diags_.error(loc, "the constructor of " + q(sd.name) + " takes " + std::to_string(ctor->params.size()) +
+            const size_t need = requiredArgs(*ctor);
+            diags_.error(loc, "the constructor of " + q(sd.name) + " takes " + (need < ctor->params.size() ? std::to_string(need) + " to " : "") + std::to_string(ctor->params.size()) +
                                   " argument" + (ctor->params.size() == 1 ? "" : "s") + " but " +
                                   std::to_string(args.size()) + (args.size() == 1 ? " was" : " were") + " given",
                          "its signature is `" + signature(*ctor).substr(sd.name.size() + 1) + "`", spec::Classes);
@@ -5184,12 +5235,13 @@ void Sema::checkRefBinding(const Expr& e, const Type* type, const std::string& w
 }
 
 void Sema::checkArgs(std::vector<ExprPtr>& args, const FuncDecl& fn, Flow& flow, Loc loc, const std::string& what) {
-    if (args.size() != fn.params.size()) {
+    const size_t need = requiredArgs(fn);
+    if (args.size() < need || args.size() > fn.params.size()) {
         for (auto& a : args) checkLooseValue(*a, flow);
         // `stoi(s, &pos, 16)`, as in C++: the built-in one takes no position or base, which wait for default arguments
         const bool reader = fn.nameLoc.line == 0 && (fn.name == "stoi" || fn.name == "stol" || fn.name == "stod" || fn.name == "stof");
         const std::string cReader = cNumberReader(fn.name == "stod" || fn.name == "stof" ? "strtod" : "strtol");
-        diags_.error(loc, what + " takes " + std::to_string(fn.params.size()) + " argument" +
+        diags_.error(loc, what + " takes " + (need < fn.params.size() ? std::to_string(need) + " to " : "") + std::to_string(fn.params.size()) + " argument" +
                               (fn.params.size() == 1 ? "" : "s") + " but " + std::to_string(args.size()) +
                               (args.size() == 1 ? " was" : " were") + " given",
                      reader ? "write `try " + fn.name + "(s)`, which reads all of the text, in decimal. For a number that is only the start of it, or in another base, declare C's: `extern \"C\" " + cReader + ";`"
@@ -5383,6 +5435,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         std::vector<ConstructArg> args;
         for (auto& a : call.args) args.push_back({"", a->loc, a.get(), nullptr});
         call.ctor = checkConstruction(*call.constructs, std::move(args), flow, call.loc);
+        if (call.ctor) addDefaults(call.args, *call.ctor);
         return call.uniqueType;
     }
     if (call.vectorType) return checkVectorConstruction(call, flow);
@@ -5410,6 +5463,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
                              "remove `const` from " + q(fn_->name) + ", or mark " + q(m->name) + " `const` if it does not change any field", spec::Methods);
             if (chosen) checkChosenArgs(exprsOf(call.args), *m, flow);
             else checkArgs(call.args, *m, flow, call.loc, q(m->name));
+            addDefaults(call.args, *m);
             checkTaskKept(*m, call, nameLoc);
             return m->retType;
         }
@@ -5463,6 +5517,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         std::vector<ConstructArg> args;
         for (auto& a : call.args) args.push_back({"", a->loc, a.get(), nullptr, checked});
         call.ctor = checkConstruction(sd, std::move(args), flow, call.loc);
+        if (call.ctor) addDefaults(call.args, *call.ctor);
         return &sd.type;
     }
 
@@ -5599,12 +5654,14 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         call.target = fn;
         if (&call != spawned_) checkCanFail(*fn, nameLoc);
         checkChosenArgs(exprsOf(call.args), *fn, flow);
+        addDefaults(call.args, *fn);
         checkTaskKept(*fn, call, nameLoc);
         return fn->retType;
     }
     call.target = fn;
     if (&call != spawned_) checkCanFail(*fn, nameLoc);
     checkArgs(call.args, *fn, flow, call.loc, q(fn->name));
+    addDefaults(call.args, *fn);
     checkTaskKept(*fn, call, nameLoc);
     if (fn->name == "fs::open" && fn->nameLoc.line == 0 && call.args.size() == 2 && call.args[1]->kind == Expr::Kind::StringLit) {
         const std::string& mode = static_cast<const StringLitExpr&>(*call.args[1]).value;
@@ -5715,7 +5772,7 @@ FuncDecl* Sema::chooseOverload(const std::string& name, const std::string& calle
     };
     std::vector<std::pair<FuncDecl*, std::vector<Fit>>> fitting;
     for (FuncDecl* f : candidates) {
-        if (f->params.size() != args.size()) continue;
+        if (args.size() < requiredArgs(*f) || args.size() > f->params.size()) continue;
         std::vector<Fit> fits;
         for (size_t i = 0; i < args.size() && fits.size() == i; ++i)
             if (auto fit = fitOf(*args[i], *f->params[i])) fits.push_back(*fit);
@@ -5738,7 +5795,7 @@ FuncDecl* Sema::chooseOverload(const std::string& name, const std::string& calle
         if (typelessList(*a)) checkLooseValue(*a, flow);
     if (broken) {  // already said; the first that takes as many arguments keeps what follows quiet
         for (FuncDecl* f : candidates)
-            if (f->params.size() == args.size()) return f;
+            if (args.size() >= requiredArgs(*f) && args.size() <= f->params.size()) return f;
         return nullptr;
     }
     std::string given = "(";
@@ -5803,6 +5860,72 @@ void Sema::checkChosenArgs(const std::vector<Expr*>& args, const FuncDecl& fn, F
         requireConvertible(a, p.declType, "for parameter " + q(p.name) + " of " + of);
         boundByRef_ = bound;
         if (p.isRef && !p.isConst) checkRefBinding(a, p.declType, "parameter " + q(p.name) + " of " + of);
+    }
+}
+
+// ---- Default arguments -----------------------------------------------------
+
+// A default value is checked as if it were written outside any function: it sees constants and functions, but not the
+// other parameters or `this`, and it cannot fail, as nothing around a call that leaves it out says what happens then.
+void Sema::checkDefaultValue(Expr& e, const VarDecl& p, const FuncDecl& of) {
+    std::vector<std::unordered_map<std::string, VarDecl*>> scopes;
+    scopes.swap(scopes_);
+    if (!scopes.empty()) scopes_.push_back(scopes[0]);  // the constants
+    FuncDecl* const fn = fn_;
+    const int tries = tryBlocks_;
+    const VarDecl* const outer = defaultOf_;
+    const FuncDecl* const outerFn = defaultFn_;
+    fn_ = nullptr;
+    tryBlocks_ = 0;
+    defaultOf_ = &p;
+    defaultFn_ = &of;
+    Flow flow;
+    checkValue(e, flow, p.declType, "for the default value of " + q(p.name));
+    fn_ = fn;
+    tryBlocks_ = tries;
+    defaultOf_ = outer;
+    defaultFn_ = outerFn;
+    scopes_.swap(scopes);
+}
+
+void Sema::checkDefaults(FuncDecl& fn) {
+    if (fn.defaultsChecked) return;
+    fn.defaultsChecked = true;
+    for (auto& p : fn.params) {
+        if (!p->defaultArg) continue;
+        const int errors = diags_.errorCount();
+        if (p->isRef && !p->isConst) {
+            diags_.error(p->defaultArg->loc, "a `T&` parameter cannot have a default value, as it changes what the caller gives it",
+                         "take it as `const " + std::string(p->declType->name) + "&` if it only reads it, or by value: `" + std::string(p->declType->name) + " " +
+                             p->name + " = ...`",
+                         spec::DefaultArguments);
+        } else {
+            checkDefaultValue(*p->defaultArg, *p, fn);
+        }
+        p->defaultBad = diags_.errorCount() != errors;
+    }
+}
+
+// Gives a call that leaves out parameters with default values a copy of each, checked as where it is written.
+void Sema::addDefaults(std::vector<ExprPtr>& args, const FuncDecl& fn) {
+    if (args.size() >= fn.params.size()) return;
+    checkDefaults(const_cast<FuncDecl&>(fn));
+    for (size_t i = args.size(); i < fn.params.size(); ++i) {
+        const VarDecl& p = *fn.params[i];
+        if (!p.defaultArg || p.defaultBad) return;  // reported, so nothing is generated
+        ExprPtr e = parser_.reparseDefault(p);
+        if (!e) return;
+        checkDefaultValue(*e, p, fn);
+        args.push_back(std::move(e));
+    }
+}
+
+void Sema::addDefaults(std::vector<InitListExpr::Element>& elements, const FuncDecl& fn) {
+    std::vector<ExprPtr> args(elements.size());
+    addDefaults(args, fn);
+    for (size_t i = elements.size(); i < args.size(); ++i) {
+        const Loc at = args[i]->loc;
+        elements.push_back({"", at, std::move(args[i]), (int)i});
     }
 }
 
@@ -6470,6 +6593,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     }
     if (chosen) checkChosenArgs(exprsOf(call.args), *m, flow);
     else checkArgs(call.args, *m, flow, call.loc, q(m->name));
+    addDefaults(call.args, *m);
     checkTaskKept(*m, call, call.loc);
     return m->retType;
 }

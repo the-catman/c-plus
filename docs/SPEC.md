@@ -1779,6 +1779,41 @@ grow(5);                         // 5 is not a variable, so it stays
 - A template beside a function of its name, and a `const` and a non-const method that take
   the same parameters, are not supported yet.
 
+### Default arguments
+
+The last parameters of a function, a method or a constructor can have default values, which
+a call that leaves them out gets, as in C++:
+
+```cpp
+string greet(string name, string greeting = "hello", int times = 1) {
+    string out = "";
+    for (int i = 0; i < times; ++i) out += greeting + " " + name + ";";
+    return out;
+}
+
+println("{}", greet("ada"));            // hello ada;
+println("{}", greet("bob", "hi"));      // hi bob;
+println("{}", greet("cy", "hey", 2));   // hey cy;hey cy;
+```
+
+- **Only the last parameters** can have them: a parameter without one after a parameter
+  with one is an error.
+- **A default value is worked out at each call** that leaves it out, as in C++. It is
+  written as if outside any function: it can use constants and call functions, but not the
+  other parameters or the fields of the object, and it cannot fail, since nothing around
+  the call says what happens then.
+- **A `T&` parameter cannot have one**, as it changes what the caller gives it. A
+  `const T&` or a value can: `long count(const vector<int>& v = {})`.
+- **An override takes the default values of the method it replaces.** It can write them
+  again, or leave them out, but not change them: a call goes to the method of the object,
+  and C++ would take the default from the type of the variable.
+- **A constructor whose parameters all have default values** builds a value where none is
+  given, as one without parameters does: `Size(long a = 7)` makes `Size z;` hold 7.
+- In [overloading](#overloading), a function fits a call that leaves out its defaulted
+  parameters, and only the arguments given are ranked. So `either(int a)` beside
+  `either(int a, int b = 0)` makes `either(1)` an error, as in C++.
+- The parameters of generics cannot have default values yet.
+
 ### The main function
 
 Every program has exactly one `main`, which returns an `int`, the process exit code. Falling
@@ -3243,7 +3278,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Variables outside functions; constants of other types | planned |
 | Lambdas | planned |
 | Enums held in other integer types, enumerator values that use enumerators, a switch with an initializer | planned |
-| Default arguments, `auto` parameters and return types | planned |
+| Default arguments | implemented |
+| Default arguments in generics, `auto` parameters and return types | planned |
 | `const` fields, nested types, types defined inside a function | planned |
 | `int x{5}`, `int x(5)`, brace initializers for fields | planned |
 | `short`, and 8-bit and 16-bit integer types | planned |

@@ -1,0 +1,48 @@
+// Default values that cannot be: before a parameter without one, on a T&, using other parameters, failing, of the wrong
+// type, changed by an override; and calls that give too few or too many arguments.
+int read() throws { return 1; }
+int f(int a = 1, int b) { return a; }
+void g(int& n = 5) {}
+int h(int a, int b = a) { return b; }
+int k(int a = read()) { return a; }
+int k2(int a = try read()) { return a; }
+string s(string t = 5) { return t; }
+int two(int a, int b = 2) { return a + b; }
+int either(int a) { return a; }
+int either(int a, int b = 0) { return b; }
+
+class Shape {
+public:
+    int side = 1;
+    virtual int draw(int size = 2) const { return size; }
+    virtual int fill(int x) const { return x; }
+    int grow(int by = side) { return by; }
+};
+class Square : public Shape {
+public:
+    int draw(int size = 3) const override { return size; }
+    int fill(int x = 1) const override { return x; }
+};
+
+int main() {
+    two();
+    two(1, 2, 3);
+    either(1);
+    return 0;
+}
+// error: parameter 'b' has no default value, but one before it does
+// error: give it one too, or move the parameters that have default values to the end, as only the last ones can have them
+// error: the default value of 'size' is not the one of the method it replaces
+// error: write `= 2`, as 'Shape' does, or leave it out to take that one
+// error: 'x' has a default value, but in the method it replaces it has none
+// error: remove `= 1`, or give the one in 'Shape' the default value too
+// error: a `T&` parameter cannot have a default value, as it changes what the caller gives it
+// error: take it as `const int&` if it only reads it, or by value: `int n = ...`
+// error: a default value cannot use the other parameters
+// error: a default value cannot use the object's fields
+// error: the default value of 'a' calls 'read', which can fail, and a default value cannot
+// error: expected 'string' for the default value of 't', but this is 'int'
+// error: 'two' takes 1 to 2 arguments but 0 were given
+// error: its signature is `two(int a, int b = 2)`
+// error: 'two' takes 1 to 2 arguments but 3 were given
+// error: this call to 'either' fits `either(int a)` and `either(int a, int b = 0)` as well as each other

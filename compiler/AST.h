@@ -554,6 +554,12 @@ struct VarDecl : Stmt {
     bool isConst = false;
     bool isConstexpr = false;  // its value must be known while compiling
     bool isParam = false;
+    // `int base = 10`: what a call that leaves the parameter out passes, as read once, for checking. Each such call gets
+    // its own copy, read again from the tokens at `defaultAt`.
+    ExprPtr defaultArg;
+    size_t defaultAt = 0, defaultEnd = 0;
+    std::string defaultText;  // as written: `10`
+    bool defaultBad = false;  // set by Sema: what is written has an error, which was reported once
     bool isTopLevel = false;  // a constant outside any function
     // `T& x` or `const T& x`: it names another place instead of holding a value of its own. Set for a parameter, a local and
     // the variable of a range-based for loop. Codegen passes a `const C&` of a class type as the object itself.
@@ -761,6 +767,7 @@ struct FuncDecl {
     const FuncDecl* taskBind = nullptr;
     const FuncDecl* taskWait = nullptr;
     bool overloaded = false;      // set by Sema: another function, or another method of its type, has its name
+    bool defaultsChecked = false; // set by Sema once the default values of its parameters have been checked
     bool checked = false;         // set by Sema once its body has been checked
     bool requested = false;       // it will be checked and generated; a generic class's methods wait for their first use
     Loc usedAt;                   // for a function made from a generic: where it was first needed
@@ -838,11 +845,15 @@ struct StructDecl {
     FuncDecl* constructor = nullptr;         // the first of its constructors, if it has any
     std::vector<FuncDecl*> constructors;     // all of them, in the order written, which are overloads of each other
     FuncDecl* destructor = nullptr;
-    // The constructor that takes no arguments, which builds a value where none is given, or null.
+    // The constructor that can be called without arguments, which builds a value where none is given, or null: one
+    // without parameters, or else one whose parameters all have default values.
     const FuncDecl* defaultConstructor() const {
-        for (const FuncDecl* c : constructors)
+        const FuncDecl* defaulted = nullptr;
+        for (const FuncDecl* c : constructors) {
             if (c->params.empty()) return c;
-        return nullptr;
+            if (!defaulted && c->params[0]->defaultArg) defaulted = c;
+        }
+        return defaulted;
     }
     // Whether it has constructors, none of which takes no arguments, so that a value of it cannot be made without them.
     bool needsConstructorArgs() const { return !constructors.empty() && !defaultConstructor(); }

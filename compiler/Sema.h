@@ -195,6 +195,11 @@ private:
     // Overloading: the function a call means, of those with its name, and its arguments checked against it.
     FuncDecl* chooseOverload(const std::string& name, const std::string& calledAs, const StructDecl* owner, const std::vector<FuncDecl*>& candidates, const std::vector<Expr*>& args, Flow& flow, Loc loc);
     void checkChosenArgs(const std::vector<Expr*>& args, const FuncDecl& fn, Flow& flow);
+    // Default arguments: checking them where they are written, and giving each call that leaves some out a copy of each.
+    void checkDefaults(FuncDecl& fn);
+    void checkDefaultValue(Expr& e, const VarDecl& p, const FuncDecl& fn);
+    void addDefaults(std::vector<ExprPtr>& args, const FuncDecl& fn);
+    void addDefaults(std::vector<InitListExpr::Element>& elements, const FuncDecl& fn);
     void checkOverloadPair(const FuncDecl& first, const FuncDecl& second, bool& sameParams);
     // One value given when building a struct or class: `Type(args)` or a `{ }` list.
     struct ConstructArg {
@@ -258,6 +263,8 @@ private:
     std::deque<FuncDecl*> pendingMethods_;
     std::vector<std::pair<const VarDecl*, Loc>> moveLog_;  // every `move(x)` of a variable so far
     int tryBlocks_ = 0;     // the `try { }` blocks around the code being checked
+    const VarDecl* defaultOf_ = nullptr;  // the parameter whose default value is being checked
+    const FuncDecl* defaultFn_ = nullptr; // and its function
     int tryPrefixes_ = 0;   // the same for `try f()`
     int failPoints_ = 0;    // how many places that can fail have been seen, to tell if a try block has any
     std::vector<const CatchClause*> catches_;  // the catches around the code being checked

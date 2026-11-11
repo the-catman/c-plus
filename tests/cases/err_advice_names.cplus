@@ -28,7 +28,6 @@ void constPointer() {
 extern "C" { typedef int myint; }
 // error: for a number, write the number type
 int hasADefault(int a = 1) { return a; }
-// error: remove `= ...`, and write the value at each call
 void callsIt() {
     println("{}", hasADefault(1));
     // not-error: there is no function named 'hasADefault'

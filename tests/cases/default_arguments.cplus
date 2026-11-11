@@ -1,0 +1,90 @@
+// Parameters with default values, which a call can leave out: of functions, methods, constructors and overrides.
+const int LIMIT = 3;
+
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+
+string greet(string name, string greeting = "hello", int times = 1) {
+    string out = "";
+    for (int i = 0; i < times; ++i) out += greeting + " " + name + ";";
+    return out;
+}
+long scaled(long n, long by = LIMIT * 2) { return n * by; }
+string where(Point p = {1, 2}) { return format("{},{}", p.x, p.y); }
+long count(const vector<int>& v = {}) { return v.size(); }
+int next() { return 1; }
+int fresh(int n = next() + 1) { return n; }  // worked out at each call
+
+string either(int a) { return "one"; }
+string either(int a, int b = 0) { return "two"; }  // `either(1)` would fit both as well
+string pick(int a) { return "one"; }
+string pick(int a, string b, int c = 0) { return "three"; }
+
+class Shape {
+public:
+    virtual string draw(int size = 2) const { return format("shape {}", size); }
+};
+class Square : public Shape {
+public:
+    string draw(int size) const override { return format("square {}", size); }  // takes Shape's default
+};
+
+class Box {
+public:
+    int w = 0;
+    int h = 0;
+    Box(int a, int b = 10) : w(a), h(b) {}
+    int area(int extra = 0) const { return w * h + extra; }
+    int twice() const { return area() * 2; }
+};
+
+class Tall : public Box {
+public:
+    Tall() : Box(1) {}
+};
+
+struct Size {
+    long w = 0;
+    Size(long a = 7) : w(a) {}
+};
+
+int main() {
+    println("{}", greet("ada"));
+    // expect: hello ada;
+    println("{}", greet("bob", "hi"));
+    // expect: hi bob;
+    println("{}", greet("cy", "hey", 2));
+    // expect: hey cy;hey cy;
+    println("{} {}", scaled(5), scaled(5, 3));
+    // expect: 30 15
+    println("{} {}", where(), where({3, 4}));
+    // expect: 1,2 3,4
+    println("{} {}", count(), count({1, 2}));
+    // expect: 0 2
+    println("{} {}", fresh(), fresh(9));
+    // expect: 2 9
+    println("{} {} {}", pick(1), pick(1, "b"), pick(1, "b", 2));
+    // expect: one three three
+    println("{}", either(1, 2));
+    // expect: two
+    Shape s = Square();
+    Square q = Square();
+    println("{} {} {}", s.draw(), q.draw(), q.draw(5));
+    // expect: square 2 square 2 square 5
+    Box b = Box(2);
+    Box c = Box{3, 4};
+    println("{} {} {} {} {}", b.h, b.area(), c.area(1), Box(1).area(), b.twice());
+    // expect: 10 20 13 10 40
+    Tall t = Tall();
+    println("{}", t.h);
+    // expect: 10
+    Size z;
+    Size y = Size();
+    vector<Size> sizes = {{}, {2}};
+    array<Size, 2> pair;
+    println("{} {} {} {} {}", z.w, y.w, sizes[0].w, sizes[1].w, pair[1].w);
+    // expect: 7 7 7 2 7
+    return 0;
+}

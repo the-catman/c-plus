@@ -246,7 +246,7 @@ long square(long n) { return n * n; }
 | Reflection | reading a field through its `reflect::Field`, methods |
 | Memory | pointers into vectors and strings |
 | Types | unions, unsigned integers, `const` fields, types nested in a type or a function, `short` and other small integers, enums held in them |
-| Functions | default arguments, `auto` parameters and return types, lambdas |
+| Functions | default arguments in generics, `auto` parameters and return types, lambdas |
 | Statements | a declaration before a switch's value: `switch (auto k = f(); k)` |
 | Top level | variables outside functions, constants of other types, `constexpr` methods and structs |
 | Containers | iterators, and erasing a range, on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |

@@ -30,6 +30,9 @@ public:
     // Reads a generic again with its parameters standing for `args`, which makes an ordinary
     // function. The same arguments give the same one. Null after reporting an error.
     FuncDecl* instantiateFunction(TemplateDecl& t, const std::vector<TemplateArg>& args, Loc usedAt, int depth);
+    // A new copy of the default value of parameter `p`, for a call that leaves it out, or null if it cannot be read.
+    ExprPtr reparseDefault(const VarDecl& p);
+    std::string tokensText(size_t from, size_t to) const;  // the code that the tokens from `from` up to `to` are, as written
     const Type* taskType(const Type* result, bool canFail, Loc usedAt);  // what `spawn` gives for a function with this result
     // The same for a constraint: `concept Addable = requires(T a, T b) { a + b; };`.
     struct ConceptBody {
