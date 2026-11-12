@@ -1,0 +1,15 @@
+// A lambda given to a generic function.
+struct Point { int x; };
+template<typename T>
+T applyTwice(function<T(T)> f, T x) {
+    return f(f(x));
+}
+int main() {
+    function<int(Point)> getX = [](Point p) { return p.x; };
+    println("{}", getX({4}));
+    println("{}", applyTwice<int>([](int x) { return x * 3; }, 2));
+    return 0;
+}
+
+// expect: 4
+// expect: 18

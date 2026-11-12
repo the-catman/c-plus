@@ -1,0 +1,52 @@
+// Lambdas: sharing, copying, counters, recursion, a fresh loop variable each round, and printing one.
+int apply(function<int(int)> f, int x) {
+    return f(x);
+}
+
+function<int()> counter() {
+    int n = 0;
+    return [&] { n += 1; return n; };
+}
+
+int square(int x) {
+    return x * x;
+}
+
+int main() {
+    int k = 10;
+    println("{}", apply([&](int x) { return x + k; }, 5));
+    println("{}", apply([k](int x) { return x * k; }, 5));
+    println("{}", apply(square, 7));
+    auto c = counter();
+    c();
+    c();
+    println("{}", c());
+    auto d = c;
+    println("{}", d());
+    println("{}", c());
+    function<int(int)> fib = [&](int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); };
+    println("{}", fib(20));
+    vector<function<int()>> fs;
+    for (int i = 0; i < 3; i++) {
+        fs.push_back([&] { return i * 100; });
+    }
+    for (auto& f : fs) println("{}", f());
+    string s = "hi";
+    auto g = [s](int times) { string out; for (int i = 0; i < times; i++) out += s; return out; };
+    println("{}", g(3));
+    println("{}", g);
+    return 0;
+}
+
+// expect: 15
+// expect: 50
+// expect: 49
+// expect: 3
+// expect: 4
+// expect: 5
+// expect: 6765
+// expect: 0
+// expect: 100
+// expect: 200
+// expect: hihihi
+// expect: function

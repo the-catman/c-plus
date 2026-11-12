@@ -1,0 +1,41 @@
+// A lambda is a function written where a value goes. What it shares lives as long as it does.
+int apply(function<int(int)> f, int x) {
+    return f(x);
+}
+
+function<int()> counter() {
+    int n = 0;
+    return [&] { n += 1; return n; };
+}
+
+int square(int x) {
+    return x * x;
+}
+
+int main() {
+    int k = 10;
+    println("{}", apply([&](int x) { return x + k; }, 5));
+    // expect: 15
+    println("{}", apply(square, 7));
+    // expect: 49
+    auto next = counter();
+    next();
+    auto again = next;  // shares the count
+    println("{} {}", next(), again());
+    // expect: 2 3
+    vector<function<int()>> rounds;
+    for (int i = 0; i < 3; i++) rounds.push_back([&] { return i * 10; });
+    for (auto& f : rounds) print("{} ", f());
+    println();
+    // expect: 0 10 20 
+    function<int(int)> fib = [&](int n) -> int {
+        return n < 2 ? n : fib(n - 1) + fib(n - 2);
+    };
+    println("{}", fib(20));
+    // expect: 6765
+    function<void()>? onDone = null;
+    onDone = [] { println("done"); };
+    if (auto g = onDone) g();
+    // expect: done
+    return 0;
+}

@@ -1,0 +1,14 @@
+// A lambda that shares a variable, which the function then returns, keeps a copy of its own.
+vector<function<int()>> fs;
+vector<int> make() {
+    vector<int> v = {1, 2, 3};
+    fs.push_back([&] { return int(v.size()); });
+    return v;
+}
+int main() {
+    vector<int> got = make();
+    println("{} {}", got.size(), fs[0]());
+    return 0;
+}
+
+// expect: 3 3

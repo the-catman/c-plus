@@ -81,6 +81,6 @@ int main() {
 // error: 'same' takes 1 template argument, but more were given
 // error: expected 'array<int, 2>' for parameter 'a' of 'lengthOf<int, 2>', but this is 'array<int, 3>'
 // error: this argument has no value
-// error: 'same' is a function, not a value
-// error: functions can only be called for now
+// error: 'same' is a generic function, which is not one value until its types are known
+// error: write a lambda that calls it, with the types: `[](int a) { return same(a); }`
 // error: 'T' is a template parameter here, so it cannot also be a variable

@@ -460,12 +460,14 @@ static void say_where_made(void* object) {
 static void report_each_leak(void) {
     enum { MOST_SHOWN = 10 };
     int shown = 0;
+    int lambdas = 0;
     for (size_t i = 0; i < alive_size && shown < MOST_SHOWN; i++) {
         void* object = alive[i];
         if (!object || object == NO_LONGER) continue;
         const cplus_type* const* vtable = *(const cplus_type* const* const*)((char*)object + 8);
         const cplus_type* type = vtable ? vtable[CPLUS_VTABLE_TYPE] : NULL;  // what `spawn` keeps for a thread has none
         fprintf(stderr, "  %s", type ? type->name : "what a thread was given");
+        if (type && strcmp(type->name, "a lambda") == 0) lambdas++;
         say_where_made(object);
         fputc('\n', stderr);
         shown++;
@@ -473,6 +475,9 @@ static void report_each_leak(void) {
     int64_t count = __atomic_load_n(&live_objects, __ATOMIC_RELAXED);
     if (count > shown) fprintf(stderr, "  and %" PRId64 " more\n", count - shown);
     fputs("  = help: objects that refer to each other in a circle keep each other alive. Make one of the references a weak<T>\n", stderr);
+    if (lambdas)
+        fputs("  = help: a lambda that an object holds, and that captures the object, is such a circle. Capture a weak reference to it "
+              "instead: `weak<Timer> self = this;`, then `[self] { if (auto t = self.lock()) ... }`\n", stderr);
 }
 #else
 #define remember_object(object) ((void)0)

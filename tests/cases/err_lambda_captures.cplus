@@ -1,0 +1,55 @@
+// What a lambda may use, and how it holds it.
+class C {
+public:
+    int v = 0;
+};
+vector<int> all;
+function<int()> notCaptured() {
+    int n = 1;
+    return [] { return n; };
+    // error: 'n' is used in the lambda, which does not capture it
+}
+void copyChanged() {
+    int n = 1;
+    auto f = [n] { n += 1; };
+    // error: 'n' cannot be changed, as the lambda holds a copy of 'n', which never changes
+    auto g = [n] { n = 2; };
+    // error: 'n' cannot be assigned to, as the lambda holds a copy of 'n', which never changes
+    auto h = [n] { n++; };
+    // error: 'n' cannot be incremented, as the lambda holds a copy of 'n', which never changes
+}
+void initChanged() {
+    auto f = [n = 0] { n += 1; };
+    // error: 'n' cannot be changed, as the lambda holds 'n', which never changes
+}
+void hasMutable() {
+    int n = 0;
+    auto f = [n]() mutable { return n; };
+    // error: C+ lambdas have no `mutable`
+}
+void noValueYet() {
+    int n;
+    auto f = [&] { return n; };
+    // error: 'n' has no value yet where the lambda is made, which captures it
+}
+void uniqueCopy() {
+    unique<C> u = unique<C>();
+    auto f = [&] { return u.v; };
+    auto g = [u] { return 1; };
+    // error: the lambda would copy 'u', but a 'unique<C>' cannot be copied
+    auto h = [=] { return u.v; };
+    // error: the lambda would copy 'u', but a 'unique<C>' cannot be copied
+}
+void thisOutside() {
+    auto f = [this] { return 1; };
+    // error: only a lambda inside a method can capture `this`
+}
+void captureGlobal() {
+    auto f = [&all] { return 1; };
+    // error: 'all' is a variable outside functions, which a lambda uses without capturing it
+}
+void captureFunction() {
+    auto f = [&main] { return 1; };
+    // error: 'main' is a function, which a lambda calls without capturing it
+}
+int main() { return 0; }

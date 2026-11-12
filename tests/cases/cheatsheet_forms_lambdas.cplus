@@ -1,0 +1,68 @@
+// The forms of lambdas that the cheat sheet writes.
+int square(int x) { return x * x; }
+
+int apply(function<int(int)> f, int x) { return f(x); }
+
+function<int()> counter() {
+    int n = 0;
+    return [&] { return ++n; };
+}
+
+class Timer {
+public:
+    int ticks = 0;
+    function<void()> tick = [] {};
+    Timer() {
+        weak<Timer> self = this;
+        tick = [self] { if (auto t = self.lock()) t.ticks += 1; };
+    }
+    function<int()> reader() { return [this] { return ticks; }; }
+};
+
+int main() throws {
+    int k = 10;
+    println("{}", apply([&](int x) { return x + k; }, 5));
+    auto copied = [k](int x) { return x * k; };
+    auto both = [=] { return k * 2; };
+    println("{} {}", copied(2), both());
+    function<int(int)> f = square;
+    println("{}", f(4));
+    function<int(string) throws> parse = [](string s) throws { return try stoi(s); };
+    println("{}", try parse("12"));
+    auto next = counter();
+    next();
+    auto again = next;
+    println("{} {}", next(), again());
+    vector<function<int()>> fs;
+    for (int i = 0; i < 3; i++) fs.push_back([&] { return i; });
+    println("{} {} {}", fs[0](), fs[1](), fs[2]());
+    auto label = [n = 0, s = string("x")] { return s + to_string(n); };
+    println("{}", label());
+    function<int(int)> fib = [&](int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); };
+    println("{}", fib(10));
+    function<void()>? onDone = null;
+    if (auto g = onDone) g();
+    onDone = [] { println("done"); };
+    if (auto g = onDone) g();
+    function<int()>? maybe = null;
+    if (auto g = maybe) g();
+    auto bound = [] { return square(2); };
+    println("{}", bound());
+    println("{}", f);
+    Timer t = Timer();
+    t.tick();
+    println("{}", t.reader()());
+    return 0;
+}
+// expect: 15
+// expect: 20 20
+// expect: 16
+// expect: 12
+// expect: 2 3
+// expect: 0 1 2
+// expect: x0
+// expect: 55
+// expect: done
+// expect: 4
+// expect: function
+// expect: 1

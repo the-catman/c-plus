@@ -877,9 +877,14 @@ void Parser::scanTemplate(Program& prog, size_t& i) {
         if (end + 1 < toks_.size()) ++end;
     } else {
         t->kind = TemplateDecl::Kind::Function;
-        while (end + 1 < toks_.size() && toks_[end].kind != Tok::LParen && toks_[end].kind != Tok::LBrace &&
-               toks_[end].kind != Tok::Semi)
+        int angles = 0;  // the parentheses of `function<T(T)>` in the return type are not where the parameters start
+        while (end + 1 < toks_.size() && (toks_[end].kind != Tok::LParen || angles > 0) && toks_[end].kind != Tok::LBrace &&
+               toks_[end].kind != Tok::Semi) {
+            if (toks_[end].kind == Tok::Less) ++angles;
+            else if (toks_[end].kind == Tok::Greater) --angles;
+            else if (toks_[end].kind == Tok::Shr) angles -= 2;
             ++end;
+        }
         if (end > pos_ && toks_[end].kind == Tok::LParen && toks_[end - 1].kind == Tok::Ident) {
             t->nameLoc = toks_[end - 1].loc;
             t->name = toks_[end - 1].text;
@@ -2418,7 +2423,9 @@ void Parser::failStd(Loc loc, const Token& name) {
     if (n == "optional" || n == "nullopt")
         fail(loc, "C+ has no std:: namespace", n == "nullopt" ? "write `null`" : "write `T?`, such as `int?`, which is an int or `null`. A value converts to it by itself, so there is nothing to build", spec::Optionals);
     if (n == "function")
-        fail(loc, "C+ has no std:: namespace", "write a function, and call it by name: C+ has no function values yet", spec::Functions);
+        fail(loc, "C+ has no std:: namespace", "write `function<R(Args...)>`, such as `function<int(int)>`, which is built in", spec::Lambdas);
+    if (n == "bind")
+        fail(loc, "C+ has no std:: namespace", "write a lambda that calls it: `[=](int x) { return f(a, x); }`", spec::Lambdas);
     if (n == "ostream" || n == "istream")
         fail(loc, "C+ has no std:: namespace", "C+ has no streams: print with `println(\"{}\", x)`, and build text with `format(\"{}\", x)`", spec::Printing);
     if (n == "stringstream" || n == "ostringstream" || n == "istringstream")
@@ -2512,6 +2519,7 @@ bool Parser::isTypeStart(size_t ahead) const {
                 // With a name that is no type, only a declaration has a name after the `>`, and it can then say so.
                 if (peek(ahead).text == "unique" || peek(ahead).text == "local")
                     return isTypeAt(ahead + 2) || (peek(ahead + 2).kind == Tok::Ident && peek(ahead + 3).kind == Tok::Greater && (peek(ahead + 4).kind == Tok::Ident || peek(ahead + 4).kind == Tok::Question));
+                if (peek(ahead).text == "function") return isTypeAt(ahead + 2);  // `function<int(int)> f`
                 if (peek(ahead).text == "unordered_map" || peek(ahead).text == "map" || isOtherContainer(peek(ahead).text)) return isTypeAt(ahead + 2);
                 return peek(ahead).text == "vector" || classTemplate(peek(ahead).text) || isAlias(peek(ahead));
             }
@@ -2561,7 +2569,8 @@ bool Parser::isTypeAt(size_t ahead) const {
         case Tok::Ident:
             if (isTypeName(t) || (isAlias(t) && aliasTemplate(t.text)->params.empty())) return true;
             if (peek(ahead + 1).kind != Tok::Less) return false;
-            return t.text == "vector" || ((t.text == "array" || t.text == "unique" || t.text == "local") && isTypeAt(ahead + 2)) || classTemplate(t.text) || isAlias(t);
+            return t.text == "vector" || ((t.text == "array" || t.text == "unique" || t.text == "local" || t.text == "function") && isTypeAt(ahead + 2)) ||
+                   classTemplate(t.text) || isAlias(t);
         default: return false;
     }
 }
@@ -2737,7 +2746,6 @@ void Parser::failUnknownGeneric(size_t at) {
          n == "optional" && isPointer ? "write `" + inside + "`, which can already be null"
          : n == "optional" && built ? "a value converts by itself: `return 3;`, or `null`. The type is written `" + inside + "?`, as in `string? s = null;`"
          : n == "optional" ? "write `" + inside + "?`, which holds a value of that type, or `null`"
-         : n == "function" ? "write a function, and call it by name: C+ has no function values yet"
                            : "check the spelling, or define it first: `template<" + params + "> class " + n + " { ... };`",
          spec::Generics);
 }
@@ -2761,7 +2769,8 @@ void Parser::checkUnknownType() {
                  "a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`", spec::Classes);
     }
     // `Foo<int> x;`, which would otherwise be read as a comparison. A variable of that name means it is one.
-    if (check(Tok::Ident) && peek(1).kind == Tok::Less && !classTemplate(peek().text) && !functionTemplate(resolvedName(peek())) && !isOtherContainer(peek().text)) {
+    if (check(Tok::Ident) && peek(1).kind == Tok::Less && peek().text != "function" && !classTemplate(peek().text) &&
+        !functionTemplate(resolvedName(peek())) && !isOtherContainer(peek().text)) {
         bool isVariable = false;
         for (auto& scope : localScopes_) isVariable = isVariable || scope.count(peek().text);
         size_t at = 2;
@@ -2774,7 +2783,7 @@ void Parser::checkUnknownType() {
             else if (k != Tok::Ident && k != Tok::Comma && k != Tok::Star && k != Tok::Question && k != Tok::IntLit && k != Tok::ColonColon && !isTypeAt(at)) break;
             ++at;
         }
-        if (!isVariable && (peek().text == "function" || (depth <= 0 && (peek(at).kind == Tok::Ident || peek(at).kind == Tok::Star || peek(at).kind == Tok::Question))))
+        if (!isVariable && depth <= 0 && (peek(at).kind == Tok::Ident || peek(at).kind == Tok::Star || peek(at).kind == Tok::Question))
             failUnknownGeneric(pos_);
     }
     // C's spellings of integers, where a wrong guess would put a C struct's fields in the
@@ -2976,6 +2985,7 @@ const Type* Parser::parseBaseType(Loc& loc) {
                 loc.len = prev().loc.col + prev().loc.len - t.loc.col;
                 return Type::uniqueOf(target);
             }
+            if (t.text == "function" && check(Tok::Less)) return parseFunctionType(t, loc);
             if (t.text == "local" && check(Tok::Less)) {
                 advance();
                 Loc inner;
@@ -3092,6 +3102,48 @@ const Type* Parser::parseBaseType(Loc& loc) {
             fail(t.loc, "unknown type '" + t.text + "'", "write one of the types: int, long, double, float, bool, char, string, void, uint8_t to uint64_t, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program", spec::IntegerTypes);
         default: fail(t.loc, "expected a type, found " + describeToken(t), "write one of the types: int, long, double, float, bool, char, string, void, uint8_t to uint64_t, vector<T>, array<T, N>, hashmap<K, V>, T?, T*, or the structs and classes of the program", spec::IntegerTypes);
     }
+}
+
+// `function<int(const string&, int) throws>`, after the word `function`: what it returns, then what it takes, each of which can
+// have a name, which says nothing more.
+const Type* Parser::parseFunctionType(const Token& word, Loc& loc) {
+    advance();  // the '<'
+    Loc retLoc;
+    const Type* ret = parseType(retLoc);
+    if (!check(Tok::LParen))
+        fail(peek().loc, "a function type says what it returns, then what it takes in parentheses",
+             "write e.g. `function<" + std::string(ret->name) + "(int)>`, or `function<" + std::string(ret->name) + "()>` for one that takes nothing", spec::Lambdas);
+    advance();
+    std::vector<Type::Param> params;
+    if (check(Tok::KwVoid) && peek(1).kind == Tok::RParen) advance();  // `function<int(void)>`, as C writes it
+    if (!check(Tok::RParen)) {
+        do {
+            if (!isTypeStart() && !isTypeAt(0))  // a name after the type is not needed
+                fail(peek().loc, "expected the type of a parameter, found " + describeToken(peek()), "write the types it takes, e.g. `function<bool(int, int)>`", spec::Lambdas);
+            Loc typeLoc;
+            bool isConst = false;
+            const Type* ty = parseType(typeLoc, &isConst);
+            if (ty->is(Type::Kind::Void) || ty->is(Type::Kind::Auto))
+                fail(typeLoc, std::string("a parameter cannot be '") + ty->name + "'", "write the type it takes, e.g. `function<void(int)>`", spec::Lambdas);
+            bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) && parseReferenceMark(ty, ReferencePlace::Parameter);
+            if (isConst && !isRef)
+                fail(typeLoc, "`const` on a parameter that is a copy says nothing to the caller",
+                     "write `" + std::string(ty->name) + "`, or `const " + ty->name + "&` to take it without a copy", spec::Lambdas);
+            match(Tok::Ident);  // a name, as in `function<int(int count)>`
+            params.push_back({ty, isRef, isConst});
+        } while (match(Tok::Comma));
+    }
+    expect(Tok::RParen, "to close what the function takes");
+    if (check(Tok::Ident) && peek().text == "noexcept")
+        fail(peek().loc, "C+ has no noexcept", "remove it: a function that is not marked `throws` cannot fail", spec::Errors);
+    bool throws = match(Tok::KwThrows);
+    if (check(Tok::Comma))
+        fail(peek().loc, "a function type is written with what it returns, then what it takes in parentheses",
+             "write e.g. `function<int(int, int)>`, not `function<int, int>`", spec::Lambdas);
+    expectCloseAngle("to close function<...>");
+    loc = word.loc;
+    loc.len = prev().loc.col + prev().loc.len - word.loc.col;
+    return Type::functionOf(ret, params, throws);
 }
 
 // How far ahead the token after the `<...>` that starts `ahead` tokens from here is, or 0
@@ -4155,7 +4207,8 @@ static std::optional<std::optional<BinOp>> assignOp(Tok k) {
 ExprPtr Parser::parseAssign() {
     Nesting nesting(*this);
     ExprPtr lhs = parseTernary();
-    if (check(Tok::Assign) && peek(1).kind == Tok::Greater) notYet(peek().loc, "lambdas", "write a function, and call it by name");
+    if (check(Tok::Assign) && peek(1).kind == Tok::Greater)
+        fail(peek().loc, "C+ writes a lambda as C++ does, with no `=>`", "write `[](int x) { return x * 2; }`, with the type of each parameter", spec::Lambdas);
     if (auto op = assignOp(peek().kind)) {
         Loc opLoc = advance().loc;
         ExprPtr rhs = parseAssign();
@@ -4429,8 +4482,15 @@ ExprPtr Parser::parsePostfix(ExprPtr e) {
         if (t.kind == Tok::PlusPlus || t.kind == Tok::MinusMinus) {
             advance();
             e = std::make_unique<IncDecExpr>(t.loc, t.kind == Tok::PlusPlus, false, std::move(e));
-        } else if (t.kind == Tok::LParen) {
-            fail(t.loc, "only functions can be called, by writing their name followed by (...)", "write a function and call it by name, `f(x)`: C+ has no function values yet, so a value cannot be called", spec::Functions);
+        } else if (t.kind == Tok::LParen) {  // `make()(3)`, `handlers[i](e)`, `[&] { ... }()`: what is called is a value
+            advance();
+            std::vector<ExprPtr> args;
+            if (!check(Tok::RParen)) {
+                do args.push_back(parseExpr());
+                while (match(Tok::Comma));
+            }
+            expect(Tok::RParen, "to close the argument list");
+            e = std::make_unique<CallValueExpr>(t.loc, std::move(e), std::move(args));
         } else if (t.kind == Tok::Dot) {
             advance();
             e = parseMemberAccess(std::move(e), ".");
@@ -4590,7 +4650,7 @@ ExprPtr Parser::parsePrimary() {
                 else if (peek(close).kind == Tok::RParen) --depth;
             }
             if (peek(close).kind == Tok::Assign && peek(close + 1).kind == Tok::Greater)  // `(a, b) => a + b`
-                notYet(t.loc, "lambdas", "write a function at the top level of the file, and call it by name");
+                fail(t.loc, "C+ writes a lambda as C++ does, with no `=>`", "write `[](int a, int b) { return a + b; }`, with the type of each parameter, and `[&]` in front to use the variables around it", spec::Lambdas);
             // `(char*)p` or `(const Node*)p`: a type with stars, then ')'.
             size_t i = peek().kind == Tok::KwConst ? 1 : 0;
             bool baseType = isCastType(peek(i).kind) || peek(i).kind == Tok::KwVoid || isTypeName(peek(i)) || isAlias(peek(i));
@@ -4678,7 +4738,8 @@ ExprPtr Parser::parsePrimary() {
                     if (peek(close).kind == Tok::LParen) ++depth;
                     else if (peek(close).kind == Tok::RParen) --depth;
                 }
-                if (peek(close).kind == Tok::LBrace) notYet(t.loc, "lambdas", "write a function at the top level of the file, and call it by name");
+                if (peek(close).kind == Tok::LBrace)
+                    fail(t.loc, "C+ writes a lambda as C++ does", "write `[](int x) { ... }`, with the type of each parameter, and `[&]` in front to use the variables around it", spec::Lambdas);
             }
             if (const StructDecl* en = isTypeName(t) && !boundType(t) ? prog_->findStruct(t.text) : nullptr; en && en->isEnum)
                 if (ExprPtr use = parseEnumUse(t, *en)) return use;
@@ -4849,9 +4910,13 @@ ExprPtr Parser::parsePrimary() {
                 if (peek(close).kind == Tok::LBracket) ++depth;
                 else if (peek(close).kind == Tok::RBracket) --depth;
             }
-            if (peek(close).kind != Tok::LParen && peek(close).kind != Tok::LBrace)
+            const Tok after = peek(close).kind;
+            const bool lambda = after == Tok::LParen || after == Tok::LBrace || after == Tok::Arrow || after == Tok::KwThrows ||
+                                (peek(close).kind == Tok::Ident && peek(close).text == "mutable");
+            if (!lambda)
                 fail(t.loc, "C+ writes a list in braces, as C++ does", "write the list in braces: `{1, 2, 3}`. `auto` needs the type written: `vector<int>{1, 2, 3}`", spec::Vectors);
-            notYet(t.loc, "lambdas", "write a function, and call it by name");
+            --pos_;  // back to the '['
+            return parseLambda();
         }
         case Tok::KwElse:
             fail(t.loc, "an `else` comes right after the body of an `if`", "check the braces before it, or remove it", spec::ControlFlow);
@@ -4859,6 +4924,104 @@ ExprPtr Parser::parsePrimary() {
         default:
             fail(t.loc, "expected an expression, found " + describeToken(t), "write a value, a name or a call, such as `1`, `x` or `f(x)`", spec::Grammar);
     }
+}
+
+// `[captures](params) throws -> R { body }`, at the '['. The parameters can be left out when there are none: `[&] { ... }`.
+ExprPtr Parser::parseLambda() {
+    Loc start = advance().loc;
+    auto lambda = std::make_unique<LambdaExpr>(start);
+    using Capture = LambdaExpr::Capture;
+    std::set<std::string> named;
+    auto once = [&](const std::string& name, Loc at) {
+        if (!named.insert(name).second) fail(at, "'" + name + "' is captured twice", "capture it once", spec::Lambdas);
+    };
+    bool first = true;
+    while (!check(Tok::RBracket)) {
+        if (!first) expect(Tok::Comma, "or ']' after a capture");
+        const Token& c = peek();
+        if (c.kind == Tok::Amp && (peek(1).kind == Tok::Comma || peek(1).kind == Tok::RBracket)) {  // `[&]`
+            advance();
+            if (!first) fail(c.loc, "`&` alone comes first in a capture list", "write `[&, x]`: what is not named after it is shared", spec::Lambdas);
+            lambda->byDefault = LambdaExpr::Default::Share;
+            lambda->defaultLoc = c.loc;
+        } else if (c.kind == Tok::Assign) {  // `[=]`
+            advance();
+            if (!first) fail(c.loc, "`=` alone comes first in a capture list", "write `[=, &x]`: what is not named after it is copied", spec::Lambdas);
+            lambda->byDefault = LambdaExpr::Default::Copy;
+            lambda->defaultLoc = c.loc;
+        } else if (c.kind == Tok::Amp || c.kind == Tok::AmpAmp) {  // `[&x]`
+            if (c.kind == Tok::AmpAmp) fail(c.loc, "a capture is shared with one `&`", "write `[&x]`", spec::Lambdas);
+            advance();
+            if (check(Tok::KwThis)) fail(peek().loc, "`this` is captured without `&`", "write `[this]`: the lambda then reaches the object's fields and methods", spec::Lambdas);
+            const Token& name = expect(Tok::Ident, "for the name of the variable it shares");
+            if (check(Tok::Assign))
+                notYet(name.loc, "a shared capture with a value of its own, `[&r = x]`", "write `[&x]` to share `x` itself, under its own name");
+            once(name.text, name.loc);
+            lambda->written.push_back({Capture::Mode::Share, name.text, name.loc, nullptr});
+        } else if (c.kind == Tok::KwThis) {
+            advance();
+            once("this", c.loc);
+            lambda->written.push_back({Capture::Mode::This, "this", c.loc, nullptr});
+        } else if (c.kind == Tok::Star && peek(1).kind == Tok::KwThis) {  // `[*this]`
+            advance();
+            advance();
+            once("this", c.loc);
+            lambda->written.push_back({Capture::Mode::CopyThis, "this", c.loc, nullptr});
+        } else if (c.kind == Tok::Ident) {
+            advance();
+            if (check(Tok::Dot)) fail(peek().loc, "C+ has no parameter packs", "capture each variable by name", spec::Lambdas);
+            once(c.text, c.loc);
+            if (match(Tok::Assign)) {  // `[n = 0]`, `[u = move(u)]`
+                auto var = std::make_unique<VarDecl>(c.loc, c.text, Type::autoTy(), c.loc);
+                var->isConst = true;  // as every copy a lambda holds
+                var->init = parseAssign();
+                lambda->written.push_back({Capture::Mode::Init, c.text, c.loc, std::move(var)});
+            } else {
+                lambda->written.push_back({Capture::Mode::Copy, c.text, c.loc, nullptr});
+            }
+        } else {
+            fail(c.loc, "expected what the lambda captures, found " + describeToken(c),
+                 "write the names of the variables it uses, `[x, &y]`, or `[&]` to share all of them, `[=]` to copy them, or `[]` for none", spec::Lambdas);
+        }
+        first = false;
+    }
+    advance();  // ']'
+    auto fn = std::make_unique<FuncDecl>();
+    fn->name = "lambda";
+    fn->nameLoc = start;
+    fn->retType = Type::autoTy();
+    fn->retTypeLoc = start;
+    if (check(Tok::LParen)) {
+        parseParams(*fn);
+        for (auto& p : fn->params)
+            if (p->defaultArg) notYet(p->loc, "default values for the parameters of a lambda", "pass the value at each call");
+    }
+    if (check(Tok::Ident) && peek().text == "mutable")
+        fail(peek().loc, "C+ lambdas have no `mutable`: a copy of the lambda would share the count in C+ and copy it in C++",
+             "declare it outside and share it: `int n = 0; return [&] { return ++n; };`", spec::Lambdas);
+    if (check(Tok::KwConstexpr)) fail(peek().loc, "a lambda cannot be constexpr", "remove `constexpr`, or write a constexpr function at the top level", spec::Lambdas);
+    parseThrowsMark(*fn);
+    if (match(Tok::Arrow)) {
+        Loc retLoc;
+        fn->retType = parseType(retLoc);
+        fn->retTypeLoc = retLoc;
+        if (fn->retType->is(Type::Kind::Auto)) fail(retLoc, "`-> auto` says nothing", "leave it out: what the lambda returns is worked out from its `return`s", spec::Lambdas);
+        if (check(Tok::Amp) || check(Tok::AmpAmp)) fail(peek().loc, "a lambda returns a value, not a reference", "write `-> " + std::string(fn->retType->name) + "`", spec::Lambdas);
+        lambda->returnWritten = true;
+    }
+    if (!check(Tok::LBrace)) {
+        if (check(Tok::Ident) && peek().text == "noexcept")
+            fail(peek().loc, "C+ has no noexcept", "remove it: a lambda that is not marked `throws` cannot fail", spec::Errors);
+        fail(peek().loc, "expected the body of the lambda, found " + describeToken(peek()),
+             check(Tok::Arrow) ? std::string("write what it returns before the body: `[](int x) -> int { return x * 2; }`")
+                               : std::string("write it in braces: `[](int x) { return x * 2; }`"),
+             spec::Lambdas);
+    }
+    fn->body = parseBlock(fn.get());
+    lambda->fn = std::move(fn);
+    lambda->fn->lambda = lambda.get();
+    lambda->loc.len = 1;
+    return lambda;
 }
 
 // A type parameter used like a type's name: `T(x)`, `T()`, `T{1, 2}`, whatever it stands for.

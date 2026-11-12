@@ -1,20 +1,17 @@
 // Functions written where a value goes, as other languages have them.
 void arrowWithTwo() {
     auto f = (a, b) => a + b;
-    // error: this compiler does not support lambdas yet
+    // error: C+ writes a lambda as C++ does, with no `=>`
+    // error: write `[](int a, int b) { return a + b; }`, with the type of each parameter, and `[&]` in front to use the variables around it
 }
 void arrowWithOne() {
     int a = 1;
     auto f = a => a + 1;
-    // error: this compiler does not support lambdas yet
+    // error: C+ writes a lambda as C++ does, with no `=>`
 }
 void javaScript() {
     auto f = function(a) { return a; };
-    // error: this compiler does not support lambdas yet
-    // error: write a function at the top level of the file, and call it by name
-}
-void cPlusPlus() {
-    auto f = [](int x) { return x; };
-    // error: this compiler does not support lambdas yet
+    // error: C+ writes a lambda as C++ does
+    // error: write `[](int x) { ... }`, with the type of each parameter, and `[&]` in front to use the variables around it
 }
 int main() { return 0; }

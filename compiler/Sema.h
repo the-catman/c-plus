@@ -253,6 +253,33 @@ private:
     bool reportElsewhere(const std::string& name, Loc used, const char* what);  // says so, if it is
     std::string resolved(const std::string& name, Loc used) const;
 
+    // Lambdas. While the body of one is checked, the scopes of the code around it stay, so that its names are found there,
+    // and a variable of that code used in the body is captured. See checkLambda.
+    struct LambdaFrame {
+        LambdaExpr* lambda;
+        size_t scopeBase;  // where its own scopes start in scopes_
+        Flow* outer;       // what is known where it is written
+        const VarDecl* self = nullptr;  // the variable it is the value of, which it can call: `function<int(int)> fib = [&](...)`
+        std::set<const VarDecl*> refused;  // what was said to be not captured, once each
+    };
+    std::vector<LambdaFrame> lambdas_;
+    const VarDecl* selfInit_ = nullptr;     // the variable whose value the lambda being checked is, when it can call itself
+    // In a constructor, the field whose new value is being checked, `tick = [this] { ... };`, which has its value once that is
+    // done, so a lambda in it can capture `this`.
+    std::string assigningField_;
+    bool fieldsSet(const Flow& flow, const VarDecl* self) const;
+    const Type* expectedFn_ = nullptr;      // the function type an expression is checked against, for a lambda or a function's name
+    const Type* checkLambda(LambdaExpr& l, Flow& flow, const Type* expected);
+    const Type* checkCallValue(CallValueExpr& c, Flow& flow);
+    void checkCanFailNamed(const std::string& name, Loc loc, const Expr* receiver = nullptr);
+    int frameOf(const VarDecl* v) const;  // the lambda frame `v` is declared in, or -1 for the function around them all
+    bool capturedHere(const VarDecl* v) const;  // used in a lambda, and declared outside it
+    const LambdaExpr::Captured* innerCapture(const VarDecl* v) const;  // how the innermost lambda has it, if it does
+    void noteCapture(VarDecl* v, Loc at);
+    void noteThisCapture(Loc at);
+    const Type* functionValue(NameExpr& n, const Type* expected);
+    void checkCaptures(Program& program);  // which lambdas are kept, and what that asks of what they share
+
     VarDecl* lookup(const std::string& name);
     // The variable of each `for (auto x : list)`, which is a copy of the element
     struct LoopCopy {

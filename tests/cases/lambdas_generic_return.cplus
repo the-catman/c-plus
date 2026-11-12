@@ -1,0 +1,15 @@
+// A generic function that returns a lambda.
+template<typename T>
+function<T()> constant(T value) {
+    return [value] { return value; };
+}
+int main() {
+    auto c = constant<string>("const");
+    println("{}", c());
+    auto d = constant(5);
+    println("{}", d());
+    return 0;
+}
+
+// expect: const
+// expect: 5

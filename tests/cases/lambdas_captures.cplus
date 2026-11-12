@@ -1,0 +1,125 @@
+// Lambdas with `this`, `*this`, fields that hold them, functions that throw, `?`, init captures and moves.
+class Counter {
+public:
+    int count = 0;
+    function<void()> incrementer() {
+        return [this] { count += 1; };
+    }
+    void each(function<void(int)> f) {
+        for (int i = 0; i < 3; i++) f(i + count);
+    }
+};
+
+struct Point {
+    int x;
+    int y;
+    function<int()> sum() const {
+        return [&] { return x + y; };
+    }
+    function<int()> copied() {
+        return [*this] { return x * y; };
+    }
+};
+
+struct Handler {
+    string name;
+    function<string(string)> run;
+};
+
+int parse(string s) throws {
+    if (s == "") throw Error("empty");
+    return int(s.size());
+}
+
+struct Grid {
+    array<int, 4> cells;
+};
+
+void fill(function<void(int&)> f, int& out) {
+    f(out);
+}
+
+int main() {
+    Counter c = Counter();
+    auto inc = c.incrementer();
+    inc();
+    inc();
+    println("{}", c.count);
+    int total = 0;
+    c.each([&](int i) { total += i; });
+    println("{}", total);
+
+    Point p = {3, 4};
+    auto s = p.sum();
+    auto m = p.copied();
+    p.x = 100;
+    println("{} {}", s(), m());
+
+    Handler h = {"shout", [](string t) { return t + "!"; }};
+    println("{}", h.run("hey"));
+    vector<Handler> hs;
+    hs.push_back(h);
+    println("{}", hs[0].run("you"));
+
+    function<int(string) throws> f = parse;
+    try {
+        println("{}", f("abc"));
+        println("{}", f(""));
+    } catch (Error e) {
+        println("caught {}", e.message);
+    }
+    auto g = [](string s) throws { return try parse(s) * 2; };
+    try {
+        println("{}", g("xy"));
+    } catch (Error e) {
+        println("caught {}", e.message);
+    }
+
+    function<int()>? maybe = null;
+    if (maybe == null) println("none");
+    maybe = [] { return 7; };
+    if (auto got = maybe) println("{}", got());
+
+    auto big = [](int v) { Grid g; for (int i = 0; i < 4; i++) g.cells[i] = v + i; return g; };
+    Grid grid = big(10);
+    println("{}", grid.cells[3]);
+
+    int target = 0;
+    fill([](int& r) { r = 42; }, target);
+    println("{}", target);
+
+    int base = 5;
+    auto make = [&](int k) { return [&, k] { return base + k; }; };
+    auto five = make(1);
+    base = 50;
+    println("{}", five());
+
+    auto init = [n = 3, t = string("x")] { return t + to_string(n); };
+    println("{}", init());
+
+    vector<int> nums = {1, 2, 3};
+    auto taken = [v = move(nums)] { return v.size(); };
+    println("{}", taken());
+
+    unique<Counter> u = unique<Counter>();
+    auto own = [w = move(u)] { return w.count; };
+    println("{}", own());
+    return 0;
+}
+
+// expect: 2
+// expect: 9
+// expect: 7 12
+// expect: hey!
+// expect: you!
+// expect: 3
+// expect: caught empty
+// expect: 4
+// expect: none
+// expect: 7
+// expect: 13
+// expect: 42
+// expect: 51
+// expect: x3
+// expect: 3
+// expect: 0

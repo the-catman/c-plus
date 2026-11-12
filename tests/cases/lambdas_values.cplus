@@ -1,0 +1,73 @@
+// Named functions as values, by reference, and lambdas that change what holds them.
+struct Board {
+    array<int, 3> cells;
+};
+Board makeBoard(int start, const string& tag) throws {
+    if (tag == "") throw Error("no tag");
+    Board b;
+    for (int i = 0; i < 3; i++) b.cells[i] = start + i;
+    return b;
+}
+void bump(int& x) {
+    x += 1;
+}
+int inner(function<int(int)> f) {
+    return f(1);
+}
+int outer(function<int(int)> f) {
+    return inner(f) + inner(f);
+}
+int byRef(const function<int(int)>& f) {
+    return f(10);
+}
+function<int()> nested() {
+    return [] {
+        int count = 0;
+        function<int()> step = [&] { count += 1; return count; };
+        step();
+        return step();
+    };
+}
+function<function<int()>(int)> maker() {
+    return [](int start) { return [&] { start += 1; return start; }; };
+}
+int main() {
+    function<Board(int, const string&) throws> mk = makeBoard;
+    try {
+        Board b = try mk(5, "x");
+        println("{}", b.cells[2]);
+        Board c = try mk(5, "");
+    } catch (Error e) {
+        println("caught {}", e.message);
+    }
+    function<void(int&)> bumper = bump;
+    int n = 1;
+    bumper(n);
+    bumper(n);
+    println("{}", n);
+    int k = 3;
+    println("{}", outer([&](int x) { return x + k; }));
+    println("{}", byRef([&](int x) { return x * k; }));
+    function<int()> self = [] { return 0; };
+    self = [&] {
+        self = [] { return 2; };
+        return 1;
+    };
+    println("{}", self());
+    println("{}", self());
+    println("{}", nested()());
+    auto from = maker()(10);
+    from();
+    println("{}", from());
+    return 0;
+}
+
+// expect: 7
+// expect: caught no tag
+// expect: 3
+// expect: 8
+// expect: 30
+// expect: 1
+// expect: 2
+// expect: 2
+// expect: 12

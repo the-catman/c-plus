@@ -149,8 +149,6 @@ void names() {
     auto a = Speaker;
     // error: 'Speaker' is a type, not a value
     // error: build an object of a class that derives from it: `SomeClass(...)`
-    auto f = nothing;
-    // error: 'nothing' is a function, not a value
     long size = sizeof(vector);
     // error: write `vector<int>`
 }

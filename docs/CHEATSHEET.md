@@ -37,6 +37,7 @@ long square(long n) { return n * n; }
 | Finding the real type | `if (auto d = dynamic_cast<Dog?>(a))` (null when it is not a `Dog`), `dynamic_cast<Dog>(a)` (**stops the program** when it is not) |
 | Weak references | `weak<Node> parent;` starts empty and does not keep the object alive, which breaks cycles. `parent = node;`, `if (auto p = parent.lock())`, `parent.lock()?.name`, `parent.expired()`, `parent.reset()`. As `std::weak_ptr` |
 | Errors | `int f() throws { if (bad) throw Error("why"); return 1; }`. Each call that can fail is `try f()`, which passes the error on, or is inside `try { f(); } catch (NotFound e) { } catch (Error e) { println("{}", e.what()); }`. `class NotFound : public Error {...}`. `catch (...)`, `throw;`, `int main() throws`. Everything is released on the way out |
+| Lambdas | `[&](int x) { return x + k; }` shares `k` with the lambda, `[k](int x) { return x * k; }` copies it, `[&]` shares all it uses and `[=]` copies all, `[this]`, `[n = 0, s = string("x")]` for values of its own. A copy never changes: there is no `mutable`. The type of any function is `function<int(int)>`, or `function<int(string) throws>` for one that can fail: `function<int(int)> f = square;` names a function. **What a lambda shares lives as long as the lambda**, as in JavaScript: `return [&] { return ++n; };` works, and a loop's own variable is a new one each round, so `for (int i = 0; i < 3; i++) fs.push_back([&] { return i; });` gives 0, 1 and 2. **Copies of a lambda share what it captured**: after `auto again = next;` both count up one `n`. `function<int(int)> fib = [&](int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); };` calls itself. A function is never empty: `function<void()>? onDone = null;`, then `if (auto g = onDone) g();`. Functions cannot be compared, and print as `function`. A lambda that an object holds and that captures the object keeps it alive: capture `weak<Timer> self = this;` instead, with `[self] { if (auto t = self.lock()) t.ticks += 1; }` |
 | Generics | `template<typename T> T largest(T a, T b) { ... }`, called as `largest(1, 2)` or `largest<long>(1, 2)`. `template<typename T> class Stack { ... };`, used as `Stack<int>` with its arguments always written. `template<typename T, int N> struct Buffer { array<T, N> items; };`. `T()` is the default value of T |
 | Type aliases | `using UserId = long;`, `template<typename T> using Grid = vector<vector<T>>;`, `export using Points = vector<Point>;`, at the top of a file. The same type under another name |
 | Constraints | `template<Comparable T>`, `template<Number T>`, `template<Integer T>`, `template<Floating T>`, `template<Hashable T>`, `template<Speaker T>` for an interface or class. Your own: `template<typename T> concept Addable = requires(T a, T b) { a + b; };` |
@@ -100,7 +101,6 @@ long square(long n) { return n * n; }
 | `#define MAX 100`, `static const int MAX = 100;` | `const int MAX = 100;`, or `constexpr int MAX = 100;` |
 | `static int count = 0;` at the top of a file, or in a function | `int count = 0;` outside the functions: a name is private to its file unless it is marked `export` |
 | `extern int count;` | `export int count = 0;` in its file, and `other::count` after `import other;` |
-| `int count = 0;` outside a function | not supported yet. A value that never changes is a `const`; otherwise pass it to the functions that use it |
 | `extern "C" size_t strlen(const char* s);` | `extern "C" long strlen(string s);`: C+ types in C declarations. `const char*` is `string` (or `string?` for a result that may be NULL), `char` is `char`, `size_t` is `long`, `unsigned` is `uint32_t`. `char*` is a raw pointer, for buffers and text to free |
 | `struct FILE* f`, `struct tm t;`, `typedef struct x x;` | `extern "C" struct FILE;` once, then `FILE* f`; `tm t;`, no word `struct`; no `typedef` |
 | `char name[64];` in a C struct | `array<char, 64> name;`, read with `string(s.name)` |
@@ -111,7 +111,10 @@ long square(long n) { return n * n; }
 | `std::vector<int>`, `std::string`, `std::to_string` | `vector<int>`, `string`, `to_string`, with no `std::` |
 | `std::`, `using namespace std` | no `std::`; built-ins have no prefix |
 | prototypes / headers | none. Define each function once, in any order |
-| a function or a lambda inside a function | write it at the top level of the file, and pass it what it needs |
+| a function inside a function | write it at the top level of the file, or as a lambda: `auto twice = [](int x) { return x * 2; };` |
+| `auto f = [n]() mutable { return ++n; };` | no `mutable`, as a copy of the lambda would share the count: `int count = 0; auto next = [&] { return ++count; };` |
+| `std::function<int(int)> f;`, `std::bind(square, 2)` | `function<int(int)> f = square;`, with no `std::`, and a lambda in place of `bind`: `[] { return square(2); }` |
+| `function<int()> f = [] { return 1; }; if (f) f();` | a `function<int()>` is never empty, so it is no condition. One that can be is `function<int()>? maybe = null;`, then `if (auto g = maybe) g();` |
 | `int x;` then read `x` | compile error until `x` is assigned on every path |
 | `int i = someLong;`, `int i = 2.5;` | error: a conversion that can lose information needs a cast: `int(x)`, which keeps the lowest bits, or `checked(int(x))`, which stops the program if `x` does not fit |
 | `float f = someDouble;` | error: write `float(x)`. Only a double written as a number, `float f = 0.5;`, converts by itself |
@@ -255,7 +258,8 @@ long square(long n) { return n * n; }
 | Reflection | reading a field through its `reflect::Field`, methods |
 | Memory | pointers into vectors and strings |
 | Types | unions, `const` fields, types nested in a type or a function, `short`, `int8_t` and `int16_t`, enums held in an unsigned type |
-| Functions | default arguments in generics, `auto` parameters and return types, lambdas |
+| Functions | default arguments in generics, `auto` parameters and return types |
+| Lambdas | `await` inside one, `spawn` of one, sharing a reference variable such as the `x` of `for (auto& x : v)`, default values for its parameters, `sort` and the other functions that take one |
 | Statements | a declaration before a switch's value: `switch (auto k = f(); k)` |
 | Top level | `thread_local`, `static` variables in a function, `constexpr` methods and structs |
 | Containers | iterators, and erasing a range, on vectors; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |

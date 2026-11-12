@@ -44,7 +44,7 @@ void mapInParentheses() {
 }
 void stdFunction() {
     std::function<int(int)> f;
-    // error: write a function, and call it by name: C+ has no function values yet
+    // error: write `function<R(Args...)>`, such as `function<int(int)>`, which is built in
 }
 void stdMakePair() {
     auto p = std::make_pair(1, 2);

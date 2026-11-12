@@ -1,0 +1,22 @@
+int apply(function<int(int)> f, int x) { return f(x); }
+int main() {
+    int k = 10;
+    auto f = [&](int x) -> int { return x + k; };
+    auto g = [] { println("hi"); };
+    auto h = [k](int a, int b) throws -> int {
+        if (a > b) {
+            throw Error("no");
+        }
+        return a + b + k;
+    };
+    println("{}", apply([&](int x) {
+        int y = x * 2;
+        return y + k;
+    }, 5));
+    vector<function<void()>> all;
+    all.push_back([=] { println("{}", k); });
+    array<int, 3> v;
+    v[0] = 1;
+    auto p = [n = k + 1] { return n; };
+    return 0;
+}

@@ -543,7 +543,12 @@ PLANNED_FEATURES = [
     ("enums held in other integer types", 'enum class Color : char { Red, Blue };\n' + M % ""),
     ("enumerator values that use enumerators", 'enum class Color { Red, Blue = Red };\n' + M % ""),
     ("a switch with an initializer", M % "int n = 1; switch (int k = n; k) { case 1: break; }"),
-    ("lambdas", M % "auto f = [](int x) { return x; };"),
+    ("await inside a lambda", 'async int f() { return 1; }\nasync int g() { auto h = [] { return await f(); }; return h(); }\n' + M % ""),
+    ("spawn of a lambda", M % "auto f = [] { return 1; }; auto t = spawn f();"),
+    ("a lambda sharing a reference variable", M % "vector<int> v = {1}; for (auto& x : v) { auto f = [&] { x += 1; }; f(); }"),
+    ("moving from a variable that a lambda shares", M % "vector<int> v = {1}; auto f = [&] { return v.size(); }; auto w = move(v);"),
+    ("default values for the parameters of a lambda", M % "auto f = [](int x = 1) { return x; };"),
+    ("a C function as a value", 'extern "C" int abs(int n);\n' + M % "function<int(int)> f = abs;"),
     ("default arguments in generics", 'template<typename T> T f(T a, T b = T()) { return a; }\n' + M % ""),
     ("auto parameters", 'int f(auto a) { return 1; }\n' + M % ""),
     ("auto return types", 'auto f() { return 1; }\n' + M % ""),
@@ -685,7 +690,7 @@ SHEET_NOT_CODE = {"T&", "const T&", "<cmath>", "<cctype>", "std::", "std::weak_p
                   "http::fetch", "cplus check", "cplus run app.cplus --race", "cplus run app.cplus -- arg1 arg2", "cplus run app.cplus --debug",
                   'import "mine.h";', "-I dir", "cplus run app"}
 # Habits that the left side of the table only names a part of, which is fine on its own. The rest of its row says what is wrong.
-SHEET_HABITS_THAT_COMPILE = {"int count = 0;", "x", "*p", "u", "if (flag)", "Node? next", "u1 == u2", "v[i]", "m[k]", "n", "s[s.size()]", "'\\0'", "s.substr(pos)",
+SHEET_HABITS_THAT_COMPILE = {"int count = 0;", "x", "*p", "u", "f", "if (flag)", "Node? next", "u1 == u2", "v[i]", "m[k]", "n", "s[s.size()]", "'\\0'", "s.substr(pos)",
                              "int x;", "int* p = new int;", "User u;", "array<int, 10000000> a;", "auto& x = v[0];", "v.push_back(1);"}
 
 
@@ -803,6 +808,7 @@ SPEC_NOT_CODE = {
     "cplus fmt", "--check", "cplus lsp", "editors/vscode", 'import "mine.h";', "-I", "-I<dir>", "cplus build app.cplus -I include", "-lsqlite3",
     "static inline", "const unsigned char*", "const T&", "T&", "case value:", "std::filesystem",
     "min()", "max()", "abs()", "std::cout", "#define MASK 0xFFFFFFFFu",
+    "function<R(Args...)>", "[captures](parameters) -> R { body }", "-> R", "std::function",
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {

@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -21,7 +22,7 @@ struct TemplatePattern;
 struct Type {
     enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, UInt8, UInt16, UInt32, UInt64,
                       Struct, Class, Vector, Optional, Null,
-                      Pointer, Opaque, Array, Weak, Unique, Local, Enum,
+                      Pointer, Opaque, Array, Weak, Unique, Local, Enum, Function,
                       // Only while a generic definition is read, to learn its shape; never in checked code.
                       TypeParam, Dependent };
     Kind kind;
@@ -31,6 +32,16 @@ struct Type {
     bool constElem = false;            // for Kind::Pointer: `const int*`, which only reads what it points to
     int64_t length = 0;                // for Kind::Array: the N of `array<T, N>`; for Kind::TypeParam: which parameter it is
     const TemplatePattern* pattern = nullptr;  // for Kind::Dependent: `Box<T>`
+    // For Kind::Function, `function<int(const string&, int)>`: what it takes, and whether a call can fail. `elem` is what it
+    // returns.
+    struct Param {
+        const Type* type;
+        bool isRef = false;    // `T&`, or `const T&` with isConst
+        bool isConst = false;
+        bool operator<(const Param& o) const { return std::tie(type, isRef, isConst) < std::tie(o.type, o.isRef, o.isConst); }
+    };
+    const std::vector<Param>* params = nullptr;
+    bool throws = false;
 
     bool is(Kind k) const { return kind == k; }
     bool isVector() const { return kind == Kind::Vector; }
@@ -46,6 +57,8 @@ struct Type {
     bool isOpaque() const { return kind == Kind::Opaque; }
     // `enum class Color { Red, Green };`: a value that is one of a list of names, held as an int or a long.
     bool isEnum() const { return kind == Kind::Enum; }
+    // `function<R(Args...)>`: code to call, with what it captured. Copies share what it captured, and it is never empty.
+    bool isFunction() const { return kind == Kind::Function; }
     bool isError() const { return kind == Kind::Error; }
     // `uint8_t` to `uint64_t`. Signed and unsigned never mix without a cast, except that the two smaller ones become
     // an int in arithmetic, as a char does.
@@ -164,6 +177,24 @@ struct Type {
         return &it->second.second;
     }
 
+    // `function<ret(params...)>`, or `function<ret(params...) throws>`. One Type per signature, like vectorOf.
+    static const Type* functionOf(const Type* ret, const std::vector<Param>& params, bool throws) {
+        static std::map<std::tuple<const Type*, std::vector<Param>, bool>, std::pair<std::pair<std::string, std::vector<Param>>, Type>> made;
+        auto [it, inserted] = made.try_emplace({ret, params, throws});
+        if (inserted) {
+            std::string name = "function<" + std::string(ret->name) + "(";
+            for (size_t i = 0; i < params.size(); ++i)
+                name += (i ? ", " : "") + std::string(params[i].isConst ? "const " : "") + params[i].type->name + (params[i].isRef ? "&" : "");
+            name += std::string(")") + (throws ? " throws" : "") + ">";
+            it->second.first.first = name;
+            it->second.first.second = params;
+            it->second.second = Type{Kind::Function, it->second.first.first.c_str(), nullptr, ret};
+            it->second.second.params = &it->second.first.second;
+            it->second.second.throws = throws;
+        }
+        return &it->second.second;
+    }
+
     // `elem*`, or `const elem*` with `constElem`: a raw pointer, which may be null. One
     // Type per pointee and constness, like vectorOf.
     static const Type* pointerTo(const Type* elem, bool constElem = false) {
@@ -183,6 +214,7 @@ struct Type {
 struct VarDecl;
 struct FuncDecl;
 struct TemplateDecl;
+struct LambdaExpr;
 
 // What is given for a parameter of a generic: a type, or a value such as the 16 of `array<T, 16>`.
 struct TemplateArg {
@@ -224,7 +256,7 @@ struct CheckedHere {  // sets it while the parser reads one part
 struct Expr {
     enum class Kind { IntLit, FloatLit, CharLit, BoolLit, StringLit, NullLit, Name, This, Unary, Binary, Assign, Ternary, IncDec,
                       Call, MethodCall, Member, Index, InitList, OptChain, OptValue, Coalesce, Cast, Sizeof, New,
-                      Delete, Try, Constraint, Borrow, Spawn, Await, EnumValue };
+                      Delete, Try, Constraint, Borrow, Spawn, Await, EnumValue, Lambda, CallValue };
     const Kind kind;
     Loc loc;
     const Type* type = nullptr;  // set by Sema
@@ -293,6 +325,7 @@ using BasePath = std::vector<const StructDecl*>;
 struct NameExpr : Expr {
     std::string name;
     VarDecl* decl = nullptr;  // set by Sema for a variable
+    FuncDecl* function = nullptr;  // set by Sema for a function used as a value: `function<int(int)> f = square;`
     int implicitField = -1;   // set by Sema when the name is a field of `this`, inside a method
     BasePath path;            // set with implicitField: from the class of `this` to the one declaring the field
     NameExpr(Loc l, std::string n) : Expr(Kind::Name, l), name(std::move(n)) {}
@@ -483,6 +516,7 @@ struct CallExpr : Expr {
     std::vector<FormatSpec> formatSpecs;    // one for each {}
     MathFn math{};                          // for Builtin::Math
     CharFn charFn{};                        // for Builtin::CharFn
+    ExprPtr lowered;                        // set by Sema for `f(x)` where f is a variable that holds a function: the call through it
     CallExpr(Loc l, std::string c, std::vector<ExprPtr> a)
         : Expr(Kind::Call, l), callee(std::move(c)), args(std::move(a)) {}
 };
@@ -587,6 +621,13 @@ struct EnumValueExpr : Expr {
         : Expr(Kind::EnumValue, l), decl(d), name(std::move(n)), typeLoc(tl), nameLoc(nl) {}
 };
 
+// `f(x)` where `f` is a value of a function type: a variable, a field, an element, or what a call gave.
+struct CallValueExpr : Expr {
+    ExprPtr callee;
+    std::vector<ExprPtr> args;
+    CallValueExpr(Loc l, ExprPtr c, std::vector<ExprPtr> a) : Expr(Kind::CallValue, l), callee(std::move(c)), args(std::move(a)) {}
+};
+
 // ---- Statements ------------------------------------------------------------
 
 struct Stmt {
@@ -619,6 +660,10 @@ struct VarDecl : Stmt {
     // `T& x` or `const T& x`: it names another place instead of holding a value of its own. Set for a parameter, a local and
     // the variable of a range-based for loop. Codegen passes a `const C&` of a class type as the object itself.
     bool isRef = false;
+    // Set by the capture check: a lambda that may outlive this function shares it, so it lives in a counted box of its own,
+    // made where it is declared, which the lambda holds too. For a loop's own variable, each round has a new one.
+    bool boxed = false;
+    bool sharedByLambda = false;  // some lambda shares it, which a `move` of it inside the lambda cannot be tracked through
     ExprPtr init;
     const Type* type = nullptr;  // resolved by Sema
     VarDecl(Loc nameLoc, std::string n, const Type* t, Loc tl)
@@ -840,11 +885,58 @@ struct FuncDecl {
     std::vector<BaseInit> baseInits;
     std::optional<BaseInit> delegation;  // `User(string n) : User(n, 0) {}`: another constructor of its type builds the object
     std::unique_ptr<VarDecl> thisDecl;  // stands for `this` in definite assignment; set by Sema
+    // The lambda this is the body of. Its `owner` is that of the method it is written in, whose fields it can reach when it
+    // captures `this`.
+    LambdaExpr* lambda = nullptr;
+    // Set by the capture check, for a parameter of a function type: whether the function only calls it, or passes it on to
+    // parameters that only call theirs, so that a lambda given for it is borrowed.
+    std::vector<bool> paramBorrows;
 
     // What the body returns, which for an async function is not what a call gives.
     const Type* bodyRet() const { return isAsync && declaredRet ? declaredRet : retType; }
     // Whether the call itself can fail. An async function's error goes in its task, and comes out of waiting for it.
     bool callFails() const { return isThrows && !isAsync; }
+};
+
+
+// `[&](int x) -> int { return x + n; }`. Its type is a `function<R(Args...)>`; its body is the function `fn`, which also takes
+// what it captured.
+struct LambdaExpr : Expr {
+    // One entry of the capture list, as written.
+    struct Capture {
+        enum class Mode { Copy, Share, This, CopyThis, Init };  // `x`, `&x`, `this`, `*this`, `n = 0`
+        Mode mode;
+        std::string name;
+        Loc loc;
+        std::unique_ptr<VarDecl> var;  // for Init: the variable the closure holds, with its value as `init`
+    };
+    enum class Default { None, Copy, Share };  // `[=]`, `[&]`
+    Default byDefault = Default::None;
+    Loc defaultLoc;
+    std::vector<Capture> written;
+    bool returnWritten = false;  // `-> R`
+    bool returnInferred = false;  // set by Sema: the first `return` with a value said what it returns
+    std::unique_ptr<FuncDecl> fn;
+    // Set by Sema: each variable from around it that the body uses, in the order first used, and how.
+    struct Captured {
+        VarDecl* var;
+        bool shares;     // by reference: the lambda and the function use one variable
+        Loc at;          // its first use in the body
+        bool self = false;  // `function<int(int)> fib = [&](int n) { ... fib(n - 1) ... };`: the lambda itself
+    };
+    std::vector<Captured> captured;
+    bool capturesThis = false;  // the object a method runs on, for its fields and methods
+    bool copiesThis = false;    // `[*this]`, or a struct's `this` in a const method that the lambda keeps: a copy of it
+    // Set by the capture check: whether it can outlive the code it is written in, which then keeps what it needs alive.
+    // A borrowed one is only called before the function it is written in goes on, and boxes nothing.
+    bool kept = true;
+    const FuncDecl* enclosing = nullptr;  // the function or lambda it is written in
+    explicit LambdaExpr(Loc l) : Expr(Kind::Lambda, l) {}
+    const Captured* capture(const VarDecl* v) const {
+        for (auto& c : captured)
+            if (c.var == v) return &c;
+        return nullptr;
+    }
 };
 
 
@@ -1101,6 +1193,24 @@ inline bool holdsUnique(const Type* t, std::vector<const StructDecl*>& seen) {
 inline bool holdsUnique(const Type* t) {
     std::vector<const StructDecl*> seen;
     return holdsUnique(t, seen);
+}
+
+// Whether a value of this type holds a function, directly or inside, which makes it something that cannot be compared. A class
+// object is compared by which one it is, so what it holds does not count.
+inline bool holdsFunction(const Type* t, std::vector<const StructDecl*>& seen) {
+    if (t->isFunction()) return true;
+    if (t->isOptional() || t->isVector() || t->isArray()) return holdsFunction(t->elem, seen);
+    if (!t->isStruct()) return false;
+    for (const StructDecl* d : seen)
+        if (d == t->decl) return false;
+    seen.push_back(t->decl);
+    for (auto& f : t->decl->fields)
+        if (holdsFunction(f.type, seen)) return true;
+    return false;
+}
+inline bool holdsFunction(const Type* t) {
+    std::vector<const StructDecl*> seen;
+    return holdsFunction(t, seen);
 }
 
 // The modules that come with the language, which an import adds to the program. See Builtins.h.

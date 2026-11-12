@@ -84,6 +84,8 @@ private:
     void rejectOtherLanguages();  // at the start of something: a word of another language, which is not a name here
     [[noreturn]] void failStd(Loc loc, const Token& name);
     const Type* parseBaseType(Loc& loc);
+    const Type* parseFunctionType(const Token& word, Loc& loc);
+    ExprPtr parseLambda();  // at the '['
     ExprPtr parseCoalesce();
     void addBuiltins();  // what is written in C+ itself, for a program that uses it. See Builtins.h
     void joinThrowingTasks();

@@ -1,0 +1,45 @@
+// Lambdas that this compiler cannot make yet.
+async int later() { return 1; }
+async int awaitInside() {
+    auto f = [] { return await later(); };
+    // error: this compiler does not support `await` inside a lambda yet
+    return f();
+}
+async int keptAsyncParam(int x) {
+    vector<function<int()>> fs;
+    fs.push_back([&] { return x; });
+    // error: this compiler does not support a lambda that is kept sharing a parameter of an async function yet
+    return 1;
+}
+vector<function<int()>> fs;
+void refLocal() {
+    vector<int> v = {1};
+    int& r = v[0];
+    auto f = [&] { return r; };
+    // error: this compiler does not support a lambda sharing a reference variable yet
+    for (auto& x : v) {
+        auto k = [&] { x += 1; };
+        // error: this compiler does not support a lambda sharing a reference variable yet
+    }
+}
+void condShared() {
+    int? maybe = 3;
+    if (auto got = maybe) {
+        fs.push_back([&] { return got; });
+        // error: this compiler does not support a lambda that is kept sharing a variable declared in a condition or a `catch` yet
+    }
+}
+void moves() {
+    vector<int> v = {1};
+    auto f = [&] { return v.size(); };
+    auto w = move(v);
+    // error: this compiler does not support moving from a variable that a lambda shares yet
+    auto g = [v = move(w)] { return move(v); };
+    // error: 'v' cannot be moved, as the lambda holds 'v', which never changes
+}
+void spawnLambda() {
+    auto f = [] { return 1; };
+    auto t = spawn f();
+    // error: this compiler does not support `spawn` of a lambda or a function value yet
+}
+int main() { return 0; }

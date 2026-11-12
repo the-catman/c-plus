@@ -1,0 +1,19 @@
+// A lambda that is kept, in a variable, a field or a vector, or returned, can outlive what it shares.
+function<int()> refParam(int& out) {
+    return [&] { return out; };
+    // error: 'out' is the caller's variable, which this lambda can outlive
+}
+struct S {
+    int v = 0;
+    function<int()> leak() {
+        return [this] { return v; };
+        // error: a lambda that is kept cannot share the struct that the method runs on, which may be gone by then
+    }
+};
+function<void()> lockGuard() {
+    Mutex m = Mutex();
+    LockGuard g = LockGuard(m);
+    return [&] { println("{}", 1); g; };
+    // error: a lambda that is kept cannot share a LockGuard, which unlocks when its block ends
+}
+int main() { return 0; }

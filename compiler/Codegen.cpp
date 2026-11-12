@@ -240,6 +240,32 @@ struct Codegen::Impl {
     std::unordered_map<const VarDecl*, Rederived> rederived;
     const NameExpr* rederiving = nullptr;  // the use of a reference whose element is being found, for the message if it is gone
 
+    // Lambdas. A value of a function type is { ptr code, ptr env }: the code takes the env first, then what the function
+    // takes. The env is what the lambda captured, laid out as { i64 count, ptr table, slots... }; the table is laid out as a
+    // vtable is, so a leak report can say what it is, and has the env's destroy helper and whether its memory is the heap's.
+    // A lambda that is kept has its env on the heap; a borrowed one has it on the stack of the function that made it. A
+    // lambda that captures nothing has none. A function used by its name is a lambda with no env, that calls it.
+    llvm::StructType* fnTy = nullptr;
+    llvm::StructType* tableTy = nullptr;  // { ptr parts (null), i64 on the heap, ptr destroy, ptr print (null), ptr type }
+    llvm::Function* countedRelease = nullptr;  // void(ptr): releases an env or a box, see countedReleaseFunction
+    llvm::Function* countedRetain = nullptr;
+    struct LambdaInfo {
+        llvm::Function* code = nullptr;
+        llvm::StructType* env = nullptr;  // null when it captures nothing
+        llvm::Constant* heapTable = nullptr;
+        llvm::Constant* stackTable = nullptr;
+    };
+    std::unordered_map<const LambdaExpr*, LambdaInfo> lambdaInfos;
+    std::vector<const LambdaExpr*> lambdaQueue;  // lambdas whose code is still to be generated
+    std::unordered_map<const FuncDecl*, llvm::Function*> valueThunks;  // a function used as a value: see functionThunk
+    std::unordered_map<const Type*, std::vector<std::unique_ptr<VarDecl>>> fnParams;  // what a function type takes, for genArguments
+    // A variable that a kept lambda shares lives in a box, { i64 count, ptr table, T value }, which the lambda holds too. The
+    // place each one's box is in: a slot of the function, or of the env of the lambda that shares it.
+    std::unordered_map<const VarDecl*, llvm::Value*> boxSlots;
+    std::unordered_map<const Type*, llvm::Constant*> boxTables;
+    llvm::Constant* lambdaDescriptor = nullptr;
+    llvm::Constant* boxDescriptor = nullptr;
+
     Impl(const SourceFile& f, CodegenOptions o) : file(f), opts(o), b(ctx) { files.push_back(&f); }
 
     // ---- Setup -------------------------------------------------------------
@@ -437,6 +463,7 @@ struct Codegen::Impl {
             case K::Array: return llvm::ArrayType::get(llvmType(t->elem), (uint64_t)t->length);
             case K::Class: case K::Vector: case K::Null: case K::Pointer: case K::Weak: case K::Unique: case K::Local: return b.getPtrTy();
             case K::Enum: return llvmType(t->decl->underlying);  // its number
+            case K::Function: return fnTy;
             // An optional class reference is a pointer that may be null. Any other
             // optional is { i1 has, T value }, and its value is all zero bytes when it
             // has none, so retaining or releasing it is harmless either way.
@@ -504,7 +531,7 @@ struct Codegen::Impl {
     // vector buffers, string buffers), which are retained when the value is copied and
     // released when it goes away.
     bool isManaged(const Type* t) {
-        if (t->isObjectRef() || t->isVector() || t->is(K::String) || t->isWeak()) return true;
+        if (t->isObjectRef() || t->isVector() || t->is(K::String) || t->isWeak() || t->isFunction()) return true;
         if (t->isOptional() || t->isArray()) return isManaged(t->elem);
         if (!t->isStruct()) return false;
         TypeInfo& info = types.at(t->decl);
@@ -835,6 +862,7 @@ struct Codegen::Impl {
         else if (t->isWeak()) b.CreateCall(rtWeakRetain, {v});
         else if (t->isVector()) b.CreateCall(rtRetain, {v});
         else if (t->is(K::String)) b.CreateCall(rtRetain, {b.CreateExtractValue(v, 2, "owner")});
+        else if (t->isFunction()) b.CreateCall(countedRetainFunction(), {b.CreateExtractValue(v, 1, "env")});
         else if (!isManaged(t)) return;
         else if (t->isArray()) b.CreateCall(arrayInfo(t).retain, {v});
         else b.CreateCall(types.at(t->decl).retain, {v});
@@ -850,6 +878,8 @@ struct Codegen::Impl {
             b.CreateCall(rtWeakRelease, {v});
         } else if (t->is(K::String)) {
             b.CreateCall(rtStrRelease, {b.CreateExtractValue(v, 2, "owner")});
+        } else if (t->isFunction()) {
+            b.CreateCall(countedReleaseFunction(), {b.CreateExtractValue(v, 1, "env")});
         } else if (t->isVector()) {
             VecInfo& info = vecInfo(t);
             b.CreateCall(rtVecRelease, {v, b.getInt64(info.elemSize), info.releaseElem});
@@ -1581,8 +1611,13 @@ struct Codegen::Impl {
     // Releases the locals of every scope from `depth` on, innermost first.
     void releaseScopes(size_t depth) {
         for (size_t i = scopes.size(); i-- > depth;)
-            for (auto it = scopes[i].rbegin(); it != scopes[i].rend(); ++it)
+            for (auto it = scopes[i].rbegin(); it != scopes[i].rend(); ++it) {
+                if (auto box = boxSlots.find(*it); box != boxSlots.end()) {  // what lambdas share lives on in its box while they do
+                    b.CreateCall(countedReleaseFunction(), {b.CreateLoad(b.getPtrTy(), box->second, (*it)->name + ".box")});
+                    continue;
+                }
                 releaseValue(peekValue((*it)->type, locals.at(*it), (*it)->name.c_str()), (*it)->type);
+            }
     }
 
     void popScope() {
@@ -1869,6 +1904,7 @@ struct Codegen::Impl {
             case K::Class: case K::Vector: case K::Pointer: case K::Weak: case K::Unique: case K::Local:
                 return llvm::ConstantPointerNull::get(b.getPtrTy());
             case K::Optional: return zeroValue(t);  // null
+            case K::Function: return llvm::Constant::getNullValue(fnTy);  // no code: Sema makes sure it is given a value before a call
             case K::Enum: return llvm::ConstantInt::get(llvmType(t), 0);  // the enumerator whose value is 0: Sema makes sure there is one
             default: llvm_unreachable("no default value for this type");
         }
@@ -2097,9 +2133,9 @@ struct Codegen::Impl {
     // a vector or an array stored in one of those.
     static bool isPlace(const Expr& e) {
         switch (e.kind) {
-            case Expr::Kind::Name: {  // a constant is not stored anywhere: see genRaw
+            case Expr::Kind::Name: {  // a constant is not stored anywhere, nor is a function used as a value: see genRaw
                 const VarDecl* decl = static_cast<const NameExpr&>(e).decl;
-                return !(decl && decl->isTopLevel);
+                return !(decl && decl->isTopLevel) && !static_cast<const NameExpr&>(e).function;
             }
             case Expr::Kind::This: return !e.type->isClass();
             case Expr::Kind::Member: {
@@ -2351,6 +2387,7 @@ struct Codegen::Impl {
                 auto& n = static_cast<const NameExpr&>(e);
                 if (n.implicitField >= 0)
                     return fieldAddress(&n.path.back()->type, atOffset(thisPtr, pathOffset(n.path)), n.implicitField, n.name);
+                if (auto it = boxSlots.find(n.decl); it != boxSlots.end()) return boxedValue(*n.decl, it->second);
                 if (auto it = rederived.find(n.decl); it != rederived.end()) return rederive(it->second, &n, hold, write);
                 if (n.decl->isGlobal) return globalAddress(*n.decl);
                 return locals.at(n.decl);
@@ -2489,6 +2526,10 @@ struct Codegen::Impl {
                 // A constant is a literal by now, or a function of its own for what must happen
                 // when it is used, such as a pointer's value or stopping at `1 / 0`.
                 const VarDecl* decl = static_cast<const NameExpr&>(e).decl;
+                if (const FuncDecl* f = static_cast<const NameExpr&>(e).function) {  // `square`, as a value: it has no env
+                    owned = true;
+                    return llvm::ConstantStruct::get(fnTy, {functionThunk(*f), llvm::ConstantPointerNull::get(b.getPtrTy())});
+                }
                 if (decl && decl->isTopLevel) {
                     owned = true;
                     if (auto it = constantFunctions.find(decl); it != constantFunctions.end())
@@ -2693,7 +2734,14 @@ struct Codegen::Impl {
             }
             case Expr::Kind::Spawn: owned = true; return genSpawn(static_cast<const SpawnExpr&>(e));
             case Expr::Kind::Await: owned = true; return genAwait(static_cast<const AwaitExpr&>(e));
-            case Expr::Kind::Call: owned = true; return genCall(static_cast<const CallExpr&>(e));
+            case Expr::Kind::Call: {
+                auto& call = static_cast<const CallExpr&>(e);
+                if (call.lowered) return genRaw(*call.lowered, owned);
+                owned = true;
+                return genCall(call);
+            }
+            case Expr::Kind::Lambda: owned = true; return genLambda(static_cast<const LambdaExpr&>(e));
+            case Expr::Kind::CallValue: owned = true; return genCallValue(static_cast<const CallValueExpr&>(e));
             case Expr::Kind::MethodCall: {
                 auto& call = static_cast<const MethodCallExpr&>(e);
                 if (call.lowered) return genRaw(*call.lowered, owned);
@@ -2888,6 +2936,11 @@ struct Codegen::Impl {
             case K::Vector: return b.CreateCall(vecInfo(t).equals, {l, r});
             case K::Array: return b.CreateCall(arrayInfo(t).equals, {l, r});
             case K::Null: return b.getInt1(true);
+            // Sema lets no program compare functions, but `f == null` on a `function<...>?`, and the helpers of what holds
+            // them are made all the same: the same code with the same env.
+            case K::Function:
+                return b.CreateAnd(b.CreateICmpEQ(b.CreateExtractValue(l, 0), b.CreateExtractValue(r, 0)),
+                                   b.CreateICmpEQ(b.CreateExtractValue(l, 1), b.CreateExtractValue(r, 1)));
             case K::Optional: {
                 // Both null, or both holding equal values. An empty optional holds zero
                 // bytes, which compare safely.
@@ -2988,6 +3041,7 @@ struct Codegen::Impl {
                 break;
             }
             case K::Pointer: b.CreateCall(rtPrintPtr, {out, v}); break;  // the address, as std::format prints a void*
+            case K::Function: printText(out, "function"); break;  // what it does is not something it can say
             case K::Enum: b.CreateCall(enumPrinter(*t->decl), {v, out}); break;
             case K::Optional: {
                 auto* someBB = llvm::BasicBlock::Create(ctx, "print.value", fn);
@@ -3587,6 +3641,380 @@ struct Codegen::Impl {
     // Calls a function of the program. One that returns a value handled through its address
     // writes it to memory the caller gives it, as a hidden first argument.
     // With `dispatch`, a virtual method is found through the vtable of `this`, the first of `args`.
+    // ---- Lambdas -----------------------------------------------------------
+
+    // void(ptr): lets go of an env or a box, which goes away with the last reference to it: its destroy helper releases what
+    // it holds, and memory on the heap is freed. A borrowed lambda's env is on the stack of the thread that made it, and never
+    // reaches another, so its count is changed without atomics, which lets the optimizer see through it.
+    llvm::Function* countedReleaseFunction() {
+        if (countedRelease) return countedRelease;
+        countedRelease = internalFunction("cplus.release_counted", b.getVoidTy(), {b.getPtrTy()});
+        SavedPoint saved(*this);
+        startHelper(countedRelease);
+        llvm::Value* p = countedRelease->getArg(0);
+        auto* countBB = llvm::BasicBlock::Create(ctx, "count", fn);
+        auto* heapBB = llvm::BasicBlock::Create(ctx, "heap", fn);
+        auto* stackBB = llvm::BasicBlock::Create(ctx, "stack", fn);
+        auto* lastBB = llvm::BasicBlock::Create(ctx, "last", fn);
+        auto* destroyBB = llvm::BasicBlock::Create(ctx, "destroy", fn);
+        auto* freeCheckBB = llvm::BasicBlock::Create(ctx, "free.check", fn);
+        auto* freeBB = llvm::BasicBlock::Create(ctx, "free", fn);
+        auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
+        b.CreateCondBr(b.CreateIsNull(p), doneBB, countBB);
+        b.SetInsertPoint(countBB);
+        llvm::Value* table = b.CreateLoad(b.getPtrTy(), byteOffset(p, kObjectVtableOffset, "table.addr"), "table");
+        llvm::Value* heap = b.CreateICmpNE(b.CreateLoad(b.getInt64Ty(), b.CreateStructGEP(tableTy, table, 1), "heap"), b.getInt64(0));
+        b.CreateCondBr(heap, heapBB, stackBB);
+        b.SetInsertPoint(heapBB);
+        b.CreateCondBr(b.CreateICmpNE(b.CreateCall(rtRelease, {p}), b.getInt32(0)), lastBB, doneBB);
+        b.SetInsertPoint(stackBB);
+        llvm::Value* left = b.CreateSub(b.CreateLoad(b.getInt64Ty(), p, "count"), b.getInt64(1));
+        b.CreateStore(left, p);
+        b.CreateCondBr(b.CreateICmpEQ(left, b.getInt64(0)), lastBB, doneBB);
+        b.SetInsertPoint(lastBB);
+        llvm::Value* destroy = b.CreateLoad(b.getPtrTy(), b.CreateStructGEP(tableTy, table, kVtableDestroy), "destroy");
+        b.CreateCondBr(b.CreateIsNull(destroy), freeCheckBB, destroyBB);
+        b.SetInsertPoint(destroyBB);
+        b.CreateCall(llvm::FunctionType::get(b.getVoidTy(), {b.getPtrTy()}, false), destroy, {p});
+        b.CreateBr(freeCheckBB);
+        b.SetInsertPoint(freeCheckBB);
+        b.CreateCondBr(heap, freeBB, doneBB);
+        b.SetInsertPoint(freeBB);
+        b.CreateCall(rtFree, {p});
+        b.CreateBr(doneBB);
+        b.SetInsertPoint(doneBB);
+        b.CreateRetVoid();
+        return countedRelease;
+    }
+
+    // void(ptr): one more reference to an env or a box, counted as countedReleaseFunction lets go of them.
+    llvm::Function* countedRetainFunction() {
+        if (countedRetain) return countedRetain;
+        countedRetain = internalFunction("cplus.retain_counted", b.getVoidTy(), {b.getPtrTy()});
+        SavedPoint saved(*this);
+        startHelper(countedRetain);
+        llvm::Value* p = countedRetain->getArg(0);
+        auto* countBB = llvm::BasicBlock::Create(ctx, "count", fn);
+        auto* heapBB = llvm::BasicBlock::Create(ctx, "heap", fn);
+        auto* stackBB = llvm::BasicBlock::Create(ctx, "stack", fn);
+        auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
+        b.CreateCondBr(b.CreateIsNull(p), doneBB, countBB);
+        b.SetInsertPoint(countBB);
+        llvm::Value* table = b.CreateLoad(b.getPtrTy(), byteOffset(p, kObjectVtableOffset, "table.addr"), "table");
+        llvm::Value* heap = b.CreateICmpNE(b.CreateLoad(b.getInt64Ty(), b.CreateStructGEP(tableTy, table, 1), "heap"), b.getInt64(0));
+        b.CreateCondBr(heap, heapBB, stackBB);
+        b.SetInsertPoint(heapBB);
+        b.CreateCall(rtRetain, {p});
+        b.CreateBr(doneBB);
+        b.SetInsertPoint(stackBB);
+        b.CreateStore(b.CreateAdd(b.CreateLoad(b.getInt64Ty(), p, "count"), b.getInt64(1)), p);
+        b.CreateBr(doneBB);
+        b.SetInsertPoint(doneBB);
+        b.CreateRetVoid();
+        return countedRetain;
+    }
+
+    // A descriptor that only names what something is, for a leak report.
+    llvm::Constant* namedDescriptor(const std::string& name, const std::string& symbol) {
+        llvm::Constant* none = llvm::ConstantPointerNull::get(b.getPtrTy());
+        auto* init = llvm::ConstantStruct::get(descriptorType(), {b.getInt64(CPLUS_KIND_OTHER), cstring(name), b.getInt64(0), none, b.getInt64(0), none,
+                                                                  b.getInt64(0), none, none, none, none});
+        return new llvm::GlobalVariable(*mod, descriptorType(), true, llvm::GlobalValue::InternalLinkage, init, symbol);
+    }
+
+    llvm::Constant* countedTable(bool heap, llvm::Constant* destroy, llvm::Constant* type, const std::string& symbol) {
+        llvm::Constant* none = llvm::ConstantPointerNull::get(b.getPtrTy());
+        auto* init = llvm::ConstantStruct::get(tableTy, {none, b.getInt64(heap ? 1 : 0), destroy ? destroy : none, none, type});
+        return new llvm::GlobalVariable(*mod, tableTy, true, llvm::GlobalValue::InternalLinkage, init, symbol);
+    }
+
+    llvm::StructType* boxType(const Type* t) { return llvm::StructType::get(ctx, {b.getInt64Ty(), b.getPtrTy(), llvmType(t)}); }
+
+    llvm::Constant* boxTable(const Type* t) {
+        auto [it, inserted] = boxTables.try_emplace(t, nullptr);
+        if (!inserted) return it->second;
+        llvm::Function* destroy = nullptr;
+        if (isManaged(t)) {
+            destroy = internalFunction(std::string("cplus.box#destroy.") + t->name, b.getVoidTy(), {b.getPtrTy()});
+            SavedPoint saved(*this);
+            startHelper(destroy);
+            releaseValue(peekValue(t, b.CreateStructGEP(boxType(t), destroy->getArg(0), 2)), t);
+            b.CreateRetVoid();
+        }
+        if (!boxDescriptor) boxDescriptor = namedDescriptor("a variable that a lambda shares", "cplus.type.box");
+        return it->second = countedTable(true, destroy, boxDescriptor, std::string("cplus.box#table.") + t->name);
+    }
+
+    // A box for a variable that a kept lambda shares, holding `value`, which it takes over, or zero bytes for none.
+    llvm::Value* newBox(const VarDecl& v, llvm::Value* value) {
+        llvm::StructType* type = boxType(v.type);
+        llvm::Value* box = b.CreateCall(rtAlloc, {b.getInt64(mod->getDataLayout().getTypeAllocSize(type))}, v.name + ".box");
+        b.CreateStore(boxTable(v.type), b.CreateStructGEP(type, box, 1));
+        if (value) storeValue(value, v.type, b.CreateStructGEP(type, box, 2));
+        return box;
+    }
+
+    // Declares a variable that lives in a box.
+    void makeBox(const VarDecl& v, llvm::Value* value) {
+        llvm::AllocaInst* slot = entryAlloca(b.getPtrTy(), v.name + ".box");
+        b.CreateStore(newBox(v, value), slot);
+        boxSlots[&v] = slot;
+    }
+
+    // Where the value of a boxed variable is, in the box that `slot` holds.
+    llvm::Value* boxedValue(const VarDecl& v, llvm::Value* slot) {
+        return b.CreateStructGEP(boxType(v.type), b.CreateLoad(b.getPtrTy(), slot, v.name + ".box"), 2, v.name);
+    }
+
+    // A new box for a loop's variable, for the next round, with the value the old one has.
+    void renewBox(const VarDecl& v) {
+        llvm::Value* slot = boxSlots.at(&v);
+        llvm::Value* old = b.CreateLoad(b.getPtrTy(), slot, v.name + ".box");
+        llvm::Value* value = peekValue(v.type, b.CreateStructGEP(boxType(v.type), old, 2));
+        retainValue(value, v.type);
+        b.CreateStore(newBox(v, value), slot);
+        b.CreateCall(countedReleaseFunction(), {old});
+    }
+
+    // Where a variable is, for a lambda that captures it, as addressOf finds it for its name.
+    llvm::Value* varAddress(const VarDecl& v) {
+        if (auto it = boxSlots.find(&v); it != boxSlots.end()) return boxedValue(v, it->second);
+        if (auto it = rederived.find(&v); it != rederived.end()) return rederive(it->second, nullptr, /*hold=*/false, /*write=*/false);
+        if (v.isGlobal) return globalAddress(v);
+        return locals.at(&v);
+    }
+
+    // The LLVM type of the code of a function value: [result], env, parameters, [error].
+    llvm::FunctionType* codeType(const Type* ft) {
+        std::vector<llvm::Type*> params;
+        bool result = inMemory(ft->elem);
+        if (result) params.push_back(b.getPtrTy());
+        params.push_back(b.getPtrTy());
+        for (auto& p : paramsOf(ft)) params.push_back(passedByRef(*p) ? b.getPtrTy() : valueType(p->type));
+        if (ft->throws) params.push_back(b.getPtrTy());
+        return llvm::FunctionType::get(result ? b.getVoidTy() : llvmType(ft->elem), params, false);
+    }
+
+    // Parameters for what a function type takes, which genArguments passes arguments to.
+    const std::vector<std::unique_ptr<VarDecl>>& paramsOf(const Type* ft) {
+        auto [it, inserted] = fnParams.try_emplace(ft);
+        if (inserted)
+            for (size_t i = 0; i < ft->params->size(); ++i) {
+                const Type::Param& p = (*ft->params)[i];
+                auto v = std::make_unique<VarDecl>(Loc{}, "arg" + std::to_string(i), p.type, Loc{});
+                v->type = p.type;
+                v->isRef = p.isRef;
+                v->isConst = p.isConst;
+                v->isParam = true;
+                it->second.push_back(std::move(v));
+            }
+        return it->second;
+    }
+
+    // What each slot of a lambda's env holds, in order: each variable it captures, but itself; `this`; then the variables
+    // of its capture list that it has values for.
+    struct EnvSlot {
+        enum Kind { Copy, Box, Address, CopyThis, This, Init } kind;
+        const VarDecl* var;
+    };
+    std::vector<EnvSlot> envSlots(const LambdaExpr& l) {
+        std::vector<EnvSlot> out;
+        for (auto& c : l.captured) {
+            if (c.self) continue;
+            out.push_back({!c.shares ? EnvSlot::Copy : c.var->boxed ? EnvSlot::Box : EnvSlot::Address, c.var});
+        }
+        if (l.capturesThis) out.push_back({l.copiesThis ? EnvSlot::CopyThis : EnvSlot::This, nullptr});
+        for (auto& c : l.written)
+            if (c.mode == LambdaExpr::Capture::Mode::Init) out.push_back({EnvSlot::Init, c.var.get()});
+        return out;
+    }
+    llvm::Type* slotType(const LambdaExpr& l, const EnvSlot& s) {
+        switch (s.kind) {
+            case EnvSlot::Copy: case EnvSlot::Init: return llvmType(s.var->type);
+            case EnvSlot::CopyThis: return llvmType(&l.fn->owner->type);
+            default: return b.getPtrTy();
+        }
+    }
+
+    // The code of a lambda, declared the first time it is made, and generated once the functions are.
+    LambdaInfo& lambdaInfo(const LambdaExpr& l) {
+        auto [it, inserted] = lambdaInfos.try_emplace(&l);
+        LambdaInfo& info = it->second;
+        if (!inserted) return info;
+        const FuncDecl& f = *l.fn;
+        std::string name = fn->getName().str() + "#lambda" + std::to_string(l.loc.line) + "." + std::to_string(l.loc.col);
+        info.code = llvm::Function::Create(codeType(l.type), llvm::Function::InternalLinkage, name, mod.get());
+        unsigned first = inMemory(f.retType) ? 1 : 0;
+        if (first) info.code->getArg(0)->setName("result");
+        info.code->getArg(first)->setName("env");
+        for (size_t i = 0; i < f.params.size(); ++i) info.code->getArg(first + 1 + i)->setName(f.params[i]->name);
+        if (f.callFails()) info.code->getArg(info.code->arg_size() - 1)->setName("error");
+        funcs[&f] = info.code;
+        lambdaQueue.push_back(&l);
+        std::vector<EnvSlot> slots = envSlots(l);
+        if (slots.empty()) return info;
+        std::vector<llvm::Type*> fields{b.getInt64Ty(), b.getPtrTy()};
+        for (const EnvSlot& s : slots) fields.push_back(slotType(l, s));
+        info.env = llvm::StructType::get(ctx, fields);
+        // What the env holds is let go of with it.
+        llvm::Function* destroy = internalFunction(name + "#destroy", b.getVoidTy(), {b.getPtrTy()});
+        {
+            SavedPoint saved(*this);
+            startHelper(destroy);
+            llvm::Value* env = destroy->getArg(0);
+            for (size_t i = 0; i < slots.size(); ++i) {
+                llvm::Value* place = b.CreateStructGEP(info.env, env, (unsigned)(2 + i));
+                switch (slots[i].kind) {
+                    case EnvSlot::Copy: case EnvSlot::Init: releaseValue(peekValue(slots[i].var->type, place), slots[i].var->type); break;
+                    case EnvSlot::Box: b.CreateCall(countedReleaseFunction(), {b.CreateLoad(b.getPtrTy(), place)}); break;
+                    case EnvSlot::CopyThis: releaseValue(peekValue(&f.owner->type, place), &f.owner->type); break;
+                    case EnvSlot::This:
+                        if (f.owner->isClass) releaseValue(b.CreateLoad(b.getPtrTy(), place), &f.owner->type);
+                        break;
+                    case EnvSlot::Address: break;
+                }
+            }
+            b.CreateRetVoid();
+        }
+        if (!lambdaDescriptor) lambdaDescriptor = namedDescriptor("a lambda", "cplus.type.lambda");
+        if (l.kept) info.heapTable = countedTable(true, destroy, lambdaDescriptor, name + "#table");
+        else info.stackTable = countedTable(false, destroy, lambdaDescriptor, name + "#table");
+        return info;
+    }
+
+    // `[&](int x) { return x + n; }`: a function value that owns its env.
+    llvm::Value* genLambda(const LambdaExpr& l) {
+        LambdaInfo& info = lambdaInfo(l);
+        if (!info.env) return llvm::ConstantStruct::get(fnTy, {info.code, llvm::ConstantPointerNull::get(b.getPtrTy())});
+        const FuncDecl& f = *l.fn;
+        std::vector<EnvSlot> slots = envSlots(l);
+        // The values of the capture list come first, as they can run code, and fail.
+        size_t mark = pending.size();
+        std::vector<llvm::Value*> inits;
+        for (const EnvSlot& s : slots)
+            if (s.kind == EnvSlot::Init) inits.push_back(holdOwned(*s.var->init, s.var->type));
+        llvm::Value* env;
+        if (l.kept) {
+            env = b.CreateCall(rtAlloc, {b.getInt64(mod->getDataLayout().getTypeAllocSize(info.env))}, "env");
+            b.CreateStore(info.heapTable, b.CreateStructGEP(info.env, env, 1));
+        } else {  // made again each time the code runs: the one made before is gone by then
+            env = entryAlloca(info.env, "env");
+            b.CreateStore(b.getInt64(1), b.CreateStructGEP(info.env, env, 0));
+            b.CreateStore(info.stackTable, b.CreateStructGEP(info.env, env, 1));
+        }
+        size_t nextInit = 0;
+        for (size_t i = 0; i < slots.size(); ++i) {
+            llvm::Value* place = b.CreateStructGEP(info.env, env, (unsigned)(2 + i));
+            const VarDecl* v = slots[i].var;
+            switch (slots[i].kind) {
+                case EnvSlot::Copy: {
+                    llvm::Value* value = peekValue(v->type, varAddress(*v));
+                    retainValue(value, v->type);
+                    storeValue(value, v->type, place);
+                    break;
+                }
+                case EnvSlot::Box: {
+                    llvm::Value* box = b.CreateLoad(b.getPtrTy(), boxSlots.at(v), v->name + ".box");
+                    b.CreateCall(rtRetain, {box});  // a box is always on the heap
+                    b.CreateStore(box, place);
+                    break;
+                }
+                case EnvSlot::Address: b.CreateStore(varAddress(*v), place); break;
+                case EnvSlot::CopyThis: {
+                    const Type* t = &f.owner->type;
+                    llvm::Value* value = peekValue(t, thisPtr);
+                    retainValue(value, t);
+                    storeValue(value, t, place);
+                    break;
+                }
+                case EnvSlot::This:
+                    if (f.owner->isClass) retainValue(thisPtr, &f.owner->type);
+                    b.CreateStore(thisPtr, place);
+                    break;
+                case EnvSlot::Init: storeValue(inits[nextInit++], v->type, place); break;
+            }
+        }
+        pending.resize(mark);
+        llvm::Value* value = b.CreateInsertValue(llvm::PoisonValue::get(fnTy), info.code, 0);
+        return b.CreateInsertValue(value, env, 1, "lambda");
+    }
+
+    // At the start of a lambda's code: where what it captured is, in its env.
+    void enterLambda(const LambdaExpr& l, llvm::Value* env) {
+        LambdaInfo& info = lambdaInfos.at(&l);
+        for (auto& c : l.captured)
+            if (c.self) {  // itself, which its env does not hold
+                llvm::AllocaInst* self = entryAlloca(fnTy, c.var->name);
+                llvm::Value* value = b.CreateInsertValue(llvm::PoisonValue::get(fnTy), fn, 0);
+                b.CreateStore(b.CreateInsertValue(value, env, 1), self);
+                locals[c.var] = self;
+            }
+        std::vector<EnvSlot> slots = envSlots(l);
+        for (size_t i = 0; i < slots.size(); ++i) {
+            llvm::Value* place = b.CreateStructGEP(info.env, env, (unsigned)(2 + i));
+            const VarDecl* v = slots[i].var;
+            switch (slots[i].kind) {
+                case EnvSlot::Copy: case EnvSlot::Init: locals[v] = place; break;
+                case EnvSlot::Box: boxSlots[v] = place; break;
+                case EnvSlot::Address: locals[v] = b.CreateLoad(b.getPtrTy(), place, v->name); break;
+                case EnvSlot::CopyThis: thisPtr = place; break;
+                case EnvSlot::This: thisPtr = b.CreateLoad(b.getPtrTy(), place, "this"); break;
+            }
+        }
+    }
+
+    // `f(x)`, through a function value. The value is held while the call runs, as the call could replace it.
+    llvm::Value* genCallValue(const CallValueExpr& call) {
+        const Type* ft = call.callee->type;
+        const Expr& callee = *call.callee;
+        llvm::Value* value;
+        const VarDecl* var = callee.kind == Expr::Kind::Name ? static_cast<const NameExpr&>(callee).decl : nullptr;
+        if (var && !var->isGlobal && !var->isRef && !var->sharedByLambda && !var->boxed && !rederived.count(var)) {
+            value = b.CreateLoad(fnTy, addressOf(callee), var->name);  // only this function can change it, and it is busy here
+        } else {
+            value = gen(callee);
+        }
+        std::vector<llvm::Value*> args;
+        llvm::Value* result = nullptr;
+        if (inMemory(ft->elem)) {
+            result = entryAlloca(llvmType(ft->elem), "result");
+            args.push_back(result);
+        }
+        args.push_back(b.CreateExtractValue(value, 1, "env"));
+        const auto& params = paramsOf(ft);
+        std::vector<ArgSpec> specs;
+        for (size_t i = 0; i < call.args.size(); ++i) specs.push_back(argSpec(*call.args[i], *params[i]));
+        std::vector<Hold> held;
+        for (llvm::Value* v : genArguments(specs, held)) args.push_back(v);
+        if (ft->throws) args.push_back(errorPlace());
+        llvm::CallInst* inst = b.CreateCall(codeType(ft), b.CreateExtractValue(value, 0, "code"), args);
+        if (ft->throws) leaveOnError();
+        checkHeld(held, specs, var ? var->name : "the function", call.loc);
+        if (result) return result;
+        return ft->elem->is(K::Void) ? nullptr : inst;
+    }
+
+    // The code of a function used as a value, which takes an env it has no use for, and calls the function.
+    llvm::Function* functionThunk(const FuncDecl& f) {
+        auto [it, inserted] = valueThunks.try_emplace(&f, nullptr);
+        if (!inserted) return it->second;
+        llvm::Function* target = funcs.at(&f);
+        std::vector<Type::Param> params;
+        for (auto& p : f.params) params.push_back({p->type, p->isRef, p->isRef && p->isConst});
+        const Type* ft = Type::functionOf(f.retType, params, f.callFails());
+        llvm::Function* thunk = llvm::Function::Create(codeType(ft), llvm::Function::InternalLinkage, target->getName() + "#value", mod.get());
+        it->second = thunk;
+        llvm::IRBuilder<> tb(llvm::BasicBlock::Create(ctx, "entry", thunk));
+        std::vector<llvm::Value*> args;
+        unsigned env = inMemory(f.retType) ? 1 : 0;
+        for (unsigned i = 0; i < thunk->arg_size(); ++i)
+            if (i != env) args.push_back(thunk->getArg(i));
+        llvm::CallInst* inst = tb.CreateCall(target, args);
+        if (thunk->getReturnType()->isVoidTy()) tb.CreateRetVoid();
+        else tb.CreateRet(inst);
+        return thunk;
+    }
+
     llvm::Value* callFunction(const FuncDecl& f, std::vector<llvm::Value*> args, bool dispatch = false) {
         llvm::Value* result = emitCall(f, std::move(args), dispatch, f.callFails() ? errorPlace() : nullptr);
         if (f.callFails()) leaveOnError();
@@ -3938,11 +4366,16 @@ struct Codegen::Impl {
                     return;
                 }
                 llvm::Value* init = v.init ? genOwned(*v.init, v.type)
-                                    : v.type->is(K::String) || v.type->hasFields() || v.type->isVector() ||
-                                              v.type->isOptional() || v.type->isArray() || v.type->isWeak() || v.type->isUnique() || v.type->isLocal()
+                                    : v.type->is(K::String) || v.type->hasFields() || v.type->isVector() || v.type->isOptional() ||
+                                              v.type->isArray() || v.type->isWeak() || v.type->isUnique() || v.type->isLocal() || v.type->isFunction()
                                         ? genDefault(v.type)
                                         : nullptr;
                 flushTemps();
+                if (v.boxed) {
+                    makeBox(v, init);
+                    scopes.back().push_back(&v);
+                    return;
+                }
                 if (inMemory(v.type)) locals[&v] = init;  // the value's own memory becomes the variable
                 else if (init) b.CreateStore(init, allocaFor(v));
                 else allocaFor(v);
@@ -4043,6 +4476,16 @@ struct Codegen::Impl {
                 genBody(*st.body, endBB, stepBB);
                 b.CreateBr(stepBB);
                 b.SetInsertPoint(stepBB);
+                // A variable of the loop that a lambda shares is a new one each round, which starts with the value the last one had,
+                // so a lambda made in one round sees that round's.
+                if (st.init) {
+                    std::vector<const VarDecl*> own;
+                    if (st.init->kind == Stmt::Kind::VarDecl) own.push_back(static_cast<const VarDecl*>(st.init.get()));
+                    if (st.init->kind == Stmt::Kind::DeclGroup)
+                        for (auto& v : static_cast<const DeclGroupStmt&>(*st.init).decls) own.push_back(v.get());
+                    for (const VarDecl* v : own)
+                        if (v->boxed) renewBox(*v);
+                }
                 for (auto& step : st.steps) genDiscarded(*step);
                 b.CreateBr(condBB);
                 b.SetInsertPoint(endBB);
@@ -4199,8 +4642,13 @@ struct Codegen::Impl {
                                   : peekValue(vt->elem, elementAt(range, i, vt), "elem");
         llvm::Value* value = convert(elem, str ? Type::charTy() : vt->elem, var.type);
         retainValue(value, var.type);
-        storeValue(value, var.type, allocaFor(var));
-        if (isManaged(var.type)) scopes.back().push_back(&var);
+        if (var.boxed) {
+            makeBox(var, value);
+            scopes.back().push_back(&var);
+        } else {
+            storeValue(value, var.type, allocaFor(var));
+            if (isManaged(var.type)) scopes.back().push_back(&var);
+        }
         genScoped(*st.body);
         popScope();
         loops.pop_back();
@@ -4532,6 +4980,8 @@ struct Codegen::Impl {
         fn = funcs.at(&f);
         fnDecl = &f;
         locals.clear();
+        boxSlots.clear();
+        rederived.clear();
         errorOut = f.isThrows ? fn->getArg(fn->arg_size() - 1) : nullptr;
         localError = nullptr;
         b.SetInsertPoint(llvm::BasicBlock::Create(ctx, "entry", fn));
@@ -4545,13 +4995,19 @@ struct Codegen::Impl {
             endLineTable();
             return;
         }
-        unsigned first = (inMemory(f.retType) ? 1 : 0) + (f.owner ? 1 : 0);
-        thisPtr = f.owner ? fn->getArg(first - 1) : nullptr;
+        unsigned first = (inMemory(f.retType) ? 1 : 0) + (f.owner || f.lambda ? 1 : 0);
+        thisPtr = f.owner && !f.lambda ? fn->getArg(first - 1) : nullptr;
+        if (f.lambda) enterLambda(*f.lambda, fn->getArg(first - 1));
         // Parameters own their values, like locals, and are released when the function ends.
         scopes.emplace_back();
         for (size_t i = 0; i < f.params.size(); ++i) {
             if (passedByRef(*f.params[i])) {  // the caller's place, which the caller keeps
                 locals[f.params[i].get()] = fn->getArg(first + i);
+                continue;
+            }
+            if (f.params[i]->boxed) {  // a lambda that is kept shares it
+                makeBox(*f.params[i], fn->getArg(first + i));
+                scopes.back().push_back(f.params[i].get());
                 continue;
             }
             if (inMemory(f.params[i]->type)) locals[f.params[i].get()] = fn->getArg(first + i);  // the caller's copy
@@ -5191,7 +5647,9 @@ struct Codegen::Impl {
         };
         llvm::Value* left = place(info.equals->getArg(0));
         llvm::Value* right = place(info.equals->getArg(1));
-        b.CreateRet(callFunction(*sd.ownMethod("__same"), {left, right}));
+        // One whose values hold functions is never compared: Sema does not let it be.
+        if (holdsFunction(&sd.type)) b.CreateRet(b.getInt1(false));
+        else b.CreateRet(callFunction(*sd.ownMethod("__same"), {left, right}));
         defineFieldCounting(sd, info);
     }
 
@@ -5444,6 +5902,8 @@ struct Codegen::Impl {
         usesThreads = program.usesThreads;
         usesAsync = program.usesAsync;
         stringTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy()}, "cplus.string");
+        fnTy = llvm::StructType::create(ctx, {b.getPtrTy(), b.getPtrTy()}, "cplus.function");
+        tableTy = llvm::StructType::get(ctx, {b.getPtrTy(), b.getInt64Ty(), b.getPtrTy(), b.getPtrTy(), b.getPtrTy()});
         // Named types are created first and given bodies after, so they can refer to
         // each other in any order.
         // A C type known only by name has no layout; C+ only points to it.
@@ -5536,6 +5996,11 @@ struct Codegen::Impl {
             for (auto& m : sd->methods)
                 if (m->requested) defineFunction(*m);
         if (userMain) defineEntryPoint(*userMain);
+        while (!lambdaQueue.empty()) {  // a lambda's code can make more of them
+            const LambdaExpr* l = lambdaQueue.back();
+            lambdaQueue.pop_back();
+            defineFunction(*l->fn);
+        }
 
         // A large array on the stack must not step over the guard page below it into other
         // memory: each new page is touched in turn, so running out of stack always stops

@@ -38,9 +38,9 @@ enum class Role : uint8_t {
     CaseColon,      // `:` of `case 1:` or `default:`
 };
 
-const std::set<std::string> kTemplates = {"vector", "array", "hashmap", "Task", "unique", "local", "static_cast", "reinterpret_cast", "dynamic_cast",
+const std::set<std::string> kTemplates = {"vector", "array", "hashmap", "Task", "unique", "local", "function", "static_cast", "reinterpret_cast", "dynamic_cast",
                                           "const_cast", "same_as", "derived_from", "Comparable", "Number", "Integer", "Floating", "Hashable"};
-const std::set<std::string> kTypes = {"vector", "array", "hashmap", "Task", "unique", "local", "Error", "Mutex", "LockGuard"};
+const std::set<std::string> kTypes = {"vector", "array", "hashmap", "Task", "unique", "local", "function", "Error", "Mutex", "LockGuard"};
 
 bool isTypeKeyword(Tok k) {
     return k == Tok::KwInt || k == Tok::KwLong || k == Tok::KwChar || k == Tok::KwBool || k == Tok::KwDouble || k == Tok::KwFloat ||
@@ -99,6 +99,8 @@ public:
         kept_.assign(n, false);
         tail_.assign(n, false);
         enum_.assign(n, false);
+        lambda_.assign(n, false);
+        lambdaArrow_.assign(n, false);
     }
 
     void knowModuleNames(std::set<std::string> types, std::set<std::string> templates) {
@@ -128,6 +130,8 @@ private:
     std::vector<bool> kept_;       // `{` of a declaration's body, on one line with its `}`, which stays on one line
     std::vector<bool> tail_;       // `(` of the `while` that ends a `do`
     std::vector<bool> enum_;       // `{` of an enum, whose enumerators each start a line, or share one
+    std::vector<bool> lambda_;     // `{` of a lambda's body, which is a block wherever it is, and stays on one line if it is written so
+    std::vector<bool> lambdaArrow_;  // `->` before what a lambda returns, which has spaces around it
     std::set<std::string> types_, templates_;
     std::set<std::string> moduleTypes_, moduleTemplates_;  // of the modules the file imports, with their paths: `geo::Box`
     std::vector<Line> lines_;
@@ -311,6 +315,30 @@ private:
         return i == close;
     }
 
+    // Whether the token just before a `{` or a `->` ends the head of a lambda: `[&]`, `[](int x)`, `[]() throws`. A `[` that
+    // starts a lambda comes where a value starts, and one after a value indexes it.
+    bool lambdaHead(size_t p) const {
+        if (p == kNone) return false;
+        if (kind(p) == Tok::KwThrows) {
+            if (p == 0) return false;
+            --p;
+        }
+        if (kind(p) == Tok::RParen && match_[p] != kNone && match_[p] > 0) p = match_[p] - 1;
+        if (kind(p) != Tok::RBracket || match_[p] == kNone) return false;
+        const size_t open = match_[p];
+        return open == 0 || !endsValue(open - 1);
+    }
+
+    // Whether a `{` follows `-> R` of a lambda: what is between them can only be a type.
+    bool afterLambdaArrow(size_t brace) const {
+        for (size_t j = brace; j-- > 0 && brace - j < 64;) {
+            if (kind(j) == Tok::Arrow) return lambdaArrow_[j];
+            const Tok k = kind(j);
+            if (k == Tok::Semi || k == Tok::LBrace || k == Tok::RBrace || k == Tok::Assign) return false;
+        }
+        return false;
+    }
+
     // ---- What each token is ------------------------------------------------
 
     void findRoles() {
@@ -354,7 +382,10 @@ private:
                 const bool inExpression = !open.empty() && role_[open.back()] != Role::Block;
                 const bool amongDeclarations = block == kNone || container_[block];
                 bool isBlock = false;
-                if (inExpression) {
+                lambda_[i] = !typeAhead && (lambdaHead(p) || afterLambdaArrow(i));
+                if (lambda_[i]) {
+                    isBlock = true;
+                } else if (inExpression) {
                     isBlock = false;
                 } else if (typeAhead) {
                     isBlock = true;
@@ -377,7 +408,7 @@ private:
                 enumAhead = false;
                 typeAhead = false;
                 role_[i] = isBlock ? Role::Block : Role::Init;
-                decl_[i] = isBlock && amongDeclarations;
+                decl_[i] = isBlock && amongDeclarations && !lambda_[i];
                 open.push_back(i);
                 break;
             }
@@ -388,7 +419,7 @@ private:
                     match_[i] = o;
                     match_[o] = i;
                     role_[i] = role_[o];
-                    kept_[o] = decl_[o] && src_.find('\n', toks_[o].begin) >= toks_[i].begin;
+                    kept_[o] = (decl_[o] || lambda_[o]) && src_.find('\n', toks_[o].begin) >= toks_[i].begin;
                     open.pop_back();
                 }
                 break;
@@ -416,6 +447,9 @@ private:
                 dropTemplates();
                 typeAhead = false;
                 enumAhead = false;
+                break;
+            case Tok::Arrow:
+                lambdaArrow_[i] = lambdaHead(p);
                 break;
             case Tok::KwCase:
                 caseDepth = open.size();
@@ -475,6 +509,7 @@ private:
         if (ak == Tok::Semi) return bk != Tok::RParen;
         if (ak == Tok::LParen || ak == Tok::LBracket || bk == Tok::RParen || bk == Tok::RBracket) return false;
         if ((ak == Tok::LBrace && ar == Role::Init) || (bk == Tok::RBrace && br == Role::Init)) return false;
+        if ((ak == Tok::Arrow && lambdaArrow_[a]) || (bk == Tok::Arrow && lambdaArrow_[b])) return true;  // `[](int x) -> int {`
         if (ak == Tok::Dot || ak == Tok::Arrow || ak == Tok::QuestionDot || ak == Tok::ColonColon) return false;
         if (bk == Tok::Dot || bk == Tok::Arrow || bk == Tok::QuestionDot || bk == Tok::ColonColon) return false;
         if (ak == Tok::LBrace) return !(bk == Tok::RBrace && match_[a] == b);  // `{}` is empty, and `{ x }` is not

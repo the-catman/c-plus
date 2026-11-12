@@ -1,0 +1,27 @@
+// The forms that the spec's section on lambdas writes.
+int main() {
+    int x = 1;
+    auto bump = [&x] { x += 1; };
+    bump();
+    println("{}", x);
+    // expect: 2
+    auto root = [](double x) { return sqrt(x); };
+    println("{}", root(16.0));
+    // expect: 4
+    function<void()>? onDone = null;
+    println("{}", onDone != null);
+    // expect: false
+    onDone = [] { println("done"); };
+    if (onDone != null) println("set");
+    // expect: set
+    if (auto g = onDone) g();
+    // expect: done
+    auto start = [n = 0] { return n + 1; };
+    println("{}", start());
+    // expect: 1
+    vector<int> items = {1, 2, 3};
+    auto owns = [v = move(items)] { return v.size(); };
+    println("{}", owns());
+    // expect: 3
+    return 0;
+}

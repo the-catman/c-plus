@@ -1,0 +1,21 @@
+// A class that holds a lambda capturing a weak reference to itself is freed.
+class Timer {
+public:
+    int ticks = 0;
+    function<void()> tick = [] {};
+    Timer() {
+        weak<Timer> self = this;
+        tick = [self] {
+            if (auto t = self.lock()) t.ticks += 1;
+        };
+    }
+};
+int main() {
+    Timer t = Timer();
+    t.tick();
+    t.tick();
+    println("{}", t.ticks);
+    return 0;
+}
+
+// expect: 2

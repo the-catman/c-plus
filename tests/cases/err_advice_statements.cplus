@@ -99,7 +99,7 @@ void withAwait() {
 void callACall() {
     int g = 1;
     println("{}", (g)(1));
-    // error: write a function and call it by name, `f(x)`: C+ has no function values yet, so a value cannot be called
+    // error: 'g' has type 'int', which cannot be called
 }
 void strayElse() {
     else {}

@@ -15,10 +15,6 @@ void containersInExpressions() {
     auto q = queue<int>();
     // error: this compiler does not support 'queue' yet
 }
-void functionType() {
-    function<int(int)> f;
-    // error: write a function, and call it by name: C+ has no function values yet
-}
 void cFor() {
     for (let i = 0; i < 1; i++) {}
     // error: C+ declares a variable with its type, or `auto`
@@ -30,7 +26,7 @@ void cForType() {
 void arrowFunction() {
     int a = 1;
     auto f = (a) => a + 1;
-    // error: this compiler does not support lambdas yet
+    // error: C+ writes a lambda as C++ does, with no `=>`
 }
 void stdThings() {
     std::cerr << 1;

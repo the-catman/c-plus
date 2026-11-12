@@ -266,6 +266,8 @@ private:
             auto* n = static_cast<const NameExpr*>(e);
             if (n->decl) {
                 add(n->loc, describe(*n->decl), n->decl->loc);
+            } else if (n->function) {  // a function used as a value
+                add(n->loc, describe(*n->function), n->function->nameLoc);
             } else if (n->implicitField >= 0 && !n->path.empty()) {
                 const StructDecl* owner = n->path.back();
                 if ((size_t)n->implicitField < owner->fields.size())
@@ -275,6 +277,10 @@ private:
         }
         case Expr::Kind::Call: {
             auto* c = static_cast<const CallExpr*>(e);
+            if (c->lowered) {  // a call through a variable
+                expr(c->lowered.get());
+                break;
+            }
             if (const FuncDecl* f = c->target ? c->target : c->method) add(c->loc, describe(*f), f->nameLoc);
             else if (c->constructs) add(c->loc, describe(*c->constructs), c->constructs->nameLoc);
             for (auto& a : c->args) expr(a.get());
@@ -377,6 +383,28 @@ private:
         case Expr::Kind::Borrow: expr(static_cast<const BorrowExpr*>(e)->operand.get()); break;
         case Expr::Kind::Spawn: expr(static_cast<const SpawnExpr*>(e)->call.get()); break;
         case Expr::Kind::Await: expr(static_cast<const AwaitExpr*>(e)->task.get()); break;
+        case Expr::Kind::CallValue: {
+            auto* c = static_cast<const CallValueExpr*>(e);
+            expr(c->callee.get());
+            for (auto& a : c->args) expr(a.get());
+            break;
+        }
+        case Expr::Kind::Lambda: {  // what it captures by name, its parameters, and its body
+            auto* l = static_cast<const LambdaExpr*>(e);
+            for (auto& c : l->written) {
+                if (c.var) {
+                    var(c.var.get());
+                    continue;
+                }
+                for (auto& captured : l->captured)
+                    if (captured.var && captured.var->name == c.name) add(c.loc, describe(*captured.var), captured.var->loc);
+            }
+            if (!l->fn) break;
+            if (l->returnWritten) typeRef(l->fn->retTypeLoc, l->fn->retType, false);
+            for (auto& p : l->fn->params) var(p.get());
+            if (l->fn->body) stmt(l->fn->body.get());
+            break;
+        }
         case Expr::Kind::IntLit:
         case Expr::Kind::FloatLit:
         case Expr::Kind::CharLit:

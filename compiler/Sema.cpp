@@ -406,8 +406,17 @@ static bool isProgramsOwnMethod(const MethodCallExpr& call) { return call.method
 // Whether a call that can fail is anywhere in `e`, so that `try` has to be written before it wherever it goes.
 static bool hasFailingCall(const Expr& e) {
     switch (e.kind) {
+        case Expr::Kind::CallValue: {
+            auto& c = static_cast<const CallValueExpr&>(e);
+            if (c.callee->type && c.callee->type->isFunction() && c.callee->type->throws) return true;
+            if (hasFailingCall(*c.callee)) return true;
+            for (auto& a : c.args)
+                if (hasFailingCall(*a)) return true;
+            return false;
+        }
         case Expr::Kind::Call: {
             auto& c = static_cast<const CallExpr&>(e);
+            if (c.lowered) return hasFailingCall(*c.lowered);
             if (c.target && c.target->callFails()) return true;
             for (auto& a : c.args)
                 if (hasFailingCall(*a)) return true;
@@ -851,6 +860,14 @@ static std::string zeroOf(const Type* t) {
     if (t->isPointer()) return "null";
     if (t->isArray()) return "{...}";
     if (t->isEnum()) return enumSample(t);
+    if (t->isFunction()) {
+        std::string params;
+        for (size_t i = 0; i < t->params->size(); ++i) {
+            const Type::Param& p = (*t->params)[i];
+            params += (i ? ", " : "") + std::string(p.isConst ? "const " : "") + p.type->name + (p.isRef ? "& " : " ") + std::string(1, (char)('a' + i % 26));
+        }
+        return "[&](" + params + ") { ... }";
+    }
     return "0";
 }
 
@@ -874,7 +891,7 @@ static bool tooDeep(const std::string& path) { return std::count(path.begin(), p
 // A class reference cannot be empty, so a field holding one (directly or inside a
 // struct field) must be given a value when an object is built.
 static bool needsValue(const Type* t, int depth = 0) {
-    if (t->isObjectRef()) return true;
+    if (t->isObjectRef() || t->isFunction()) return true;
     if (t->isEnum()) return t->decl->zeroEnumerator() < 0;  // what a value of it starts as, without one
 
     if (t->isArray()) {  // its elements are made one by one, which may take a value or a constructor's arguments
@@ -1126,6 +1143,7 @@ void Sema::requireAssigned(Flow& flow, const VarDecl* var, const std::string& pa
         return;
     }
     if (var->isTopLevel || var->isGlobal || !flow.reachable || isAssigned(flow, var, type, path)) return;
+    if (capturedHere(var)) return;  // it had its value where the lambda was made
     std::string name = placeName(var, path);
     const auto moved = std::find_if(moveLog_.rbegin(), moveLog_.rend(), [&](auto& m) { return m.first == var; });
     if (initField_ && var == thisVar()) {
@@ -1288,12 +1306,23 @@ void Sema::reportUnknownName(const NameExpr& n) {
                      spec::Variables);
         return;
     }
-    if (funcs_.count(n.name) || (program_->findTemplate(n.name) && program_->findTemplate(n.name)->kind == TemplateDecl::Kind::Function)) {
-        diags_.error(n.loc, q(n.name) + " is a function, not a value", "call it, as in `" + n.name + "()`: functions can only be called for now", spec::Functions);
+    if (const TemplateDecl* t = program_->findTemplate(n.name); t && t->kind == TemplateDecl::Kind::Function) {
+        std::string params, args;
+        const size_t count = t->pattern ? t->pattern->params.size() : 1;
+        for (size_t i = 0; i < count; ++i) {
+            const std::string name(1, (char)('a' + i % 26));
+            params += (i ? ", int " : "int ") + name;
+            args += (i ? ", " : "") + name;
+        }
+        diags_.error(n.loc, q(n.name) + " is a generic function, which is not one value until its types are known",
+                     "write a lambda that calls it, with the types: `[](" + params + ") { return " + n.name + "(" + args + "); }`", spec::Lambdas);
         return;
     }
     if (isBuiltinFunction(n.name) || isMathFunction(n.name) || isCharFunction(n.name)) {
-        diags_.error(n.loc, q(n.name) + " is a function, not a value", "call it, as in `" + n.name + "(x)`: functions can only be called for now", spec::Functions);
+        diags_.error(n.loc, q(n.name) + " is built in, and cannot be used as a value",
+                     isMathFunction(n.name) || isCharFunction(n.name) ? "write a lambda that calls it: `[](double x) { return " + n.name + "(x); }`"
+                                                                      : "write a lambda that calls it: `[](string s) { " + n.name + "(\"{}\", s); }`",
+                     spec::Lambdas);
         return;
     }
     if (n.name == "vector" || n.name == "array" || n.name == "hashmap") {
@@ -1310,7 +1339,10 @@ void Sema::reportUnknownName(const NameExpr& n) {
         if (isMethod) {
             const FuncDecl* method = nullptr;
             for (const StructDecl* d = o; d && !method; d = d->bases.empty() ? nullptr : d->bases[0]) method = d->findMethod(n.name);
-            diags_.error(n.loc, q(n.name) + " is a method, not a value", "call it with `" + n.name + (method && !method->params.empty() ? "(...)" : "()") + "`", spec::Methods);
+            diags_.error(n.loc, q(n.name) + " is a method, not a value",
+                         "call it with `" + n.name + (method && !method->params.empty() ? "(...)" : "()") + "`, or for a value that calls it, write a lambda: `[this] { " + n.name +
+                             (method && !method->params.empty() ? "(...)" : "()") + "; }`",
+                         spec::Methods);
             return;
         }
     }
@@ -1533,6 +1565,7 @@ void Sema::check(Program& program) {
             progress = true;
         }
     }
+    checkCaptures(program);
 }
 
 void Sema::adoptTypes() {
@@ -1571,7 +1604,7 @@ void Sema::checkNewStructs() {
         checkMembers(sd);
         if (sd.templateOf) diags_.popContext();
         if (isHashmap(&sd.type)) {
-            mapMethod(&sd.type, "__same");  // for ==, wherever it is hidden in other types
+            if (!holdsFunction(&sd.type)) mapMethod(&sd.type, "__same");  // for ==, wherever it is hidden in other types
             if (program_->buildsFromDescriptors()) mapMethod(&sd.type, "__put");  // for reading JSON, which goes by descriptors
         }
         // A generic class's other methods wait until they are used, as in C++, so that it
@@ -2715,26 +2748,30 @@ std::string Sema::whereAnErrorCanGo() const {
         const std::string type = fn_->owner ? fn_->owner->name : "T";
         return handle + ", or write a function that can fail and makes the object: `" + type + " make(...) throws { ...; return " + type + "(...); }`";
     }
+    if (fn_->lambda) return "mark the lambda: `[...](...) throws { ... }`, or " + handle;
     return "mark it: `... " + (fn_->name == "main" ? std::string("main()") : fn_->name.substr(0, fn_->name.find('<')) + "(...)") + " throws { ... }`, or " + handle;
 }
 
 void Sema::checkCanFail(const FuncDecl& callee, Loc loc, const Expr* receiver) {
-    if (!callee.callFails()) return;
+    if (callee.callFails()) checkCanFailNamed(callee.name, loc, receiver);
+}
+
+void Sema::checkCanFailNamed(const std::string& calleeName, Loc loc, const Expr* receiver) {
     ++failPoints_;
     if (defaultOf_) {
-        diags_.error(loc, "the default value of " + q(defaultOf_->name) + " calls " + q(callee.name) + ", which can fail, and a default value cannot",
-                     "use a value that cannot fail, or leave the default out and have each call give the value, with `try` where it calls " + q(callee.name),
+        diags_.error(loc, "the default value of " + q(defaultOf_->name) + " calls " + q(calleeName) + ", which can fail, and a default value cannot",
+                     "use a value that cannot fail, or leave the default out and have each call give the value, with `try` where it calls " + q(calleeName),
                      spec::DefaultArguments);
         return;
     }
     if (globalOf_) {
-        diags_.error(loc, "the value of " + q(globalOf_->name) + " calls " + q(callee.name) + ", which can fail, and a variable outside functions cannot",
+        diags_.error(loc, "the value of " + q(globalOf_->name) + " calls " + q(calleeName) + ", which can fail, and a variable outside functions cannot",
                      "nothing before main could say what happens then: give it a value that cannot fail, and set it in main with `try`",
                      spec::Globals);
         return;
     }
     if (tryBlocks_ == 0 && tryPrefixes_ == 0) {
-        diags_.error(loc, q(callee.name) + " can fail, so its call must say what happens then",
+        diags_.error(loc, q(calleeName) + " can fail, so its call must say what happens then",
                      [&] {
                          std::string before;  // what the call is on, as written
                          if (receiver && receiver->kind == Expr::Kind::OptValue) {
@@ -2745,12 +2782,12 @@ void Sema::checkCanFail(const FuncDecl& callee, Loc loc, const Expr* receiver) {
                              before = base.empty() ? "" : asBase(base) + ".";
                          }
                          if (receiver && before.empty()) return std::string("write `try` before the call, which passes the error on, or put it in `try { ... } catch (Error e) { ... }`");
-                         return "write `try " + before + callee.name + "(...)`, which passes the error on, or put it in `try { ... } catch (Error e) { ... }`";
+                         return "write `try " + before + calleeName + "(...)`, which passes the error on, or put it in `try { ... } catch (Error e) { ... }`";
                      }(),
                      spec::Errors);
     } else if (tryBlocks_ == 0 && (!fn_ || !fn_->isThrows)) {
-        diags_.error(loc, "an error from " + q(callee.name) + " has nowhere to go, since " +
-                              (fn_ ? q(fn_->name) + " is not marked `throws`" : "this is not in a function"),
+        diags_.error(loc, "an error from " + q(calleeName) + " has nowhere to go, since " +
+                              (fn_ ? (fn_->lambda ? std::string("the lambda") : q(fn_->name)) + " is not marked `throws`" : "this is not in a function"),
                      whereAnErrorCanGo(),
                      spec::Errors);
     }
@@ -2782,6 +2819,12 @@ const Type* Sema::checkSpawn(SpawnExpr& s, Flow& flow) {
     } else {
         auto& m = static_cast<MethodCallExpr&>(call);
         if (!m.lowered) target = m.method;
+    }
+    const Expr* lowered = call.kind == Expr::Kind::Call ? static_cast<CallExpr&>(call).lowered.get() : static_cast<MethodCallExpr&>(call).lowered.get();
+    if (lowered && lowered->kind == Expr::Kind::CallValue) {
+        diags_.error(call.loc, "this compiler does not support `spawn` of a lambda or a function value yet",
+                     "write a function that does this, and spawn that: `spawn work(x)`", spec::Concurrency);
+        return Type::error();
     }
     if (!target || target->isExtern) {
         diags_.error(call.loc, std::string("`spawn` runs a function or method written in C+, and this is ") + (target ? "a C function" : "built in"),
@@ -2899,6 +2942,12 @@ void Sema::checkTaskKept(const FuncDecl& f, const Expr& call, Loc loc) {
 }
 
 const Type* Sema::checkAwait(AwaitExpr& a, Flow& flow) {
+    if (fn_ && fn_->lambda) {
+        checkLooseValue(*a.task, flow);
+        diags_.error(a.loc, "this compiler does not support `await` inside a lambda yet",
+                     "write an async function that waits, and call it from the lambda, which then gives its task", spec::Lambdas);
+        return Type::error();
+    }
     const Type* t = checkExpr(*a.task, flow);
     if (t->isError()) return t;
     const std::string what = spelled(*a.task, "t");
@@ -3074,7 +3123,26 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
             v.type = t->is(K::Void) || t->isNull() ? Type::error() : t;
         } else {
             v.type = v.declType;
+            // `function<int(int)> fib = [&](int n) { ... fib(n - 1) ... };`: a lambda that shares the variable it is the value of
+            // calls itself, so the variable is known inside it.
+            bool self = false;
+            if (v.type->isFunction() && v.init->kind == Expr::Kind::Lambda && !v.isTopLevel && !v.isGlobal) {
+                auto& l = static_cast<LambdaExpr&>(*v.init);
+                self = l.byDefault == LambdaExpr::Default::Share;
+                for (auto& c : l.written) self = self || (c.mode == LambdaExpr::Capture::Mode::Share && c.name == v.name);
+            }
+            if (self) {
+                declare(v);
+                selfInit_ = &v;
+            }
             checkValue(*v.init, flow, v.type, "to initialize " + q(v.name));
+            selfInit_ = nullptr;
+            if (self) {
+                boundByRef_ = bound;
+                if (v.isConstexpr) foldConstexpr(v);
+                markAssigned(flow, &v, "");
+                return;
+            }
         }
     } else {
         if (v.declType->is(K::Auto))
@@ -3136,6 +3204,7 @@ static std::string conditionHelp(const Expr& e, const Type* t, bool negated = fa
         return negated ? "write `" + n + ".empty()`" : std::string("to check whether it has ") + (t->is(K::String) ? "any text" : "elements") + ", write `!" + n + ".empty()`";
     if (t->isArray()) return "an array always has its elements. To test one of them, write e.g. `a[0] != 0`";
     if (t->isClass()) return "a class reference is never empty, so there is nothing to test. For one that can be, make it `" + std::string(t->name) + "?`, which is a condition";
+    if (t->isFunction()) return "a function value is never empty, so there is nothing to test. For one that can be missing, make it `" + std::string(t->name) + "?`, which is a condition";
     if (t->isEnum()) return "an enum is not a condition; compare it, e.g. `" + n + (negated ? " == " : " != ") + enumSample(t) + "`";
     return "write a comparison, or call a method that gives a bool";
 }
@@ -3300,6 +3369,63 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
         case Stmt::Kind::Return: {
             auto& st = static_cast<ReturnStmt&>(s);
             const Type* ret = fn_->bodyRet();
+            if (fn_->lambda && !fn_->lambda->returnWritten && (ret->is(K::Auto) || fn_->lambda->returnInferred)) {  // its returns say what it gives
+                LambdaExpr& l = *fn_->lambda;
+                if (!st.value) {
+                    if (ret->is(K::Auto)) fn_->retType = Type::voidTy();
+                    else if (!ret->is(K::Void))
+                        diags_.error(s.loc, "the lambda returns " + q(ret) + " in one place, and nothing here",
+                                     "return a value here too, or write what it returns: `[...](...) -> " + std::string(ret->name) + " { ... }`", spec::Lambdas);
+                    flow.reachable = false;
+                    return;
+                }
+                if (st.value->kind == Expr::Kind::Name) {  // a local about to go away hands over what it holds
+                    const VarDecl* local = lookup(static_cast<NameExpr&>(*st.value).name);
+                    if (local && !local->isTopLevel && !local->isGlobal && !local->isConst && !local->isRef && local->type && !isCopyable(local->type) && !capturedHere(local)) {
+                        std::vector<ExprPtr> args;
+                        Loc loc = st.value->loc;
+                        args.push_back(std::move(st.value));
+                        auto call = std::make_unique<CallExpr>(loc, "move", std::move(args));
+                        call->builtin = Builtin::Move;
+                        st.value = std::move(call);
+                    }
+                }
+                if (st.value->kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(*st.value).explicitType && ret->is(K::Auto)) {
+                    diags_.error(st.value->loc, "the lambda cannot tell what type this { } list is",
+                                 "name the type, `return Point{1, 2};`, or write what the lambda returns: `[...](...) -> Point { ... }`", spec::Lambdas);
+                    checkLooseValue(*st.value, flow);
+                    fn_->retType = Type::error();
+                    flow.reachable = false;
+                    return;
+                }
+                if (!ret->is(K::Auto) && l.returnInferred && !ret->isError() && !ret->isFunction() && st.value->kind != Expr::Kind::InitList) {
+                    // The type came from an earlier `return`, so a different one here is most likely a slip in one of them.
+                    const Type* t = checkExpr(*st.value, flow);
+                    if (!t->isError() && !canConvert(t, ret) && !fitsUnsigned(*st.value, ret->isOptional() ? ret->elem : ret))
+                        diags_.error(st.value->loc, "this returns " + q(t) + ", but the lambda's first `return` gave " + q(ret),
+                                     "return one type from each `return`, or write what the lambda returns: `[...](...) -> " + std::string(ret->name) + " { ... }`",
+                                     spec::Lambdas);
+                    else
+                        requireConvertible(*st.value, ret, "as what the lambda returns");
+                    flow.reachable = false;
+                    return;
+                }
+                if (!ret->is(K::Auto)) {
+                    checkValue(*st.value, flow, ret, "as what the lambda returns");
+                    flow.reachable = false;
+                    return;
+                }
+                const Type* t = checkExpr(*st.value, flow);
+                if (t->is(K::Void))
+                    diags_.error(st.value->loc, "this gives nothing, so the lambda cannot return it", "call it on a line of its own, then write `return;`", spec::Lambdas);
+                else if (t->isNull())
+                    diags_.error(st.value->loc, "the lambda cannot tell what kind of optional `null` is",
+                                 "write what it returns: `[...](...) -> User? { ... }`", spec::Lambdas);
+                fn_->retType = t->is(K::Void) || t->isNull() ? Type::error() : t;
+                l.returnInferred = true;
+                flow.reachable = false;
+                return;
+            }
             if (st.value) {
                 if (ret->is(K::Void)) {
                     const Type* t = checkExpr(*st.value, flow);
@@ -3906,7 +4032,9 @@ void Sema::checkValue(Expr& e, Flow& flow, const Type* expected, const std::stri
         checkInitList(static_cast<InitListExpr&>(e), flow, expected->isOptional() ? expected->elem : expected);
         return;
     }
+    expectedFn_ = expected && (expected->isFunction() || (expected->isOptional() && expected->elem->isFunction())) ? expected : nullptr;
     checkExpr(e, flow);
+    expectedFn_ = nullptr;
     requireConvertible(e, expected, context);
 }
 
@@ -4143,6 +4271,8 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     path.clear();
     if (e.kind == Expr::Kind::Name) {
         auto& n = static_cast<NameExpr&>(e);
+        const Type* expectedFn = expectedFn_;
+        expectedFn_ = nullptr;
         n.decl = lookup(n.name);
         if ((!n.decl || n.decl->isTopLevel || n.decl->isGlobal) && !fieldHides(n.name) && parser_.modules()) {  // a constant or variable of the file's module
             const std::string full = resolved(n.name, n.loc);
@@ -4165,16 +4295,19 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
                     n.path = std::move(found);
                     const FieldDecl& f = declaring->fields[n.implicitField];
                     if (!canAccess(*declaring, f.access, o)) reportAccess(*declaring, f.name, false, f.access, e.loc);
+                    if (fn_ && fn_->lambda) noteThisCapture(e.loc);
                     var = thisVar();
                     path = n.name;
                     return e.type = f.type;
                 }
             }
+            if (funcs_.count(n.name) && !fieldHides(n.name)) return e.type = functionValue(n, expectedFn);
             reportUnknownName(n);
             return e.type = Type::error();
         }
         if (n.decl->isTopLevel) checkConstant(*n.decl);  // another constant may use it first
         if (n.decl->isGlobal) checkGlobal(*n.decl);      // the type of an `auto` one, from its value
+        if (capturedHere(n.decl)) noteCapture(n.decl, n.loc);
         var = n.decl;
         return e.type = n.decl->type;
     }
@@ -4183,6 +4316,7 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
             diags_.error(e.loc, "'this' can only be used inside a method or constructor", "use it inside a method or constructor. A function gets what it needs as parameters", spec::Methods);
             return e.type = Type::error();
         }
+        if (fn_ && fn_->lambda) noteThisCapture(e.loc);
         var = thisVar();
         return e.type = &owner()->type;
     }
@@ -4291,7 +4425,8 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
     }
     if (baseType->isUnique() || baseType->isLocal()) {  // the field of the object it owns or refers to
         if (baseIsPlace && var) requireAssigned(flow, var, path, baseType, m.base->loc);
-        bool isVariable = m.base->kind == Expr::Kind::Name && static_cast<NameExpr&>(*m.base).implicitField < 0;
+        bool isVariable = m.base->kind == Expr::Kind::Name && static_cast<NameExpr&>(*m.base).implicitField < 0 &&
+                          !capturedHere(static_cast<NameExpr&>(*m.base).decl);  // a lambda's may have been moved from by the time it runs
         Loc loc = m.base->loc;
         m.base = std::make_unique<BorrowExpr>(loc, std::move(m.base), !isVariable);
         m.base->type = baseType->elem;
@@ -4594,6 +4729,30 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
     bool inString = target.kind == Expr::Kind::Index && static_cast<const IndexExpr&>(target).base->type &&
                     static_cast<const IndexExpr&>(target).base->type->is(K::String);
     const char* parts = inString ? "chars" : "elements";
+    if (rootVar == thisVar() && fn_->isConst && fn_->lambda) {
+        std::string what = element ? std::string("the ") + parts + " of " + q(outerVectorName(target)) : q(var && !path.empty() ? path : rootVar->name);
+        diags_.error(target.loc, what + " cannot be " + action + " in the lambda, which " + (fn_->lambda->copiesThis ? "holds a copy of the object" : "is in a const method"),
+                     fn_->lambda->copiesThis ? "change it in the method instead, or make the type a class, whose objects the lambda shares"
+                                             : "remove `const` after the parameter list of the method if it needs to change fields",
+                     spec::Lambdas);
+        return false;
+    }
+    if (const LambdaExpr::Captured* c = capturedHere(rootVar) ? innerCapture(rootVar) : nullptr; c && !c->shares) {
+        std::string what = element ? std::string("the ") + parts + " of " + q(outerVectorName(target)) : q(var && !path.empty() ? path : rootVar->name);
+        diags_.error(target.loc, what + " cannot be " + action + ", as the lambda holds a copy of " + q(rootVar->name) + ", which never changes",
+                     "share it with the lambda instead: `[&" + rootVar->name + "]`", spec::Lambdas);
+        return false;
+    }
+    for (const LambdaFrame& frame : lambdas_)  // `[n = 0]`: what the lambda holds, which never changes
+        for (auto& c : frame.lambda->written)
+            if (c.var.get() == rootVar) {
+                std::string what = element ? std::string("the ") + parts + " of " + q(outerVectorName(target)) : q(var && !path.empty() ? path : rootVar->name);
+                diags_.error(target.loc, what + " cannot be " + action + ", as the lambda holds " + q(rootVar->name) + ", which never changes",
+                             std::string(action) == "moved" ? "copy it: write `" + rootVar->name + "` in place of `move(" + rootVar->name + ")`"
+                                                            : "declare it outside the lambda, and share it: `int n = 0; auto f = [&] { n += 1; };`",
+                             spec::Lambdas);
+                return false;
+            }
     if (rootVar == thisVar() && fn_->isConst) {
         std::string what = element ? std::string("the ") + parts + " of " + q(outerVectorName(target))
                                    : q(var ? path : rootVar->name);
@@ -4627,6 +4786,7 @@ bool Sema::isReadOnlyPlace(const Expr& target) {
     const VarDecl* rootVar = rootVariable(*root);
     if (!rootVar) return false;
     if (rootVar == thisVar() && fn_->isConst) return true;
+    if (const LambdaExpr::Captured* c = capturedHere(rootVar) ? innerCapture(rootVar) : nullptr; c && !c->shares) return true;
     return rootVar->isConst;
 }
 
@@ -4941,7 +5101,11 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
 
 const Type* Sema::checkExpr(Expr& e, Flow& flow) {
     const Type* result = Type::error();
+    const Type* expectedFn = expectedFn_;  // for this expression, and not for those inside it
+    expectedFn_ = nullptr;
     switch (e.kind) {
+        case Expr::Kind::Lambda: result = checkLambda(static_cast<LambdaExpr&>(e), flow, expectedFn); break;
+        case Expr::Kind::CallValue: result = checkCallValue(static_cast<CallValueExpr&>(e), flow); break;
         case Expr::Kind::IntLit: {
             auto& lit = static_cast<IntLitExpr&>(e);
             result = lit.type && lit.type->isInteger() ? lit.type : lit.writtenType();  // a constant's value, put in its place, keeps its type
@@ -4984,7 +5148,9 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
         case Expr::Kind::Index: {
             const VarDecl* var;
             std::string path;
+            expectedFn_ = e.kind == Expr::Kind::Name ? expectedFn : nullptr;  // for a function's name, which the type can choose
             result = resolvePlace(e, flow, var, path);
+            expectedFn_ = nullptr;
             if (var && !result->isError()) requireAssigned(flow, var, path, result, e.loc);
             break;
         }
@@ -5063,6 +5229,32 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 break;
             }
             bool equality = b.op == BinOp::Eq || b.op == BinOp::Ne;
+            auto isFn = [](const Type* t) { return t->isFunction() || (t->isOptional() && t->elem->isFunction()); };
+            if (isFn(l) || isFn(r)) {  // what a function does cannot be compared, and a plain one is never null
+                const Type* fnType = isFn(l) ? l : r;
+                const Expr& side = isFn(l) ? *b.lhs : *b.rhs;
+                const bool withNull = (l->isNull() || r->isNull()) && equality;
+                if (withNull && fnType->isOptional()) {
+                    b.operandType = fnType;
+                    result = Type::boolTy();
+                    break;
+                }
+                const std::string n = asBase(spelled(side, "f"));
+                diags_.error(b.lhs->loc, withNull ? q(n) + " is a " + q(fnType) + ", which is never null" : std::string("functions cannot be compared with '") + sym + "'",
+                             withNull ? "remove the test. For a function that can be missing, make it `" + std::string(fnType->name) + "?`, and test it with `" + n + " != null`"
+                                      : "compare what they give instead: `" + n + "(...) == ...`",
+                             spec::Lambdas);
+                if (comparison) result = Type::boolTy();
+                break;
+            }
+            if (equality && l == r && holdsFunction(l)) {  // a struct, a vector or a hashmap with functions in it
+                diags_.error(b.lhs->loc, "a " + q(l) + " cannot be compared with '" + sym + "', as it holds functions, which cannot be compared",
+                             l->isStruct() && !isHashmap(l) ? "compare the fields that can be, one by one: `a.name == b.name`"
+                                                            : "compare what is in them that can be, one by one",
+                             spec::Lambdas);
+                result = Type::boolTy();
+                break;
+            }
             // Values of the same type can always be compared for equality: strings by
             // contents, structs field by field, and class references by identity.
             if (equality && l->is(K::Void) && r->is(K::Void)) {
@@ -5283,7 +5475,9 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 else
                     checkShiftAmount(t, nullptr, *a.value, a.checked);
             } else {
+                const std::string assigning = std::exchange(assigningField_, ok && var && var == thisVar() && path.find('.') == std::string::npos ? path : "");
                 checkValue(*a.value, flow, t, "when assigning to " + name);
+                assigningField_ = assigning;
                 if (ok && var) markAssigned(flow, var, path);
                 if (ok && var && path.empty()) notePointer(flow, var, *a.value);
             }
@@ -5629,11 +5823,26 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (call.callee == "string") return checkStringFill(call, flow);
     Loc nameLoc = call.loc;
     nameLoc.len = (uint32_t)call.callee.size();
+    // `f(x)` where f is a variable: a call through the function it holds. A variable hides a function of its name, as in C++,
+    // unless it cannot be called, which is then the mistake to report.
+    auto callable = [](const Type* t) { return t && (t->isFunction() || (t->isOptional() && t->elem->isFunction()) || t->isError()); };
+    auto callThrough = [&](Loc at) {
+        auto callee = std::make_unique<NameExpr>(at, call.callee);
+        call.lowered = std::make_unique<CallValueExpr>(call.loc, std::move(callee), std::move(call.args));
+        call.args.clear();
+        return checkExpr(*call.lowered, flow);
+    };
+    if (call.templateArgs.empty() && call.loc.line != 0)
+        if (VarDecl* v = lookup(call.callee); v && !(fieldHides(call.callee) && (v->isTopLevel || v->isGlobal)) && (callable(v->type) || !funcs_.count(call.callee)))
+            return callThrough(nameLoc);
 
     // Inside a method, `name(...)` calls another method on `this`, as in C++.
     if (StructDecl* o = owner()) {
         BasePath found = findMember(*o, call.callee, nameLoc);
+        if (!found.empty() && found.back()->fieldIndex(call.callee) >= 0 && callable(found.back()->fields[found.back()->fieldIndex(call.callee)].type))
+            return callThrough(nameLoc);  // a field that holds a function
         if (FuncDecl* m = found.empty() ? nullptr : found.back()->ownMethod(call.callee)) {
+            if (fn_ && fn_->lambda) noteThisCapture(nameLoc);
             const std::vector<FuncDecl*> named = methodsNamed(*found.back(), call.callee);
             const bool chosen = named.size() > 1;
             if (chosen && !(m = chooseOverload(call.callee, call.callee, found.back(), named, exprsOf(call.args), flow, nameLoc))) return Type::error();
@@ -5779,8 +5988,6 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         } else if (name.find("::") != std::string::npos) {
             const std::string module = name.substr(0, name.find("::"));
             help = "`cplus explain " + module + "` says what the module '" + module + "' has";
-        } else if (lookup(name)) {
-            help = q(name) + " is a variable, and C+ has no function values yet. Write a function, and call it by name";
         } else if (name == "fetch")
             help = "to get what is at a URL: `import http;`, then `try http::get(url)`";
         else if (name == "vector" || name == "array")
@@ -6383,6 +6590,10 @@ static std::string jsonProblem(const Program& program, const Type* t, bool readi
             return where + " has keys of type " + q(key) + ", while a JSON object has strings. Use a string, an int, a long or an enum for the key, which is written as a string";
         return jsonProblem(program, t->decl->templateArgs[1].type, reading, path.empty() ? "[key]" : path + "[key]", seen, true);
     }
+    if (t->isFunction())
+        return where + " is code, which JSON cannot hold. " +
+               (path.empty() || inList ? std::string("Write what the code gives instead: `f(...)`")
+                                       : std::string("Make it a private field, which is left out of JSON, and reach it through methods of the class"));
     if (!t->hasFields())
         return where + " is a pointer, which only means something to this program. " +
                (t->isOpaque() || (t->isPointer() && (t->elem->is(K::Void) || t->elem->isOpaque())) ? std::string("Use a type with values, such as a struct, as JSON cannot hold an address")
@@ -6554,6 +6765,16 @@ const Type* Sema::checkMove(CallExpr& call, Flow& flow) {
         return t;
     }
     if (!checkChangeable(x, "moved", var, path)) return t;
+    if (var && capturedHere(var)) {
+        diags_.error(x.loc, "this compiler does not support moving from a variable that the lambda shares yet",
+                     "move it into the lambda where the lambda is made, `[" + var->name + " = move(" + var->name + ")]`, or copy it", spec::Lambdas);
+        return t;
+    }
+    if (var && var->sharedByLambda) {  // a lambda made before this could still use it, which nothing here follows
+        diags_.error(x.loc, "this compiler does not support moving from a variable that a lambda shares yet",
+                     "copy it, or move it into the lambda where the lambda is made, `[" + var->name + " = move(" + var->name + ")]`", spec::Lambdas);
+        return t;
+    }
     bool wholeVariable = x.kind == Expr::Kind::Name && static_cast<NameExpr&>(x).implicitField < 0;
     if (wholeVariable) markMoved(flow, var, call.loc);
     return t;
@@ -6585,7 +6806,8 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
             return t->elem;
         }
         // Everything else is a method of the object.
-        bool isVariable = recv.kind == Expr::Kind::Name && static_cast<NameExpr&>(recv).implicitField < 0;
+        bool isVariable = recv.kind == Expr::Kind::Name && static_cast<NameExpr&>(recv).implicitField < 0 &&
+                          !capturedHere(static_cast<NameExpr&>(recv).decl);
         Loc loc = recv.loc;
         call.receiver = std::make_unique<BorrowExpr>(loc, std::move(call.receiver), !isVariable);
         call.receiver->type = t->elem;
@@ -6659,6 +6881,29 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         const std::string calledAs = (call.receiver ? asBase(spelled(*call.receiver, "x")) + "." : "") + call.name;
         m = chooseOverload(call.name, calledAs, found.back(), named, exprsOf(call.args), flow, call.loc);
         if (!m) return Type::error();
+    }
+    const auto fieldCalled = [&] {
+        if (found.empty() || found.back()->fieldIndex(call.name) < 0) return false;
+        const Type* t = found.back()->fields[found.back()->fieldIndex(call.name)].type;
+        return t && (t->isFunction() || (t->isOptional() && t->elem->isFunction()));
+    };
+    if (!m && fieldCalled()) {  // `button.onClick(e)`: a field that holds a function
+        const StructDecl* declaring = found.back();
+        auto member = std::make_unique<MemberExpr>(call.loc, std::move(call.receiver), call.name);
+        member->fieldOwner = declaring;
+        member->path = toStart;
+        member->path.insert(member->path.end(), found.begin() + 1, found.end());
+        member->fieldIndex = declaring->fieldIndex(call.name);
+        member->qualifier = call.qualifier;
+        const FieldDecl& field = declaring->fields[member->fieldIndex];
+        if (!canAccess(*declaring, field.access, &sd)) reportAccess(*declaring, field.name, false, field.access, call.loc);
+        member->type = field.type;
+        auto through = std::make_unique<CallValueExpr>(call.loc, std::move(member), std::move(call.args));
+        call.args.clear();
+        const Type* result = checkCallValue(*through, flow);
+        through->type = result;
+        call.lowered = std::move(through);
+        return result;
     }
     if (!m) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
@@ -8186,6 +8431,700 @@ void Sema::reportEnumOperator(const BinaryExpr& b, const Type* l, const Type* r)
                      ? "an enum is not a number. To step to another enumerator, go through its number: `" + std::string(en->name) + "(int(" + n + ") " + sym + " 1)`, which stops the program if there is none"
                      : "an enum is not a number. Use its number: `int(" + n + ")`",
                  spec::Enums);
+}
+
+// ---- Lambdas ---------------------------------------------------------------
+
+// The type of a function used as a value: what it takes and gives, and whether a call can fail.
+static const Type* functionTypeOf(const FuncDecl& f) {
+    std::vector<Type::Param> params;
+    for (auto& p : f.params) params.push_back({p->declType, p->isRef, p->isRef && p->isConst});
+    return Type::functionOf(f.retType, params, f.callFails());
+}
+
+// What a list of parameters takes, as it is written in a function type: `(int, const string&)`.
+static std::string paramTypes(const std::vector<Type::Param>& params) {
+    std::string out = "(";
+    for (size_t i = 0; i < params.size(); ++i)
+        out += (i ? ", " : "") + std::string(params[i].isConst ? "const " : "") + params[i].type->name + (params[i].isRef ? "&" : "");
+    return out + ")";
+}
+
+int Sema::frameOf(const VarDecl* v) const {
+    for (size_t i = scopes_.size(); i-- > 0;) {
+        auto found = scopes_[i].find(v->name);
+        if (found == scopes_[i].end() || found->second != v) continue;
+        int frame = -1;
+        for (size_t f = 0; f < lambdas_.size(); ++f)
+            if (lambdas_[f].scopeBase <= i) frame = (int)f;
+        return frame;
+    }
+    return (int)lambdas_.size() - 1;
+}
+
+bool Sema::capturedHere(const VarDecl* v) const {
+    if (lambdas_.empty() || !v || v->isTopLevel || v->isGlobal || v == thisVar()) return false;
+    return frameOf(v) < (int)lambdas_.size() - 1;
+}
+
+const LambdaExpr::Captured* Sema::innerCapture(const VarDecl* v) const {
+    return lambdas_.empty() ? nullptr : lambdas_.back().lambda->capture(v);
+}
+
+// The copy a lambda would make of what cannot be copied.
+static void reportCopiedUnique(Diagnostics& diags, const VarDecl& v, Loc at) {
+    diags.error(at, "the lambda would copy " + q(v.name) + ", but a " + q(v.type) + " cannot be copied",
+                "share it, `[&" + v.name + "]`, or move it into the lambda, `[" + v.name + " = move(" + v.name + ")]`", spec::Lambdas);
+}
+
+// `v`, declared outside the lambda being checked, is used at `at`. Each lambda from the one just inside where it is declared to
+// this one captures it, as its default says, or it is an error.
+void Sema::noteCapture(VarDecl* v, Loc at) {
+    const int home = frameOf(v);
+    for (int i = home + 1; i < (int)lambdas_.size(); ++i) {
+        LambdaFrame& frame = lambdas_[i];
+        LambdaExpr& l = *frame.lambda;
+        if (l.capture(v)) continue;
+        if (l.byDefault == LambdaExpr::Default::None) {
+            if (frame.refused.insert(v).second)
+                diags_.error(at, q(v->name) + " is used in the lambda, which does not capture it",
+                             "write `[&" + v->name + "]` to share it with the lambda, or `[" + v->name + "]` to copy it. `[&]` shares all that the lambda uses",
+                             spec::Lambdas);
+            return;
+        }
+        bool shares = l.byDefault == LambdaExpr::Default::Share;
+        // A lambda inside one that copied it has that copy, which never changes; so it is for one inside the lambda that is
+        // the variable's value, which is the lambda itself.
+        if (i > home + 1)
+            if (const LambdaExpr::Captured* outer = lambdas_[i - 1].lambda->capture(v); outer && (!outer->shares || outer->self)) shares = false;
+        const bool self = shares && v == frame.self;
+        if (i == home + 1 && !self && frame.outer->reachable && !isAssigned(*frame.outer, v, v->type, ""))
+            diags_.error(at, q(v->name) + " has no value yet where the lambda is made, which captures it",
+                         "give it a value before the lambda", spec::Lambdas);
+        if (!shares && !isCopyable(v->type)) reportCopiedUnique(diags_, *v, at);
+        if (shares) v->sharedByLambda = true;
+        l.captured.push_back({v, shares, at, self});
+    }
+}
+
+// The lambda being checked uses `this`, for a field or a method: each lambda around it captures it.
+void Sema::noteThisCapture(Loc at) {
+    for (size_t i = 0; i < lambdas_.size(); ++i) {
+        LambdaFrame& frame = lambdas_[i];
+        LambdaExpr& l = *frame.lambda;
+        if (l.capturesThis) continue;
+        if (l.byDefault == LambdaExpr::Default::None) {
+            if (frame.refused.insert(nullptr).second)
+                diags_.error(at, "the lambda uses the object's fields or methods, but does not capture `this`",
+                             "write `[this]`, or `[&]`, which captures it with the rest", spec::Lambdas);
+            return;
+        }
+        if (i == 0) {
+            const FuncDecl* method = l.enclosing;
+            if (method && method->role == FuncDecl::Role::Constructor && method->thisDecl && frame.outer->reachable &&
+                !fieldsSet(*frame.outer, method->thisDecl.get()))
+                diags_.error(at, "the lambda captures `this` before every field of the object has its value",
+                             "make the lambda after the fields are set, in the constructor's body", spec::Lambdas);
+        }
+        l.capturesThis = true;
+        if (i > 0 && lambdas_[i - 1].lambda->copiesThis) l.copiesThis = true;  // it has the copy
+    }
+}
+
+// Whether every field of the object a constructor builds has its value, for a lambda that captures `this`. The field being
+// assigned has it as soon as the lambda is made.
+bool Sema::fieldsSet(const Flow& flow, const VarDecl* self) const {
+    for (auto& f : self->type->decl->fields)
+        if (f.name != assigningField_ && !isAssigned(flow, self, f.type, f.name)) return false;
+    return true;
+}
+
+const Type* Sema::checkLambda(LambdaExpr& l, Flow& flow, const Type* expected) {
+    using Mode = LambdaExpr::Capture::Mode;
+    FuncDecl& f = *l.fn;
+    const Type* want = expected && expected->isOptional() ? expected->elem : expected;
+    if (want && !want->isFunction()) want = nullptr;
+    const VarDecl* self = selfInit_;
+    selfInit_ = nullptr;
+    l.enclosing = fn_;
+    l.captured.clear();
+    l.capturesThis = l.copiesThis = false;
+    bool failed = false;
+    // What it captures by name. This is read where the lambda is written, as the code around it.
+    for (auto& c : l.written) {
+        if (c.mode == Mode::This || c.mode == Mode::CopyThis) {
+            if (!owner()) {
+                diags_.error(c.loc, "only a lambda inside a method can capture `this`", "remove it: there is no object here", spec::Lambdas);
+                continue;
+            }
+            if (c.mode == Mode::CopyThis && owner()->isClass) {
+                diags_.error(c.loc, "an object of a class is shared, not copied, so a lambda cannot capture `*this` of one",
+                             "write `[this]`, which keeps the object alive as long as the lambda is", spec::Lambdas);
+                continue;
+            }
+            if (fn_ && fn_->lambda) noteThisCapture(c.loc);
+            else if (fn_ && fn_->role == FuncDecl::Role::Constructor && thisVar() && flow.reachable && !fieldsSet(flow, thisVar()))
+                diags_.error(c.loc, "the lambda captures `this` before every field of the object has its value",
+                             "make the lambda after the fields are set, in the constructor's body", spec::Lambdas);
+            l.capturesThis = true;
+            l.copiesThis = c.mode == Mode::CopyThis || (fn_ && fn_->lambda && fn_->lambda->copiesThis);
+            continue;
+        }
+        if (c.mode == Mode::Init) {
+            VarDecl& v = *c.var;
+            const Type* t = checkExpr(*v.init, flow);
+            rejectCopy(*v.init);
+            if (t->is(K::Void))
+                diags_.error(v.init->loc, "a void function gives nothing for " + q(v.name) + " to hold", "call it on a line of its own", spec::Lambdas);
+            if (t->isNull())
+                diags_.error(v.init->loc, "the lambda cannot tell what kind of optional " + q(v.name) + " is from null",
+                             "declare it before the lambda with its type, `User? " + v.name + " = null;`, and capture that", spec::Lambdas);
+            v.type = t->is(K::Void) || t->isNull() ? Type::error() : t;
+            continue;
+        }
+        VarDecl* v = lookup(c.name);
+        if (!v) {
+            const bool function = funcs_.count(c.name) > 0;
+            diags_.error(c.loc, function ? q(c.name) + " is a function, which a lambda calls without capturing it" : q(c.name) + " is not declared",
+                         function ? std::string("remove it from the capture list") : "capture a variable declared before the lambda, or remove it from the list", spec::Lambdas);
+            continue;
+        }
+        if (v->isTopLevel || v->isGlobal) {
+            diags_.error(c.loc, q(c.name) + (v->isTopLevel ? " is a constant" : " is a variable outside functions") + ", which a lambda uses without capturing it",
+                         "remove it from the capture list", spec::Lambdas);
+            continue;
+        }
+        const bool throughLambda = capturedHere(v);
+        if (throughLambda) noteCapture(v, c.loc);
+        bool shares = c.mode == Mode::Share;
+        if (const LambdaExpr::Captured* outer = throughLambda ? innerCapture(v) : nullptr; outer && (!outer->shares || outer->self)) shares = false;
+        const bool isSelf = shares && v == self;
+        if (!isSelf && !throughLambda && flow.reachable && !isAssigned(flow, v, v->type, ""))
+            diags_.error(c.loc, q(v->name) + " has no value yet where the lambda is made, which captures it", "give it a value before the lambda", spec::Lambdas);
+        if (!shares && !isCopyable(v->type)) reportCopiedUnique(diags_, *v, c.loc);
+        if (shares) v->sharedByLambda = true;
+        l.captured.push_back({v, shares, c.loc, isSelf});
+    }
+    // What it takes, and what it gives back.
+    std::vector<Type::Param> params;
+    for (auto& p : f.params) {
+        checkStorable(p->declType, p->typeLoc);
+        if (p->declType->is(K::Void))
+            diags_.error(p->typeLoc, "parameters cannot have type void", "write `()` for no parameters, or give the parameter a type", spec::Lambdas);
+        p->type = p->declType;
+        params.push_back({p->declType, p->isRef, p->isRef && p->isConst});
+    }
+    if (want) {
+        bool same = want->params->size() == params.size();
+        for (size_t i = 0; same && i < params.size(); ++i) same = !((*want->params)[i] < params[i]) && !(params[i] < (*want->params)[i]);
+        if (!same) {
+            std::string written;
+            for (size_t i = 0; i < want->params->size(); ++i) {
+                const Type::Param& p = (*want->params)[i];
+                const std::string name = i < f.params.size() ? f.params[i]->name : std::string(1, (char)('a' + i % 26));
+                written += (i ? ", " : "") + std::string(p.isConst ? "const " : "") + p.type->name + (p.isRef ? "& " : " ") + name;
+            }
+            diags_.error(l.loc, "this lambda takes `" + paramTypes(params) + "`, but a " + q(want) + " takes `" + paramTypes(*want->params) + "`",
+                         "write its parameters as the type has them: `[...](" + written + ") { ... }`", spec::Lambdas);
+            failed = true;
+        }
+        if (!l.returnWritten) {
+            f.retType = want->elem;
+        } else if (f.retType != want->elem && !f.retType->isError()) {
+            diags_.error(f.retTypeLoc, "this lambda returns " + q(f.retType) + ", but a " + q(want) + " returns " + q(want->elem),
+                         "write `-> " + std::string(want->elem->name) + "`, or leave it out", spec::Lambdas);
+            failed = true;
+        }
+        if (f.isThrows && !want->throws) {
+            diags_.error(l.loc, "this lambda can fail, but a " + q(want) + " cannot",
+                         "handle the error inside it, with `try { ... } catch (Error e) { ... }`, or write the type with `throws`: `function<" +
+                             std::string(want->elem->name) + paramTypes(*want->params) + " throws>`",
+                         spec::Lambdas);
+            failed = true;
+        }
+    }
+    StructDecl* o = owner();
+    f.owner = o;  // so that its body finds the fields and methods of `this`
+    f.isConst = l.copiesThis || (fn_ && fn_->isConst);
+    if (o) {
+        f.thisDecl = std::make_unique<VarDecl>(l.loc, "this", &o->type, l.loc);
+        f.thisDecl->type = &o->type;
+    }
+    // The body, as a function of its own, which sees the scopes around it.
+    struct Saved {
+        Sema& s;
+        FuncDecl* fn = s.fn_;
+        std::vector<LoopContext> loops = std::move(s.loops_);
+        int tryBlocks = s.tryBlocks_, tryPrefixes = s.tryPrefixes_, failPoints = s.failPoints_;
+        std::vector<const CatchClause*> catches = std::move(s.catches_);
+        const FieldDecl* initField = s.initField_;
+        const StructDecl* buildingBase = s.buildingBase_;
+        std::vector<const Expr*> discarded = std::move(s.discarded_);
+        const Expr* spawned = s.spawned_;
+        const Expr* boundByRef = s.boundByRef_;
+        const VarDecl* globalOf = s.globalOf_;
+        const VarDecl* defaultOf = s.defaultOf_;
+        const FuncDecl* defaultFn = s.defaultFn_;
+        size_t moves = s.moveLog_.size();
+        ~Saved() {
+            s.fn_ = fn;
+            s.loops_ = std::move(loops);
+            s.tryBlocks_ = tryBlocks;
+            s.tryPrefixes_ = tryPrefixes;
+            s.failPoints_ = failPoints;
+            s.catches_ = std::move(catches);
+            s.initField_ = initField;
+            s.buildingBase_ = buildingBase;
+            s.discarded_ = std::move(discarded);
+            s.spawned_ = spawned;
+            s.boundByRef_ = boundByRef;
+            s.globalOf_ = globalOf;
+            s.defaultOf_ = defaultOf;
+            s.defaultFn_ = defaultFn;
+            s.moveLog_.resize(std::min(moves, s.moveLog_.size()));  // what the body moved is its own
+            s.lambdas_.pop_back();
+        }
+    };
+    lambdas_.push_back({&l, scopes_.size(), &flow, self, {}});
+    {
+        Saved saved{*this};
+        fn_ = &f;
+        loops_.clear();
+        tryBlocks_ = tryPrefixes_ = 0;
+        catches_.clear();
+        initField_ = nullptr;
+        buildingBase_ = nullptr;
+        discarded_.clear();
+        spawned_ = nullptr;
+        boundByRef_ = nullptr;
+        globalOf_ = nullptr;
+        defaultOf_ = nullptr;
+        defaultFn_ = nullptr;
+        Flow inner;
+        if (f.thisDecl) markAssigned(inner, f.thisDecl.get(), "");
+        scopes_.emplace_back();
+        for (auto& p : f.params) {
+            declare(*p);
+            markAssigned(inner, p.get(), "");
+        }
+        for (auto& c : l.written)
+            if (c.mode == Mode::Init) {
+                declare(*c.var);
+                markAssigned(inner, c.var.get(), "");
+            }
+        for (auto& st : f.body->stmts) checkStmt(*st, inner);
+        scopes_.pop_back();
+        if (f.retType->is(K::Auto)) f.retType = Type::voidTy();  // no `return` with a value
+        if (inner.reachable && !f.retType->is(K::Void) && !f.retType->isError())
+            diags_.error(f.body->endLoc, "the lambda can reach its end without returning a value",
+                         "add `return <" + std::string(f.retType->name) + " value>;` before this closing brace", spec::Lambdas);
+    }
+    if (want && want->throws) f.isThrows = true;  // it is called as what can fail, though it never does
+    if (failed || f.retType->isError()) return Type::error();
+    params.clear();
+    for (auto& p : f.params) params.push_back({p->declType, p->isRef, p->isRef && p->isConst});
+    return Type::functionOf(f.retType, params, f.isThrows);
+}
+
+// `f(x)`, where f is a value: a variable, a field, an element, or what something gave.
+const Type* Sema::checkCallValue(CallValueExpr& c, Flow& flow) {
+    const Type* t = c.callee->type ? c.callee->type : checkExpr(*c.callee, flow);
+    auto loose = [&] {
+        for (auto& a : c.args) checkLooseValue(*a, flow);
+        return Type::error();
+    };
+    if (t->isError()) return loose();
+    const std::string name = spelled(*c.callee, "");
+    const std::string shown = name.empty() || name.find("...") != std::string::npos ? "the function" : q(name);
+    if (t->isOptional() && t->elem->isFunction()) {
+        loose();
+        const std::string n = name.empty() ? "f" : asBase(name);
+        diags_.error(c.loc, shown + " may be null, so it cannot be called directly",
+                     "unwrap it first: `if (auto g = " + n + ") g(...)`", spec::Lambdas);
+        return Type::error();
+    }
+    if (!t->isFunction()) {
+        loose();
+        diags_.error(c.callee->loc, (shown == "the function" ? std::string("this") : shown) + " has type " + q(t) + ", which cannot be called",
+                     "only a function can be called: a lambda, a `function<R(Args...)>`, or a function by its name", spec::Lambdas);
+        return Type::error();
+    }
+    const auto& params = *t->params;
+    if (c.args.size() != params.size()) {
+        loose();
+        diags_.error(c.loc, shown + " takes " + std::to_string(params.size()) + " argument" + (params.size() == 1 ? "" : "s") + " but " +
+                                std::to_string(c.args.size()) + (c.args.size() == 1 ? " was" : " were") + " given",
+                     params.empty() ? "call it with nothing in the parentheses, `" + (name.empty() ? std::string("f") : name) + "()`, as its type is " + q(t)
+                                    : "pass one value for each parameter in `" + paramTypes(params) + "`, as its type is " + q(t),
+                     spec::Lambdas);
+        return t->elem;
+    }
+    for (size_t i = 0; i < params.size(); ++i) {
+        const Expr* bound = boundByRef_;
+        if (params[i].isRef) boundByRef_ = c.args[i].get();
+        checkValue(*c.args[i], flow, params[i].type, "for argument " + std::to_string(i + 1) + " of " + shown);
+        boundByRef_ = bound;
+        if (params[i].isRef && !params[i].isConst) checkRefBinding(*c.args[i], params[i].type, "argument " + std::to_string(i + 1) + " of " + shown);
+    }
+    if (t->throws) checkCanFailNamed(shown == "the function" ? "the function" : name, c.loc);
+    return t->elem;
+}
+
+// A function's name used as a value: `function<int(int)> f = square;`. With more than one of that name, the type it is
+// given says which.
+const Type* Sema::functionValue(NameExpr& n, const Type* expected) {
+    const Type* want = expected && expected->isOptional() ? expected->elem : expected;
+    std::vector<FuncDecl*> all;
+    if (auto many = overloads_.find(n.name); many != overloads_.end()) all = many->second;
+    else all.push_back(funcs_.at(n.name));
+    FuncDecl* chosen = all.size() == 1 ? all[0] : nullptr;
+    for (FuncDecl* f : all)
+        if (all.size() > 1 && want && functionTypeOf(*f) == want) chosen = f;
+    if (!chosen) {
+        diags_.error(n.loc, q(n.name) + " is the name of more than one function, so which one is meant is not known",
+                     "say which with the type it is given: `" + std::string(functionTypeOf(*all[0])->name) + " f = " + n.name + ";`", spec::Lambdas);
+        return Type::error();
+    }
+    if (chosen->isExtern) {
+        std::string params, args;
+        for (size_t i = 0; i < chosen->params.size(); ++i) {
+            const std::string name = chosen->params[i]->name.empty() ? std::string(1, (char)('a' + i % 26)) : chosen->params[i]->name;
+            params += (i ? ", " : "") + std::string(chosen->params[i]->declType->name) + " " + name;
+            args += (i ? ", " : "") + name;
+        }
+        diags_.error(n.loc, "this compiler does not support using a C function as a value yet",
+                     "write a lambda that calls it: `[](" + params + ") { return " + n.name + "(" + args + "); }`", spec::Lambdas);
+        return Type::error();
+    }
+    if (chosen->name == "main" && chosen->role == FuncDecl::Role::Free) {
+        diags_.error(n.loc, "`main` is where the program starts, and cannot be used as a value", "move what it does into a function of its own, and use that", spec::MainFunction);
+        return Type::error();
+    }
+    n.function = chosen;
+    return functionTypeOf(*chosen);
+}
+
+namespace {
+// Which lambdas can outlive the code they are written in. A lambda is borrowed when it is called where it is written, given to
+// a parameter that only calls it, or held in a local variable that is only used that way; any other use keeps it. A parameter of
+// a function type only borrows when its function does no more with it than that, which is worked out for every function
+// together: each starts out borrowing, and stops when some use keeps it, until nothing changes.
+struct CaptureCheck {
+    enum class Use { Kept, Called, Arg, Init };
+    // The parameters of a function type that can borrow, and the locals that hold a lambda.
+    std::unordered_map<const VarDecl*, std::pair<FuncDecl*, size_t>> params;
+    std::set<const VarDecl*> keeping;  // parameters and locals a use keeps
+    std::set<const LambdaExpr*> keptLambdas;
+    std::vector<LambdaExpr*> lambdas;  // every one, the first time round
+    std::vector<std::pair<LambdaExpr*, const VarDecl*>> heldIn;  // a lambda that is the value of a local
+    // The variables that can live in a box: a local declared by a statement, the variable of a loop over values, and a
+    // parameter passed by value. Codegen makes the box where each of these is declared.
+    std::set<const VarDecl*> boxable;
+    bool first = true;
+    bool changed = false;
+
+    static bool eligible(const FuncDecl& f) {
+        return f.body && !f.isExtern && !f.isPure && !f.isVirtual && !f.isAsync && !f.lambda;
+    }
+    void addFunction(FuncDecl& f) {
+        f.paramBorrows.assign(f.params.size(), false);
+        if (!f.isAsync)
+            for (auto& p : f.params)
+                if (!p->isRef) boxable.insert(p.get());
+        if (!eligible(f)) return;
+        for (size_t i = 0; i < f.params.size(); ++i)
+            if (f.params[i]->declType->isFunction()) {
+                f.paramBorrows[i] = true;
+                params[f.params[i].get()] = {&f, i};
+            }
+    }
+    void keep(const VarDecl* v) {
+        if (keeping.insert(v).second) changed = true;
+        if (auto it = params.find(v); it != params.end() && it->second.first->paramBorrows[it->second.second]) {
+            it->second.first->paramBorrows[it->second.second] = false;
+            changed = true;
+        }
+    }
+    static bool borrows(const FuncDecl* f, size_t i) { return f && i < f->paramBorrows.size() && f->paramBorrows[i]; }
+
+    void expr(Expr* e, Use use, const FuncDecl* callee = nullptr, size_t arg = 0, const VarDecl* init = nullptr) {
+        if (!e) return;
+        const bool borrowed = use == Use::Called || (use == Use::Arg && borrows(callee, arg));
+        switch (e->kind) {
+            case Expr::Kind::Name: {
+                auto* n = static_cast<NameExpr*>(e);
+                if (n->decl && n->decl->type && n->decl->type->isFunction() && !borrowed) keep(n->decl);
+                return;
+            }
+            case Expr::Kind::Lambda: {
+                auto* l = static_cast<LambdaExpr*>(e);
+                if (first) {
+                    lambdas.push_back(l);
+                    for (auto& p : l->fn->params)
+                        if (!p->isRef) boxable.insert(p.get());
+                }
+                if (use == Use::Init && init) heldIn.push_back({l, init});
+                else if (!borrowed && keptLambdas.insert(l).second) changed = true;
+                for (auto& c : l->written)
+                    if (c.var) expr(c.var->init.get(), Use::Kept);
+                if (keptLambdas.count(l))  // what it captures lives as long as it does
+                    for (auto& c : l->captured)
+                        if (!c.self && c.var->type && c.var->type->isFunction()) keep(c.var);
+                stmt(l->fn->body.get());
+                return;
+            }
+            case Expr::Kind::CallValue: {
+                auto* c = static_cast<CallValueExpr*>(e);
+                expr(c->callee.get(), Use::Called);
+                for (auto& a : c->args) expr(a.get(), Use::Kept);
+                return;
+            }
+            case Expr::Kind::Call: {
+                auto* c = static_cast<CallExpr*>(e);
+                if (c->lowered) return expr(c->lowered.get(), use, callee, arg, init);
+                const FuncDecl* target = c->target ? c->target : c->method;
+                if (target && (target->isExtern || target->isVirtual)) target = nullptr;
+                for (size_t i = 0; i < c->args.size(); ++i) expr(c->args[i].get(), Use::Arg, target, i);
+                return;
+            }
+            case Expr::Kind::MethodCall: {
+                auto* c = static_cast<MethodCallExpr*>(e);
+                if (c->lowered) return expr(c->lowered.get(), use, callee, arg, init);
+                expr(c->receiver.get(), Use::Kept);
+                const FuncDecl* target = c->method && !c->method->isVirtual && c->method->vtableSlot < 0 ? c->method : nullptr;
+                for (size_t i = 0; i < c->args.size(); ++i) expr(c->args[i].get(), Use::Arg, target, i);
+                return;
+            }
+            case Expr::Kind::Spawn: {  // what runs on another thread keeps all it is given
+                Expr* call = static_cast<SpawnExpr*>(e)->call.get();
+                if (call->kind == Expr::Kind::Call && !static_cast<CallExpr*>(call)->lowered) {
+                    for (auto& a : static_cast<CallExpr*>(call)->args) expr(a.get(), Use::Kept);
+                } else if (call->kind == Expr::Kind::MethodCall && !static_cast<MethodCallExpr*>(call)->lowered) {
+                    expr(static_cast<MethodCallExpr*>(call)->receiver.get(), Use::Kept);
+                    for (auto& a : static_cast<MethodCallExpr*>(call)->args) expr(a.get(), Use::Kept);
+                } else {
+                    expr(call, Use::Kept);
+                }
+                return;
+            }
+            case Expr::Kind::Assign: {
+                auto* a = static_cast<AssignExpr*>(e);
+                if (a->target->kind == Expr::Kind::Name) {  // a new value for a variable: what it held is no longer only its own
+                    auto* n = static_cast<NameExpr*>(a->target.get());
+                    if (n->decl && n->decl->type && n->decl->type->isFunction()) keep(n->decl);
+                } else {
+                    expr(a->target.get(), Use::Kept);
+                }
+                expr(a->value.get(), Use::Kept);
+                return;
+            }
+            default: break;
+        }
+        forEachChild(e, [&](Expr* child) { expr(child, Use::Kept); });
+    }
+
+    template <typename F>
+    static void forEachChild(Expr* e, F&& f) {
+        switch (e->kind) {
+            case Expr::Kind::Unary: f(static_cast<UnaryExpr*>(e)->operand.get()); break;
+            case Expr::Kind::Binary: f(static_cast<BinaryExpr*>(e)->lhs.get()); f(static_cast<BinaryExpr*>(e)->rhs.get()); break;
+            case Expr::Kind::Ternary: {
+                auto* t = static_cast<TernaryExpr*>(e);
+                f(t->cond.get()); f(t->thenExpr.get()); f(t->elseExpr.get());
+                break;
+            }
+            case Expr::Kind::IncDec: f(static_cast<IncDecExpr*>(e)->target.get()); break;
+            case Expr::Kind::Member: f(static_cast<MemberExpr*>(e)->base.get()); break;
+            case Expr::Kind::Index: f(static_cast<IndexExpr*>(e)->base.get()); f(static_cast<IndexExpr*>(e)->index.get()); break;
+            case Expr::Kind::InitList:
+                for (auto& el : static_cast<InitListExpr*>(e)->elements) f(el.value.get());
+                break;
+            case Expr::Kind::OptChain: f(static_cast<OptChainExpr*>(e)->base.get()); f(static_cast<OptChainExpr*>(e)->body.get()); break;
+            case Expr::Kind::Coalesce: f(static_cast<CoalesceExpr*>(e)->lhs.get()); f(static_cast<CoalesceExpr*>(e)->rhs.get()); break;
+            case Expr::Kind::Cast: if (static_cast<CastExpr*>(e)->operand) f(static_cast<CastExpr*>(e)->operand.get()); break;
+            case Expr::Kind::New: {
+                auto* n = static_cast<NewExpr*>(e);
+                if (n->count) f(n->count.get());
+                if (n->init) f(n->init.get());
+                break;
+            }
+            case Expr::Kind::Delete: f(static_cast<DeleteExpr*>(e)->operand.get()); break;
+            case Expr::Kind::Try: f(static_cast<TryExpr*>(e)->operand.get()); break;
+            case Expr::Kind::Borrow: f(static_cast<BorrowExpr*>(e)->operand.get()); break;
+            case Expr::Kind::Await: f(static_cast<AwaitExpr*>(e)->task.get()); break;
+            default: break;
+        }
+    }
+
+    void stmt(Stmt* s) {
+        if (!s) return;
+        switch (s->kind) {
+            case Stmt::Kind::VarDecl: {
+                auto* v = static_cast<VarDecl*>(s);
+                if (!v->isRef && !v->isGlobal && !v->isTopLevel) boxable.insert(v);
+                const bool holds = v->type && v->type->isFunction() && !v->isGlobal && !v->isTopLevel && !v->isRef;
+                expr(v->init.get(), holds ? Use::Init : Use::Kept, nullptr, 0, holds ? v : nullptr);
+                return;
+            }
+            case Stmt::Kind::DeclGroup:
+                for (auto& v : static_cast<DeclGroupStmt*>(s)->decls) stmt(v.get());
+                return;
+            case Stmt::Kind::Expr: expr(static_cast<ExprStmt*>(s)->expr.get(), Use::Kept); return;
+            case Stmt::Kind::Block:
+                for (auto& st : static_cast<BlockStmt*>(s)->stmts) stmt(st.get());
+                return;
+            case Stmt::Kind::If: {
+                auto* st = static_cast<IfStmt*>(s);
+                if (st->decl) expr(st->decl->var->init.get(), Use::Kept);
+                expr(st->cond.get(), Use::Kept);
+                stmt(st->thenStmt.get());
+                stmt(st->elseStmt.get());
+                return;
+            }
+            case Stmt::Kind::While: {
+                auto* st = static_cast<WhileStmt*>(s);
+                if (st->decl) expr(st->decl->var->init.get(), Use::Kept);
+                expr(st->cond.get(), Use::Kept);
+                stmt(st->body.get());
+                return;
+            }
+            case Stmt::Kind::DoWhile: {
+                auto* st = static_cast<DoWhileStmt*>(s);
+                stmt(st->body.get());
+                expr(st->cond.get(), Use::Kept);
+                return;
+            }
+            case Stmt::Kind::For: {
+                auto* st = static_cast<ForStmt*>(s);
+                stmt(st->init.get());
+                expr(st->cond.get(), Use::Kept);
+                for (auto& step : st->steps) expr(step.get(), Use::Kept);
+                stmt(st->body.get());
+                return;
+            }
+            case Stmt::Kind::ForEach: {
+                auto* st = static_cast<ForEachStmt*>(s);
+                if (!st->var->isRef) boxable.insert(st->var.get());
+                expr(st->range.get(), Use::Kept);
+                stmt(st->body.get());
+                return;
+            }
+            case Stmt::Kind::Return: expr(static_cast<ReturnStmt*>(s)->value.get(), Use::Kept); return;
+            case Stmt::Kind::Throw: expr(static_cast<ThrowStmt*>(s)->value.get(), Use::Kept); return;
+            case Stmt::Kind::Try: {
+                auto* st = static_cast<TryStmt*>(s);
+                stmt(st->body.get());
+                for (auto& c : st->catches) stmt(c.body.get());
+                return;
+            }
+            case Stmt::Kind::Switch: {
+                auto* st = static_cast<SwitchStmt*>(s);
+                expr(st->value.get(), Use::Kept);
+                for (auto& section : st->sections) stmt(section.body.get());
+                return;
+            }
+            default: return;
+        }
+    }
+};
+}  // namespace
+
+// The function, or method, that `l` is written in, past any lambdas it is inside.
+static const FuncDecl* outermostFunction(const LambdaExpr& l) {
+    const FuncDecl* f = l.enclosing;
+    while (f && f->lambda) f = f->lambda->enclosing;
+    return f;
+}
+
+void Sema::checkCaptures(Program& program) {
+    CaptureCheck check;
+    std::vector<FuncDecl*> functions;
+    for (auto& f : program.funcs) functions.push_back(f.get());
+    for (auto& sd : program.structs)
+        for (auto& m : sd->methods)
+            if (m->checked && m->body) functions.push_back(m.get());
+    for (FuncDecl* f : functions) check.addFunction(*f);
+    auto walkAll = [&] {
+        check.changed = false;
+        for (FuncDecl* f : functions) {
+            if (f->isExtern || !f->body) continue;
+            for (auto& init : f->memberInits) check.expr(init.value.get(), CaptureCheck::Use::Kept);
+            for (auto& base : f->baseInits)
+                for (auto& a : base.args) check.expr(a.get(), CaptureCheck::Use::Kept);
+            check.stmt(f->body.get());
+        }
+        for (auto& g : program.globals) check.expr(g->init.get(), CaptureCheck::Use::Kept);
+        for (auto& sd : program.structs)
+            for (auto& field : sd->fields) check.expr(field.defaultValue.get(), CaptureCheck::Use::Kept);
+        // A lambda held in a local is kept when the local is.
+        for (auto& [l, v] : check.heldIn)
+            if (check.keeping.count(v) && check.keptLambdas.insert(l).second) check.changed = true;
+        check.heldIn.clear();
+        check.first = false;
+    };
+    walkAll();
+    for (int rounds = 0; check.changed && rounds < 1000; ++rounds) walkAll();
+
+    std::set<const VarDecl*> reported;  // a lambda inside another shares what that one shares: one error for each variable
+    for (LambdaExpr* l : check.lambdas) {
+        l->kept = check.keptLambdas.count(l) > 0;
+        for (auto& c : l->captured) {
+            if (!c.shares || c.self) continue;
+            VarDecl& v = *c.var;
+            // What never changes is the same shared or copied, and a copy needs no box. A `const T&` may also not outlive
+            // the call, or lie in a container that moves it.
+            if (v.isConst && (v.isRef || isCopyable(v.type))) {
+                c.shares = false;
+                continue;
+            }
+            if (v.isRef && !v.isParam) {
+                if (reported.insert(&v).second)
+                    diags_.error(c.at, "this compiler does not support a lambda sharing a reference variable yet",
+                                 "copy it, `[" + v.name + "]`, or share the variable that holds what it refers to", spec::Lambdas);
+                continue;
+            }
+            if (!l->kept) continue;
+            if (v.isRef) {
+                if (reported.insert(&v).second)
+                    diags_.error(c.at, q(v.name) + " is the caller's variable, which this lambda can outlive",
+                                 "copy it, `[" + v.name + "]`, or have the function return what it works out, for the caller to keep", spec::Lambdas);
+                continue;
+            }
+            if (v.type && v.type->decl && v.type->decl->name == "LockGuard") {
+                if (reported.insert(&v).second)
+                    diags_.error(c.at, "a lambda that is kept cannot share a LockGuard, which unlocks when its block ends",
+                                 "lock the Mutex inside the lambda: `LockGuard g = LockGuard(m);`", spec::Lambdas);
+                continue;
+            }
+            if (!check.boxable.count(&v)) {
+                if (reported.insert(&v).second)
+                    diags_.error(c.at, std::string("this compiler does not support a lambda that is kept sharing ") +
+                                           (v.isParam ? "a parameter of an async function" : "a variable declared in a condition or a `catch`") + " yet",
+                                 "copy it, `[" + v.name + "]`, or copy it into a variable of its own first, `auto mine = " + v.name + ";`, and share that",
+                                 spec::Lambdas);
+                continue;
+            }
+            v.boxed = true;
+        }
+        if (!l->kept) continue;
+        if (l->capturesThis && !l->copiesThis && l->fn->owner) {
+            const FuncDecl* method = outermostFunction(*l);
+            if (method && method->role == FuncDecl::Role::Destructor) {
+                diags_.error(l->loc, "a lambda that is kept cannot hold `this` in a destructor, as the object is going away",
+                             "copy what the lambda needs into variables of its own: `[n = name] { ... }`", spec::Lambdas);
+            } else if (!l->fn->owner->isClass) {
+                if (method && method->isConst) {
+                    l->copiesThis = true;  // the struct does not change while it runs, and the lambda keeps a copy
+                } else {
+                    diags_.error(l->loc, "a lambda that is kept cannot share the struct that the method runs on, which may be gone by then",
+                                 "copy it, `[*this]`, or make " + q(l->fn->owner->name) + " a class, whose objects can be shared", spec::Lambdas);
+                }
+            }
+        }
+    }
+    // A lambda inside one that holds a copy of the struct reaches that copy.
+    for (LambdaExpr* l : check.lambdas)
+        if (l->capturesThis && l->enclosing && l->enclosing->lambda && l->enclosing->lambda->copiesThis) l->copiesThis = true;
 }
 
 }  // namespace cplus

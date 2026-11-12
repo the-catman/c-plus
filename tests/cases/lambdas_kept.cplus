@@ -1,0 +1,89 @@
+// Kept lambdas: globals and fields that hold them, parameters and loop variables they share, nested lambdas.
+// flags: --debug
+function<int(int)> twice = [](int x) { return x * 2; };
+
+class Button {
+public:
+    string label = "ok";
+    function<string()> describe = [] { return "a button"; };
+    function<void()>? onClick = null;
+};
+
+function<int()> fromParam(int start) {
+    return [&] { start += 10; return start; };
+}
+
+vector<function<int()>> each(vector<string> names) {
+    vector<function<int()>> out;
+    for (string n : names) out.push_back([&] { return int(n.size()); });
+    return out;
+}
+
+void run(function<void()> f) {
+    f();
+}
+
+int main() {
+    println("{}", twice(21));
+    Button b = Button();
+    println("{}", b.describe());
+    auto p = fromParam(1);
+    p();
+    println("{}", p());
+    for (auto& f : each({"a", "bbb", "cc"})) println("{}", f());
+
+    int n = 0;
+    function<int()> kept = [&] { return n; };
+    run([&] { n += 5; });
+    println("{} {}", n, kept());
+
+    vector<function<int()>> fs;
+    for (int i = 0; i < 6; i++) {
+        if (i % 2 == 0) continue;
+        fs.push_back([&] { return i; });
+    }
+    for (auto& f : fs) println("{}", f());
+
+    int depth = 1;
+    run([&] {
+        auto inner = [&] { return depth * 3; };
+        fs.push_back(inner);
+    });
+    depth = 7;
+    println("{}", fs.back()());
+
+    function<int(int)> fact = [&](int k) {
+        auto step = [&] { return k <= 1 ? 1 : k * fact(k - 1); };
+        return step();
+    };
+    println("{}", fact(5));
+    function<int(int)> fact2 = [&](int k) {
+        function<int()> step = [&] { return k <= 1 ? 1 : k * fact2(k - 1); };
+        fs.push_back([&] { return k; });
+        return step();
+    };
+    println("{}", fact2(4));
+
+    b.onClick = [b] { println("clicked {}", b.label); };
+    if (auto click = b.onClick) click();
+    return 0;
+}
+
+// expect: 42
+// expect: a button
+// expect: 21
+// expect: 1
+// expect: 3
+// expect: 2
+// expect: 5 5
+// expect: 1
+// expect: 3
+// expect: 5
+// expect: 21
+// expect: 120
+// expect: 24
+// expect: clicked ok
+// stderr: cplus: 2 objects were never freed
+// stderr: Button, made at tests/cases/lambdas_kept.cplus:28:12, in main
+// stderr: a lambda, made at tests/cases/lambdas_kept.cplus:67:15, in main
+// stderr: = help: a lambda that an object holds, and that captures the object, is such a circle.

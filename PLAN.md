@@ -712,6 +712,23 @@ predict:
 - Not yet: a template beside a function of its name, until templates are chosen between too; `stoi` with a position and a
   base, and `fs::open` with a default mode, which can now be written.
 
+### 2.34 Lambdas — DECIDED
+Decided 2026-11-11 by the owner (§6), built 2026-11-12: a lambda captures as a JavaScript closure does.
+- `[&]` shares the variable with the function, and the variable lives as long as anything uses it: one that a kept lambda
+  captures moves into a counted box. `[=]` copies, as in C++. One type, `function<R(Args...)>`, with `throws` and `?`, and
+  no `mutable`. A function named by itself is a value of that type. Functions cannot be compared.
+- A lambda is borrowed when it is only called where it is written or passed to a parameter that only calls it, as `sort`'s
+  will, and then it boxes nothing. Otherwise it is kept: returned, stored, given to `spawn`.
+- A loop's own variable, `for (int i = 0; ...)`, is a new one each round when a kept lambda shares it, as JavaScript's `let`
+  is, so the lambdas of three rounds see 0, 1 and 2.
+- A kept lambda cannot share what the function only borrows: a `T&` parameter is an error, and a `const T&` one is copied. In
+  a struct's method, `this` is copied in a `const` method and an error otherwise.
+- A value of a function type is its code and a counted environment of copies and boxes. A lambda that an object holds and
+  that captures the object keeps it alive; `weak<T>` breaks the circle, and a debug build reports the leak.
+- Not yet: `await` in a lambda, `spawn` of a lambda, default values for its parameters, sharing a reference variable, moving
+  from a shared variable, a kept lambda sharing a variable of a condition, a `catch` or an async function's parameter, and C
+  functions as values. Then `sort` and the other functions that take one, `spawn` with a lambda, and C callbacks.
+
 ## 3. Compiler architecture
 
 ```
@@ -778,7 +795,8 @@ what holds real programs back most:
    before lambdas and overloading, which depend on it: what a lambda captures, what `operator[]` gives, and what a
    parameter can be. It may replace the rules of §2.17 and §2.24 on when a result is a copy, and is where the safety of
    §2.7 is tested hardest. `return &x;` of a local, which compiles today, is caught first.
-5. Lambdas, and a type for a function, then `sort` and the other functions that take one, and C callbacks.
+5. Lambdas, and a type for a function (built 2026-11-12, see §2.34), then `sort` and the other functions that take one,
+   `spawn` with a lambda, and C callbacks.
 6. Function overloading, more than one constructor and default arguments, then operator overloading. Overloading also
    ends the pairs that stand in for it, such as `http::fetch` and `http::fetchWith`, before more of them are made.
 7. The rest of what everyday programs need: writing files and the rest of `fs` (§2.15), `split`, `trim`, `join` and
@@ -830,16 +848,7 @@ will confidently write C++ wherever the two differ.
 
 ## 6. Open items
 
-- Remaining syntax: lambdas, in Phase 7. Enums and `switch` are in §2.32.
-  - Decided 2026-11-11 by the owner: a lambda captures as a JavaScript closure does. `[&]` shares the variable with
-    the function, and the variable lives as long as anything uses it: one that a kept lambda captures moves into a
-    counted box. `[=]` copies, as in C++. One type, `function<R(Args...)>`, and no `mutable`.
-    - A lambda is borrowed when it is only called where it is written or passed to a parameter that only calls it,
-      as `sort`'s does, and then it boxes nothing. Otherwise it is kept: returned, stored, given to `spawn`.
-    - A loop's own variable, `for (int i = 0; ...)`, is a new one each round when a kept lambda shares it, as JavaScript's
-      `let` is, so the lambdas of three rounds see 0, 1 and 2.
-    - A kept lambda cannot share what the function only borrows: a `T&` parameter is an error, and a `const T&` one is
-      copied. In a struct's method, `this` is copied in a `const` method and an error otherwise.
+- Lambdas were decided 2026-11-11 and built 2026-11-12, in §2.34. Enums and `switch` are in §2.32.
 - Default arguments in generics, and a template beside a function of its name, in Phase 7 (§2.33).
 - A struct method changing a vector element stops the program if its body also writes to that
   vector, keeps a copy of it or frees it, since the update to the element would be lost (decided
@@ -860,7 +869,7 @@ will confidently write C++ wherever the two differ.
   - In: parameters (`Point& p`, `const T&`), `for (auto& x : v)`, a result used where it is made (`v.back().x = 1`,
     `m[k].count++`), and a reference variable in a block (`auto& e = m[k];`).
   - Out: a reference in a field, and a returned reference to a local. A lambda's `[&]` shares the variable instead,
-    as decided below.
+    as §2.34 decides.
   - While a reference into a vector, string or hashmap lives, that one cannot grow or share its buffer. The compiler checks
     this where it can tell, and the running program where it cannot, so a reference never dangles or changes a copy.
   - Plain C++ references were turned down. Copies share a buffer until one is written (§2.12, §2.17), so writing through a

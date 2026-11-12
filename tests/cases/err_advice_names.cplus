@@ -3,7 +3,7 @@ import json;
 int valueNotFunction() {
     int g = 1;
     return g();
-    // error: 'g' is a variable, and C+ has no function values yet. Write a function, and call it by name
+    // error: 'g' has type 'int', which cannot be called
 }
 void moduleHasNoSuch() {
     json::foo(1);

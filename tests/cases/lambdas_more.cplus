@@ -1,0 +1,102 @@
+// Lambdas in classes, generics, async functions, and lambdas that return lambdas.
+// flags: --debug
+class Shape {
+public:
+    virtual void visit(function<void(string)> f) { f("shape"); }
+};
+class Square : public Shape {
+public:
+    vector<function<string()>> kept;
+    void visit(function<void(string)> f) override {
+        f("square");
+    }
+};
+class Timer {
+public:
+    int ticks = 0;
+    function<void()> tick;
+    Timer() {
+        tick = [this] { ticks += 1; };
+    }
+};
+function<function<int(int)>(int)> adder() {
+    return [](int a) { return [a](int b) { return a + b; }; };
+}
+int run(function<int(int) throws> f, int x) throws {
+    return try f(x);
+}
+template<typename T>
+T applyTwice(function<T(T)> f, T x) {
+    return f(f(x));
+}
+template<typename T>
+function<T()> constant(T value) {
+    return [value] { return value; };
+}
+struct Board {
+    array<int, 3> cells;
+};
+async int later(int x) {
+    auto f = [&] { return x * 2; };
+    return f();
+}
+int main() {
+    Square sq = Square();
+    sq.visit([](string n) { println("visit {}", n); });
+    Timer t = Timer();
+    t.tick();
+    t.tick();
+    println("{}", t.ticks);
+    println("{}", adder()(3)(4));
+    try {
+        println("{}", try run([](int x) throws { if (x > 1) throw Error("big"); return x; }, 1));
+        println("{}", try run([](int x) throws { if (x > 1) throw Error("big"); return x; }, 2));
+    } catch (Error e) {
+        println("caught {}", e.message);
+    }
+    println("{}", applyTwice<int>([](int x) { return x * 3; }, 2));
+    println("{}", applyTwice<string>([](string x) { return x + "!"; }, "hi"));
+    auto c = constant<string>("const");
+    println("{}", c());
+    vector<int> v = {1, 2, 3};
+    auto snap = [v] { return v.size(); };
+    v.push_back(4);
+    println("{} {}", snap(), v.size());
+    Board b;
+    b.cells[0] = 5;
+    vector<function<int()>> fs;
+    fs.push_back([&] { b.cells[1] += 10; return b.cells[0] + b.cells[1]; });
+    println("{}", fs[0]());
+    println("{}", fs[0]());
+    println("{}", b.cells[1]);
+    int round = 0;
+    while (round < 3) {
+        int mine = round * 7;
+        fs.push_back([&] { return mine; });
+        round++;
+    }
+    for (int i = 1; i < fs.size(); i++) println("{}", fs[i]());
+    println("{}", later(21).wait());
+    return 0;
+}
+
+// expect: visit square
+// expect: 2
+// expect: 7
+// expect: 1
+// expect: caught big
+// expect: 18
+// expect: hi!!
+// expect: const
+// expect: 3 4
+// expect: 15
+// expect: 25
+// expect: 20
+// expect: 0
+// expect: 7
+// expect: 14
+// expect: 42
+// stderr: cplus: 2 objects were never freed
+// stderr: Timer, made at tests/cases/lambdas_more.cplus:46:11, in main
+// stderr: a lambda, made at tests/cases/lambdas_more.cplus:19:14, in Timer#init
+// stderr: = help: a lambda that an object holds, and that captures the object, is such a circle.

@@ -3,4 +3,5 @@ int main() {
     int x = f()();
     return x;
 }
-// error: only functions can be called, by writing their name followed by (...)
+// error: 'f()' has type 'int', which cannot be called
+// error: only a function can be called: a lambda, a `function<R(Args...)>`, or a function by its name

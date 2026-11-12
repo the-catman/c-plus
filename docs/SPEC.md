@@ -1912,6 +1912,95 @@ println("{}", greet("cy", "hey", 2));   // hey cy;hey cy;
   `either(int a, int b = 0)` makes `either(1)` an error, as in C++.
 - The parameters of generics cannot have default values yet.
 
+### Lambdas
+
+A lambda is a function written where a value goes, as in C++. Its type is `function<R(Args...)>`, which every
+function value has, whatever it captured:
+
+```cpp
+int apply(function<int(int)> f, int x) {
+    return f(x);
+}
+
+function<int()> counter() {
+    int n = 0;
+    return [&] { n += 1; return n; };  // n lives on, as long as the lambda does
+}
+
+int main() {
+    int k = 10;
+    println("{}", apply([&](int x) { return x + k; }, 5));  // 15
+    auto next = counter();
+    next();
+    println("{}", next());  // 2
+    return 0;
+}
+```
+
+- **It is written as in C++**: `[captures](parameters) -> R { body }`. The parameters can be left out when it takes
+  none, `[&] { ... }`, and so can `-> R`: the `function<...>` it is given says what it returns, or else the first
+  `return` with a value does. A lambda can be marked `throws`, after its parameters.
+- **`function<int(string, const Point&)>` is the type of a function value**, written as C++'s `std::function`, without
+  `std::`. Parameter names are allowed, `function<bool(int a, int b)>`, and mean nothing. `function<int(string) throws>`
+  is one whose call can fail, and is written with `try`. A lambda given where a `function<...>` is expected takes the
+  same parameters. One that is not marked `throws` can be given for one that is.
+- **A function is a value too**: `function<int(int)> f = square;`. With more than one function of that name, the type
+  it is given says which. A built-in such as `println` or `sqrt`, a generic function, a method and a C function are not
+  values: a lambda that calls one is, `[](double x) { return sqrt(x); }`.
+- **A function value is never empty**, so it is no condition, and `f == null` is an error. One that can be missing is a
+  `function<void()>?`, which starts out null, is tested with `onDone != null`, and is unwrapped like any
+  [optional](#optionals): `if (auto g = onDone) g();`.
+- **Functions cannot be compared**, as there is no telling whether two do the same, and neither can a struct, vector or
+  hashmap that holds one. JSON cannot hold one. A function prints as `function`.
+
+**What it captures.** A lambda names what it uses from the function around it, as in C++, and using one it does not
+capture is an error:
+
+| Written | Captures |
+|---------|----------|
+| `[&x]` | shares `x` with the function |
+| `[x]` | a copy of `x`, made with the lambda |
+| `[&]` | shares all that it uses |
+| `[=]` | copies all that it uses |
+| `[this]` | the object of the method it is in, for its fields and methods. `[&]` and `[=]` capture it too |
+| `[*this]` | a copy of the struct of the method it is in |
+| `[n = 0]`, `[v = move(items)]` | a value of its own, worked out with the lambda |
+
+- **A copy never changes.** C+ has no `mutable`: as copies of a lambda share what it captured, a count in one would
+  count for all of them. A lambda that counts shares a variable declared outside it.
+- **What it shares lives as long as the lambda**, as in a JavaScript closure. `counter` above returns a lambda that
+  shares `n`, which in C++ would be gone when `counter` returns.
+- **Copies of a lambda share what it captured.** After `auto again = next;`, both count up the same `n`. In C++ a copy
+  of a lambda copies what it holds.
+- **A loop's own variable is a new one each round**, when a lambda that is kept shares it, as JavaScript's `let` is:
+  `for (int i = 0; i < 3; i++) fs.push_back([&] { return i; });` makes lambdas that give 0, 1 and 2. Each round starts
+  with the value the round before ended with.
+- **A lambda can call itself** through the variable it is the value of:
+  `function<int(int)> fib = [&](int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); };`.
+- A variable outside functions, and a constant, is used without being captured.
+
+**Borrowed and kept.** The compiler works out whether a lambda can outlive the code it is written in. One that is only
+called where it is written, given to a parameter that only calls it or gives it to such parameters, or held in a local
+variable that is only used so, is **borrowed**. It lives on the stack, costs nothing for what it shares, and is usually
+made into plain code by `-O`. Any other lambda is **kept**: returned, stored in a variable, a field or a vector, given to
+a parameter that keeps it, or to a virtual method. It is a counted object, freed when the last function value that holds
+it is gone, and a variable that it shares moves into a counted box of its own. What a kept lambda can share has limits:
+
+- A `T&` parameter is the caller's variable, which the lambda could outlive, so sharing one is an error. Copy it, or
+  return what the lambda works out.
+- A `const` variable, and a `const T&`, are copied, by any lambda: they cannot change, so the copy is the same.
+- In a method of a struct, `this` is copied in a `const` method, and is an error in any other: the struct may be gone.
+  `[*this]` copies it. In a class, `this` is a counted reference, and the lambda keeps the object alive.
+- A `LockGuard` cannot be shared, as it unlocks when its block ends.
+- A lambda that an object holds, and that captures the object, keeps it alive, as two objects that refer to each other
+  do. Capture a [weak reference](#weak-references) instead: `weak<Timer> self = this;`, then
+  `[self] { if (auto t = self.lock()) t.ticks += 1; }`. A [debug build](#debug-builds) reports such a leak.
+
+**Not yet:** `await` inside a lambda, `spawn` of a lambda, default values for its parameters, sharing a reference
+variable, such as the `x` of `for (auto& x : v)`, moving from a variable that a lambda shares, a kept lambda sharing a
+variable declared in a condition, in a `catch` or as a parameter of an async function, and a C function as a value.
+`sort` and the other functions that take one come next.
+
 ### The main function
 
 Every program has exactly one `main`, which returns an `int`, the process exit code. Falling
@@ -3474,7 +3563,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Programs of more than one file | implemented |
 | `constexpr` values and functions, `if constexpr`, array sizes and template arguments worked out while compiling | implemented |
 | `constexpr` methods and structs; a generic `constexpr` function in an array's size | planned |
-| Lambdas | planned |
+| Lambdas: captures by name, `[&]`, `[=]`, `[this]`, `[*this]`, `[n = 0]`; `function<R(Args...)>`, `throws` and `function<...>?`; functions by name as values; borrowed and kept lambdas, shared variables in boxes, a new loop variable each round | implemented |
+| `await` in a lambda, `spawn` of a lambda, default values for its parameters, a lambda sharing a reference variable, C functions as values | planned |
 | Enums held in other integer types, enumerator values that use enumerators, a switch with an initializer | planned |
 | Default arguments | implemented |
 | Default arguments in generics, `auto` parameters and return types | planned |

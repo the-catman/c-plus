@@ -37,9 +37,11 @@ void conditions() {
 }
 void namesAsValues() {
     auto a = println;
-    // error: 'println' is a function, not a value
+    // error: 'println' is built in, and cannot be used as a value
+    // error: write a lambda that calls it: `[](string s) { println("{}", s); }`
     auto b = sqrt;
-    // error: 'sqrt' is a function, not a value
+    // error: 'sqrt' is built in, and cannot be used as a value
+    // error: write a lambda that calls it: `[](double x) { return sqrt(x); }`
     auto d = vector(1, 2);
     // error: write what it holds: `vector<int>(n, value)`
 }

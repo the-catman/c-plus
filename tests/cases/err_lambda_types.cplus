@@ -1,0 +1,71 @@
+// A lambda must fit the function type it is given to, and a function value is used as one.
+struct Handler {
+    string name;
+    function<int(int)> run;
+};
+void wrongParams() {
+    function<int(int)> f = [](string s) { return 1; };
+    // error: this lambda takes `(string)`, but a 'function<int(int)>' takes `(int)`
+}
+void wrongReturn() {
+    function<int(int)> f = [](int x) -> string { return "a"; };
+    // error: this lambda returns 'string', but a 'function<int(int)>' returns 'int'
+}
+void failsButNot() {
+    function<int(int)> f = [](int x) throws { throw Error("x"); };
+    // error: this lambda can fail, but a 'function<int(int)>' cannot
+}
+void callOptional() {
+    function<int()>? f = null;
+    f();
+    // error: 'f' may be null, so it cannot be called directly
+}
+void compare() {
+    auto f = [] { return 1; };
+    auto g = f;
+    if (f == g) println("same");
+    // error: functions cannot be compared with '=='
+    Handler a = {"a", [](int x) { return x; }};
+    Handler b = a;
+    println("{}", a == b);
+    // error: a 'Handler' cannot be compared with '==', as it holds functions, which cannot be compared
+    vector<function<int()>> v1;
+    vector<function<int()>> v2;
+    println("{}", v1 == v2);
+    // error: a 'vector<function<int()>>' cannot be compared with '==', as it holds functions, which cannot be compared
+}
+void ifFunction() {
+    auto f = [] { return 1; };
+    if (f) println("yes");
+    // error: the if condition must be a bool, a number, a pointer or an optional, but this is 'function<int()>'
+}
+void returnMixed() {
+    auto f = [](int x) { if (x > 0) return 1; return "a"; };
+    // error: this returns 'string', but the lambda's first `return` gave 'int'
+    // error: write what the lambda returns: `[...](...) -> int { ... }`
+}
+void noReturn() {
+    auto f = [](int x) -> int { if (x > 0) return 1; };
+    // error: the lambda can reach its end without returning a value
+}
+void wrongArgs() {
+    auto f = [](int x) { return x; };
+    f(1, 2);
+    // error: 'f' takes 1 argument but 2 were given
+    f("a");
+    // error: expected 'int' for argument 1 of 'f', but this is 'string'
+}
+void initNull() {
+    auto f = [n = null] { return 1; };
+    // error: the lambda cannot tell what kind of optional 'n' is from null
+}
+void voidInit() {
+    auto f = [n = println("x")] { return 1; };
+    // error: a void function gives nothing for 'n' to hold
+}
+void notAFunction() {
+    int g = 3;
+    g();
+    // error: 'g' has type 'int', which cannot be called
+}
+int main() { return 0; }

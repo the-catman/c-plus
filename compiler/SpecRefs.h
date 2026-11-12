@@ -26,6 +26,7 @@ inline constexpr const char* DefiniteAssignment = "definite-assignment";
 inline constexpr const char* Functions = "functions";
 inline constexpr const char* Overloading = "overloading";
 inline constexpr const char* DefaultArguments = "default-arguments";
+inline constexpr const char* Lambdas = "lambdas";
 inline constexpr const char* Globals = "variables-outside-functions";
 inline constexpr const char* TypeAliases = "type-aliases";
 inline constexpr const char* MainFunction = "the-main-function";
