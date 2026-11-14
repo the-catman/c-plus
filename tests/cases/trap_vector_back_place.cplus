@@ -1,0 +1,13 @@
+// `v.back()` of an empty vector, used as a place, stops the program, as reading it does.
+int main() {
+    vector<int> v;
+    v.push_back(1);
+    v.back() = 2;
+    println("{}", v);
+    v.pop_back();
+    v.back() = 3;
+    return 0;
+}
+// expect: [2]
+// trap: back() was called on an empty vector
+// trap: trap_vector_back_place.cplus:8:7

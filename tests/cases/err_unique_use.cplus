@@ -63,14 +63,15 @@ int main() {
 // error: write `dynamic_cast<Derived?>(a.get())`
 // error: 'Node' has no field named 'missing'
 // error: 'Node' has no method named 'nope'
-// error: front() gives a copy, but a 'unique<Node>' cannot be copied
-// error: back() gives a copy, but a 'unique<Node>' cannot be copied
+// error: 'v.front()' cannot be copied, since a 'unique<Node>' has one owner
+// error: 'v.back()' cannot be copied, since a 'unique<Node>' has one owner
+// error: write `move(v.back())` to hand it over
 // error: 'v[0]' cannot be copied
 // error: a range-based for loop copies each element, but a 'unique<Node>' cannot be copied
 // error: cannot make its elements on its own, because a 'unique<Node>' reference cannot be empty
 // error: every element would be a copy of this, but a 'unique<Node>' cannot be copied
 // error: fill() copies an element, but a 'unique<Node>' cannot be copied
-// error: front() copies an element, but a 'unique<Node>' cannot be copied
+// error: 'a.front()' cannot be copied, since a 'unique<Node>' has one owner
 // error: value() gives a copy, but a 'unique<Node>' cannot be copied
 // error: 'o' cannot be copied, since a 'unique<Node>?' holds what has one owner
 // error: '?.' gives a copy, but a 'unique<Node>' cannot be copied

@@ -213,7 +213,7 @@ long square(long n) { return n * n; }
 | `auto p = {1, 2};` | `auto p = Point{1, 2};`, since a bare `{ }` needs a known type |
 | `int n = v.size();`, `size_t n = v.size();` | error: `size()` is a `long`, as every size is in C+. Write `long n` or `auto n`; `i < v.size()` with an `int i` is fine |
 | `v[i]` past the end is UB | every index is checked and a bad one **stops the program** with file:line; so do `pop_back()`, `front()`, `back()` on an empty vector |
-| `v.back().x = 1`, `v.back().set()`, `v.back().p.set()`, `m.at(k) = 1`, `(first ? a : b).set()` | error: `back()`, `front()`, `at()` and `?:` give copies. Write `v[v.size() - 1].x = 1`, `m[k] = 1`, `if (first) a.set(); else b.set();` |
+| `(first ? a : b).set()` | error: `?:` gives a copy. Write `if (first) a.set(); else b.set();`. `v.back()`, `v.front()` and `m.at(k)` are the element itself, as in C++ |
 | `v.push_back(...)` inside `for (x : v)` is UB | safe: the loop goes over `v` as it was when the loop started |
 | `auto& x = v[0];`, then `v.push_back(1);`, which can leave `x` dangling | safe: `x` is `v[0]` wherever the elements are now, found again at each use. Once `v` is too short for it, using `x` **stops the program** |
 | `vector<int> v(5);`, `vector<int> v{1, 2};` | `auto v = vector<int>(5);`, `vector<int> v = {1, 2};` |

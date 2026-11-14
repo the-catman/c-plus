@@ -921,7 +921,7 @@ Building a vector:
 | `v.pop_back()` | removes the last element |
 | `v.insert(i, x)` | puts `x` before the element at index `i`, or at the end when `i` is `v.size()` |
 | `v.erase(i)` | removes the element at index `i`, and moves those after it down one |
-| `v.front()`, `v.back()` | a copy of the first or the last element |
+| `v.front()`, `v.back()` | the first or the last element, which can be changed where it is |
 | `v.clear()` | removes every element |
 
 - `size()` returns a `long`, as every count and size in C+ is, where C++ gives an unsigned
@@ -939,11 +939,12 @@ Building a vector:
   `erase` one from 0 to `size() - 1`, and any other stops the program. Each moves the elements after the index, so it
   takes time that grows with them, as in C++. Erasing a range, `v.erase(first, last)`, waits, since C++'s takes two
   iterators and a string's `erase(pos, count)` a position and a count.
-- `front()` and `back()` return a copy. To change the last element, write
-  `v[v.size() - 1] = x`. Changing what they give, `v.back().x = 1` or a method that changes a struct, `v.back().set()` or `v.back().p.set()`, is an
-  error, as in C++ it would change the element, and here it would do nothing. So is changing what `?:` gives when both
-  of what it chooses from are what C++ would refer to, such as variables, fields, elements or what `back()` gives, as
-  `(f ? a : b).set()` would change `a` in C++, and what `=` gives. What `??`, `value_or()`, `values()` and `items()` give,
+- `front()` and `back()` are the element itself, as C++'s references are: `v.back() = x`, `v.back().x = 1` and
+  `v.back().set()` change the last element. Of an empty vector, they **stop the program**. A reference bound to one,
+  `auto& last = v.back();`, goes on meaning that element, found by its index, as `auto& e = v[i];` does. Of a temporary,
+  such as `list().back()`, they are a copy. Changing what `?:` gives is an error when both of what it chooses from are
+  what C++ would refer to, such as variables, fields or elements, as `(f ? a : b).set()` would change `a` in C++, and so
+  is changing what `=` gives. What `??`, `value_or()`, `values()` and `items()` give,
   and `?:` with only one such, is a copy in C++ too, so changing it is an error only when nothing receives the result. What a function gave changes nothing the program has, so `(f ? make(1) : make(2)).with(5)`
   and `list().back().with(5)` are allowed, and so is any method under `spawn`, which runs on a copy.
 - `==` and `!=` compare the sizes and then each pair of elements, in order. Ordering with
@@ -1010,7 +1011,7 @@ Building an array:
 |--------|--------------|
 | `a.size()` | the number of elements, as a `long` |
 | `a.empty()` | whether the array has no elements, which only `array<T, 0>` does |
-| `a.front()`, `a.back()` | a copy of the first or the last element |
+| `a.front()`, `a.back()` | the first or the last element, which can be changed where it is |
 | `a.fill(x)` | sets every element to `x` |
 | `a.data()` | a pointer to the first element |
 
@@ -1095,7 +1096,7 @@ for (auto e : ages) println("{}: {}", e.first, e.second);
 | `m.size()`, `m.empty()` | how many entries it has, as a `long`, and whether it has none |
 | `m.contains(key)`, `m.count(key)` | whether the key is there, as a `bool`, or as a `long`, 0 or 1 |
 | `m.get(key)` | a `V?`: the value, or null. If `V` can be null already, use `contains` to tell the two apart |
-| `m.at(key)` | a copy of the value, or **stops the program** with the key that is missing |
+| `m.at(key)` | the value, which can be changed where it is, or **stops the program** with the key that is missing; it never adds a key |
 | `m.insert({key, value})` | adds it unless the key is there, which keeps the value that is there, and says whether it added it |
 | `m.erase(key)` | removes it, and says how many it removed, as a `long`, 0 or 1 |
 | `m.clear()` | removes everything |

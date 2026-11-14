@@ -1,0 +1,56 @@
+// `v.back()`, `v.front()` and `m.at(k)` are the element itself, as C++'s references are, so it can be changed where it is.
+struct P {
+    int x = 0;
+    void set() { x = 7; }
+};
+vector<P> list() { return {P{1}}; }
+void asWritten() {
+    vector<int> v = {1, 2};
+    int x = 5;
+    v.back() = x;
+    println("{}", v);                          // expect: [1, 5]
+}
+void aMethod() {
+    vector<P> v = {P{}};
+    v.back().set();
+    println("{}", v);                          // expect: [{x: 7}]
+}
+int main() {
+    asWritten();
+    aMethod();
+    vector<P> v = {P{1}, P{2}};
+    v.back().x = 1;
+    v.front().set();
+    println("{}", v);                          // expect: [{x: 7}, {x: 1}]
+    vector<int> n = {1, 2, 3};
+    int x = 30;
+    v.back() = P{x};
+    n.back() = x;
+    n.front() += 10;
+    println("{} {} {} {}", n, n.back(), n.front(), v.back());  // expect: [11, 2, 30] 30 11 {x: 30}
+    string s = "abc";
+    s.back() = 'z';
+    s.front() = 'Z';
+    println("{}", s);                          // expect: Zbz
+    array<int, 3> a = {1, 2, 3};
+    a.back() *= 2;
+    println("{}", a);                          // expect: [1, 2, 6]
+    hashmap<string, P> m;
+    m["k"] = P{1};
+    m.at("k").x = 7;
+    m.at("k").set();
+    println("{} {}", m.at("k"), m.size());     // expect: {x: 7} 1
+    vector<vector<int>> grid = {{1, 2}, {3}};
+    grid.back().push_back(4);
+    grid.front().back() = 9;
+    println("{}", grid);                       // expect: [[1, 9], [3, 4]]
+    // A reference bound to one goes on meaning that element, found by its index.
+    auto& last = v.back();
+    v.push_back(P{3});
+    last.x = 99;
+    println("{}", v);                          // expect: [{x: 7}, {x: 99}, {x: 3}]
+    // Of a temporary, they are a copy.
+    P copy = list().back();
+    println("{}", copy.x);                     // expect: 1
+    return 0;
+}

@@ -38,7 +38,7 @@ void itMayOnlyRead() {
     // error: `value()` gives a copy. Take the copy first, `auto v = o.value();`, use `v.area()` in place of this, and store it back after: `o = v;`, or mark 'area' `const` if it does not change any field
     const vector<S> w = {S{}};
     w.back().area();
-    // error: 'w' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change that, or mark 'area' `const` if it does not change any field
+    // error: cannot call 'area' on const 'w', because it may change fields
 }
 void pointerToPointer(H** p) {
     (*p)->os?.set();
@@ -54,9 +54,9 @@ void pointersToConst(const H* p, const vector<S>* w, const hashmap<string, S>* m
     p->os?.set();
     // error: 'p' is a 'const H*', so what it points to cannot change. Use a pointer that is not const, or change a copy: `auto x = ...;`, and change that
     w->back().set();
-    // error: 'w' is a 'const vector<S>*', so what it points to cannot change
+    // error: cannot call 'set' through a 'const vector<S>*', because it may change fields
     m->at("a").set();
-    // error: 'm' is a 'const hashmap<string, S>*', so what it points to cannot change
+    // error: cannot call 'set' through a 'const hashmap<string, S>*', because it may change fields
 }
 void cannotBeCopied() {
     WithUnique? o;

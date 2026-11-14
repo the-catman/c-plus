@@ -229,6 +229,7 @@ static bool namesOnePlace(const Expr& e) {
             auto& ix = static_cast<const IndexExpr&>(e);
             return !ix.lowered && namesOnePlace(*ix.base) && !plainKey(*ix.index).empty();  // what an `operator[]` gives is no place
         }
+        case Expr::Kind::MethodCall: return placeCall(e) && namesOnePlace(*placeCall(e));  // `v.back()`, `m.at(k)`
         case Expr::Kind::Borrow: return namesOnePlace(*static_cast<const BorrowExpr&>(e).operand);
         case Expr::Kind::Binary: {  // `p + n`, a pointer or a number, and nothing that is only a value made here, as `a + b` of strings would be
             auto& b = static_cast<const BinaryExpr&>(e);
@@ -279,6 +280,11 @@ static std::string spelled(const Expr& e, const std::string& fallback) {
         }
         return text.size() > 1 ? text + "]" : fallback;
     }
+    if (e.kind == Expr::Kind::Index && static_cast<const IndexExpr&>(e).endMethod) {  // `v.back()`, which became an element
+        auto& ix = static_cast<const IndexExpr&>(e);
+        const std::string base = spelled(*ix.base, "");
+        return base.empty() ? fallback : asBase(base) + "." + ix.endMethod + "()";
+    }
     if (e.kind == Expr::Kind::Index) {  // `v[0]` or `v[i]`
         auto& ix = static_cast<const IndexExpr&>(e);
         std::string base = spelled(*ix.base, "");
@@ -315,6 +321,10 @@ static std::string spelled(const Expr& e, const std::string& fallback) {
         auto& c = static_cast<const MethodCallExpr&>(e);
         if (!c.receiver && c.lowered && c.lowered->kind == Expr::Kind::Index) {  // `m.at(key)`, which has become something else by now
             auto& ix = static_cast<const IndexExpr&>(*c.lowered);
+            if (ix.endMethod) {  // `v.back()`, whose index is not written
+                const std::string base = spelled(*ix.base, "");
+                return base.empty() ? fallback : asBase(base) + "." + c.name + "()";
+            }
             const std::string base = spelled(*ix.base, ""), key = plainKey(*ix.index);
             if (!base.empty()) return asBase(base) + "." + c.name + "(" + (key.empty() ? "..." : key) + ")";
         }
@@ -531,6 +541,10 @@ static bool throughContainerMethod(const Expr& e) {
             case Expr::Kind::OptChain: x = static_cast<const OptChainExpr*>(x)->base.get(); continue;
             case Expr::Kind::OptValue: x = static_cast<const OptValueExpr*>(x)->chain->base.get(); continue;
             case Expr::Kind::MethodCall: {
+                if (const Expr* place = placeCall(*x)) {  // `v.back()` and `m.at(k)` of a place, which are the element itself
+                    x = place;
+                    continue;
+                }
                 auto& call = *static_cast<const MethodCallExpr*>(x);
                 if (call.lowered && call.name == "at") return true;
                 if (!call.receiver || !call.receiver->type) return false;
@@ -547,12 +561,16 @@ static bool throughContainerMethod(const Expr& e) {
 // When the root of `e` is the variable of a `for (auto x : list)` loop, which is a copy of the element: how to change the element.
 std::string Sema::loopCopyNote(const Expr& e) {
     const Expr* x = &e;
-    while (x->kind == Expr::Kind::Member || (x->kind == Expr::Kind::Index && !indexCall(*x)))
-        x = x->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(x)->base.get() : static_cast<const IndexExpr*>(x)->base.get();
+    while (x->kind == Expr::Kind::Member || (x->kind == Expr::Kind::Index && !indexCall(*x)) || placeCall(*x))
+        x = x->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(x)->base.get()
+            : placeCall(*x)               ? placeCall(*x)
+                                          : static_cast<const IndexExpr*>(x)->base.get();
     if (x->kind != Expr::Kind::Name) return "";
     for (const Expr* y = &e; y != x;) {  // a class object or what a pointer points to is the element itself, and not a copy
         if (y->type && (y->type->isClass() || y->type->isPointer())) return "";
-        y = y->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(y)->base.get() : static_cast<const IndexExpr*>(y)->base.get();
+        y = y->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(y)->base.get()
+            : placeCall(*y)               ? placeCall(*y)
+                                          : static_cast<const IndexExpr*>(y)->base.get();
     }
     if (x->type && (x->type->isClass() || x->type->isPointer())) return "";
     const VarDecl* var = lookup(static_cast<const NameExpr*>(x)->name);
@@ -593,7 +611,7 @@ std::string Sema::changeForm(const Expr& base, const std::string& change, const 
         return opening + "store it in a variable first, as this only exists as a copy: `auto " + opt + " = " + tryIfItFails(base) + name + ";`. Then " + what + ": " + store(opt);
     }
     if (!throughContainerMethod(base)) return opening + kStoreFirst;
-    return opening + "reach it with `[ ]`, and not with `back()`, `at()` or `get()`, which give copies, then unwrap it, change the copy and store it back there";
+    return opening + "reach it in place, with `[ ]` or `at()`, and not with `get()`, which gives a copy, then unwrap it, change the copy and store it back there";
 }
 
 // What is written after a value on the way to `e`: `.a.b`, and `e` is then left at the value.
@@ -645,7 +663,7 @@ std::string Sema::storeItBack(const Expr& recv, const std::string& method, bool 
         if (isTemporaryResult(*root) && !name.empty())
             return "store it in a variable first, as this only exists as a copy: `auto " + freshName(name, {"opt", "copy", "temp", "held"}) + " = " + tryIfItFails(*root) + name + ";`. Then " + inTurn;
         if (!throughContainerMethod(*root)) return kStoreFirst;
-        return "reach it with `[ ]`, and not with `back()`, `at()` or `get()`, which give copies. Then " + inTurn;
+        return "reach it in place, with `[ ]` or `at()`, and not with `get()`, which gives a copy. Then " + inTurn;
     }
     std::string used = name + " " + method;
     for (auto& p : paths) used += " " + p;
@@ -794,8 +812,11 @@ static bool holdsAPlace(const Expr& e) {
 // `?:` counts when both of what it chooses from are places, as then C++ would change the one it chose.
 static std::string copyOnTheWay(const Expr& e, bool resultUsed) {
     const Expr* x = &e;
-    while (x->kind == Expr::Kind::Member || x->kind == Expr::Kind::Index) {
-        x = x->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(x)->base.get() : indexCall(*x) ? indexCall(*x) : static_cast<const IndexExpr*>(x)->base.get();
+    while (x->kind == Expr::Kind::Member || x->kind == Expr::Kind::Index || placeCall(*x)) {
+        x = x->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(x)->base.get()
+            : placeCall(*x)               ? placeCall(*x)  // `v.back()`, the element itself
+            : indexCall(*x)               ? indexCall(*x)
+                                          : static_cast<const IndexExpr*>(x)->base.get();
         if (x->type && (x->type->isClass() || x->type->isPointer())) return "";
     }
     switch (x->kind) {
@@ -1058,7 +1079,7 @@ static const Type* typeAtPath(const VarDecl* v, const std::string& path) {
 // pointer points to.
 static bool isPlaceKind(const Expr& e) {
     return e.kind == Expr::Kind::Name || e.kind == Expr::Kind::Member || e.kind == Expr::Kind::This ||
-           (e.kind == Expr::Kind::Index && !indexCall(e)) || isDeref(e);
+           (e.kind == Expr::Kind::Index && !indexCall(e)) || isDeref(e) || placeCall(e);
 }
 
 // ---- Definite assignment ---------------------------------------------------
@@ -4381,6 +4402,11 @@ const FuncDecl* Sema::checkConstruction(const StructDecl& sd, std::vector<Constr
 }
 
 const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::string& path) {
+    if (e.kind == Expr::Kind::MethodCall) {  // `v.back()`, which checking it makes an element
+        var = nullptr;
+        path.clear();
+        return e.type ? e.type : checkExpr(e, flow);
+    }
     var = nullptr;
     path.clear();
     if (e.kind == Expr::Kind::Name) {
@@ -4636,6 +4662,7 @@ enum class Storage { Variable, Object, Pointer, Temporary };
 // variable, `root` is set to the Name or This expression it starts from; for memory
 // reached through a pointer, to the `*p` or `p[i]` that follows it.
 static Storage storageOf(const Expr& e, const Expr*& root) {
+    if (const Expr* place = placeCall(e)) return storageOf(*place, root);  // `v.back()`, the element
     switch (e.kind) {
         case Expr::Kind::Name:
         case Expr::Kind::This: root = &e; return Storage::Variable;
@@ -4701,6 +4728,7 @@ static bool inTemporaryObject(const Expr& e) {
 }
 
 static bool containsIndex(const Expr& e) {
+    if (const Expr* place = placeCall(e)) return containsIndex(*place);
     if (e.kind == Expr::Kind::Index) return !indexCall(e);
     return e.kind == Expr::Kind::Member && containsIndex(*static_cast<const MemberExpr&>(e).base);
 }
@@ -4717,6 +4745,7 @@ static std::string outerVectorName(const Expr& e) {
             return containsIndex(*m.base) ? base : base + "." + m.field;
         }
         case Expr::Kind::Index: return indexCall(e) ? "" : outerVectorName(*static_cast<const IndexExpr&>(e).base);
+        case Expr::Kind::MethodCall: return placeCall(e) ? outerVectorName(*placeCall(e)) : "";
         default: return "";
     }
 }
@@ -4846,11 +4875,13 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
     for (const Expr* at = &target; at;) {  // `m[key]` itself was reported, and also what is changed through it
         if (at == constMapReported_) return false;
         at = at->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(at)->base.get()
+             : placeCall(*at) ? placeCall(*at)
              : at->kind == Expr::Kind::Index && !indexCall(*at) ? static_cast<const IndexExpr*>(at)->base.get() : nullptr;
     }
     bool element = containsIndex(target);
-    bool inString = target.kind == Expr::Kind::Index && !indexCall(target) && static_cast<const IndexExpr&>(target).base->type &&
-                    static_cast<const IndexExpr&>(target).base->type->is(K::String);
+    const Expr& targetPlace = placeCall(target) ? *placeCall(target) : target;
+    bool inString = targetPlace.kind == Expr::Kind::Index && !indexCall(targetPlace) && static_cast<const IndexExpr&>(targetPlace).base->type &&
+                    static_cast<const IndexExpr&>(targetPlace).base->type->is(K::String);
     const char* parts = inString ? "chars" : "elements";
     if (rootVar == thisVar() && fn_->isConst && fn_->lambda) {
         std::string what = element ? std::string("the ") + parts + " of " + q(outerVectorName(target)) : q(var && !path.empty() ? path : rootVar->name);
@@ -5335,9 +5366,14 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
                      spec::Optionals);
         return false;
     }
+    if (target.kind == Expr::Kind::MethodCall) {  // `v.back() = x` or `m.at(k) = x`: the element, which can change where it is
+        const Type* t = checkExpr(target, flow);
+        if (t->isError()) return false;
+        if (placeCall(target)) return checkChangeable(target, action, nullptr, "", change, before);
+    }
     if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index &&
         !isDeref(target)) {
-        checkExpr(target, flow);
+        if (target.kind != Expr::Kind::MethodCall) checkExpr(target, flow);
         std::string help = target.kind == Expr::Kind::This ? "assign to its fields, or to a variable: 'this' always refers to the current object" : copyHelp(target, change, false, before);
         diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action, help,
                      spec::Variables);
@@ -8006,6 +8042,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     }
     bool isPlace = isPlaceKind(recv);
     const Type* t = isPlace ? resolvePlace(recv, flow, var, path) : checkExpr(recv, flow);
+    isPlace = isPlace || placeCall(recv);  // `v.back().set()`, which is a place once checked
     if (var && !t->isError()) requireAssigned(flow, var, path, t, recv.loc);
     if (t->isError()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
@@ -8032,6 +8069,18 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         diags_.error(call.loc, q(n) + " is a pointer, so the methods of what it points to are called with '->'",
                      "write `" + asBase(n) + "->" + call.name + "(...)`", spec::Pointers);
         return Type::error();
+    }
+    // `v.back()` and `v.front()` of a container that is a place: that element, which can be changed where it is, as the
+    // reference C++ gives can. The index of the last is worked out where the place is found.
+    if ((t->isVector() || t->isArray() || t->is(K::String)) && isPlace && call.args.empty() && (call.name == "back" || call.name == "front") &&
+        !throughOptionalChain(recv) && !(t->isArray() && t->length == 0)) {
+        auto zero = std::make_unique<IntLitExpr>(call.loc, 0, true, false);
+        zero->type = Type::longTy();
+        auto ix = std::make_unique<IndexExpr>(call.loc, std::move(call.receiver), std::move(zero));
+        ix->endMethod = call.name == "back" ? "back" : "front";
+        ix->type = t->is(K::String) ? Type::charTy() : t->elem;
+        call.lowered = std::move(ix);
+        return call.lowered->type;
     }
     if (t->isVector()) return checkVectorMethod(call, flow, t);
     if (t->isArray()) return checkArrayMethod(call, flow, t);

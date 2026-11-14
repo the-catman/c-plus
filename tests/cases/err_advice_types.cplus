@@ -45,12 +45,9 @@ void unassignedStruct() {
 void backOfVector() {
     vector<P> v = {P{}};
     v.back().x = 1;
-    // error: `back()` gives a copy. Change it in place: `v[v.size() - 1].x = ...`
     v.front().x = 1;
-    // error: `front()` gives a copy. Change it in place: `v[0].x = ...`
     hashmap<string, int> m;
     m.at("a") = 3;
-    // error: `at()` gives a copy. Change it in place: `m["a"] = ...`
 }
 void throughPointers() {
     P p;

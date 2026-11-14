@@ -877,8 +877,6 @@ SPEC_REJECTED = {
     "{:n}": 'vector<int> v = {1}; println("{:n}", v);', 'throw "text"': '^void f2() throws { throw "text"; }', "try f() + g()": "int x = try f() + g();",
     "Node n = a;": 'local<Node> a = local<Node>("x"); Node n = a;', "local<Node> a = n;": 'Node n = Node("x"); local<Node> a = n;', "weak<Node>?": "weak<Node>? w = null;",
     "w == null": 'weak<Node> w; println("{}", w == null);', "largest(1, 2.5)": "auto x = largest(1, 2.5);", "Stack(1)": "auto s = Stack(1);", "spawn f(x).wait()": "int x = 1; spawn given(x).wait();",
-    "v.back().x = 1": "vector<Point> v = {Point{}}; v.back().x = 1;", "v.back().set()": "vector<Settable> v = {Settable{}}; v.back().set();",
-    "v.back().p.set()": "vector<HoldsSettable> v = {HoldsSettable{}}; v.back().p.set();",
     "(f ? a : b).set()": "Settable a = {}; Settable b = {}; bool f = true; (f ? a : b).set();",
     "for (auto [k, v] : m)": "hashmap<string, int> m; for (auto [k, v] : m) {}",
     "return &x;": "^int* f() { int x = 1; return &x; }", "return a.data();": "^int* f() { array<int, 2> a = {1, 2}; return a.data(); }",

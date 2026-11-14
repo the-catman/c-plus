@@ -1723,6 +1723,7 @@ struct Codegen::Impl {
                 const Expr& base = *static_cast<const IndexExpr&>(e).base;
                 return base.type->isArray() && stablePlace(base);
             }
+            case Expr::Kind::MethodCall: return placeCall(e) && stablePlace(*placeCall(e));
             default: return false;
         }
     }
@@ -1741,6 +1742,7 @@ struct Codegen::Impl {
                 if (base.type->isArray()) return inContainerElement(base);
                 return !base.type->isPointer();
             }
+            case Expr::Kind::MethodCall: return placeCall(e) && inContainerElement(*placeCall(e));
             default: return false;
         }
     }
@@ -1780,6 +1782,7 @@ struct Codegen::Impl {
                 auto& ix = static_cast<const IndexExpr&>(e);
                 return !ix.lowered && ((ix.mapSlot && !ix.mapSlot->isConst) || addsKey(*ix.base));
             }
+            case Expr::Kind::MethodCall: return placeCall(e) && addsKey(*placeCall(e));
             default: return false;
         }
     }
@@ -2157,6 +2160,7 @@ struct Codegen::Impl {
                 auto& m = static_cast<const MemberExpr&>(e);
                 return m.base->type->isClass() || isPlace(*m.base);
             }
+            case Expr::Kind::MethodCall: return placeCall(e) && isPlace(*placeCall(e));  // `v.back()`, the element
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
                 if (ix.lowered) return false;  // `g[i]`, a call of `operator[]`
@@ -2219,10 +2223,19 @@ struct Codegen::Impl {
                 freeze(pointer, gen(pointer));
                 return;
             }
+            case Expr::Kind::MethodCall:  // `v.back()`, which is the element
+                if (const Expr* place = placeCall(e)) freezePlace(*place, made);
+                return;
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
                 if (ix.base->type->isPointer() || !isPlace(*ix.base)) freeze(*ix.base, gen(*ix.base));
                 else freezePlace(*ix.base, made);
+                if (ix.endMethod) {  // `v.back()`: the last one now, which a reference bound to it goes on meaning
+                    const Type* vt = ix.base->type;
+                    llvm::Value* size = vt->isArray() ? b.getInt64(vt->length) : vt->is(K::String) ? strLength(gen(*ix.base)) : vecSize(gen(*ix.base));
+                    freeze(*ix.index, endIndex(ix, size));
+                    return;
+                }
                 freeze(*ix.index, ix.mapSlot ? heldKey(ix) : genIndex(*ix.index));
                 return;
             }
@@ -2409,6 +2422,7 @@ struct Codegen::Impl {
                 return locals.at(n.decl);
             }
             case Expr::Kind::This: return thisPtr;
+            case Expr::Kind::MethodCall: return addressOf(*placeCall(e), hold, write);  // `v.back()`, the element
             case Expr::Kind::Member: {
                 auto& m = static_cast<const MemberExpr&>(e);
                 const Type* baseType = m.base->type;
@@ -2446,7 +2460,7 @@ struct Codegen::Impl {
                 if (vt->isArray()) {
                     // As for a vector below, the array's place stays alive while the index is computed.
                     llvm::Value* array = isPlace(*ix.base) ? addressOf(*ix.base, hold || mayRunCode(*ix.index), write) : baseOnce(*ix.base);
-                    llvm::Value* index = indexOnce(*ix.index);
+                    llvm::Value* index = ix.endMethod && !frozenValue(*ix.index) ? endIndex(ix, b.getInt64(vt->length)) : indexOnce(*ix.index);
                     checkIndex(index, b.getInt64(vt->length), ix.loc, rtTrapArrayIndex);
                     return arrayElement(array, index, vt);
                 }
@@ -2464,6 +2478,7 @@ struct Codegen::Impl {
                     buf = baseOnce(*ix.base);  // a temporary, kept until the statement ends
                     index = indexOnce(*ix.index);
                 }
+                if (ix.endMethod && !frozenValue(*ix.index)) index = endIndex(ix, vecSize(buf));  // `v.back()`, found now
                 checkIndex(index, vecSize(buf), ix.loc, rtTrapIndex);
                 if (write) {
                     if (!slot) llvm_unreachable("Sema allowed changing an element of a temporary vector");
@@ -2474,6 +2489,15 @@ struct Codegen::Impl {
             }
             default: llvm_unreachable("not a place");
         }
+    }
+
+    // The index of `v.back()` or `v.front()` among `size`, which stops the program when there is none.
+    llvm::Value* endIndex(const IndexExpr& ix, llvm::Value* size) {
+        const Type* vt = ix.base->type;
+        trapIf(b.CreateICmpEQ(size, b.getInt64(0)),
+               std::string(ix.endMethod) + "() was called on " + (vt->isArray() ? "an array with no elements" : vt->is(K::String) ? "an empty string" : "an empty vector"),
+               ix.loc);
+        return std::string(ix.endMethod) == "back" ? b.CreateSub(size, b.getInt64(1), "last") : b.getInt64(0);
     }
 
     // The address of `s[i]`, a byte of a string, found as for an element of a vector.
@@ -2490,6 +2514,7 @@ struct Codegen::Impl {
             s = baseOnce(*ix.base);  // a temporary, kept until the statement ends
             index = indexOnce(*ix.index);
         }
+        if (ix.endMethod && !frozenValue(*ix.index)) index = endIndex(ix, strLength(s));  // `s.back()`, found now
         checkIndex(index, strLength(s), ix.loc, rtTrapStringIndex);
         llvm::Value* data = strData(s);
         if (write) {

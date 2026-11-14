@@ -83,7 +83,7 @@ void comparing(string name, string? maybe, bool flag, int count) {
 }
 void uniques(vector<unique<Node>> vu) {
     auto b = vu.back();
-    // error: read the element in place, through `vu[vu.size() - 1]`, or take it with `move(vu[vu.size() - 1])`
+    // error: write `move(vu.back())` to hand it over, after which vu.back() has no value, or `vu.back().get()` to lend the object, as a `Node`
 }
 void formats(double? od, int x, int? o) {
     string q = format("{:.1f} and {}", od, x);

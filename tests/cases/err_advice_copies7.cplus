@@ -19,7 +19,6 @@ void keepWhatItGives() {
     // error: `=` gives a copy of what was assigned. Assign first, on a line of its own, `a = ...;`, and then use `a.with(...)`
     vector<S> list = {S{}};
     list.back().with(3);
-    // error: `back()` gives a copy. Change it in place: `list[list.size() - 1].with(...)`
     hashmap<string, S> m;
     m.values()[0].set();
     // error: 'set' may change the struct, but 'values()' gives a copy of it

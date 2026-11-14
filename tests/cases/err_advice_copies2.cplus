@@ -32,9 +32,9 @@ void inTheMap() {
 void inTheVector() {
     vector<vector<int>?> vs;
     vs.back().push_back(2);
-    // error: unwrap it, change the copy and store it back: `if (auto v = vs[vs.size() - 1]) { v.push_back(...); vs[vs.size() - 1] = v; }`
+    // error: To change it, unwrap it, change the copy and store it back: `if (auto v = vs.back()) { v.push_back(...); vs.back() = v; }`
     vs.front()[0] = 2;
-    // error: unwrap it, change the copy and store it back: `if (auto v = vs[0]) { v[i] = ...; vs[0] = v; }`
+    // error: unwrap it first: `if (auto v = vs.front()) ... v[i]`. To change an element, unwrap it, change the copy and store it back: `if (auto v = vs.front())
 }
 void anOptionalInTheMap() {
     hashmap<string, vector<int>?> m;
@@ -46,7 +46,6 @@ void anOptionalInTheMap() {
 }
 void aTemporary() {
     makeMap().at("a").set();
-    // error: this value is a temporary copy, so changing it would have no effect. Store it in a variable first
 }
 void namesThatMustKeepTheirMeaning() {
     Outer? a;
@@ -76,7 +75,7 @@ void constMaps() {
     // error: 'm' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change that
     const hashmap<string, S> ms = {};
     ms.at("a").x = 1;
-    // error: 'ms' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto x = ...;`, and change that
+    // error: 'ms' is const, so its elements cannot be assigned to
 }
 
 struct Plain {
@@ -92,22 +91,17 @@ string keyOf() { return "a"; }
 void throughACopy() {
     vector<Plain> ps = {Plain{}};
     ps.back().p.set();
-    // error: 'set' may change the struct, but 'back()' gives a copy of it
-    // error: `back()` gives a copy. Change it in place: `ps[ps.size() - 1].p.set()`
     ps.back().p.x = 9;
-    // error: `back()` gives a copy. Change it in place: `ps[ps.size() - 1].p.x = ...`
     vector<Holder> hs;
     hs.back().items.push_back(1);
-    // error: `back()` gives a copy. Change it in place: `hs[hs.size() - 1].items.push_back(...)`
 }
 void partsThatRunEachTimeTheyAreWritten() {
     vector<vector<S>> vv;
     Counter c = Counter();
     vv[c.next()].back().x = 5;
-    // error: this value is a temporary copy, so changing it would have no effect. Store it in a variable first
     hashmap<string, S> m;
     m.get(keyOf())?.set();
-    // error: reach it with `[ ]`, and not with `back()`, `at()` or `get()`, which give copies, then unwrap it, change the copy and store it back there
+    // error: reach it in place, with `[ ]` or `at()`, and not with `get()`, which gives a copy, then unwrap it, change the copy and store it back there, or mark
 }
 void keysOfOtherKinds() {
     hashmap<int, S> byNumber;
@@ -118,9 +112,7 @@ void keysOfOtherKinds() {
     // error: write `if (byChar.contains('a')) byChar['a'].set();`, which changes it in the map
     hashmap<string, S> m;
     m.at("a\rb").x = 1;
-    // error: this value is a temporary copy, so changing it would have no effect
     m.at("b").x = 1;
-    // error: `at()` gives a copy. Change it in place: `m["b"].x = ...`, which adds the key if it is missing
 }
 void anOptionalInGet() {
     hashmap<string, S?> m;
@@ -141,7 +133,7 @@ void namesAlreadyTaken() {
     // error: `auto copy = makeMaybe();`. Then unwrap it, change the copy and store it back: `if (auto v = copy) { v.push_back(...); copy = v; }`
     const vector<S> x;
     x.back().x = 5;
-    // error: 'x' is const, so what is in it cannot change. Remove `const` from its declaration, or change a copy: `auto copy = ...;`, and change that
+    // error: 'x' is const, so its elements cannot be assigned to
 }
 void constThroughOptionals() {
     const S? o = S{};

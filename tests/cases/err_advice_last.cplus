@@ -16,7 +16,7 @@ void fromAMap() {
 void fromBack() {
     vector<P?> w;
     w.back()?.set();
-    // error: `if (auto v = w[w.size() - 1]) { v.set(); w[w.size() - 1] = v; }`
+    // error: `if (auto v = w.back()) { v.set(); w.back() = v; }`
 }
 struct WithV { P? o; };
 void namedV() {
@@ -62,7 +62,6 @@ void newUnique() {
 void keyToEscape() {
     hashmap<string, int> q;
     q.at("a\"b") = 1;
-    // error: this value is a temporary copy, so changing it would have no effect
 }
 void floatRemainder() {
     float x = 1;

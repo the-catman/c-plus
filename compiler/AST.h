@@ -647,6 +647,9 @@ struct IndexExpr : Expr {
     FuncDecl* mapSlot = nullptr;  // set by Sema for `m[key]` on a hashmap: finds the entry, adding it if it should
     bool mapAssign = false;       // the target of `m[key] = value`, which needs no value to start with
     bool mapTarget = false;       // the target of any assignment, which checks by itself that `m` can change
+    // `v.back()` or `v.front()` of a container that is a place, which Sema makes this: "back" counts from the end, so that 0 is
+    // the last element, worked out where the place is found; the name is also what an empty container's error says.
+    const char* endMethod = nullptr;
     // Set by Sema for `g[i]` of a struct or a class: the call of its `operator[]` that this is, which then owns `base`,
     // `index` and `more`. What looks at the parts of an IndexExpr looks there first: see indexCall.
     ExprPtr lowered;
@@ -656,6 +659,28 @@ struct IndexExpr : Expr {
 // The call of `operator[]` that an IndexExpr really is, or null.
 inline const Expr* indexCall(const Expr& e) {
     return e.kind == Expr::Kind::Index ? static_cast<const IndexExpr&>(e).lowered.get() : nullptr;
+}
+
+// The place that a method call really is, as Sema lowers `v.back()`, `v.front()` and `m.at(k)` to an element: that IndexExpr,
+// which owns the receiver. Null for any other expression. What looks at places looks through it.
+inline const Expr* placeCall(const Expr& e);
+// Whether `e` is written as storage: a variable, `this`, a field, an element or what a pointer points to. What it lies in may
+// still be a temporary.
+inline bool placeShaped(const Expr& e) {
+    switch (e.kind) {
+        case Expr::Kind::Name: case Expr::Kind::This: case Expr::Kind::Member: return true;
+        case Expr::Kind::Index: return !static_cast<const IndexExpr&>(e).lowered;
+        case Expr::Kind::Unary: return static_cast<const UnaryExpr&>(e).op == UnOp::Deref;
+        case Expr::Kind::MethodCall: return placeCall(e) != nullptr;
+        default: return false;
+    }
+}
+inline const Expr* placeCall(const Expr& e) {
+    if (e.kind != Expr::Kind::MethodCall) return nullptr;
+    auto& m = static_cast<const MethodCallExpr&>(e);
+    if (m.receiver || !m.lowered || m.lowered->kind != Expr::Kind::Index) return nullptr;
+    const Expr* base = static_cast<const IndexExpr&>(*m.lowered).base.get();  // `makeMap().at(k)` gives a copy, as before
+    return base && placeShaped(*base) ? m.lowered.get() : nullptr;
 }
 
 // `{1, 2}`, `{.x = 1, .y = 2}`, or `Point{1, 2}`. Without a type name, the list takes its

@@ -436,8 +436,10 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
 - `size()` returns `long`, as every size and count does, unsigned types being for bits.
 - An index out of range, and `pop_back`, `front` or `back` on an empty vector, stop the
   program with the file and line.
-- `front()` and `back()` give copies, as there are no references yet. Changing what they give or a field of it, `v.back().x = 1`, `v.back().p.set()` or a method that
-  changes a struct, is an error, since in C++ it would change the element, and here it would quietly do nothing. Decided 2026-11-07.
+- `front()` and `back()` of a vector, an array or a string that is a place are the element itself, as C++'s references are
+  (2026-11-14, §2.31): `v.back().x = 1` and `v.back().set()` change it, and a reference bound to one is found again by
+  its index, worked out where it is bound. Of a temporary they are a copy. Until then they gave copies, and changing
+  what they gave was an error (decided 2026-11-07).
 - A range-based `for` loops over the vector as it was when the loop started, so changing
   the vector in the body is safe. `for (auto& x : v)` waits for references.
 
@@ -585,7 +587,8 @@ Decided 2026-11-05.
 - Any type with `==` can be a key, if that `==` looks at what can be hashed, with no hash to write. A type with its own
   `operator==`, or holding one, cannot be a key until it can have its own hash, as one made from its fields could tell
   apart two values that its `==` calls equal (§2.38).
-- `m.at(k)` and `m.get(k)` give copies too, so changing what they give is an error for the same reason, and `m[k]` is the place.
+- `m.at(k)` of a map that is a place is the value itself (2026-11-14, §2.31), and never adds the key: a missing one
+  stops the program. `m.get(k)` gives a copy, so changing what it gives is an error, and `m[k]` or `m.at(k)` is the place.
   So are `?:` when both of what it chooses from are what C++ would refer to (then C++ would change the one it chose), and `=`.
   `??`, `value_or()`, `values()`, `items()`, and `?:` with only one such, give copies in C++ too, so they are errors only when nothing
   receives the result. The same goes for `?.`: on a place it is an error, and on what a function gave only when the result is unused.
@@ -689,8 +692,8 @@ program and never dangles, but when its container is resized, replaced or was sh
     After the call, the program stops if the container was changed, copied or freed in any other way, as the trap of §6 does
     for methods, which this extends. That stop also covers a change C++ allows, such as writing another element through a
     `vector<int>&` parameter; pins would remove it, at the cost above.
-  - Still to come: `v.back()`, `v.front()`, `m.at(k)` and `?:` of two places as places, which change §2.17 and §2.24, and
-    `for (auto& e : m)` over a hashmap.
+  - `v.back()`, `v.front()` and `m.at(k)` of a place are places (built 2026-11-14), changing §2.17 and §2.24. Still to
+    come: `?:` of two places as a place, and `for (auto& e : m)` over a hashmap.
 - Aliasing follows C++: `swap(v[0], v[1])` and `f(x, x)` are allowed.
 - Order: `const T&` first, with no change to the runtime, then `T&` to variables and fields, then to elements (all done
   2026-11-11), then `T&` returns with item 6.

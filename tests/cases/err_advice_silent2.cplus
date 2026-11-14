@@ -19,7 +19,6 @@ void notAVariable() {
 void copies() {
     string s = "a";
     s.back() = 'b';
-    // error: `back()` gives a copy. Change it in place: `s[s.size() - 1] = ...`
     P? o = P{};
     o.value().x = 1;
     // error: `value()` gives a copy. Unwrap it, change that and store it back: `if (auto v = o) { v.x = ...; o = v; }`
@@ -28,11 +27,8 @@ void copies() {
     // error: `get()` gives a copy. Change it in place: `m["a"] = ...`
     hashmap<string, vector<int>> lists;
     lists.at("a").push_back(1);
-    // error: `at()` gives a copy. Change it in place: `lists["a"].push_back(...)`
     vector<P> v = {P{}};
     v.back().set();
-    // error: 'set' may change the struct, but 'back()' gives a copy of it
-    // error: `back()` gives a copy. Change it in place: `v[v.size() - 1].set()`
     vector<int>? w = vector<int>{1};
     w[0] = 1;
     // error: To change an element, unwrap it, change the copy and store it back: `if (auto inner = w) { inner[i] = ...; w = inner; }`
@@ -66,7 +62,7 @@ void classes() {
     // error: start empty, and `push_back` a new object in a loop: every element of `vector<U>(n, value)` would be one object
     array<unique<U>, 2> a = {unique<U>(), unique<U>()};
     unique<U> b = a.back();
-    // error: reach the element in place, as in `a[a.size() - 1].field`, or take it with `move(a[a.size() - 1])`
+    // error: write `move(a.back())` to hand it over, after which a.back() has no value, or `a.back().get()` to lend the object, as a `U`
 }
 void thrown() throws {
     throw "a \"q\"";
