@@ -1,0 +1,7 @@
+// In a function type, a parameter is the value or a const T&, which mean the same, so `const` alone says nothing.
+int main() {
+    function<bool(const int, const int)> less = [](int a, int b) { return a < b; };
+    // error: `const` on a parameter that is a copy says nothing to the caller
+    // error: write `int`, which in a function type means the same as `const int&`
+    return 0;
+}

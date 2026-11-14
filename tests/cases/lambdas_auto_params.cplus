@@ -1,0 +1,35 @@
+// A lambda's parameter can be `auto` or `const auto&` where what it is given to says the type: a call of sort or another
+// algorithm, a function<...> variable or parameter, or a generic once its types are worked out.
+struct Person {
+    string name;
+    int age;
+};
+
+template<typename T> T applyTwice(function<T(T)> f, T x) { return f(f(x)); }
+template<typename T> long countWhere(vector<T> v, function<bool(T)> test) { return count_if(v, test); }
+
+int main() {
+    vector<Person> ps = {{"Ann", 31}, {"Bob", 25}, {"Cy", 40}};
+    sort(ps, [](const auto& a, const auto& b) { return a.age < b.age; });
+    println("{}", ps[0].name);
+    // expect: Bob
+    function<int(int)> twice = [](auto x) { return x * 2; };
+    println("{} {}", twice(4), applyTwice([](auto x) { return x + 1; }, 10));
+    // expect: 8 12
+    println("{} {}", applyTwice([](const auto& s) { return s + s; }, string("ab")), countWhere(ps, [](auto p) { return p.age > 30; }));
+    // expect: abababab 2
+    println("{}", count_if(ps, [](auto p) { return p.age > 30; }));
+    // expect: 2
+    vector<string> w = {"bb", "a", "ccc"};
+    stable_sort(w, [](const auto& a, const auto& b) { return a.size() > b.size(); });
+    println("{}", w);
+    // expect: ["ccc", "bb", "a"]
+    println("{}", accumulate(ps, 0, [](auto total, const auto& p) { return total + p.age; }));
+    // expect: 96
+    int k = 3;
+    vector<function<int(int)>> steps = {[&](auto x) { return x + k; }, [](auto x) { return x * x; }};
+    k = 4;
+    println("{} {}", steps[0](1), steps[1](5));
+    // expect: 5 25
+    return 0;
+}

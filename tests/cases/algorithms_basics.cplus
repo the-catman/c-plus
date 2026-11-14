@@ -1,0 +1,90 @@
+// Each function of <algorithm>, on vectors of numbers, strings and structs.
+struct Person {
+    string name;
+    int age;
+};
+
+int main() {
+    vector<int> v = {5, 3, 9, 1, 7, 3, 8, 2, 6, 4, 0, 11, 15, 13, 12, 14, 19, 18, 17, 16, 10};
+    sort(v);
+    println("{}", v);
+    // expect: [0, 1, 2, 3, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    sort(v, [](int a, int b) { return a > b; });
+    println("{}", v);
+    // expect: [19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 3, 2, 1, 0]
+    vector<string> names = {"pear", "apple", "fig", "kiwi"};
+    sort(names);
+    println("{}", names);
+    // expect: ["apple", "fig", "kiwi", "pear"]
+    vector<Person> ps = {{"Ann", 31}, {"Bob", 25}, {"Cy", 31}, {"Di", 25}, {"Ed", 40}};
+    stable_sort(ps, [](const Person& a, const Person& b) { return a.age < b.age; });
+    for (auto p : ps) print("{} ", p.name);
+    println("|");
+    // expect: Bob Di Ann Cy Ed |
+    stable_sort(ps, [](Person a, Person b) { return a.age > b.age; });
+    for (auto p : ps) print("{} ", p.name);
+    println("|");
+    // expect: Ed Ann Cy Bob Di |
+    reverse(v);
+    println("{}", v);
+    // expect: [0, 1, 2, 3, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    println("{} {} {}", any_of(v, [](int x) { return x > 18; }), all_of(v, [](int x) { return x >= 0; }), none_of(v, [](int x) { return x < 0; }));
+    // expect: true true true
+    println("{} {} {}", any_of(v, [](int x) { return x > 19; }), all_of(v, [](int x) { return x > 0; }), none_of(v, [](int x) { return x == 0; }));
+    // expect: false false false
+    println("{} {} {} {}", contains(v, 7), contains(v, 70), count(v, 3), count_if(v, [](int x) { return x % 2 == 0; }));
+    // expect: true false 2 10
+    println("{} {}", index_of(v, 9) ?? -1, index_if(v, [](int x) { return x > 100; }) ?? -1);
+    // expect: 10 -1
+    println("{}", erase_if(v, [](int x) { return x % 3 == 0; }));
+    // expect: 8
+    println("{}", v);
+    // expect: [1, 2, 4, 5, 7, 8, 10, 11, 13, 14, 16, 17, 19]
+    println("{} {}", erase(v, 1), erase(v, 100));
+    // expect: 1 0
+    println("{} {}", min(v), max(v));
+    // expect: 2 19
+    println("{} {}", accumulate(v, 0), accumulate(v, 0.5));
+    // expect: 126 126.5
+    println("{}", accumulate(v, 1L, [](long p, int x) { return p * x; }));
+    // expect: 231757926400
+    println("{}", accumulate(names, string(">"), [](string s, const string& x) { return s + x[0]; }));
+    // expect: >afkp
+    println("{}", accumulate(names, ""));
+    // expect: applefigkiwipear
+    println("{} {} {}", binary_search(v, 7), binary_search(v, 6), binary_search(v, 100));
+    // expect: true false false
+    vector<int> down = {9, 7, 5};
+    println("{} {}", binary_search(down, 7, [](int a, int b) { return a > b; }), binary_search(down, 6, [](int a, int b) { return a > b; }));
+    // expect: true false
+    vector<int> r = vector<int>(5);
+    iota(r, 10);
+    println("{}", r);
+    // expect: [10, 11, 12, 13, 14]
+    vector<char> letters = vector<char>(3);
+    iota(letters, 'x');
+    vector<double> halves = vector<double>(3);
+    iota(halves, 0.5);
+    println("{} {}", letters, halves);
+    // expect: ['x', 'y', 'z'] [0.5, 1.5, 2.5]
+    println("{} {}", min(names, [](const string& a, const string& b) { return a.size() < b.size(); }), max(names, [](const string& a, const string& b) { return a.size() < b.size(); }));
+    // expect: fig apple
+    Person oldest = max(ps, [](const Person& a, const Person& b) { return a.age < b.age; });
+    Person first25 = min(ps, [](auto a, auto b) { return a.age < b.age; });
+    println("{} {}", oldest.name, first25.name);
+    // expect: Ed Bob
+    vector<int> none;
+    sort(none);
+    stable_sort(none, [](int a, int b) { return a < b; });
+    reverse(none);
+    iota(none, 1);
+    println("{} {} {} {} {}", none, contains(none, 1), count_if(none, [](int x) { return true; }), accumulate(none, 7), binary_search(none, 1));
+    // expect: [] false 0 7 false
+    println("{} {}", index_of(none, 1) ?? -1, erase_if(none, [](int x) { return true; }));
+    // expect: -1 0
+    vector<int> one = {4};
+    sort(one, [](int a, int b) { return a > b; });
+    println("{} {} {}", one, min(one), max(one));
+    // expect: [4] 4 4
+    return 0;
+}

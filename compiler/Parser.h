@@ -253,6 +253,7 @@ private:
     std::unordered_map<size_t, ConstexprIf> constexprIfs_;  // from reading a generic's definition, by the `if`
     const Type* injected_ = nullptr;  // inside `Box<T>`: what `Box` alone means
     bool dryRun_ = false;  // reading a definition with parameters not yet known
+    bool lambdaParams_ = false;  // reading what a lambda takes, which can be `auto`: Sema gives it the type it is given to
     std::deque<Type> placeholders_;
     std::deque<TemplatePattern> patterns_;
     int genericDepth_ = 0;

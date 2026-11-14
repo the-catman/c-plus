@@ -18,5 +18,12 @@ int main() {
     array<int, 3> v;
     v[0] = 1;
     auto p = [n = k + 1] { return n; };
+    vector<function<int(int)>> steps = {[&](auto x) { return x + k; }, [](const auto& x) { return x * x; }};
+    vector<function<int()>> one = {[] { return 1; }};
+    int n = [] { return 2; }();
+    vector<function<int()>> tall = {[] {
+        return 1;
+    }};
+    sort(v, [](const auto& a, const auto& b) { return a > b; });
     return 0;
 }

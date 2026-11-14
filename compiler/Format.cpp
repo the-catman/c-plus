@@ -513,6 +513,7 @@ private:
         if (ak == Tok::Dot || ak == Tok::Arrow || ak == Tok::QuestionDot || ak == Tok::ColonColon) return false;
         if (bk == Tok::Dot || bk == Tok::Arrow || bk == Tok::QuestionDot || bk == Tok::ColonColon) return false;
         if (ak == Tok::LBrace) return !(bk == Tok::RBrace && match_[a] == b);  // `{}` is empty, and `{ x }` is not
+        if (ak == Tok::RBrace && bk == Tok::LParen && match_[a] != kNone && lambda_[match_[a]]) return false;  // `[] { ... }()`
         if ((bk == Tok::RBrace && br == Role::Block) || (ak == Tok::RBrace && ar == Role::Block)) return true;
         if (bk == Tok::LBrace) return br == Role::Block || !(ak == Tok::Ident || ar == Role::TemplateClose || isTypeKeyword(ak));
         if (ar == Role::TemplateOpen || br == Role::TemplateOpen || br == Role::TemplateClose) return false;
@@ -743,7 +744,9 @@ private:
                     const Tok nk = kind(next);
                     const bool doWhile = o.isDo && nk == Tok::KwWhile;
                     if (doWhile && kind(next + 1) == Tok::LParen) tail_[next + 1] = true;
-                    const bool goesOn = nk == Tok::KwElse || nk == Tok::KwCatch || doWhile || nk == Tok::Semi || nk == Tok::Comma || nk == Tok::RParen;
+                    // A lambda is in an expression, which goes on after it: `{[] { return 1; }}`, `[] { ... }()`.
+                    const bool goesOn = nk == Tok::KwElse || nk == Tok::KwCatch || doWhile || nk == Tok::Semi || nk == Tok::Comma || nk == Tok::RParen ||
+                                        lambda_[o.at];
                     mustBreak = keptDepth == 0 && !goesOn && next < toks_.size();
                     if (!goesOn) {
                         stmtStart = true;

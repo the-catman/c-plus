@@ -1,0 +1,9 @@
+// The same for a string.
+int main() {
+    string s = "cab";
+    sort(s, [&](char a, char b) { s += "x"; return a < b; });
+    println("not reached");
+    return 0;
+}
+// trap: the comparator given to sort() changed the string it was sorting, and that change would be lost
+// trap: trap_sort_string_comparator_changes.cplus:4:5

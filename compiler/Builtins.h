@@ -6,6 +6,8 @@
 //
 //   __hash(x)       a number for x, the same for two values that are ==, and never negative
 //   __move(x)       as move(x), but x is always left empty, even if it could have been copied
+//   __swap(a, b)    swaps what two places of one type hold, as bytes, so that no count of a reference changes
+//   __same_buffer(a, b)  whether two vectors, or two strings, share one buffer, which a write to either would end
 //   __Hashable      the constraint Hashable, which a program's own `Hashable` cannot replace
 //   V?              stays V when V can already be empty: a pointer, an optional or a weak reference
 //   __zero(T)       a T that is all zero bytes, for what must be filled in before anything can see it
@@ -958,6 +960,400 @@ string? readLine() {
     if (!cplus_read_line((void*)&line)) return null;
     return line;
 }
+)cplus";
+
+// `sort` and the other functions of <algorithm> (Sema::checkAlgorithm), added when the program uses one of their names. Each
+// is a generic of its own name with `__` in front, which the program cannot name, so a function of the program's that is called
+// `sort` replaces the library's. A block between `//@` lines is written once for several variants, which Parser::expandVariants
+// makes from it: `@V` is what each adds to the names, `@P` and `@A` the comparator that the parameters and the arguments
+// have or not, `@T` is ` throws` when the function given can fail, `@C` is `try ` before what can then fail, and `@L(x, y)`
+// is whether x goes before y, which is `x < y` for the variant without a comparator and `less(x, y)` for those with one.
+//
+// Each that changes a vector it is given a function for works on a copy, so that the function sees the vector as it was, and
+// keeps `before`, which shares the vector's buffer, so that any change to the vector gives it a buffer of its own. Then it
+// gives -1, as what it did would lose that change, and Codegen stops the program where it was called.
+//
+// The sorts never stop the program, and keep every element, whatever the comparator says: every loop is bounded by its
+// indexes, and elements only change places, by `__swap(a, b)`, which swaps what two places hold without counting
+// references. `sort` is an introsort, which goes to a heapsort when the partitions do not shrink fast enough, and
+// `stable_sort` a merge sort.
+inline constexpr const char* kAlgorithmSource = R"cplus(
+long __log2(long n) {
+    long k = 0;
+    while (n > 1) {
+        n = n / 2;
+        k++;
+    }
+    return k;
+}
+
+//@ natural floating by by_t
+template<typename T> void __insertion@V(vector<T>& w, long lo, long hi@P)@T {
+    for (long i = lo + 1; i < hi; i++) {
+        long j = i;
+        while (j > lo) {
+            bool lt = @L(w[j], w[j - 1]);
+            if (!lt) break;
+            __swap(w[j], w[j - 1]);
+            j--;
+        }
+    }
+}
+
+template<typename T> void __sift@V(vector<T>& w, long lo, long root, long n@P)@T {
+    while (true) {
+        long child = 2 * root + 1;
+        if (child >= n) return;
+        if (child + 1 < n) {
+            bool right = @L(w[lo + child], w[lo + child + 1]);
+            if (right) child++;
+        }
+        bool down = @L(w[lo + root], w[lo + child]);
+        if (!down) return;
+        __swap(w[lo + root], w[lo + child]);
+        root = child;
+    }
+}
+
+template<typename T> void __heapsort@V(vector<T>& w, long lo, long hi@P)@T {
+    long n = hi - lo;
+    for (long s = n / 2 - 1; s >= 0; s--) @C__sift@V(w, lo, s, n@A);
+    for (long end = n - 1; end > 0; end--) {
+        __swap(w[lo], w[lo + end]);
+        @C__sift@V(w, lo, 0, end@A);
+    }
+}
+
+// Orders w[a], w[b] and w[c], and swaps the middle one to a, for a pivot.
+template<typename T> void __median@V(vector<T>& w, long a, long b, long c@P)@T {
+    bool ba = @L(w[b], w[a]);
+    if (ba) {
+        __swap(w[a], w[b]);
+    }
+    bool cb = @L(w[c], w[b]);
+    if (cb) {
+        __swap(w[b], w[c]);
+        bool again = @L(w[b], w[a]);
+        if (again) {
+            __swap(w[a], w[b]);
+        }
+    }
+    __swap(w[a], w[b]);
+}
+
+// Sorts w[lo, hi). Each round puts the pivot where it belongs, so the range shrinks by at least one, and after `depth` rounds
+// what is left is sorted by the heapsort, which needs O(n log n) comparisons whatever they say.
+template<typename T> void __introsort@V(vector<T>& w, long lo, long hi, long depth@P)@T {
+    while (hi - lo > 16) {
+        if (depth == 0) {
+            @C__heapsort@V(w, lo, hi@A);
+            return;
+        }
+        depth--;
+        @C__median@V(w, lo, lo + (hi - lo) / 2, hi - 1@A);
+        T pivot = w[lo];
+        long i = lo + 1;
+        long j = hi - 1;
+        while (true) {
+            while (i <= j) {
+                bool before = @L(w[i], pivot);
+                if (!before) break;
+                i++;
+            }
+            while (i <= j) {
+                bool after = @L(pivot, w[j]);
+                if (!after) break;
+                j--;
+            }
+            if (i >= j) break;
+            __swap(w[i], w[j]);
+            i++;
+            j--;
+        }
+        __swap(w[lo], w[j]);
+        if (j - lo < hi - j - 1) {
+            @C__introsort@V(w, lo, j, depth@A);
+            lo = j + 1;
+        } else {
+            @C__introsort@V(w, j + 1, hi, depth@A);
+            hi = j;
+        }
+    }
+    @C__insertion@V(w, lo, hi@A);
+}
+
+// Sorts w[lo, hi), keeping equal elements in their order. tmp is as large as w.
+template<typename T> void __merge@V(vector<T>& w, vector<T>& tmp, long lo, long hi@P)@T {
+    if (hi - lo <= 16) {
+        @C__insertion@V(w, lo, hi@A);
+        return;
+    }
+    long mid = lo + (hi - lo) / 2;
+    @C__merge@V(w, tmp, lo, mid@A);
+    @C__merge@V(w, tmp, mid, hi@A);
+    bool apart = @L(w[mid], w[mid - 1]);
+    if (!apart) return;
+    // The left half goes to tmp, and each element then comes back to its place, all by swaps, so that what w[k, j) holds is
+    // what tmp held, which the next swap puts back there.
+    for (long k = lo; k < mid; k++) __swap(tmp[k - lo], w[k]);
+    long i = 0;
+    long n = mid - lo;
+    long j = mid;
+    long k = lo;
+    while (i < n && j < hi) {
+        bool right = @L(w[j], tmp[i]);
+        if (right) {
+            __swap(w[k], w[j]);
+            j++;
+        } else {
+            __swap(w[k], tmp[i]);
+            i++;
+        }
+        k++;
+    }
+    while (i < n) {
+        __swap(w[k], tmp[i]);
+        i++;
+        k++;
+    }
+}
+
+template<typename T> long __sort@V(vector<T>& v@P)@T {
+    if (v.size() < 2) return 0;
+    vector<T> before = v;
+    vector<T> w = v;
+    @C__introsort@V(w, 0, w.size(), 2 * __log2(w.size())@A);
+    if (!__same_buffer(v, before)) return -1;
+    v = __move(w);
+    return 0;
+}
+
+template<typename T> long __stable_sort@V(vector<T>& v@P)@T {
+    if (v.size() < 2) return 0;
+    vector<T> before = v;
+    vector<T> w = v;
+    vector<T> tmp = v;
+    @C__merge@V(w, tmp, 0, w.size()@A);
+    if (!__same_buffer(v, before)) return -1;
+    v = __move(w);
+    return 0;
+}
+
+template<typename T, int N> long __sort_array@V(array<T, N>& a@P)@T {
+    array<T, N> before = a;
+    vector<T> w;
+    for (int i = 0; i < N; i++) w.push_back(a[i]);
+    long r = @C__sort@V(w@A);
+    for (int i = 0; i < N; i++)
+        if (!(a[i] == before[i]) && !(a[i] != a[i] && before[i] != before[i])) return -1;
+    for (int i = 0; i < N; i++) a[i] = w[i];
+    return r;
+}
+
+template<typename T, int N> long __stable_sort_array@V(array<T, N>& a@P)@T {
+    array<T, N> before = a;
+    vector<T> w;
+    for (int i = 0; i < N; i++) w.push_back(a[i]);
+    long r = @C__stable_sort@V(w@A);
+    for (int i = 0; i < N; i++)
+        if (!(a[i] == before[i]) && !(a[i] != a[i] && before[i] != before[i])) return -1;
+    for (int i = 0; i < N; i++) a[i] = w[i];
+    return r;
+}
+
+template<typename T> bool __binary_search@V(vector<T> v, T x@P)@T {
+    long lo = 0;
+    long hi = v.size();
+    while (lo < hi) {
+        long mid = lo + (hi - lo) / 2;
+        bool below = @L(v[mid], x);
+        if (below) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo == v.size()) return false;
+    bool above = @L(x, v[lo]);
+    return !above;
+}
+
+// Codegen stops the program before these, for an empty vector.
+template<typename T> T __min@V(vector<T> v@P)@T {
+    T best = v[0];
+    for (long i = 1; i < v.size(); i++) {
+        bool lower = @L(v[i], best);
+        if (lower) best = v[i];
+    }
+    return best;
+}
+
+template<typename T> T __max@V(vector<T> v@P)@T {
+    T best = v[0];
+    for (long i = 1; i < v.size(); i++) {
+        bool higher = @L(best, v[i]);
+        if (higher) best = v[i];
+    }
+    return best;
+}
+//@ end
+
+// A string is sorted by its bytes, which a count of each does in one pass.
+long __sort_string(string& s) {
+    vector<long> counts = vector<long>(256, 0);
+    for (char c : s) counts[int(c)]++;
+    string out;
+    for (int b = 0; b < 256; b++)
+        if (counts[b] > 0) out += string(counts[b], char(b));
+    s = out;
+    return 0;
+}
+
+//@ by by_t
+long __sort_string@V(string& s, function<bool(char, char)@T> less)@T {
+    string before = s;
+    vector<char> w;
+    for (char c : s) w.push_back(c);
+    @C__sort@V(w@A);
+    if (!__same_buffer(s, before)) return -1;
+    string out;
+    for (char c : w) out += c;
+    s = out;
+    return 0;
+}
+
+long __stable_sort_string@V(string& s, function<bool(char, char)@T> less)@T {
+    string before = s;
+    vector<char> w;
+    for (char c : s) w.push_back(c);
+    @C__stable_sort@V(w@A);
+    if (!__same_buffer(s, before)) return -1;
+    string out;
+    for (char c : w) out += c;
+    s = out;
+    return 0;
+}
+//@ end
+
+template<typename T> void __reverse(vector<T>& v) {
+    long i = 0;
+    long j = v.size() - 1;
+    while (i < j) {
+        __swap(v[i], v[j]);
+        i++;
+        j--;
+    }
+}
+
+template<typename T, int N> void __reverse_array(array<T, N>& a) {
+    for (int i = 0; i < N / 2; i++) {
+        __swap(a[i], a[N - 1 - i]);
+    }
+}
+
+void __reverse_string(string& s) {
+    string out;
+    for (long i = s.size() - 1; i >= 0; i--) out += s[i];
+    s = out;
+}
+
+template<typename T> bool __contains(vector<T> v, T x) {
+    for (const T& e : v)
+        if (e == x) return true;
+    return false;
+}
+
+template<typename T> long __count(vector<T> v, T x) {
+    long n = 0;
+    for (const T& e : v)
+        if (e == x) n++;
+    return n;
+}
+
+template<typename T> long? __index_of(vector<T> v, T x) {
+    for (long i = 0; i < v.size(); i++)
+        if (v[i] == x) return i;
+    return null;
+}
+
+template<typename T> long __erase(vector<T>& v, T x) {
+    vector<T> kept;
+    for (const T& e : v)
+        if (!(e == x)) kept.push_back(e);
+    long removed = v.size() - kept.size();
+    if (removed > 0) v = __move(kept);
+    return removed;
+}
+
+template<typename T> void __iota(vector<T>& v, T start) {
+    for (long i = 0; i < v.size(); i++) {
+        v[i] = start;
+        start++;
+    }
+}
+
+template<typename A, typename T> A __accumulate(vector<T> v, A init) {
+    for (const T& x : v) init = init + x;
+    return init;
+}
+
+//@ pred pred_t
+template<typename T> bool __any_of@V(vector<T> v, function<bool(T)@T> pred)@T {
+    for (const T& x : v) {
+        bool hit = @Cpred(x);
+        if (hit) return true;
+    }
+    return false;
+}
+
+template<typename T> bool __all_of@V(vector<T> v, function<bool(T)@T> pred)@T {
+    for (const T& x : v) {
+        bool hit = @Cpred(x);
+        if (!hit) return false;
+    }
+    return true;
+}
+
+template<typename T> bool __none_of@V(vector<T> v, function<bool(T)@T> pred)@T {
+    for (const T& x : v) {
+        bool hit = @Cpred(x);
+        if (hit) return false;
+    }
+    return true;
+}
+
+template<typename T> long __count_if@V(vector<T> v, function<bool(T)@T> pred)@T {
+    long n = 0;
+    for (const T& x : v) {
+        bool hit = @Cpred(x);
+        if (hit) n++;
+    }
+    return n;
+}
+
+template<typename T> long? __index_if@V(vector<T> v, function<bool(T)@T> pred)@T {
+    for (long i = 0; i < v.size(); i++) {
+        bool hit = @Cpred(v[i]);
+        if (hit) return i;
+    }
+    return null;
+}
+
+template<typename T> long __erase_if@V(vector<T>& v, function<bool(T)@T> pred)@T {
+    vector<T> before = v;
+    vector<T> kept;
+    for (const T& x : before) {
+        bool hit = @Cpred(x);
+        if (!hit) kept.push_back(x);
+    }
+    if (!__same_buffer(v, before)) return -1;
+    long removed = v.size() - kept.size();
+    if (removed > 0) v = __move(kept);
+    return removed;
+}
+
+template<typename A, typename T> A __accumulate_by@V(vector<T> v, A init, function<A(A, T)@T> f)@T {
+    for (const T& x : v) init = @Cf(init, x);
+    return init;
+}
+//@ end
 )cplus";
 
 inline constexpr const char* kStoiSource = R"cplus(

@@ -177,8 +177,11 @@ struct Type {
         return &it->second.second;
     }
 
-    // `function<ret(params...)>`, or `function<ret(params...) throws>`. One Type per signature, like vectorOf.
-    static const Type* functionOf(const Type* ret, const std::vector<Param>& params, bool throws) {
+    // `function<ret(params...)>`, or `function<ret(params...) throws>`. One Type per signature, like vectorOf. A `const T&`
+    // parameter is a `T`, as the caller cannot tell them apart, so both ways of writing a comparator give one type.
+    static const Type* functionOf(const Type* ret, std::vector<Param> params, bool throws) {
+        for (Param& p : params)
+            if (p.isRef && p.isConst) p = {p.type, false, false};
         static std::map<std::tuple<const Type*, std::vector<Param>, bool>, std::pair<std::pair<std::string, std::vector<Param>>, Type>> made;
         auto [it, inserted] = made.try_emplace({ret, params, throws});
         if (inserted) {
@@ -455,7 +458,7 @@ struct IncDecExpr : Expr {
         : Expr(Kind::IncDec, l), increment(inc), prefix(pre), target(std::move(t)) {}
 };
 
-enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill, Move, Hash };
+enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill, Move, Hash, SameBuffer, Swap };
 
 // The math functions of C++'s <cmath>, and abs, min and max.
 enum class MathFn {
@@ -479,6 +482,29 @@ inline std::string cDeclarationOf(const std::string& name) {
         {"usleep", "int usleep(int microseconds)"}, {"getenv", "string? getenv(string name)"}, {"system", "int system(string command)"}, {"getchar", "int getchar()"}};
     auto it = known.find(name);
     return it == known.end() ? "" : it->second;
+}
+
+// What to write for a function of C++'s <algorithm> or <numeric> that C+ has in another form, or not yet, as most of those
+// give an iterator, which C+ does not have; or nothing.
+inline std::string algorithmHelp(const std::string& name) {
+    if (name == "find") return "`index_of(v, x)` gives the index of the first element equal to x, or null, and `contains(v, x)` whether there is one";
+    if (name == "find_if")
+        return "`index_if(v, [](int x) { return x > 0; })` gives the index of the first element the test is true for, or null, and `any_of` whether there is one";
+    if (name == "min_element" || name == "max_element")
+        return "`" + name.substr(0, 3) + "(v)` gives the " + (name[1] == 'i' ? "smallest" : "largest") + " element itself, and `index_of(v, " + name.substr(0, 3) +
+               "(v))` where it is";
+    if (name == "lower_bound" || name == "upper_bound" || name == "equal_range")
+        return "this compiler does not support " + name + " yet, as it gives an iterator. `binary_search(v, x)` says whether a sorted vector holds x";
+    if (name == "unique") return "this compiler does not support unique yet, as it gives an iterator. Keep each element that differs from the one before it, with a loop";
+    if (name == "transform") return "this compiler does not support transform yet. Build the new vector with a loop: `for (auto x : v) out.push_back(f(x));`";
+    if (name == "for_each") return "write a range-based for loop: `for (auto& x : v) { ... }`";
+    if (name == "remove" || name == "remove_if")
+        return std::string("write `") + (name == "remove" ? "erase(v, x)" : "erase_if(v, [](int x) { return x < 0; })") +
+               "`, which removes them from the vector and gives how many it removed";
+    if (name == "greater" || name == "less" || name == "greater_equal" || name == "less_equal")
+        return std::string("write a lambda: `[](int a, int b) { return a ") + (name[0] == 'g' ? ">" : "<") + (name.size() > 7 && name.find("equal") != std::string::npos ? "=" : "") + " b; }`";
+    if (name == "qsort") return "write `sort(v)`, or `sort(v, [](int a, int b) { return a > b; })` with a comparator that says whether a goes before b";
+    return "";
 }
 
 inline std::string cNumberReader(const std::string& name) {
@@ -517,6 +543,10 @@ struct CallExpr : Expr {
     MathFn math{};                          // for Builtin::Math
     CharFn charFn{};                        // for Builtin::CharFn
     ExprPtr lowered;                        // set by Sema for `f(x)` where f is a variable that holds a function: the call through it
+    // Set by Sema for `sort(v)` and the others of <algorithm>, which call a generic of Builtins.h, for what only the call can
+    // report, at its place: `Unchanged`, that the generic gave -1, as the function given to it changed the vector; `NonEmpty`,
+    // that the vector, the first argument, has no elements, which is checked before the call.
+    enum class Check { None, Unchanged, NonEmpty } check = Check::None;
     CallExpr(Loc l, std::string c, std::vector<ExprPtr> a)
         : Expr(Kind::Call, l), callee(std::move(c)), args(std::move(a)) {}
 };
@@ -916,6 +946,7 @@ struct LambdaExpr : Expr {
     std::vector<Capture> written;
     bool returnWritten = false;  // `-> R`
     bool returnInferred = false;  // set by Sema: the first `return` with a value said what it returns
+    const Expr* notBool = nullptr;  // set by Sema: the first value it returns as a bool that is not one, as `return a - b;`
     std::unique_ptr<FuncDecl> fn;
     // Set by Sema: each variable from around it that the body uses, in the order first used, and how.
     struct Captured {

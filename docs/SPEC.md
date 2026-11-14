@@ -958,9 +958,8 @@ Building a vector:
 
 **Copies are cheap.** The copies of a vector share one buffer of elements until one of them
 changes; that copy first gets a buffer of its own (copy-on-write). Passing or returning a
-vector therefore costs about as much as passing a class reference, so there is no need for
-`const vector<int>&` parameters, which C+ does not support. See
-[Memory model](#memory-model).
+vector therefore costs about as much as passing a class reference, so a `const vector<int>&`
+parameter, which C+ has too, saves little. See [Memory model](#memory-model).
 
 ### Arrays
 
@@ -1478,9 +1477,9 @@ if (p) println("{}", *p);       // a pointer is true when it is not null
   undefined, as it is in C++. Memory from [`new`](#new-and-delete) starts with real values,
   so it can hold anything.
 - Memory that a pointer owns comes from [`new`](#new-and-delete) or from C's `malloc`
-  (see [C functions](#c-functions)). Planned: pointers into vectors and strings, and
-  references (`T&`); meanwhile a pointer parameter lets a function change the caller's
-  variable.
+  (see [C functions](#c-functions)). Planned: pointers into vectors and strings. A
+  [reference](#references) parameter, `T&`, lets a function change the caller's variable
+  without a pointer.
 
 ### Pointer declarations
 
@@ -1944,6 +1943,13 @@ int main() {
   `std::`. Parameter names are allowed, `function<bool(int a, int b)>`, and mean nothing. `function<int(string) throws>`
   is one whose call can fail, and is written with `try`. A lambda given where a `function<...>` is expected takes the
   same parameters. One that is not marked `throws` can be given for one that is.
+- **In a function type, `const T&` is the same as `T`**: `function<bool(const Point&, const Point&)>` is
+  `function<bool(Point, Point)>`, and a lambda or a function that takes either can be given for it. What it is called
+  with is not copied for it, unless it takes a `T`, which is then a copy of its own. `T&` is a type of its own.
+- **A parameter can be `auto`**, or `const auto&`, where what the lambda is given to says its type, as
+  [`sort`](#algorithms) does:
+  `sort(people, [](const auto& a, const auto& b) { return a.age < b.age; })`, or a `function<int(int)>` variable. Where
+  nothing does, as in `auto f = [](auto x) { return x; };`, it is not supported yet, and neither is `void f(auto x)`.
 - **A function is a value too**: `function<int(int)> f = square;`. With more than one function of that name, the type
   it is given says which. A built-in such as `println` or `sqrt`, a generic function, a method and a C function are not
   values: a lambda that calls one is, `[](double x) { return sqrt(x); }`.
@@ -1998,8 +2004,8 @@ it is gone, and a variable that it shares moves into a counted box of its own. W
 
 **Not yet:** `await` inside a lambda, `spawn` of a lambda, default values for its parameters, sharing a reference
 variable, such as the `x` of `for (auto& x : v)`, moving from a variable that a lambda shares, a kept lambda sharing a
-variable declared in a condition, in a `catch` or as a parameter of an async function, and a C function as a value.
-`sort` and the other functions that take one come next.
+variable declared in a condition, in a `catch` or as a parameter of an async function, a C function as a value, and
+`auto` parameters whose types nothing says.
 
 ### The main function
 
@@ -2362,9 +2368,9 @@ for (const Point p : points) total += p.x;
 ```
 
 - `x` is a copy of the element, so assigning to `x` does not change the vector. To change
-  the elements, loop over the indexes: `for (long i = 0; i < v.size(); i++) v[i] *= 2;`.
-- `for (auto& x : v)` and `for (const auto& x : v)` are not supported yet, because C+ has
-  no references. Write `for (const auto x : v)`; copying an element is cheap.
+  the elements, write `for (auto& x : v) x *= 2;`, as in C++, or loop over the indexes:
+  `for (long i = 0; i < v.size(); i++) v[i] *= 2;`. `for (const auto& x : v)` reads each
+  one without copying it (see [References](#references)), though copying an element is cheap.
 - The loop goes over the vector as it was when the loop started. Changing the vector in
   the body, even with `push_back` or `clear`, does not affect the loop; in C++ it is
   undefined behavior. An [array](#arrays) works the same way.
@@ -2605,6 +2611,94 @@ long biggest = max(total, 0L);
 - Constants such as C++20's `std::numbers::pi` are planned. Until then, `acos(-1)` is π, and
   `import <math.h>;` declares C's `M_PI`, `M_E`, `INFINITY` and `NAN`.
 
+### Algorithms
+
+The functions of C++'s `<algorithm>` that sort, search and count are built in, without `std::` and without an include. As
+C+ has no iterators, each takes the vector itself, as the `std::ranges` ones of C++20 do: `sort(v)`, where C++ writes
+`std::sort(v.begin(), v.end())`.
+
+```cpp
+struct Person {
+    string name;
+    int age;
+};
+
+int main() {
+    vector<int> v = {5, 3, 8, 1};
+    sort(v);                                      // [1, 3, 5, 8]
+    sort(v, [](int a, int b) { return a > b; });  // [8, 5, 3, 1]
+    vector<Person> people = {{"Ada", 36}, {"Linus", 21}, {"Grace", 36}};
+    stable_sort(people, [](const Person& a, const Person& b) { return a.age < b.age; });  // Linus, Ada, Grace
+    long adults = count_if(people, [](const Person& p) { return p.age >= 30; });          // 2
+    long? at = index_of(v, 3);                     // 2, and null if there is none
+    erase_if(v, [](int x) { return x % 2 == 0; });  // [5, 3, 1]
+    println("{} {} {}", min(v), max(v), accumulate(v, 0));  // 1 5 9
+    return 0;
+}
+```
+
+| Function | What it does |
+|----------|--------------|
+| `sort(v)`, `sort(v, less)` | puts the elements in order, smallest first, or by `less` |
+| `stable_sort(v)`, `stable_sort(v, less)` | the same, keeping elements that are equal in the order they were in |
+| `reverse(v)` | puts the elements in the opposite order |
+| `binary_search(v, x)`, `binary_search(v, x, less)` | whether a sorted vector holds `x` |
+| `min(v)`, `max(v)`, `min(v, less)`, `max(v, less)` | the smallest or the largest element, the first of those that are equal |
+| `contains(v, x)` | whether an element is `== x` |
+| `count(v, x)` | how many elements are `== x`, as a `long` |
+| `index_of(v, x)` | the index of the first element that is `== x`, as a `long?`, which is null when there is none |
+| `erase(v, x)` | removes each element that is `== x`, and gives how many it removed |
+| `any_of(v, test)`, `all_of(v, test)`, `none_of(v, test)` | whether the test is true for an element, for each one, or for none |
+| `count_if(v, test)` | how many elements the test is true for |
+| `index_if(v, test)` | the index of the first element the test is true for, or null |
+| `erase_if(v, test)` | removes each element the test is true for, and gives how many it removed |
+| `iota(v, start)` | sets the elements to `start`, the one after it, and so on, with `++` |
+| `accumulate(v, init)`, `accumulate(v, init, f)` | adds each element to `init` with `+`, or makes `f(total, x)` the total, and gives the total |
+
+- **They take a vector**, and `sort`, `stable_sort` and `reverse` also take an [array](#arrays) or a string. A string is
+  sorted by its bytes, as [chars](#char) compare: `"banana"` becomes `"aaabnn"`. Those that change what they are given
+  need a variable, a field or an element that is not `const`, as `push_back` does: `sort` of what a function returns is
+  an error, since the sorted copy would be lost.
+- **`less(a, b)` says whether `a` goes before `b`**, as in C++. It is a lambda, or any function value of type
+  `function<bool(T, T)>`, where `T` is the type of the elements, and it can take them as `T` or as `const T&`, which mean
+  the same in a function type (see [Lambdas](#lambdas)). `a > b` sorts from the largest to the smallest. Without
+  `less`, the elements must be [`Comparable`](#constraints), so a struct needs one, and the error says how to write it.
+- **A comparator gives a `bool`.** `return a - b;`, as a comparator is written for JavaScript's `sort` or C's `qsort`, is
+  an error, as that would be true for any two elements that differ.
+- **`sort` is not stable**: elements that `less` finds equal can end up in any order. It is an introsort, as C++'s
+  `std::sort` usually is, which takes time that grows as n log n, whatever the elements are. `stable_sort` keeps them in
+  the order they were in, as `std::stable_sort` does, with a merge sort.
+- **A comparator that is wrong does no harm.** One that is not consistent, such as `a <= b`, or that gives a random
+  answer, still sorts in time that grows as n log n, and every element is still there once, in some order. In C++ that is
+  undefined, and `std::sort` can run past the end of the vector.
+- **NaNs go last.** Without `less`, the sorts put each NaN of a `double` or `float` vector after every number, where `<`,
+  which is false for NaN both ways, would leave the numbers around it out of order. `min`, `max` and `binary_search` also
+  count NaN as larger than any number, so `max` of a vector that holds a NaN is NaN, and `min` is its smallest number.
+- **The test** of `any_of`, `count_if` and the others is a `function<bool(T)>`. The `f` of `accumulate` is a
+  `function<A(A, T)>`, where `A` is the type of `init`, which is the type that `accumulate` gives:
+  `accumulate(prices, 0.0)` is a `double`. Without `f`, `init` is a number that each element converts to, or a string
+  for strings: `accumulate` of `double`s from `0` is an error, as C++ would add each one to an `int` and drop its
+  fraction.
+- **A function given to them can [fail](#errors)**, if it is a lambda marked `throws` or a `function<bool(T, T) throws>`.
+  Then the call can fail too, and is written with `try`, as in `try sort(names, byNumber);`. If it fails while sorting,
+  the vector is as it was before.
+- **The function sees the vector as it was before the call.** `sort`, `stable_sort` and `erase_if` work on a copy, which
+  takes the place of the vector when they are done. If the function changes the vector anyway, the program stops when
+  the call returns, as what the call did would undo that change. In C++ this is undefined. The others change nothing, so
+  such a change stays.
+- `min(v)` and `max(v)` of an empty vector stop the program, as `v.front()` does. `min(a, b)` and `max(a, b)` of two
+  values are the [math functions](#math-functions).
+- `binary_search` expects a vector that is sorted, by `<` or by the `less` it is given. Of one that is not, it gives
+  `true` or `false`, and either may be wrong.
+- **C++ writes some of these another way.** `std::find` and `std::find_if` give an iterator, where `index_of` and
+  `index_if` give an index. `v.erase(std::remove_if(...), v.end())` is `erase_if(v, test)`, which C++20 has too.
+  `std::greater<int>()` is `[](int a, int b) { return a > b; }`, and `std::min_element` is `min(v)`, with
+  `index_of(v, min(v))` for where it is. Each of these, and `v.begin()`, `std::sort` and `sort<int>(v)`, is an error
+  that says what to write.
+- A function of the program with one of these names takes the place of the built-in one.
+- Not yet: sorting part of a vector, and `lower_bound`, `upper_bound`, `unique`, `transform`, `for_each` and the others
+  that give or take an iterator, which wait for iterators.
+
 ### Nesting limits
 
 Code nested too deeply is a compile error, where a C++ compiler might crash. The limits are about 333
@@ -2748,8 +2842,8 @@ destructor cannot be marked, and a constructor cannot be yet. Both can handle er
 
 **`catch`** is tried in order, and the first that takes the error's class, or a class it derives from, runs.
 
-- `catch (NotFound e)`, or `catch (NotFound)` when the error itself is not needed. `const Error& e` is not used, since a class
-  variable already refers to the object. An interface can be caught too, if a class of error derives from it.
+- `catch (NotFound e)`, or `catch (NotFound)` when the error itself is not needed. `catch (const Error& e)` works too, as
+  in C++, but a class variable already refers to the object, so `catch (Error e)` copies nothing. An interface can be caught too, if a class of error derives from it.
 - `catch (Error e)` and `catch (...)` take every error. A catch that can never run, because one before it
   takes everything it would, is an error.
 - An error no catch takes goes on, as if the block were not there. So either something must take every error, or the
@@ -3544,6 +3638,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | `double` and `float`: literals, IEEE arithmetic, shortest printing, `{:.2f}`, `{:e}`, `{:g}` | implemented |
 | Casts: `int(x)`, `static_cast<int>(x)`, `(int)x`, stopping when the value does not fit; `reinterpret_cast` | implemented |
 | Math functions from `<cmath>`, `abs`, `min`, `max` | implemented |
+| Algorithms: `sort`, `stable_sort`, `reverse`, `binary_search`, `min(v)`, `max(v)`, `contains`, `count`, `index_of`, `erase`, `any_of`, `all_of`, `none_of`, `count_if`, `index_if`, `erase_if`, `iota`, `accumulate`, on vectors, and the sorts and `reverse` on arrays and strings | implemented |
+| Algorithms on part of a vector, and those that give or take an iterator, such as `lower_bound` and `transform` | planned |
 | `char`: `'a'`, checked `s[i]`, `for (char c : s)`, `push_back`, `pop_back`, `front`, `back`, `string(n, c)`, `<cctype>` functions | implemented |
 | `extern "C"` functions taking and returning numbers, `char`, `bool`, `string`, `string?`; `-l` and `-L` | implemented |
 | Pointers: `T*`, `&x`, `*p`, `p->x`, `p[i]`, arithmetic, `const T*`, `void*`, null checks, `sizeof` | implemented |
@@ -3563,11 +3659,11 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Programs of more than one file | implemented |
 | `constexpr` values and functions, `if constexpr`, array sizes and template arguments worked out while compiling | implemented |
 | `constexpr` methods and structs; a generic `constexpr` function in an array's size | planned |
-| Lambdas: captures by name, `[&]`, `[=]`, `[this]`, `[*this]`, `[n = 0]`; `function<R(Args...)>`, `throws` and `function<...>?`; functions by name as values; borrowed and kept lambdas, shared variables in boxes, a new loop variable each round | implemented |
+| Lambdas: captures by name, `[&]`, `[=]`, `[this]`, `[*this]`, `[n = 0]`; `function<R(Args...)>`, `throws` and `function<...>?`; functions by name as values; borrowed and kept lambdas, shared variables in boxes, a new loop variable each round; `auto` parameters where the type a lambda is given to says what they are | implemented |
 | `await` in a lambda, `spawn` of a lambda, default values for its parameters, a lambda sharing a reference variable, C functions as values | planned |
 | Enums held in other integer types, enumerator values that use enumerators, a switch with an initializer | planned |
 | Default arguments | implemented |
-| Default arguments in generics, `auto` parameters and return types | planned |
+| Default arguments in generics, `auto` return types, `auto` parameters of functions and of lambdas whose types nothing says | planned |
 | `const` fields, nested types, types defined inside a function | planned |
 | `int x{5}`, `int x(5)`, brace initializers for fields | planned |
 | `short`, `int8_t` and `int16_t`: signed 8-bit and 16-bit integer types; enums held in an unsigned type | planned |

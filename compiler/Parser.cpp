@@ -4,7 +4,10 @@
 
 #include "SpecRefs.h"
 
+#include <algorithm>
 #include <cstring>
+#include <sstream>
+#include <stdexcept>
 
 namespace cplus {
 
@@ -540,6 +543,75 @@ void Parser::addBuiltins() {
     checkModuleNames();
 }
 
+// The variants of each block of kAlgorithmSource, between a line `//@ natural by ...` and `//@ end`, as Builtins.h says.
+static std::string expandVariants(const std::string& text) {
+    struct Variant {
+        const char* name;
+        const char *suffix, *params, *args, *throws, *tries;
+        int less;  // 0: `x < y`, 1: `x < y` with NaN last, 2: `less(x, y)`
+    };
+    static const Variant variants[] = {
+        {"natural", "", "", "", "", "", 0},
+        {"floating", "_f", "", "", "", "", 1},
+        {"by", "_by", ", function<bool(T, T)> less", ", less", "", "", 2},
+        {"by_t", "_by_t", ", function<bool(T, T) throws> less", ", less", " throws", "try ", 2},
+        {"pred", "", "", "", "", "", 2},
+        {"pred_t", "_t", "", "", " throws", "try ", 2},
+    };
+    auto expand = [](const std::string& block, const Variant& v) {
+        std::string out;
+        for (size_t i = 0; i < block.size();) {
+            if (block[i] != '@') {
+                out += block[i++];
+                continue;
+            }
+            const char k = i + 1 < block.size() ? block[i + 1] : 0;
+            i += 2;
+            if (k == 'V') out += v.suffix;
+            else if (k == 'P') out += v.params;
+            else if (k == 'A') out += v.args;
+            else if (k == 'T') out += v.throws;
+            else if (k == 'C') out += v.tries;
+            else if (k == 'L') {  // `@L(x, y)`, whose x and y have no commas outside brackets
+                size_t depth = 0, comma = 0, j = i;
+                for (; j < block.size(); ++j) {
+                    if (block[j] == '(' || block[j] == '[') ++depth;
+                    else if (block[j] == ')' || block[j] == ']') {
+                        if (--depth == 0) break;
+                    } else if (block[j] == ',' && depth == 1) comma = j;
+                }
+                const std::string x = block.substr(i + 1, comma - i - 1), y = block.substr(comma + 2, j - comma - 2);
+                out += v.less == 0 ? "(" + x + " < " + y + ")"
+                       : v.less == 1 ? "(" + x + " < " + y + " || (" + y + " != " + y + " && " + x + " == " + x + "))"
+                                     : std::string(v.tries) + "less(" + x + ", " + y + ")";
+                i = j + 1;
+            } else {
+                throw std::logic_error("Builtins.h: unknown @" + std::string(1, k));
+            }
+        }
+        return out;
+    };
+    std::string out;
+    for (size_t at = 0; at < text.size();) {
+        const size_t open = text.find("//@ ", at);
+        if (open == std::string::npos) {
+            out += text.substr(at);
+            break;
+        }
+        out += text.substr(at, open - at);
+        const size_t headEnd = text.find('\n', open);
+        const size_t close = text.find("//@ end", headEnd);
+        const std::string block = text.substr(headEnd + 1, close - headEnd - 1);
+        std::istringstream names(text.substr(open + 4, headEnd - open - 4));
+        for (std::string name; names >> name;)
+            for (const Variant& v : variants)
+                if (name == v.name) out += expand(block, v);
+        at = text.find('\n', close);
+        at = at == std::string::npos ? text.size() : at + 1;
+    }
+    return out;
+}
+
 // `import fs;`, and the functions that need no import, each when the program uses it, as `readLine()`, and has no function or
 // variable of that name at the top level, which then takes its place, as for `delay`. A method of that name is the type's own.
 // Without `canThrow` what throws is left out, as the program has an `Error` of its own, which is reported.
@@ -551,7 +623,13 @@ std::vector<const SourceFile*> Parser::librarySources(const std::set<std::string
         const SourceFile* source;
         bool throws;
     };
-    static const Named named[] = {{"readLine", &readLine, false}, {"stoi", &stoi, true}, {"stol", &stol, true}, {"stod", &stod, true}, {"stof", &stof, true}};
+    static const SourceFile algorithms("<built-in>", expandVariants(kAlgorithmSource));
+    static const Named named[] = {{"readLine", &readLine, false}, {"stoi", &stoi, true}, {"stol", &stol, true}, {"stod", &stod, true}, {"stof", &stof, true},
+                                  {"sort", &algorithms, false}, {"stable_sort", &algorithms, false}, {"reverse", &algorithms, false}, {"any_of", &algorithms, false},
+                                  {"all_of", &algorithms, false}, {"none_of", &algorithms, false}, {"contains", &algorithms, false}, {"binary_search", &algorithms, false},
+                                  {"count", &algorithms, false}, {"count_if", &algorithms, false}, {"erase", &algorithms, false}, {"erase_if", &algorithms, false},
+                                  {"iota", &algorithms, false}, {"min", &algorithms, false}, {"max", &algorithms, false}, {"accumulate", &algorithms, false},
+                                  {"index_of", &algorithms, false}, {"index_if", &algorithms, false}};
     std::vector<const SourceFile*> out;
     if (modules.count("fs")) {
         thrower = "fs";
@@ -586,7 +664,7 @@ std::vector<const SourceFile*> Parser::librarySources(const std::set<std::string
             thrower = n.name;
             throwerLoc = firstUse[n.name];
         }
-        if (canThrow || !n.throws) out.push_back(n.source);
+        if ((canThrow || !n.throws) && std::find(out.begin(), out.end(), n.source) == out.end()) out.push_back(n.source);
     }
     return out;
 }
@@ -2454,8 +2532,14 @@ void Parser::failStd(Loc loc, const Token& name) {
         fail(loc, "C+ has no std:: namespace", "use a `vector<T>` or a `hashmap<K, V>` for now: `cplus explain hashmap` says what they do", spec::Vectors);
     if (n == "condition_variable")
         fail(loc, "C+ has no std:: namespace", "this compiler does not support condition variables yet. To wait for a thread, write `t.wait()`", spec::Concurrency);
-    if (n == "sort" || n == "stable_sort" || n == "reverse" || n == "accumulate" || n == "min_element" || n == "max_element")
-        fail(loc, "C+ has no std:: namespace", "write the loop: this compiler has no sorting yet, nor the other algorithms of C++", spec::Status);
+    static const char* const algorithms[] = {"sort", "stable_sort", "reverse", "any_of", "all_of", "none_of", "contains", "binary_search", "count",
+                                             "count_if", "erase", "erase_if", "iota", "min", "max", "accumulate"};
+    if (n == "ranges" || std::find(std::begin(algorithms), std::end(algorithms), n) != std::end(algorithms))
+        fail(loc, "C+ has no std:: namespace",
+             n == "ranges" ? "leave out `std::ranges::`: C+'s algorithms take the vector itself, as those of `std::ranges` do: `sort(v)`"
+                           : "write `" + n + "(...)` without `std::`. C+'s algorithms take the vector itself: `sort(v)`, not `sort(v.begin(), v.end())`",
+             spec::Algorithms);
+    if (const std::string help = algorithmHelp(n); !help.empty()) fail(loc, "C+ has no std:: namespace", help, spec::Algorithms);
     if (n == "swap")
         fail(loc, "C+ has no std:: namespace", "write it with a third variable: `auto t = a; a = b; b = t;`", spec::Variables);
     if (n == "getline")
@@ -2742,6 +2826,11 @@ void Parser::failUnknownGeneric(size_t at) {
     std::string inside = writtenBetweenAngles(at + 2, closing);
     if (inside.empty()) inside = "T";
     const bool isPointer = !inside.empty() && inside.back() == '*';
+    static const char* const algorithms[] = {"sort", "stable_sort", "reverse", "any_of", "all_of", "none_of", "contains", "binary_search", "count",
+                                             "count_if", "erase", "erase_if", "iota", "min", "max", "accumulate", "index_of", "index_if"};
+    if (std::find(std::begin(algorithms), std::end(algorithms), n) != std::end(algorithms))  // `sort<int>(v)`
+        fail(name.loc, "'" + n + "' works out its types from its arguments", "leave out the `<" + inside + ">`: `" + n + "(v)`", spec::Algorithms);
+    if (const std::string help = algorithmHelp(n); !help.empty()) fail(name.loc, "C+ has no '" + n + "'", help, spec::Algorithms);  // `greater<int>()`
     fail(name.loc, "unknown type '" + n + "'",
          n == "optional" && isPointer ? "write `" + inside + "`, which can already be null"
          : n == "optional" && built ? "a value converts by itself: `return 3;`, or `null`. The type is written `" + inside + "?`, as in `string? s = null;`"
@@ -3128,7 +3217,7 @@ const Type* Parser::parseFunctionType(const Token& word, Loc& loc) {
             bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) && parseReferenceMark(ty, ReferencePlace::Parameter);
             if (isConst && !isRef)
                 fail(typeLoc, "`const` on a parameter that is a copy says nothing to the caller",
-                     "write `" + std::string(ty->name) + "`, or `const " + ty->name + "&` to take it without a copy", spec::Lambdas);
+                     "write `" + std::string(ty->name) + "`, which in a function type means the same as `const " + ty->name + "&`", spec::Lambdas);
             match(Tok::Ident);  // a name, as in `function<int(int count)>`
             params.push_back({ty, isRef, isConst});
         } while (match(Tok::Comma));
@@ -3267,7 +3356,8 @@ void Parser::parseParams(FuncDecl& fn) {
             Loc typeLoc;
             bool isConst = false;
             const Type* ty = parseType(typeLoc, &isConst);
-            if (ty->is(Type::Kind::Auto)) notYet(typeLoc, "'auto' parameters", "write the parameter type");
+            if (ty->is(Type::Kind::Auto) && !lambdaParams_)
+                notYet(typeLoc, "`auto` parameters of a function", "write the parameter type. A function for any type is a generic: `template<typename T> void f(T x)`");
             bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) && parseReferenceMark(ty, ReferencePlace::Parameter);
             const Token& pname = expectNewName("for the parameter name");
             rejectTemplateParamName(pname);
@@ -4992,7 +5082,14 @@ ExprPtr Parser::parseLambda() {
     fn->retType = Type::autoTy();
     fn->retTypeLoc = start;
     if (check(Tok::LParen)) {
-        parseParams(*fn);
+        lambdaParams_ = true;
+        try {
+            parseParams(*fn);
+        } catch (...) {
+            lambdaParams_ = false;
+            throw;
+        }
+        lambdaParams_ = false;
         for (auto& p : fn->params)
             if (p->defaultArg) notYet(p->loc, "default values for the parameters of a lambda", "pass the value at each call");
     }

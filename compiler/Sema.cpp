@@ -3412,6 +3412,7 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
                 }
                 if (!ret->is(K::Auto)) {
                     checkValue(*st.value, flow, ret, "as what the lambda returns");
+                    if (ret->is(K::Bool) && st.value->type && !st.value->type->is(K::Bool) && !st.value->type->isError() && !l.notBool) l.notBool = st.value.get();
                     flow.reachable = false;
                     return;
                 }
@@ -3452,6 +3453,8 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
                         }
                     }
                     checkValue(*st.value, flow, ret, "as the return value of " + q(fn_->name));
+                    if (LambdaExpr* l = fn_->lambda; l && !l->notBool && ret->is(K::Bool) && st.value->type && !st.value->type->is(K::Bool) && !st.value->type->isError())
+                        l->notBool = st.value.get();  // see checkAlgorithm
                     if (const VarDecl* local = flow.reachable && ret->isPointer() ? localPointee(*st.value, flow) : nullptr) {
                         std::string what = (local->isParam ? "the parameter " : "the local variable ") + q(local->name);
                         const Expr& v = *st.value;
@@ -5798,11 +5801,341 @@ const Type* Sema::checkMath(CallExpr& call, Flow& flow) {
     return allFloat ? Type::floatTy() : Type::doubleTy();
 }
 
+// ---- <algorithm> -----------------------------------------------------------
+
+namespace {
+// `sort(v)` and the others of C++'s <algorithm> that give no iterator, written in C+ in Builtins.h (kAlgorithmSource).
+enum class Algo { Sort, Reverse, Test, Find, BinarySearch, Iota, MinMax, Accumulate };
+struct AlgorithmInfo {
+    const char* name;
+    Algo kind;
+    bool changes;  // takes the vector as a `T&`
+    const char* usage;
+};
+const AlgorithmInfo kAlgorithms[] = {
+    {"sort", Algo::Sort, true, "sort(v)` or `sort(v, [](int a, int b) { return a > b; })"},
+    {"stable_sort", Algo::Sort, true, "stable_sort(v)` or `stable_sort(v, [](int a, int b) { return a > b; })"},
+    {"reverse", Algo::Reverse, true, "reverse(v)"},
+    {"any_of", Algo::Test, false, "any_of(v, [](int x) { return x > 0; })"},
+    {"all_of", Algo::Test, false, "all_of(v, [](int x) { return x > 0; })"},
+    {"none_of", Algo::Test, false, "none_of(v, [](int x) { return x > 0; })"},
+    {"count_if", Algo::Test, false, "count_if(v, [](int x) { return x > 0; })"},
+    {"index_if", Algo::Test, false, "index_if(v, [](int x) { return x > 0; })"},
+    {"erase_if", Algo::Test, true, "erase_if(v, [](int x) { return x < 0; })"},
+    {"contains", Algo::Find, false, "contains(v, x)"},
+    {"count", Algo::Find, false, "count(v, x)"},
+    {"index_of", Algo::Find, false, "index_of(v, x)"},
+    {"erase", Algo::Find, true, "erase(v, x)"},
+    {"binary_search", Algo::BinarySearch, false, "binary_search(v, x)` or `binary_search(v, x, [](int a, int b) { return a > b; })"},
+    {"iota", Algo::Iota, true, "iota(v, 0)"},
+    {"min", Algo::MinMax, false, "min(v)` or `min(v, [](int a, int b) { return a < b; })"},
+    {"max", Algo::MinMax, false, "max(v)` or `max(v, [](int a, int b) { return a < b; })"},
+    {"accumulate", Algo::Accumulate, false, "accumulate(v, 0)` or `accumulate(v, 1, [](int product, int x) { return product * x; })"},
+};
+const AlgorithmInfo* findAlgorithm(const std::string& name) {
+    for (const AlgorithmInfo& a : kAlgorithms)
+        if (name == a.name) return &a;
+    return nullptr;
+}
+// "a 'Point'", but "an 'int'".
+std::string article(const Type* t) {
+    return std::string(std::strchr("aeio", t->name[0]) ? "an " : "a ");
+}
+// The last way of calling it that `usage` shows, which is the one with a function.
+std::string lastForm(const std::string& usage) {
+    const size_t at = usage.rfind('`');
+    return at == std::string::npos ? usage : usage.substr(at + 1);
+}
+// `x.begin()` or `x.end()`, of C++'s iterators, which C+ does not have.
+const Expr* iteratorBase(const Expr& e, const char* which) {
+    if (e.kind != Expr::Kind::MethodCall) return nullptr;
+    auto& m = static_cast<const MethodCallExpr&>(e);
+    return m.name == which && m.args.empty() ? m.receiver.get() : nullptr;
+}
+}  // namespace
+
+// The arguments of a call of C++'s <algorithm> that C+ writes another way, where `v.begin()` and `v.end()` are reported by what
+// the call says to write, so only what they are called on is checked.
+void Sema::skipIterators(std::vector<ExprPtr>& args, Flow& flow) {
+    for (auto& a : args) {
+        if (const Expr* base = iteratorBase(*a, "begin") ? iteratorBase(*a, "begin") : iteratorBase(*a, "end")) {
+            checkLooseValue(*const_cast<Expr*>(base), flow);
+            a->type = Type::error();
+        } else {
+            checkLooseValue(*a, flow);
+        }
+    }
+}
+
+bool Sema::checkAlgorithmPlace(const Expr& range, const std::string& name) {
+    if (!range.type || range.type->isError()) return false;
+    const char* what = range.type->is(K::String) ? "string" : range.type->isArray() ? "array" : "vector";
+    if (!isPlaceKind(range)) {
+        const std::string text = spelled(range, "");
+        diags_.error(range.loc, q(name) + " changes the " + what + " it is given, so it needs a variable, a field or an element, but this is a value",
+                     "store it in a variable first, and give it that: `auto list = " + (text.empty() ? std::string("...") : text) + "; " + name + "(list);`",
+                     spec::Algorithms);
+        return false;
+    }
+    const VarDecl* var = nullptr;
+    std::string path;
+    const Expr* at = &range;
+    while (at->kind == Expr::Kind::Member) {
+        auto& m = static_cast<const MemberExpr&>(*at);
+        path = path.empty() ? m.field : m.field + "." + path;
+        at = m.base.get();
+    }
+    if (at->kind == Expr::Kind::This) {
+        var = thisVar();
+    } else if (at->kind == Expr::Kind::Name) {
+        auto& n = static_cast<const NameExpr&>(*at);
+        if (n.implicitField >= 0) {
+            var = thisVar();
+            path = path.empty() ? n.name : n.name + "." + path;
+        } else {
+            var = n.decl;
+        }
+    }
+    return checkChangeable(range, name == "sort" || name == "stable_sort" ? "sorted" : name == "reverse" ? "reversed" : "changed", var, path);
+}
+
+// `sort(v, less)` and the others in kAlgorithms. Each argument is checked once: the vector first, as what the others take
+// comes from its elements, so that a lambda is checked as the function type it is given to, and its `auto` parameters get their
+// types from that. Then the generic of Builtins.h that does the work is made for those types, in the variant for what was given:
+// with a comparator or not, with one that can fail or not, and with NaNs last for floating point.
+const Type* Sema::checkAlgorithm(CallExpr& call, Flow& flow) {
+    const AlgorithmInfo& info = *findAlgorithm(call.callee);
+    const std::string& name = call.callee;
+    Loc nameLoc = call.loc;
+    nameLoc.len = (uint32_t)name.size();
+    const bool less = info.kind == Algo::Sort || info.kind == Algo::BinarySearch || info.kind == Algo::MinMax;
+    auto loose = [&](size_t from) {
+        for (size_t i = from; i < call.args.size(); ++i) checkLooseValue(*call.args[i], flow);
+        return Type::error();
+    };
+    if (!call.templateArgs.empty()) {
+        diags_.error(nameLoc, q(name) + " works out its types from its arguments", "leave out the `<...>`: write `" + std::string(info.usage) + "`", spec::Algorithms);
+        return loose(0);
+    }
+    // `sort(v.begin(), v.end())`, as C++ writes it.
+    if (call.args.size() >= 2)
+        if (const Expr* first = iteratorBase(*call.args[0], "begin"); first && iteratorBase(*call.args[1], "end")) {
+            std::string base = spelled(*first, "v"), rest;
+            for (size_t i = 2; i < call.args.size(); ++i) {
+                const std::string arg = spelled(*call.args[i], "");
+                rest += ", " + (arg.empty() ? std::string("...") : arg);
+            }
+            diags_.error(call.args[0]->loc, "C+ has no iterators, so " + q(name) + " takes the vector itself",
+                         "write `" + name + "(" + base + rest + ")`", spec::Algorithms);
+            skipIterators(call.args, flow);
+            return Type::error();
+        }
+    size_t most = info.kind == Algo::Reverse ? 1 : info.kind == Algo::Sort || info.kind == Algo::MinMax ? 2 : info.kind == Algo::BinarySearch || info.kind == Algo::Accumulate ? 3 : 2;
+    size_t fewest = info.kind == Algo::Reverse || info.kind == Algo::Sort || info.kind == Algo::MinMax ? 1 : 2;
+    if (call.args.size() < fewest || call.args.size() > most) {
+        loose(0);
+        diags_.error(nameLoc, q(name) + " takes " + (fewest == most ? std::to_string(fewest) : std::to_string(fewest) + " or " + std::to_string(most)) +
+                                  (most == 1 ? " argument" : " arguments") + ", but " + std::to_string(call.args.size()) + (call.args.size() == 1 ? " was" : " were") + " given",
+                     "write `" + std::string(info.usage) + "`", spec::Algorithms);
+        return Type::error();
+    }
+    // What it works on.
+    Expr& range = *call.args[0];
+    const Type* rt = checkExpr(range, flow);
+    if (rt->isError()) return loose(1);
+    const bool wholes = info.kind == Algo::Sort || info.kind == Algo::Reverse;  // these also take an array or a string
+    const Type* elem = rt->isVector() || (wholes && rt->isArray()) ? rt->elem : wholes && rt->is(K::String) ? Type::charTy() : nullptr;
+    if (!elem) {
+        const std::string text = spelled(range, "a");
+        diags_.error(range.loc, q(name) + " takes a vector" + (wholes ? ", an array or a string" : "") + ", but this is " + q(rt),
+                     rt->isArray() || rt->is(K::String)
+                         ? "copy it into a vector first: `vector<" + std::string(rt->is(K::String) ? "char" : rt->elem->name) + "> items; for (auto x : " + text +
+                               ") items.push_back(x);`"
+                         : "give it a vector, such as `" + std::string(info.usage) + "`",
+                     spec::Algorithms);
+        return loose(1);
+    }
+    if (info.kind == Algo::Iota && !elem->isArithmetic()) {
+        diags_.error(range.loc, "`iota` counts up from the value it is given with `++`, which a " + q(elem) + " does not have",
+                     "fill it with a loop: `for (long i = 0; i < v.size(); i++) v[i] = ...;`", spec::Algorithms);
+        return loose(1);
+    }
+    bool bad = info.changes && !checkAlgorithmPlace(range, name);
+    // A value that it looks for, or starts from.
+    const Type* init = nullptr;
+    if (info.kind == Algo::Find || info.kind == Algo::BinarySearch || info.kind == Algo::Iota) {
+        checkValue(*call.args[1], flow, elem, "for the value " + q(name) + " " + (info.kind == Algo::Iota ? "starts from" : "looks for"));
+        bad = bad || !call.args[1]->type || call.args[1]->type->isError();
+    } else if (info.kind == Algo::Accumulate) {
+        init = checkExpr(*call.args[1], flow);
+        if (init->is(K::Void) || init->isNull()) {
+            diags_.error(call.args[1]->loc, init->isNull() ? std::string("`accumulate` cannot tell what type of optional to start from from null") : std::string("this argument has no value"),
+                         "start from a value of the type it gives, such as `0`, `0.0` or `\"\"`", spec::Algorithms);
+            init = Type::error();
+        }
+        bad = bad || init->isError();
+    }
+    // The function it is given, which can be left out of the sorts, `binary_search`, `min`, `max` and `accumulate`.
+    const size_t fnAt = info.kind == Algo::Sort || info.kind == Algo::MinMax ? 1 : info.kind == Algo::Test ? 1 : info.kind == Algo::BinarySearch || info.kind == Algo::Accumulate ? 2 : SIZE_MAX;
+    Expr* given = fnAt < call.args.size() ? call.args[fnAt].get() : nullptr;
+    bool throws = false;
+    if (given) {
+        if (given->kind == Expr::Kind::Lambda) {
+            throws = static_cast<LambdaExpr*>(given)->fn->isThrows;
+        } else {
+            const Type* t = checkExpr(*given, flow);
+            if (t->isFunction()) throws = t->throws;
+            else if (!t->isError()) {
+                diags_.error(given->loc, q(name) + " is given a function here, " +
+                                             std::string(info.kind == Algo::Test ? "which says whether an element is one it is after"
+                                                         : info.kind == Algo::Accumulate ? "which says how to add an element"
+                                                                                         : "which says whether one element goes before another") +
+                                             ", but this is " + q(t),
+                             "write a lambda: `" + lastForm(info.usage) + "`",
+                             spec::Algorithms);
+                bad = true;
+            } else {
+                bad = true;
+            }
+        }
+        if (!bad || given->kind == Expr::Kind::Lambda) {
+            std::vector<Type::Param> params;
+            const Type* ret = Type::boolTy();
+            if (info.kind == Algo::Accumulate) {
+                ret = init && !init->isError() ? init : Type::error();
+                params = {{ret, false, false}, {elem, false, false}};
+            } else if (info.kind == Algo::Test) {
+                params = {{elem, false, false}};
+            } else {
+                params = {{elem, false, false}, {elem, false, false}};
+            }
+            if (!ret->isError()) {
+                const Type* want = Type::functionOf(ret, params, throws);
+                checkValue(*given, flow, want, info.kind == Algo::Test ? "for the test of " + q(name) : info.kind == Algo::Accumulate ? "for the function of `accumulate`" : "for the comparator of " + q(name));
+                bad = bad || !given->type || given->type->isError();
+                // `return a - b;`, as a comparator of JavaScript or of C's qsort is written, which is true for any two that differ.
+                if (const Expr* v = given->kind == Expr::Kind::Lambda ? static_cast<LambdaExpr*>(given)->notBool : nullptr; v && ret->is(K::Bool)) {
+                    const bool test = info.kind == Algo::Test;
+                    std::string a = "a", b2 = "b";
+                    auto* l = static_cast<LambdaExpr*>(given);
+                    if (l->fn->params.size() >= 1) a = l->fn->params[0]->name;
+                    if (l->fn->params.size() >= 2) b2 = l->fn->params[1]->name;
+                    diags_.error(v->loc, test ? "the test of " + q(name) + " gives a bool, but this is " + q(v->type) + ", which would be true for anything but 0"
+                                              : "a comparator gives a bool, whether " + a + " goes before " + b2 + ", but this is " + q(v->type) +
+                                                    ", as for JavaScript's sort or C's qsort, and it would be true for any two that differ",
+                                 test ? "say what it tests: `return " + a + " != 0;`" : "write `return " + a + " < " + b2 + ";`, or `" + a + " > " + b2 + "` for the other order",
+                                 spec::Algorithms);
+                    bad = true;
+                }
+            } else {
+                checkLooseValue(*given, flow);
+            }
+        }
+    }
+    if (bad) return Type::error();
+    // What the elements must allow.
+    if (less && !given) {
+        Loc where;
+        if (std::string problem = constraintProblem("Comparable", elem, where); !problem.empty()) {
+            std::string field = "x";
+            if (elem->hasFields())
+                for (auto& f : elem->decl->fields) {
+                    Loc unused;
+                    if (constraintProblem("Comparable", f.type, unused).empty()) {
+                        field = f.name;
+                        break;
+                    }
+                }
+            const std::string t = elem->name;
+            const std::string example = elem->isClass() ? "[](" + t + " a, " + t + " b) { return a." + field + " < b." + field + "; }"
+                                                        : "[](const " + t + "& a, const " + t + "& b) { return a." + field + " < b." + field + "; }";
+            diags_.error(range.loc, q(elem) + " has no `<`, so " + q(name) + " needs to be told which of two elements comes first",
+                         "give it a comparator: `" + name + "(" + spelled(range, "v") + (info.kind == Algo::BinarySearch ? ", x" : "") + ", " +
+                             (elem->hasFields() ? example : std::string("[](...) { ... }")) + ")`",
+                         spec::Algorithms);
+            return Type::error();
+        }
+    }
+    if (info.kind == Algo::Find && (elem->isFunction() || holdsFunction(elem))) {
+        diags_.error(call.args[1]->loc, q(name) + " compares each element with `==`, which a " + q(elem) + " does not have, as functions cannot be compared",
+                     "give a test of your own instead: `" + std::string(name == "count" ? "count_if" : name == "erase" ? "erase_if" : name == "index_of" ? "index_if" : "any_of") +
+                         "(v, [](...) { return ...; })`",
+                     spec::Algorithms);
+        return Type::error();
+    }
+    if (info.kind == Algo::Sort && rt->isArray() && (elem->isFunction() || holdsFunction(elem))) {
+        diags_.error(range.loc, "an array of " + q(elem) + " cannot be sorted yet, as it holds functions, which cannot be compared",
+                     "copy it into a vector, and sort that", spec::Algorithms);
+        return Type::error();
+    }
+    if (info.kind == Algo::Accumulate && !given) {
+        const bool adds = (init->isNumber() && elem->isArithmetic() && canConvert(elem, init)) || (init->is(K::String) && elem->is(K::String));
+        if (!adds) {
+            const bool numbers = init->isNumber() && elem->isArithmetic();
+            const std::string start = elem->isFloating() ? "0.0" : elem->is(K::Long) ? "long(0)" : std::string(elem->name) + "(0)";
+            diags_.error(call.args[1]->loc,
+                         numbers ? "`accumulate` adds each element to this " + std::string(init->name) + ", which cannot hold a " + q(elem)
+                                 : "`accumulate` adds each element to this with `+`, which " + article(init) + q(init) + " and " + article(elem) + q(elem) + " do not have",
+                         numbers ? "start from a value of the elements' type: `accumulate(" + spelled(range, "v") + ", " + start + ")`"
+                                 : "give it the function to use: `accumulate(" + spelled(range, "v") + ", init, [](" + std::string(init->name) + " total, const " +
+                                       elem->name + "& x) { return ...; })`",
+                         spec::Algorithms);
+            return Type::error();
+        }
+    }
+    // The generic that does it.
+    std::string internal = "__" + name;
+    if (info.kind == Algo::Sort || info.kind == Algo::Reverse) {
+        if (rt->isArray()) internal += "_array";
+        else if (rt->is(K::String)) internal = given || info.kind == Algo::Reverse ? internal + "_string" : "__sort_string";
+    }
+    if (info.kind == Algo::Accumulate && given) internal += "_by";
+    if (less) internal += given ? (throws ? "_by_t" : "_by") : elem->isFloating() ? "_f" : "";
+    else if (given && throws) internal += "_t";
+    FuncDecl* fn = nullptr;
+    if (TemplateDecl* t = program_->findTemplate(internal); t && t->kind == TemplateDecl::Kind::Function) {
+        std::vector<TemplateArg> args;
+        if (info.kind == Algo::Accumulate) args.push_back({init});
+        args.push_back({elem});
+        if (rt->isArray()) args.push_back({nullptr, rt->length});
+        fn = parser_.instantiateFunction(*t, args, call.loc, fn_ ? fn_->genericDepth + 1 : 1);
+        adoptTypes();
+    } else if (auto it = funcs_.find(internal); it != funcs_.end()) {
+        fn = it->second;
+    }
+    if (!fn) {
+        diags_.error(nameLoc, "internal compiler error: " + q(internal) + " is missing from Builtins.h", "this is a mistake in the compiler", spec::Algorithms);
+        return Type::error();
+    }
+    call.target = fn;
+    for (size_t i = 0; i < call.args.size(); ++i) {
+        const VarDecl& p = *fn->params[i];
+        const Expr* bound = boundByRef_;
+        if (p.isRef) boundByRef_ = call.args[i].get();
+        requireConvertible(*call.args[i], p.declType, "for " + q(name));
+        boundByRef_ = bound;
+    }
+    if (throws) checkCanFailNamed(name, nameLoc);
+    if (info.kind == Algo::MinMax) call.check = CallExpr::Check::NonEmpty;
+    if ((info.kind == Algo::Sort || name == "erase_if") && given) call.check = CallExpr::Check::Unchanged;  // only then does the program's code run
+    return info.kind == Algo::Sort || info.kind == Algo::Reverse || info.kind == Algo::Iota ? Type::voidTy() : fn->retType;
+}
+
 const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (call.loc.line == 0 && call.callee == "__hash") {  // see Builtins.h
         checkExpr(*call.args[0], flow);
         call.builtin = Builtin::Hash;
         return Type::longTy();
+    }
+    if (call.loc.line == 0 && call.callee == "__swap") {  // see Builtins.h
+        for (auto& a : call.args) checkExpr(*a, flow);
+        call.builtin = Builtin::Swap;
+        return Type::voidTy();
+    }
+    if (call.loc.line == 0 && call.callee == "__same_buffer") {  // see Builtins.h
+        for (auto& a : call.args) checkExpr(*a, flow);
+        call.builtin = Builtin::SameBuffer;
+        return Type::boolTy();
     }
     if (call.loc.line == 0 && call.callee == "__move") {
         call.builtin = Builtin::Move;
@@ -5835,6 +6168,8 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (call.templateArgs.empty() && call.loc.line != 0)
         if (VarDecl* v = lookup(call.callee); v && !(fieldHides(call.callee) && (v->isTopLevel || v->isGlobal)) && (callable(v->type) || !funcs_.count(call.callee)))
             return callThrough(nameLoc);
+    if (call.templateArgs.empty() && call.loc.line == 0)  // what comes with the language calls only its own parameters and locals
+        if (VarDecl* v = lookup(call.callee); v && !v->isTopLevel && !v->isGlobal && callable(v->type)) return callThrough(nameLoc);
 
     // Inside a method, `name(...)` calls another method on `this`, as in C++.
     if (StructDecl* o = owner()) {
@@ -5922,10 +6257,21 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         call.builtin = Builtin::Move;
         return checkMove(call, flow);
     }
+    if (it == funcs_.end() && findAlgorithm(call.callee)) {
+        // `min(a, b)` is the math one, and `min(v)` or `min(v, less)` the one of <algorithm>.
+        auto isVector = [&](const Expr& e) {
+            if (e.kind != Expr::Kind::Name) return false;
+            const VarDecl* v = lookup(static_cast<const NameExpr&>(e).name);
+            return v && v->type && v->type->isVector();
+        };
+        if (!findMath(call.callee) || call.args.size() == 1 || (call.args.size() == 2 && (call.args[1]->kind == Expr::Kind::Lambda || isVector(*call.args[0]))))
+            return checkAlgorithm(call, flow);
+    }
     if (it == funcs_.end() && findMath(call.callee)) return checkMath(call, flow);
     if (it == funcs_.end() && findCharFn(call.callee)) return checkCharFn(call, flow);
     if (it == funcs_.end()) {
-        for (auto& a : call.args) checkLooseValue(*a, flow);
+        if (!algorithmHelp(call.callee).empty()) skipIterators(call.args, flow);  // `find(v.begin(), v.end(), x)`: what to write instead says it
+        else for (auto& a : call.args) checkLooseValue(*a, flow);
         if (reportElsewhere(call.callee, nameLoc, "declared")) return Type::error();
         if (auto why = program_->notImported.find(call.callee); why != program_->notImported.end()) {
             diags_.error(nameLoc, why->second.first, why->second.second, spec::CHeaders);
@@ -6018,8 +6364,10 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         }
         else if (!cDeclarationOf(name).empty())
             help = "a C function must be declared: `extern \"C\" " + cDeclarationOf(name) + ";`";
-        else if (name == "sort" || name == "stable_sort" || name == "reverse" || name == "accumulate" || name == "min_element" || name == "max_element")
-            help = "this compiler has no sorting yet, nor the other algorithms of C++. Write the loop";
+        else if (const std::string algorithm = algorithmHelp(name); !algorithm.empty()) {
+            help = algorithm;
+            anchor = spec::Algorithms;
+        }
         else if (name == "swap")
             help = "write it with a third variable: `auto t = a; a = b; b = t;`";
         else if (name == "fmin" || name == "fmax" || name == "fminf" || name == "fmaxf")
@@ -6488,11 +6836,18 @@ const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow)
     for (size_t i = 0; i < call.templateArgs.size(); ++i) args[i] = call.templateArgs[i];
     Deduction deduction{t, args, std::vector<bool>(t.params.size(), false), call.templateArgs.size(), ""};
     for (size_t i = 0; i < call.templateArgs.size(); ++i) deduction.known[i] = true;
-    // `{ }` lists take their type from the parameter, so they wait until it is known.
+    // `{ }` lists take their type from the parameter, and so does a lambda with `auto` parameters, so they wait until it is known.
+    auto waits = [](const Expr& a) {
+        if (a.kind == Expr::Kind::InitList) return !static_cast<const InitListExpr&>(a).explicitType;
+        if (a.kind != Expr::Kind::Lambda) return false;
+        for (auto& p : static_cast<const LambdaExpr&>(a).fn->params)
+            if (p->declType->is(K::Auto)) return true;
+        return false;
+    };
     bool bad = false;
     for (size_t i = 0; i < call.args.size(); ++i) {
         Expr& a = *call.args[i];
-        if (a.kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(a).explicitType) continue;
+        if (waits(a)) continue;
         const Type* type = checkExpr(a, flow);
         bad = bad || type->isError();
         if (type->is(K::Void)) {
@@ -6505,7 +6860,7 @@ const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow)
     auto finishLists = [&](FuncDecl* fn) {
         for (size_t i = 0; i < call.args.size(); ++i) {
             Expr& a = *call.args[i];
-            if (a.kind != Expr::Kind::InitList || static_cast<InitListExpr&>(a).explicitType) continue;
+            if (!waits(a)) continue;
             if (fn) checkValue(a, flow, fn->params[i]->declType, "for parameter " + q(fn->params[i]->name) + " of " + q(fn->name));
             else checkLooseValue(a, flow);
         }
@@ -6548,7 +6903,7 @@ const Type* Sema::checkTemplateCall(CallExpr& call, TemplateDecl& t, Flow& flow)
     if (&call != spawned_) checkCanFail(*fn, nameLoc);
     for (size_t i = 0; i < call.args.size(); ++i) {
         Expr& a = *call.args[i];
-        if (a.kind == Expr::Kind::InitList && !static_cast<InitListExpr&>(a).explicitType) continue;
+        if (waits(a)) continue;
         const Expr* bound = boundByRef_;
         if (fn->params[i]->isRef) boundByRef_ = &a;
         requireConvertible(a, fn->params[i]->declType, "for parameter " + q(fn->params[i]->name) + " of " + q(fn->name));
@@ -7145,6 +7500,12 @@ const Type* Sema::checkVectorInsertErase(MethodCallExpr& call, Flow& flow, const
     call.vecMethod = insert ? VecMethod::Insert : VecMethod::Erase;
     checkChangingReceiver(*call.receiver, call.name.c_str(), "vector", spec::Vectors);
     const size_t want = insert ? 2 : 1;
+    if (!insert && call.args.size() == 2 && call.args[0]->kind == Expr::Kind::Call &&  // `v.erase(remove_if(...), v.end())`, which says what to write
+        (static_cast<CallExpr&>(*call.args[0]).callee == "remove_if" || static_cast<CallExpr&>(*call.args[0]).callee == "remove") && iteratorBase(*call.args[1], "end")) {
+        checkLooseValue(*call.args[0], flow);
+        call.args[1]->type = Type::error();
+        return Type::error();
+    }
     if (!insert && call.args.size() == 2) {  // `v.erase(first, last)`
         for (auto& a : call.args) checkLooseValue(*a, flow);
         diags_.error(call.loc, "this compiler does not support erase() of a range of a vector yet",
@@ -8435,10 +8796,16 @@ void Sema::reportEnumOperator(const BinaryExpr& b, const Type* l, const Type* r)
 
 // ---- Lambdas ---------------------------------------------------------------
 
+// A parameter as a function type has it, where a `const T&` is a `T`, as the caller cannot tell them apart.
+static Type::Param asParam(const VarDecl& p) {
+    if (p.isRef && p.isConst) return {p.declType, false, false};
+    return {p.declType, p.isRef, false};
+}
+
 // The type of a function used as a value: what it takes and gives, and whether a call can fail.
 static const Type* functionTypeOf(const FuncDecl& f) {
     std::vector<Type::Param> params;
-    for (auto& p : f.params) params.push_back({p->declType, p->isRef, p->isRef && p->isConst});
+    for (auto& p : f.params) params.push_back(asParam(*p));
     return Type::functionOf(f.retType, params, f.callFails());
 }
 
@@ -8607,12 +8974,28 @@ const Type* Sema::checkLambda(LambdaExpr& l, Flow& flow, const Type* expected) {
     }
     // What it takes, and what it gives back.
     std::vector<Type::Param> params;
-    for (auto& p : f.params) {
+    bool autoParams = false;
+    for (size_t i = 0; i < f.params.size(); ++i) {
+        auto& p = f.params[i];
+        if (p->declType->is(K::Auto)) {  // `[](const auto& a, const auto& b)`: the type it is given to says what they are
+            autoParams = true;
+            if (want && i < want->params->size()) {
+                p->declType = (*want->params)[i].type;
+            } else {
+                diags_.error(p->typeLoc, want ? "the lambda takes more than a " + q(want) + " does, so there is no type for this `auto`"
+                                              : "this compiler does not support `auto` parameters of a lambda yet, except where the type it is given to says what they are",
+                             want ? "take what the type has: `" + std::string(want->name) + "`"
+                                  : "write the parameter's type, or give the lambda to what says it, such as `sort(v, [](const auto& a, const auto& b) { ... })` or a `function<bool(int)>` variable",
+                             spec::Lambdas);
+                p->declType = Type::error();
+                failed = true;
+            }
+        }
         checkStorable(p->declType, p->typeLoc);
         if (p->declType->is(K::Void))
             diags_.error(p->typeLoc, "parameters cannot have type void", "write `()` for no parameters, or give the parameter a type", spec::Lambdas);
         p->type = p->declType;
-        params.push_back({p->declType, p->isRef, p->isRef && p->isConst});
+        params.push_back(asParam(*p));
     }
     if (want) {
         bool same = want->params->size() == params.size();
@@ -8624,8 +9007,14 @@ const Type* Sema::checkLambda(LambdaExpr& l, Flow& flow, const Type* expected) {
                 const std::string name = i < f.params.size() ? f.params[i]->name : std::string(1, (char)('a' + i % 26));
                 written += (i ? ", " : "") + std::string(p.isConst ? "const " : "") + p.type->name + (p.isRef ? "& " : " ") + name;
             }
+            std::string asAuto;  // `(const auto& a, const auto& b)`, for a lambda written with `auto`
+            for (size_t i = 0; i < want->params->size(); ++i)
+                asAuto += std::string(i ? ", " : "") + ((*want->params)[i].isRef ? "auto& " : "const auto& ") + (i < f.params.size() ? f.params[i]->name : std::string(1, (char)('a' + i % 26)));
             diags_.error(l.loc, "this lambda takes `" + paramTypes(params) + "`, but a " + q(want) + " takes `" + paramTypes(*want->params) + "`",
-                         "write its parameters as the type has them: `[...](" + written + ") { ... }`", spec::Lambdas);
+                         autoParams && want->params->size() == f.params.size()
+                             ? "write `[...](" + asAuto + ") { ... }`: a `" + std::string(want->name) + "` cannot change what it is given"
+                             : "write its parameters as the type has them: `[...](" + written + ") { ... }`",
+                         spec::Lambdas);
             failed = true;
         }
         if (!l.returnWritten) {
@@ -8722,7 +9111,7 @@ const Type* Sema::checkLambda(LambdaExpr& l, Flow& flow, const Type* expected) {
     if (want && want->throws) f.isThrows = true;  // it is called as what can fail, though it never does
     if (failed || f.retType->isError()) return Type::error();
     params.clear();
-    for (auto& p : f.params) params.push_back({p->declType, p->isRef, p->isRef && p->isConst});
+    for (auto& p : f.params) params.push_back(asParam(*p));
     return Type::functionOf(f.retType, params, f.isThrows);
 }
 

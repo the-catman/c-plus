@@ -729,6 +729,26 @@ Decided 2026-11-11 by the owner (§6), built 2026-11-12: a lambda captures as a 
   from a shared variable, a kept lambda sharing a variable of a condition, a `catch` or an async function's parameter, and C
   functions as values. Then `sort` and the other functions that take one, `spawn` with a lambda, and C callbacks.
 
+### 2.35 Algorithms — DECIDED
+Decided 2026-11-12 by the owner: the functions of C++'s `<algorithm>` whose C++20 or C++23 range form gives no iterator, as
+free functions with those forms and no `std::ranges::`, so that no name changes meaning when iterators come.
+- `sort(v)` and `sort(v, less)`, unstable; `stable_sort(v)` and `stable_sort(v, less)`, stable. With any comparator, one that
+  is not a strict weak order too, both return after O(n log n) calls with exactly the elements they had, and never stop the
+  program; only the order is unspecified. NaNs sort last.
+- Also `reverse`, `any_of`, `all_of`, `none_of`, `contains`, `binary_search`, `count`, `count_if`, `erase(v, x)` and
+  `erase_if(v, pred)` (which return how many they removed), `iota(v, start)`, `min(v)`, `max(v)` and `accumulate(v, init)`,
+  with a function as a last argument where C++ takes one. `find`, `find_if`, `min_element`, `max_element`, `lower_bound`,
+  `unique`, `transform` and `for_each` wait for iterators, and say what to write today.
+- "Where is it" is `index_of(v, x)` and `index_if(v, pred)`, which give a `long?`: names that cannot clash with C++'s.
+- Inside `function<...>`, `const T&` means `T`, so both ways of writing a comparator work. `T&` stays a type of its own.
+- A function given to one of these can be `throws`. Then the call needs `try`, as Swift's `rethrows` does, and when it fails
+  the vector is as it was. There is no syntax for this in a program's own functions.
+- The function given sees the vector as it was before the call. If it changes the vector that `sort`, `stable_sort` or
+  `erase_if` was given, the program stops when the call returns, as the change would be lost. The others change nothing,
+  so a change it makes stays.
+- A lambda's `auto` parameters take their types from the function type it is given to. `void f(auto x)` as a generic, and
+  a lambda with `auto` parameters whose types are not known, are planned.
+
 ## 3. Compiler architecture
 
 ```
@@ -795,8 +815,8 @@ what holds real programs back most:
    before lambdas and overloading, which depend on it: what a lambda captures, what `operator[]` gives, and what a
    parameter can be. It may replace the rules of §2.17 and §2.24 on when a result is a copy, and is where the safety of
    §2.7 is tested hardest. `return &x;` of a local, which compiles today, is caught first.
-5. Lambdas, and a type for a function (built 2026-11-12, see §2.34), then `sort` and the other functions that take one,
-   `spawn` with a lambda, and C callbacks.
+5. Lambdas, and a type for a function (built 2026-11-12, see §2.34), then `sort` and the other functions that take one
+   (§2.35), `spawn` with a lambda, and C callbacks.
 6. Function overloading, more than one constructor and default arguments, then operator overloading. Overloading also
    ends the pairs that stand in for it, such as `http::fetch` and `http::fetchWith`, before more of them are made.
 7. The rest of what everyday programs need: writing files and the rest of `fs` (§2.15), `split`, `trim`, `join` and

@@ -1,0 +1,55 @@
+// The forms of algorithms that the cheat sheet writes.
+struct Person {
+    string name;
+    int age;
+};
+
+bool later(string a, string b) throws { return try stoi(a) > try stoi(b); }
+
+int main() throws {
+    vector<int> v = {3, -1, 2};
+    int x = 2;
+    sort(v);
+    sort(v, [](int a, int b) { return a > b; });
+    stable_sort(v);
+    reverse(v);
+    println("{}", v);
+    // expect: [3, 2, -1]
+    println("{} {} {}", contains(v, x), count(v, x), count_if(v, [](int x) { return x > 0; }));
+    // expect: true 1 2
+    println("{} {}", any_of(v, [](int x) { return x < 0; }), all_of(v, [](int x) { return x < 0; }));
+    // expect: true false
+    println("{}", none_of(v, [](int x) { return x > 5; }));
+    // expect: true
+    long? at = index_of(v, x);
+    long? first = index_if(v, [](int x) { return x < 0; });
+    println("{} {}", at ?? -1, first ?? -1);
+    // expect: 1 2
+    println("{} {} {}", min(v), max(v), accumulate(v, 0));
+    // expect: -1 3 4
+    println("{}", erase(v, x));
+    // expect: 1
+    println("{}", erase_if(v, [](int x) { return x > 2; }));
+    // expect: 1
+    erase_if(v, [](int x) { return x < 0; });
+    println("{}", v);
+    // expect: []
+    v = {1, 2, 3};
+    iota(v, 0);
+    println("{} {}", v, binary_search(v, x));
+    // expect: [0, 1, 2] true
+    sort(v, [](const int& a, const int& b) { return a <= b; });
+    println("{}", v);
+    // expect: [0, 1, 2]
+    vector<Person> people = {{"Ada", 36}, {"Linus", 21}};
+    sort(people, [](const auto& a, const auto& b) { return a.age < b.age; });
+    println("{}", people[0].name);
+    // expect: Linus
+    vector<string> numbers = {"9", "10"};
+    try sort(numbers, later);
+    println("{}", numbers);
+    // expect: ["10", "9"]
+    sort(v, [](int a, int b) { return a < b; });
+    try sort(v, [](int a, int b) throws { return a < b; });
+    return 0;
+}

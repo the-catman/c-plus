@@ -1,0 +1,9 @@
+// The same for an array, whose elements stable_sort compares before it puts the sorted ones back.
+int main() {
+    array<int, 3> a = {3, 1, 2};
+    stable_sort(a, [&](int x, int y) { a[0] = 7; return x < y; });
+    println("not reached");
+    return 0;
+}
+// trap: the comparator given to stable_sort() changed the array it was sorting, and that change would be lost
+// trap: trap_sort_array_comparator_changes.cplus:4:5

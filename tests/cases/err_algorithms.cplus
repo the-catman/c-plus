@@ -1,0 +1,132 @@
+// What the algorithms take, and what the functions given to them must be.
+struct Point {
+    int x;
+    int y;
+};
+class Node {
+public:
+    string name;
+    Node(string n) : name(n) {}
+};
+vector<int> makeList() { return {2, 1}; }
+
+void noLess(vector<Point> ps) {
+    sort(ps);
+    // error: 'Point' has no `<`, so 'sort' needs to be told which of two elements comes first
+    // error: give it a comparator: `sort(ps, [](const Point& a, const Point& b) { return a.x < b.x; })`
+}
+void noLessClass(vector<Node> ns) {
+    auto m = max(ns);
+    // error: give it a comparator: `max(ns, [](Node a, Node b) { return a.name < b.name; })`
+}
+void noLessSearch(vector<Point> ps, Point p) {
+    bool b = binary_search(ps, p);
+    // error: give it a comparator: `binary_search(ps, x, [](const Point& a, const Point& b) { return a.x < b.x; })`
+}
+void constant() {
+    const vector<int> fixed = {1};
+    sort(fixed);
+    // error: 'fixed' is const and cannot be sorted
+}
+void constantParam(const vector<int>& v) {
+    erase_if(v, [](int x) { return x > 1; });
+    // error: 'v' is const and cannot be changed
+}
+void temporary() {
+    sort(makeList());
+    // error: 'sort' changes the vector it is given, so it needs a variable, a field or an element, but this is a value
+    // error: store it in a variable first, and give it that: `auto list = makeList(); sort(list);`
+}
+void wrongParams(vector<int> v) {
+    sort(v, [](string a, string b) { return a < b; });
+    // error: this lambda takes `(string, string)`, but a 'function<bool(int, int)>' takes `(int, int)`
+}
+void changingParams(vector<int> v) {
+    sort(v, [](int& a, int& b) { return a < b; });
+    // error: this lambda takes `(int&, int&)`, but a 'function<bool(int, int)>' takes `(int, int)`
+}
+void changingAuto(vector<int> v) {
+    sort(v, [](auto& a, auto& b) { return a < b; });
+    // error: write `[...](const auto& a, const auto& b) { ... }`: a `function<bool(int, int)>` cannot change what it is given
+}
+void notAFunction(vector<int> v) {
+    sort(v, 3);
+    // error: 'sort' is given a function here, which says whether one element goes before another, but this is 'int'
+    // error: write a lambda: `sort(v, [](int a, int b) { return a > b; })`
+}
+void notATest(vector<int> v) {
+    bool b = any_of(v, true);
+    // error: 'any_of' is given a function here, which says whether an element is one it is after, but this is 'bool'
+}
+void wrongFunctionType(vector<int> v, function<bool(long, long)> less) {
+    sort(v, less);
+    // error: for the comparator of 'sort'
+}
+void notAVector() {
+    sort(5);
+    // error: 'sort' takes a vector, an array or a string, but this is 'int'
+}
+void arrayForCount(array<int, 3> a) {
+    long n = count(a, 1);
+    // error: 'count' takes a vector, but this is 'array<int, 3>'
+    // error: copy it into a vector first: `vector<int> items; for (auto x : a) items.push_back(x);`
+}
+void tooMany(vector<int> v) {
+    reverse(v, 1);
+    // error: 'reverse' takes 1 argument, but 2 were given
+}
+void tooFew(vector<int> v) {
+    bool b = contains(v);
+    // error: 'contains' takes 2 arguments, but 1 was given
+    // error: write `contains(v, x)`
+}
+void wrongValue(vector<int> v) {
+    bool b = contains(v, "x");
+    // error: for the value 'contains' looks for
+}
+void sumOfDoubles() {
+    double t = accumulate(vector<double>{1.5}, 0);
+    // error: `accumulate` adds each element to this int, which cannot hold a 'double'
+    // error: start from a value of the elements' type: `accumulate(v, 0.0)`
+}
+void sumOfPoints(vector<Point> ps) {
+    int t = accumulate(ps, 0);
+    // error: `accumulate` adds each element to this with `+`, which an 'int' and a 'Point' do not have
+}
+void sumFromNull(vector<int> v) {
+    auto t = accumulate(v, null);
+    // error: `accumulate` cannot tell what type of optional to start from from null
+}
+void noLessRows(vector<vector<int>> rows) {
+    sort(rows);
+    // error: 'vector<int>' has no `<`, so 'sort' needs to be told which of two elements comes first
+    // error: give it a comparator: `sort(rows, [](...) { ... })`
+}
+void sumFromNothing(vector<int> v) {
+    auto t = accumulate(v, println("x"));
+    // error: this argument has no value
+    // error: start from a value of the type it gives, such as `0`, `0.0` or `""`
+}
+void countUp(vector<Point> ps) {
+    iota(ps, 0);
+    // error: `iota` counts up from the value it is given with `++`, which a 'Point' does not have
+}
+void findFunction(vector<function<int()>> fs) {
+    bool b = contains(fs, fs[0]);
+    // error: 'contains' compares each element with `==`, which a 'function<int()>' does not have, as functions cannot be compared
+    // error: give a test of your own instead: `any_of(v, [](...) { return ...; })`
+}
+void sortFunctions(array<function<int()>, 2> fs) {
+    sort(fs, [](function<int()> a, function<int()> b) { return a() < b(); });
+    // error: an array of 'function<int()>' cannot be sorted yet, as it holds functions, which cannot be compared
+}
+void failsWithoutTry(vector<int> v) {
+    sort(v, [](int a, int b) throws { return a < b; });
+    // error: 'sort' can fail, so its call must say what happens then
+    // error: write `try sort(...)`, which passes the error on
+}
+void printsNothing(vector<int> v) {
+    println("{}", sort(v));
+    // error: this expression produces no value, so it cannot be printed
+}
+int main() { return 0; }

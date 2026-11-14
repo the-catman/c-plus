@@ -1,0 +1,10 @@
+// sort works on a copy, which takes the place of the vector when it is done, so a comparator that changes the vector would
+// have that change undone. The program stops at the call instead.
+int main() {
+    vector<int> v = {3, 1, 2};
+    sort(v, [&](int a, int b) { v.push_back(0); return a < b; });
+    println("not reached");
+    return 0;
+}
+// trap: the comparator given to sort() changed the vector it was sorting, and that change would be lost
+// trap: trap_sort_comparator_changes.cplus:5:5

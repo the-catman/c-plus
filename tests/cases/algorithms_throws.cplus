@@ -1,0 +1,59 @@
+// A function given to an algorithm can fail. Then the call is written with `try`, and a sort or an erase_if that fails
+// leaves the vector as it was.
+int byKey(string s) throws { return try stoi(s); }
+bool numerically(string a, string b) throws { return try stoi(a) < try stoi(b); }
+
+long countBig(vector<string> v) throws {
+    return try count_if(v, [](string s) throws { return try stoi(s) > 5; });
+}
+
+int main() throws {
+    vector<string> nums = {"10", "9", "x", "1", "30", "2", "8", "7", "6", "5", "4", "3", "20", "11", "12", "13", "14", "15"};
+    try {
+        sort(nums, [](string a, string b) throws { return try byKey(a) < try byKey(b); });
+        println("not reached");
+    } catch (Error e) {
+        println("sort failed: {}", nums);
+    }
+    // expect: sort failed: ["10", "9", "x", "1", "30", "2", "8", "7", "6", "5", "4", "3", "20", "11", "12", "13", "14", "15"]
+    try {
+        stable_sort(nums, numerically);
+    } catch (Error e) {
+        println("stable_sort failed: {}", nums[2]);
+    }
+    // expect: stable_sort failed: x
+    try {
+        erase_if(nums, [](const string& s) throws { return try stoi(s) > 9; });
+    } catch (Error e) {
+        println("erase_if failed: {}", nums.size());
+    }
+    // expect: erase_if failed: 18
+    vector<string> good = {"10", "9", "100", "1"};
+    try sort(good, [](const string& a, const string& b) throws { return try stoi(a) < try stoi(b); });
+    println("{}", good);
+    // expect: ["1", "9", "10", "100"]
+    function<bool(string, string) throws> byNumber = numerically;
+    try stable_sort(good, byNumber);
+    println("{} {}", try binary_search(good, "10", byNumber), try min(good, byNumber));
+    // expect: true 1
+    println("{} {}", try countBig(good), try accumulate(good, 0, [](int t, string s) throws { return t + try stoi(s); }));
+    // expect: 3 120
+    println("{} {}", try any_of(good, [](string s) throws { return try stoi(s) == 9; }), try index_if(good, [](string s) throws { return try stoi(s) > 50; }) ?? -1);
+    // expect: true 3
+    println("{}", try erase_if(good, [](string s) throws { return try stoi(s) < 10; }));
+    // expect: 2
+    println("{}", good);
+    // expect: ["10", "100"]
+    try {
+        println("{}", try max(nums, byNumber));
+    } catch (Error e) {
+        println("max failed");
+    }
+    // expect: max failed
+    // A lambda that is not marked throws can be given where one is expected, and then the call cannot fail.
+    vector<int> v = {3, 1, 2};
+    sort(v, [](int a, int b) { return a < b; });
+    println("{}", v);
+    // expect: [1, 2, 3]
+    return 0;
+}

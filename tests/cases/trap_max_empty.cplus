@@ -1,0 +1,14 @@
+// max(v) gives an element, and an empty vector has none, as front() does not.
+int largest(vector<int> v) {
+    return max(v, [](int a, int b) { return a < b; });
+}
+int main() {
+    vector<int> v = {4, 9};
+    println("{}", largest(v));
+    v.clear();
+    println("{}", largest(v));
+    return 0;
+}
+// expect: 9
+// trap: max() was called on an empty vector
+// trap: trap_max_empty.cplus:3:12

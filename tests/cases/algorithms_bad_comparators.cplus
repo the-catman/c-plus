@@ -1,0 +1,67 @@
+// A comparator that is not a strict weak order, or that answers at random, gives some order, and never loses, repeats or
+// breaks an element: in C++ each of these is undefined, and std::sort can run past the end of the vector.
+class Tag {
+public:
+    int n = 0;
+    Tag(int k) : n(k) {}
+};
+
+long seed = 1;
+bool coin() {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 65536 % 2 == 0;
+}
+
+template<typename T> bool sameElements(vector<T> a, vector<T> b) {
+    sort(a);
+    sort(b);
+    return a == b;
+}
+
+int main() {
+    vector<int> big;
+    for (int i = 0; i < 20000; i++) big.push_back((i * 7919) % 1000);
+    vector<int> was = big;
+    sort(big, [](int a, int b) { return a <= b; });
+    println("{}", sameElements(big, was));
+    // expect: true
+    sort(big, [](int a, int b) { return coin(); });
+    stable_sort(big, [](int a, int b) { return coin(); });
+    sort(big, [](int a, int b) { return true; });
+    stable_sort(big, [](int a, int b) { return true; });
+    sort(big, [](int a, int b) { return false; });
+    println("{} {}", big.size(), sameElements(big, was));
+    // expect: 20000 true
+    println("{} {}", min(big, [](int a, int b) { return coin(); }) >= 0, binary_search(big, 5, [](int a, int b) { return coin(); }) || true);
+    // expect: true true
+    // Elements that are counted, which a swap that went wrong would free twice or leak.
+    vector<string> words;
+    for (int i = 0; i < 3000; i++) words.push_back("w" + to_string(i * 31 % 500));
+    vector<string> wordsWas = words;
+    sort(words, [](const string& a, const string& b) { return coin(); });
+    stable_sort(words, [](string a, string b) { return a.size() <= b.size(); });
+    println("{}", sameElements(words, wordsWas));
+    // expect: true
+    vector<Tag> tags;
+    for (int i = 0; i < 2000; i++) tags.push_back(Tag(i % 50));
+    long total = 0;
+    for (auto t : tags) total += t.n;
+    sort(tags, [](Tag a, Tag b) { return coin(); });
+    stable_sort(tags, [](const Tag& a, const Tag& b) { return a.n <= b.n; });
+    long after = 0;
+    for (auto t : tags) after += t.n;
+    println("{} {}", tags.size(), total == after);
+    // expect: 2000 true
+    sort(tags, [](Tag a, Tag b) { return a.n < b.n; });
+    bool ordered = true;
+    for (long i = 1; i < tags.size(); i++) ordered = ordered && tags[i - 1].n <= tags[i].n;
+    println("{}", ordered);
+    // expect: true
+    vector<vector<int>> rows;
+    for (int i = 0; i < 300; i++) rows.push_back({i % 7, i});
+    sort(rows, [](const vector<int>& a, const vector<int>& b) { return coin(); });
+    stable_sort(rows, [](vector<int> a, vector<int> b) { return a[0] < b[0]; });
+    println("{} {} {}", rows.size(), rows[0][0], rows[299][0]);
+    // expect: 300 0 6
+    return 0;
+}

@@ -86,7 +86,7 @@ void stdRuntimeError() {
 }
 void stdSort() {
     std::sort(1, 2);
-    // error: write the loop: this compiler has no sorting yet, nor the other algorithms of C++
+    // error: write `sort(...)` without `std::`. C+'s algorithms take the vector itself: `sort(v)`, not `sort(v.begin(), v.end())`
 }
 void stdUnknown() {
     std::something(1);

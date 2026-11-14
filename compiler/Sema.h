@@ -190,6 +190,9 @@ private:
     bool checkStorable(const Type* t, Loc loc);
     bool checkSize(const Type* t, Loc loc);
     const Type* checkMath(CallExpr& call, Flow& flow);
+    const Type* checkAlgorithm(CallExpr& call, Flow& flow);
+    bool checkAlgorithmPlace(const Expr& range, const std::string& name);
+    void skipIterators(std::vector<ExprPtr>& args, Flow& flow);
     const Type* checkCharFn(CallExpr& call, Flow& flow);
     const Type* checkStringFill(CallExpr& call, Flow& flow);
     const Type* checkOptionalMethod(MethodCallExpr& call, Flow& flow, const Type* opt);

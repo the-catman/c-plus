@@ -1,0 +1,91 @@
+// The C++ ways of calling <algorithm>, each of which says what to write in C+.
+void iterators(vector<int> v) {
+    sort(v.begin(), v.end());
+    // error: C+ has no iterators, so 'sort' takes the vector itself
+    // error: write `sort(v)`
+}
+void iteratorsWithLess(vector<int> v) {
+    stable_sort(v.begin(), v.end(), [](int a, int b) { return a > b; });
+    // error: write `stable_sort(v, ...)`
+}
+void iteratorsReverse(vector<int> v) {
+    reverse(v.begin(), v.end());
+    // error: write `reverse(v)`
+}
+void withStd(vector<int> v) {
+    std::sort(v.begin(), v.end());
+    // error: write `sort(...)` without `std::`. C+'s algorithms take the vector itself
+}
+void withRanges(vector<int> v) {
+    std::ranges::sort(v);
+    // error: leave out `std::ranges::`: C+'s algorithms take the vector itself, as those of `std::ranges` do: `sort(v)`
+}
+void templateArgs(vector<int> v) {
+    sort<int>(v);
+    // error: 'sort' works out its types from its arguments
+    // error: leave out the `<int>`: `sort(v)`
+}
+void greaterObject(vector<int> v) {
+    sort(v, greater<int>());
+    // error: C+ has no 'greater'
+    // error: write a lambda: `[](int a, int b) { return a > b; }`
+}
+void lessObject(vector<int> v) {
+    sort(v, less<int>());
+    // error: write a lambda: `[](int a, int b) { return a < b; }`
+}
+void findIterator(vector<int> v) {
+    auto it = find(v.begin(), v.end(), 3);
+    // error: `index_of(v, x)` gives the index of the first element equal to x, or null, and `contains(v, x)` whether there is one
+}
+void findIf(vector<int> v) {
+    auto i = find_if(v, [](int x) { return x > 1; });
+    // error: `index_if(v, [](int x) { return x > 0; })` gives the index of the first element the test is true for, or null
+}
+void eraseRemoveIf(vector<int> v) {
+    v.erase(remove_if(v.begin(), v.end(), [](int x) { return x > 1; }), v.end());
+    // error: write `erase_if(v, [](int x) { return x < 0; })`, which removes them from the vector and gives how many it removed
+}
+void eraseRemove(vector<int> v) {
+    v.erase(remove(v.begin(), v.end(), 3), v.end());
+    // error: write `erase(v, x)`, which removes them from the vector and gives how many it removed
+}
+void minElement(vector<int> v) {
+    int m = *min_element(v.begin(), v.end());
+    // error: `min(v)` gives the smallest element itself, and `index_of(v, min(v))` where it is
+}
+void maxElement(vector<int> v) {
+    auto m = max_element(v);
+    // error: `max(v)` gives the largest element itself, and `index_of(v, max(v))` where it is
+}
+void lowerBound(vector<int> v) {
+    auto at = lower_bound(v.begin(), v.end(), 2);
+    // error: this compiler does not support lower_bound yet, as it gives an iterator. `binary_search(v, x)` says whether a sorted vector holds x
+}
+void uniqueOnes(vector<int> v) {
+    auto end = unique(v.begin(), v.end());
+    // error: this compiler does not support unique yet, as it gives an iterator
+}
+void transformed(vector<int> v) {
+    transform(v.begin(), v.end(), v.begin(), [](int x) { return x * 2; });
+    // error: this compiler does not support transform yet. Build the new vector with a loop
+}
+void forEach(vector<int> v) {
+    for_each(v.begin(), v.end(), [](int x) { println("{}", x); });
+    // error: write a range-based for loop: `for (auto& x : v) { ... }`
+}
+void cSort(vector<int> v) {
+    qsort(v);
+    // error: write `sort(v)`, or `sort(v, [](int a, int b) { return a > b; })` with a comparator that says whether a goes before b
+}
+void subtracts(vector<int> v) {
+    sort(v, [](int a, int b) { return a - b; });
+    // error: a comparator gives a bool, whether a goes before b, but this is 'int', as for JavaScript's sort or C's qsort
+    // error: write `return a < b;`, or `a > b` for the other order
+}
+void testGivesInt(vector<int> v) {
+    long n = count_if(v, [](int x) { return x; });
+    // error: the test of 'count_if' gives a bool, but this is 'int', which would be true for anything but 0
+    // error: say what it tests: `return x != 0;`
+}
+int main() { return 0; }

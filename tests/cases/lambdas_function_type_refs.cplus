@@ -1,0 +1,67 @@
+// In a function type, `const T&` is the same as `T`, so a function or lambda that takes either can be given for it. One
+// that takes a `T` gets a copy of its own, which it can change. `T&` is a type of its own.
+struct Point {
+    int x = 0;
+    int y = 0;
+    string label;
+};
+class Tag {
+public:
+    int n = 0;
+    Tag(int k) : n(k) {}
+};
+struct Sorter {
+    function<bool(const Point&, const Point&)> less;
+};
+
+bool byX(const Point& a, const Point& b) { return a.x < b.x; }
+bool byY(Point a, Point b) { return a.y < b.y; }
+int bump(Tag t) { t.n += 1; return t.n; }
+
+int main() {
+    function<bool(Point, Point)> f = byX;
+    function<bool(const Point&, const Point&)> g = byY;
+    f = g;
+    g = [](Point a, Point b) { return a.label < b.label; };
+    vector<function<bool(Point, Point)>> orders = {byX, byY, g, [](const Point& a, const Point& b) { return a.x > b.x; }};
+    Point p = {1, 5, "p"};
+    Point q = {2, 3, "q"};
+    for (auto& o : orders) print("{} ", o(p, q));
+    println("|");
+    // expect: true false true false |
+    println("{}", g({0, 0, "b"}, {0, 0, "a"}));
+    // expect: false
+    // A T parameter is the lambda's own copy.
+    function<long(vector<int>)> grow = [](vector<int> v) { v.push_back(1); v[0] = 9; return v.size(); };
+    function<string(const string&)> shout = [](string s) { s += "!"; return s; };
+    function<int(const Point&)> moved = [](Point m) { m.x += 10; m.label = "moved"; return m.x; };
+    vector<int> xs = {1, 2};
+    string word = "hi";
+    println("{} {} {} {} {} {}", grow(xs), xs, shout(word), word, moved(p), p);
+    // expect: 3 [1, 2] hi! hi 11 {x: 1, y: 5, label: "p"}
+    // A class object is shared, whichever way it is passed.
+    function<int(Tag)> up = bump;
+    Tag t = Tag(1);
+    up(t);
+    println("{}", t.n);
+    // expect: 2
+    // T& is not the same type, and changes what it is given.
+    function<void(int&)> inc = [](int& n) { n++; };
+    int k = 1;
+    inc(k);
+    inc(k);
+    println("{}", k);
+    // expect: 3
+    // Kept, in a field, and called after the function that made it is gone.
+    Sorter s = {[](Point a, Point b) { return a.y < b.y; }};
+    vector<Point> ps = {p, q, {0, 4, "r"}};
+    sort(ps, s.less);
+    for (auto& e : ps) print("{} ", e.label);
+    println("|");
+    // expect: q r p |
+    stable_sort(ps, orders[0]);
+    for (auto& e : ps) print("{} ", e.label);
+    println("|");
+    // expect: r p q |
+    return 0;
+}

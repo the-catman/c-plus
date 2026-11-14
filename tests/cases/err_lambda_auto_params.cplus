@@ -1,0 +1,19 @@
+// An `auto` parameter takes its type from what the lambda is given to. Where nothing says it, it is planned, as is one of a
+// function.
+void f(auto x) {}
+// error: this compiler does not support `auto` parameters of a function yet
+// error: write the parameter type. A function for any type is a generic: `template<typename T> void f(T x)`
+void nothingSays() {
+    auto g = [](auto x) { return x; };
+    // error: this compiler does not support `auto` parameters of a lambda yet, except where the type it is given to says what they are
+    // error: write the parameter's type, or give the lambda to what says it, such as `sort(v, [](const auto& a, const auto& b) { ... })`
+}
+void changes() {
+    function<void(int)> h = [](auto& x) { x = 1; };
+    // error: write `[...](const auto& x) { ... }`: a `function<void(int)>` cannot change what it is given
+}
+void wrongUse() {
+    function<int(string)> k = [](auto s) { return s * 2; };
+    // error: 'string'
+}
+int main() { return 0; }

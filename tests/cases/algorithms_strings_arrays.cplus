@@ -1,0 +1,69 @@
+// sort, stable_sort and reverse also take an array or a string, which is sorted by its bytes. NaNs sort last.
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+
+int main() {
+    string s = "hello world";
+    sort(s);
+    println("[{}]", s);
+    // expect: [ dehllloorw]
+    reverse(s);
+    println("[{}]", s);
+    // expect: [wroolllhed ]
+    string bytes = "b\xc8" "a\x01Z";
+    sort(bytes);
+    println("{} {} {}", int(bytes[0]), bytes.substr(1, 3), int(bytes[4]));
+    // expect: 1 Zab 200
+    string word = "banana";
+    stable_sort(word, [](char a, char b) { return a > b; });
+    println("{}", word);
+    // expect: nnbaaa
+    sort(word, [](char a, char b) { return a < b; });
+    println("{}", word);
+    // expect: aaabnn
+    string empty;
+    sort(empty);
+    reverse(empty);
+    sort(empty, [](char a, char b) { return a < b; });
+    println("[{}]", empty);
+    // expect: []
+    array<int, 4> arr = {4, 2, 3, 1};
+    sort(arr);
+    println("{}", arr);
+    // expect: [1, 2, 3, 4]
+    reverse(arr);
+    println("{}", arr);
+    // expect: [4, 3, 2, 1]
+    array<string, 3> names = {"b", "c", "a"};
+    sort(names, [](const string& a, const string& b) { return a > b; });
+    stable_sort(names);
+    println("{}", names);
+    // expect: ["a", "b", "c"]
+    array<Point, 3> pts = {Point{3, 0}, Point{1, 1}, Point{2, 2}};
+    stable_sort(pts, [](Point a, Point b) { return a.x < b.x; });
+    println("{}", pts);
+    // expect: [{x: 1, y: 1}, {x: 2, y: 2}, {x: 3, y: 0}]
+    double nan = 0.0 / 0.0;
+    vector<double> d = {2.5, nan, -1.0, nan, 3.0, -0.5};
+    sort(d);
+    println("{}", d);
+    // expect: [-1, -0.5, 2.5, 3, nan, nan]
+    vector<double> e = {nan, 1.0, nan, 0.5};
+    stable_sort(e);
+    println("{} {} {}", e, min(e), max(e));
+    // expect: [0.5, 1, nan, nan] 0.5 nan
+    println("{} {}", binary_search(e, 1.0), binary_search(e, 2.0));
+    // expect: true false
+    vector<float> f = {float(nan), 2.0f, 1.0f};
+    sort(f);
+    array<double, 3> a3 = {nan, 1.0, 0.0};
+    sort(a3);
+    println("{} {}", f, a3);
+    // expect: [1, 2, nan] [0, 1, nan]
+    vector<double> allNan = {nan, nan};
+    println("{} {}", min(allNan), max(allNan));
+    // expect: nan nan
+    return 0;
+}

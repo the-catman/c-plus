@@ -1778,7 +1778,9 @@ struct Codegen::Impl {
     // make the next place copy it, as in `swap(v[0], v[1])`. Keys a place adds to a hashmap could move what an earlier one
     // lies in, so when there are such keys every place is found twice, and the first time only adds them. The buffers a
     // changeable place lies in go to `held`, for checkHeld after the call.
-    std::vector<llvm::Value*> genArguments(const std::vector<ArgSpec>& specs, std::vector<Hold>& held) {
+    // `hold` is false only for the code of the library that calls a function it was given with elements of a vector of its own,
+    // which nothing else can reach (Builtins.h).
+    std::vector<llvm::Value*> genArguments(const std::vector<ArgSpec>& specs, std::vector<Hold>& held, bool hold = true) {
         std::vector<llvm::Value*> out(specs.size(), nullptr);
         std::vector<size_t> places;
         std::vector<const Expr*> made;
@@ -1805,7 +1807,7 @@ struct Codegen::Impl {
         deferredHolds = &holds;
         for (size_t i : places) {
             holdFrom = i;
-            out[i] = addressOf(*specs[i].e, /*hold=*/true, specs[i].write);
+            out[i] = addressOf(*specs[i].e, hold, specs[i].write);
         }
         deferredHolds = outerHolds;
         holdFrom = outerFrom;
@@ -3484,6 +3486,27 @@ struct Codegen::Impl {
             const Expr& x = *call.args[0];
             return b.CreateAnd(hashValue(gen(x), x.type), b.getInt64(INT64_MAX));
         }
+        if (call.builtin == Builtin::Swap) {  // what two places hold, swapped, which leaves every count as it was: see Builtins.h
+            const Type* t = call.args[0]->type;
+            llvm::Value* l = addressOf(*call.args[0], /*hold=*/false, /*write=*/true);
+            llvm::Value* r = addressOf(*call.args[1], /*hold=*/false, /*write=*/true);  // a buffer of both is its own by now
+            llvm::Value* x = b.CreateLoad(llvmType(t), l);
+            llvm::Value* y = b.CreateLoad(llvmType(t), r);
+            b.CreateStore(y, l);
+            b.CreateStore(x, r);
+            return nullptr;
+        }
+        if (call.builtin == Builtin::SameBuffer) {  // whether two vectors or strings share their buffer: see Builtins.h
+            const Expr& x = *call.args[0];
+            const Expr& y = *call.args[1];
+            if (x.type->is(K::String)) {
+                llvm::Value* l = stringForRead(x);
+                llvm::Value* r = stringForRead(y);
+                return b.CreateAnd(b.CreateICmpEQ(b.CreateExtractValue(l, 0), b.CreateExtractValue(r, 0)),
+                                   b.CreateICmpEQ(b.CreateExtractValue(l, 1), b.CreateExtractValue(r, 1)), "same");
+            }
+            return b.CreateICmpEQ(vectorForRead(x), vectorForRead(y), "same");
+        }
         if (call.copies) return genOwned(*call.args[0], call.vectorType ? call.vectorType : &call.constructs->type);  // `Point(p)`
         if (call.vectorType) return genVectorConstruction(call);
         if (call.builtin == Builtin::Math) return genMath(call);
@@ -3519,8 +3542,20 @@ struct Codegen::Impl {
         for (size_t i = 0; i < call.args.size(); ++i) specs.push_back(argSpec(*call.args[i], *target->params[i]));
         std::vector<Hold> held;
         for (llvm::Value* v : genArguments(specs, held)) args.push_back(v);
+        if (call.check == CallExpr::Check::NonEmpty)  // `min(v)`, which has nothing to give for an empty vector
+            trapIf(b.CreateICmpEQ(vecSize(args[0]), b.getInt64(0)), call.callee + "() was called on an empty vector", call.loc);
         llvm::Value* result = callFunction(*target, std::move(args), call.method != nullptr);
         checkHeld(held, specs, target->name, call.loc);
+        if (call.check == CallExpr::Check::Unchanged) {  // the function given changed the vector, which what the call did would undo
+            const Type* t = call.args[0]->type;
+            const std::string kind = t->is(K::String) ? "string" : t->isArray() ? "array" : "vector";
+            const bool sorts = call.callee != "erase_if";
+            trapIf(b.CreateICmpSLT(result, b.getInt64(0)),
+                   std::string(sorts ? "the comparator" : "the test") + " given to " + call.callee + "() changed the " + kind + " it was " +
+                       (sorts ? "sorting" : "erasing from") + ", and that change would be lost",
+                   call.loc);
+        }
+        if (call.type && call.type->is(K::Void) && !target->retType->is(K::Void)) return nullptr;  // `sort(v)`, whose generic says how it went
         return result;
     }
 
@@ -3795,7 +3830,9 @@ struct Codegen::Impl {
         return llvm::FunctionType::get(result ? b.getVoidTy() : llvmType(ft->elem), params, false);
     }
 
-    // Parameters for what a function type takes, which genArguments passes arguments to.
+    // Parameters for what a function type takes, which genArguments passes arguments to. A `T` that holds counted parts or
+    // lies in memory is passed as a `const T&` is, by its address, which the caller keeps: a function written to take a
+    // `const T&` then uses it in place, and one that takes a `T` copies it (see genFunction and functionThunk).
     const std::vector<std::unique_ptr<VarDecl>>& paramsOf(const Type* ft) {
         auto [it, inserted] = fnParams.try_emplace(ft);
         if (inserted)
@@ -3803,8 +3840,9 @@ struct Codegen::Impl {
                 const Type::Param& p = (*ft->params)[i];
                 auto v = std::make_unique<VarDecl>(Loc{}, "arg" + std::to_string(i), p.type, Loc{});
                 v->type = p.type;
-                v->isRef = p.isRef;
-                v->isConst = p.isConst;
+                const bool lent = !p.isRef && (isManaged(p.type) || inMemory(p.type));
+                v->isRef = p.isRef || lent;
+                v->isConst = p.isConst || lent;
                 v->isParam = true;
                 it->second.push_back(std::move(v));
             }
@@ -3985,7 +4023,7 @@ struct Codegen::Impl {
         std::vector<ArgSpec> specs;
         for (size_t i = 0; i < call.args.size(); ++i) specs.push_back(argSpec(*call.args[i], *params[i]));
         std::vector<Hold> held;
-        for (llvm::Value* v : genArguments(specs, held)) args.push_back(v);
+        for (llvm::Value* v : genArguments(specs, held, /*hold=*/call.loc.line != 0)) args.push_back(v);
         if (ft->throws) args.push_back(errorPlace());
         llvm::CallInst* inst = b.CreateCall(codeType(ft), b.CreateExtractValue(value, 0, "code"), args);
         if (ft->throws) leaveOnError();
@@ -3994,7 +4032,8 @@ struct Codegen::Impl {
         return ft->elem->is(K::Void) ? nullptr : inst;
     }
 
-    // The code of a function used as a value, which takes an env it has no use for, and calls the function.
+    // The code of a function used as a value, which takes an env it has no use for, and calls the function. A function value is
+    // given its arguments as paramsOf says, so the thunk copies one that the function takes as a `T` and was given where it lies.
     llvm::Function* functionThunk(const FuncDecl& f) {
         auto [it, inserted] = valueThunks.try_emplace(&f, nullptr);
         if (!inserted) return it->second;
@@ -4004,14 +4043,33 @@ struct Codegen::Impl {
         const Type* ft = Type::functionOf(f.retType, params, f.callFails());
         llvm::Function* thunk = llvm::Function::Create(codeType(ft), llvm::Function::InternalLinkage, target->getName() + "#value", mod.get());
         it->second = thunk;
-        llvm::IRBuilder<> tb(llvm::BasicBlock::Create(ctx, "entry", thunk));
+        llvm::IRBuilderBase::InsertPointGuard guard(b);
+        llvm::Function* outer = fn;
+        startHelper(thunk);
         std::vector<llvm::Value*> args;
-        unsigned env = inMemory(f.retType) ? 1 : 0;
-        for (unsigned i = 0; i < thunk->arg_size(); ++i)
-            if (i != env) args.push_back(thunk->getArg(i));
-        llvm::CallInst* inst = tb.CreateCall(target, args);
-        if (thunk->getReturnType()->isVoidTy()) tb.CreateRetVoid();
-        else tb.CreateRet(inst);
+        const unsigned env = inMemory(f.retType) ? 1 : 0;
+        const auto& valueParams = paramsOf(ft);
+        for (unsigned i = 0; i < thunk->arg_size(); ++i) {
+            if (i == env) continue;
+            llvm::Value* a = thunk->getArg(i);
+            const unsigned k = i - env - 1;  // which parameter, if it is one
+            if (i > env && k < f.params.size()) {
+                const VarDecl& p = *f.params[k];
+                if (passedByRef(p) && !passedByRef(*valueParams[k])) {  // a `const int&`, given an int
+                    llvm::Value* place = entryAlloca(a->getType(), p.name.c_str());
+                    b.CreateStore(a, place);
+                    a = place;
+                } else if (!passedByRef(p) && passedByRef(*valueParams[k])) {  // a `T`, which the function owns, given where one lies
+                    a = loadValue(p.type, a, p.name.c_str());
+                    retainValue(a, p.type);
+                }
+            }
+            args.push_back(a);
+        }
+        llvm::CallInst* inst = b.CreateCall(target, args);
+        if (thunk->getReturnType()->isVoidTy()) b.CreateRetVoid();
+        else b.CreateRet(inst);
+        fn = outer;
         return thunk;
     }
 
@@ -5001,17 +5059,29 @@ struct Codegen::Impl {
         // Parameters own their values, like locals, and are released when the function ends.
         scopes.emplace_back();
         for (size_t i = 0; i < f.params.size(); ++i) {
+            // A lambda is given its arguments as paramsOf says, which may not be as it takes them.
+            const bool lent = f.lambda ? passedByRef(*paramsOf(f.lambda->type)[i]) : passedByRef(*f.params[i]);
             if (passedByRef(*f.params[i])) {  // the caller's place, which the caller keeps
-                locals[f.params[i].get()] = fn->getArg(first + i);
+                llvm::Value* place = fn->getArg(first + i);
+                if (!lent) {  // a `const Point&` of a lambda, given a small value: it lies here
+                    place = entryAlloca(place->getType(), f.params[i]->name);
+                    b.CreateStore(fn->getArg(first + i), place);
+                }
+                locals[f.params[i].get()] = place;
                 continue;
             }
+            llvm::Value* arg = fn->getArg(first + i);
+            if (lent) {  // given where it lies, as a lambda is: a copy of its own
+                arg = loadValue(f.params[i]->type, arg, f.params[i]->name.c_str());
+                retainValue(arg, f.params[i]->type);
+            }
             if (f.params[i]->boxed) {  // a lambda that is kept shares it
-                makeBox(*f.params[i], fn->getArg(first + i));
+                makeBox(*f.params[i], arg);
                 scopes.back().push_back(f.params[i].get());
                 continue;
             }
-            if (inMemory(f.params[i]->type)) locals[f.params[i].get()] = fn->getArg(first + i);  // the caller's copy
-            else b.CreateStore(fn->getArg(first + i), allocaFor(*f.params[i]));
+            if (inMemory(f.params[i]->type)) locals[f.params[i].get()] = arg;  // the caller's copy, or its own
+            else b.CreateStore(arg, allocaFor(*f.params[i]));
             if (isManaged(f.params[i]->type)) scopes.back().push_back(f.params[i].get());
         }
         if (f.role == FuncDecl::Role::Constructor && f.delegation) {  // the other constructor builds the object, with these values

@@ -1,0 +1,9 @@
+export vector<int> sorted(vector<int> v) {
+    sort(v);
+    return v;
+}
+
+export template<Comparable T> T middle(vector<T> v) {
+    stable_sort(v, [](const T& a, const T& b) { return a < b; });
+    return v[v.size() / 2];
+}

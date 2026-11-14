@@ -809,6 +809,7 @@ SPEC_NOT_CODE = {
     "static inline", "const unsigned char*", "const T&", "T&", "case value:", "std::filesystem",
     "min()", "max()", "abs()", "std::cout", "#define MASK 0xFFFFFFFFu",
     "function<R(Args...)>", "[captures](parameters) -> R { body }", "-> R", "std::function",
+    "std::sort", "std::stable_sort", "std::find", "std::find_if", "std::min_element", "<algorithm>", "std::ranges",
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
@@ -835,9 +836,9 @@ SPEC_REJECTED = {
     "this->w": "^struct R2 { int w = 0; int f() { return this->w; } };", "&this": "^struct R3 { int w = 0; R3* f() { return &this; } };",
     "vector<User>(n)": "int n = 1; auto v = vector<User>(n);", "int n = v.size();": "vector<int> v; int n = v.size();", "v[-1]": 'vector<int> v = {1}; println("{}", v[-1]);',
     "makeList().push_back(1)": "makeList().push_back(1);", "makeThree().fill(1)": "makeThree().fill(1);", "begin()": "vector<int> v; auto b = v.begin();", "end()": "vector<int> v; auto b = v.end();",
-    "const vector<int>&": "^void f2(const vector<int>& v) {}", "int* p = a;": "array<int, 3> a; int* p = a;", "m.find(k)": "hashmap<int, int> m; int k = 1; auto x = m.find(k);",
+    "int* p = a;": "array<int, 3> a; int* p = a;", "m.find(k)": "hashmap<int, int> m; int k = 1; auto x = m.find(k);",
 "int*?": "int*? a = null;", "auto*": "int x = 1; auto* p = &x;", "&v[0]": "vector<int> v = {1}; int* p = &v[0];",
-    "(int*)0x1000": "int* p = (int*)0x1000;", "int* p = 0;": "int* p = 0;", "T&": "^template<typename T> void f2(T& x) {}", "int* a, b;": "int* a, b;",
+    "(int*)0x1000": "int* p = (int*)0x1000;", "int* p = 0;": "int* p = 0;", "int* a, b;": "int* a, b;",
     "new int[3]{1, 2, 3}": "auto p = new int[3]{1, 2, 3};", "new (buffer) T": "int buffer = 0; auto p = new (buffer) int;", "new auto(x)": "int x = 1; auto p = new auto(x);",
     "[[nodiscard]]": "^[[nodiscard]] int f2() { return 1; }", "int x{5}": "int x{5};", "int x(5)": "int x(5);", "int f(int x);": "^int f2(int x);", "int values[]": '^extern "C" void f2(int values[]);',
     "either(1)": "^int either(int a) { return a; }\nint either(int a, int b = 0) { return b; }\nint g() { return either(1); }",
@@ -848,9 +849,9 @@ SPEC_REJECTED = {
     "char name[64];": '^extern "C" { struct S2 { char name[64]; }; }', "typedef struct { ... } name;": "^typedef struct { int a; } name;", "struct FILE*": "struct FILE* f = null;",
     "typedef struct _IO_FILE FILE;": "^typedef struct _IO_FILE FILE;", "#define SQLITE_OK 0": "^#define SQLITE_OK 0",
     "f[i]": "FILE* f = null; int i = 0; auto x = f[i];", "f + 1": "FILE* f = null; auto x = f + 1;", "sizeof(FILE)": "long x = sizeof(FILE);", "typedef struct x x;": "^typedef struct x x;",
-    "class X;": "^class X;", "json::Mine": "^struct json::Mine {};", "for (auto& x : v)": "vector<int> v; for (auto& x : v) {}", "for (const auto& x : v)": "vector<int> v; for (const auto& x : v) {}",
-    "Point operator+(Point other) const": "^struct P2 { int x = 0; P2 operator+(P2 other) const { return other; } };", "1 << 40": "long x = 1 << 40;", "sizeof(void)": "long x = sizeof(void);",
-    "{:x}": 'println("{:x}", 1);', 'throw "text"': '^void f2() throws { throw "text"; }', "const Error& e": "try { } catch (const Error& e) { }", "try f() + g()": "int x = try f() + g();",
+    "class X;": "^class X;", "json::Mine": "^struct json::Mine {};",
+    "Point operator+(Point other) const": "^struct P2 { int x = 0; P2 operator+(P2 other) const { return other; } };", "sizeof(void)": "long x = sizeof(void);",
+    "{:x}": 'println("{:x}", 1);', 'throw "text"': '^void f2() throws { throw "text"; }', "try f() + g()": "int x = try f() + g();",
     "Node n = a;": 'local<Node> a = local<Node>("x"); Node n = a;', "local<Node> a = n;": 'Node n = Node("x"); local<Node> a = n;', "weak<Node>?": "weak<Node>? w = null;",
     "w == null": 'weak<Node> w; println("{}", w == null);', "largest(1, 2.5)": "auto x = largest(1, 2.5);", "Stack(1)": "auto s = Stack(1);", "spawn f(x).wait()": "int x = 1; spawn given(x).wait();",
     "v.back().x = 1": "vector<Point> v = {Point{}}; v.back().x = 1;", "v.back().set()": "vector<Settable> v = {Settable{}}; v.back().set();",
@@ -861,10 +862,14 @@ SPEC_REJECTED = {
     "T&&": "^void f(vector<int>&& v) {}", "auto&&": "vector<int> v = {1}; for (auto&& x : v) {}",
 "int& at(int i)": "^struct G { int c = 0; int& at(int i) { return c; } };", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
     "enum struct": "^enum struct Hue { Red };", "using enum": "^enum class Hue { Red };\nusing enum Hue;", "case 1, 2:": "int n = 1; switch (n) { case 1, 2: break; }",
-    "case 1 ... 5:": "int n = 1; switch (n) { case 1 ... 5: break; }", "for (auto& e : m)": "hashmap<string, int> m; for (auto& e : m) {}", "switch (auto k = f(); k)": "switch (auto k = f(); k) { default: break; }",
+    "case 1 ... 5:": "int n = 1; switch (n) { case 1 ... 5: break; }",
+    "std::sort(v.begin(), v.end())": "vector<int> v; std::sort(v.begin(), v.end());", "v.begin()": "vector<int> v; sort(v.begin(), v.end());",
+    "v.erase(std::remove_if(...), v.end())": "vector<int> v; v.erase(std::remove_if(v.begin(), v.end(), [](int x) { return x > 1; }), v.end());",
+    "std::greater<int>()": "vector<int> v; sort(v, std::greater<int>());", "sort<int>(v)": "vector<int> v; sort<int>(v);",
+    "return a - b;": "vector<int> v; sort(v, [](int a, int b) { return a - b; });", "auto f = [](auto x) { return x; };": "auto f = [](auto x) { return x; };",
+    "void f(auto x)": "^void f2(auto x) {}", "for (auto& e : m)": "hashmap<string, int> m; for (auto& e : m) {}", "switch (auto k = f(); k)": "switch (auto k = f(); k) { default: break; }",
 }
-SPEC_REJECT_PRELUDE = """struct Settable { int x = 0; void set() { x = 1; } };
-struct HoldsSettable { Settable p; };
+SPEC_REJECT_PRELUDE = """struct HoldsSettable { Settable p; };
 class Base { public: int id = 0; };
 class LeftOf : public Base {};
 class RightOf : public Base {};
@@ -921,6 +926,13 @@ def check_spec_spans(cplus, workdir):
         if listed not in spans:
             print(f"FAIL the spec no longer has `{listed}`, which tests/run_tests.py still has a list entry for")
             ok = False
+    # Each program below fails to compile, so the part they share must compile alone, or every one of them would pass.
+    prelude = workdir / "rejected_prelude.cplus"
+    prelude.write_text(SHEET_PRELUDE + SPEC_REJECT_PRELUDE + "int main() { return 0; }\n")
+    run = subprocess.run([cplus, "check", str(prelude)], capture_output=True, text=True, timeout=60)
+    if run.returncode != 0:
+        print(f"FAIL what the programs of SPEC_REJECTED start with does not compile: {run.stderr.splitlines()[:1]}")
+        return False
     def rejected(pair):
         index, (span, code) = pair
         top = code.startswith("^")

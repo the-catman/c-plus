@@ -1,0 +1,10 @@
+// erase_if goes over the vector as it was, and puts what it keeps in its place, so a test that changes the vector would
+// have that change undone.
+int main() {
+    vector<int> v = {1, 2, 3};
+    long n = erase_if(v, [&](int x) { v[0] = 9; return x > 1; });
+    println("not reached {}", n);
+    return 0;
+}
+// trap: the test given to erase_if() changed the vector it was erasing from, and that change would be lost
+// trap: trap_erase_if_test_changes.cplus:5:14
