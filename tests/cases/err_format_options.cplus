@@ -1,0 +1,63 @@
+// Format options that are not C++'s, or not in this order, and the habits of other languages.
+int main() {
+    int x = 1;
+    string s = "a";
+    vector<int> v = {1};
+    array<int, 2> a = {1, 2};
+    println("{:,}", 1000);
+    println("{:%}", 0.5);
+    println("{:z}", x);
+    println("{!r}", s);
+    println("{name}", x);
+    println("{ x: {} }", x);
+    println("{:Ld}", x);
+    println("{:a}", 1.5);
+    println("{:.f}", 1.5);
+    println("{:100000}", x);
+    println("{:.70000f}", 1.5);
+    println("{01}", x, x);
+    println("{} {0}", x);
+    println("{0:{}}", x, x);
+    println("{:{x}}", x, x);
+    println("{::x}", v);
+    println("{:n}", a);
+    println("x = {:>8} and {", x);
+    println("{:\0}", x);
+    return 0;
+}
+// error: ',' is not a format option, in {:,}
+// error: remove the ',': C+ does not group the digits of a number
+// error: '%' is not a format option, in {:%}
+// error: write the % sign after the placeholder, and multiply by 100 first: `println("{:.1f}%", x * 100)`
+// error: 'z' is not a format option, in {:z}
+// error: write the options in the order C++ has them, [[fill]align][sign][#][0][width][.precision][type], as in {:>8}, {:+.2f} or {:#06x}
+// error: err_format_options.cplus:9:14
+// error: '!' is not a format option, in {!r}
+// error: write {:?} to print a string in quotes with its escapes, as Python's !r does
+// error: a placeholder cannot name the value it prints, as {name} does
+// error: write {} and pass the value after the format string: `println("{}", name)`
+// error: this format string has a '{' that does not start a placeholder: { x: {} }
+// error: write {{ for a literal '{', and {} where a value goes: `println("{{ x: {} }}", x)`
+// error: 'L' is not a format option in C+, which has no locales: {:Ld}
+// error: remove the 'L': a number prints the same everywhere, with a '.' before its decimals
+// error: this compiler does not support the format option {:a} yet
+// error: write {:e} for a number with an exponent, in decimal
+// error: the '.' in {:.f} must be followed by the precision
+// error: write the number of digits after the '.', as in {:.2f}, or remove the '.'
+// error: the width in {:100000} is more than 65535
+// error: pass a larger width as a value: `println("{:{}}", x, width)`
+// error: the precision in {:.70000f} is more than 65535
+// error: pass a larger precision as a value: `println("{:.{}f}", x, digits)`
+// error: the number in {01} starts with a 0
+// error: write it without the 0: {1}
+// error: the format string has both {} and numbered placeholders, such as {0}
+// error: give every placeholder a number, as in "{0} {1}", or none of them, as in "{} {}"
+// error: err_format_options.cplus:19:17
+// error: err_format_options.cplus:20:14
+// error: 'x' is not a format option, in {:{x}}
+// error: this compiler does not support options for the elements of a vector, such as {::x}, yet
+// error: write a loop that prints each element with its options, or give only a width and an alignment, as in {:>20}, which pad the whole text
+// error: this compiler does not support options for the elements of an array, such as {:n}, yet
+// error: this format string has a '{' with no matching '}'
+// error: err_format_options.cplus:24:28
+// error: '\x00' is not a format option, in {:\x00}

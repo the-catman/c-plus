@@ -1,0 +1,87 @@
+// The options of a placeholder, as C++'s std::format has them: fill and alignment, sign, #, 0, width, precision and type,
+// numbered placeholders, and a width or a precision taken from a value.
+struct Point { int x = 0; int y = 0; };
+struct Named { string name = "a"; char c = 'b'; };
+enum class Color { Red, Green };
+int calls = 0;
+int next() {
+    calls += 1;
+    return calls;
+}
+int main() {
+    // Fill and alignment. Numbers and pointers go right by default, everything else left.
+    println("[{:>8}] [{:<8}] [{:^8}] [{:8}] [{:8}]", 42, 42, 42, 42, "ab");       // expect: [      42] [42      ] [   42   ] [      42] [ab      ]
+    println("[{:*^9}] [{:-<6}] [{:0>5}] [{:^7}]", "hi", "ab", "7", "ab");        // expect: [***hi****] [ab----] [00007] [  ab   ]
+    println("[{:─^9}] [{:é>4}]", "mid", 1);                                      // expect: [───mid───] [ééé1]
+    println("[{::<5}] [{:<<3}]", "a", "b");                                       // expect: [a::::] [b<<]
+    // Width counts the characters of UTF-8, and each byte that is not part of one.
+    println("[{:6}] [{:>4}] {}", "héllo", "日本", format("{:3}", "\xff").size());  // expect: [héllo ] [  日本] 3
+    // Integers.
+    println("[{:x}] [{:X}] [{:o}] [{:b}] [{:B}] [{:d}]", 255, 255, 8, 5, 5, 42);  // expect: [ff] [FF] [10] [101] [101] [42]
+    println("[{:#x}] [{:#X}] [{:#b}] [{:#B}] [{:#x}]", 255, 255, 5, 5, 0);        // expect: [0xff] [0XFF] [0b101] [0B101] [0x0]
+    println("[{:x}] [{:#x}] [{:08x}] [{:#010b}] [{:+x}]", -255, -255, -255, 5, 255); // expect: [-ff] [-0xff] [-00000ff] [0b00000101] [+ff]
+    println("[{:+}] [{:-}] [{: }] [{: }] [{:+}]", 5, 5, 5, -5, 0);              // expect: [+5] [5] [ 5] [-5] [+0]
+    println("[{:06}] [{:+06}] [{:06}] [{:0}] [{:#06x}]", 42, 42, -42, 7, 255);  // expect: [000042] [+00042] [-00042] [7] [0x00ff]
+    println("[{:x}] [{:X}] [{:b}]", uint64_t(18446744073709551615u), uint8_t(200), uint16_t(6)); // expect: [ffffffffffffffff] [C8] [110]
+    long smallest = -9223372036854775807L - 1;
+    println("[{:x}] [{}]", smallest, smallest);                                  // expect: [-8000000000000000] [-9223372036854775808]
+    println("[{:x}] 0o{:o}", unchecked(uint32_t(-255)), 15);                    // expect: [ffffff01] 0o17
+    // Floating-point numbers.
+    println("[{:.2f}] [{:f}] [{:F}] [{:.0f}] [{:.1f}]", 3.14159, 1.5, 1.5, 2.5, 0.05); // expect: [3.14] [1.500000] [1.500000] [2] [0.1]
+    println("[{:e}] [{:E}] [{:.2e}] [{:.0e}]", 12345.678, 12345.678, 0.000123, 12345.0); // expect: [1.234568e+04] [1.234568E+04] [1.23e-04] [1e+04]
+    println("[{:g}] [{:G}] [{:.3g}] [{:.3}] [{:.3}] [{:G}]", 1e-10, 1e-10, 1234.5, 1234.5, 1e10, 1e10); // expect: [1e-10] [1E-10] [1.23e+03] [1.23e+03] [1e+10] [1E+10]
+    println("[{:+}] [{: }] [{:+.2f}] [{:+}] [{:+}]", 0.1, 2.5, 3.14159, -0.0, 0.1f); // expect: [+0.1] [ 2.5] [+3.14] [-0] [+0.1]
+    println("[{:08.3f}] [{:010.3f}] [{:+010}] [{:08}] [{:>8.2f}] [{:<8}]", 3.14159, -3.14159, 3.5, 1e21, 2.0, 0.5); // expect: [0003.142] [-00003.142] [+0000003.5] [0001e+21] [    2.00] [0.5     ]
+    println("[{:.10}] [{}] [{:.10f}]", 0.1f, 0.1f, 1.0 / 3);                    // expect: [0.1000000015] [0.1] [0.3333333333]
+    // NaN prints as if its sign bit were clear; zeros pad neither it nor the infinities.
+    double nan = 0.0 / 0.0;
+    double inf = 1.0 / 0.0;
+    println("[{:06}] [{:+}] [{: }] [{:E}] [{:F}] [{:.2f}] [{:e}]", nan, nan, nan, nan, -nan, nan, -nan); // expect: [   nan] [+nan] [ nan] [NAN] [NAN] [nan] [nan]
+    println("[{:06}] [{:+}] [{:E}] [{:+08.2f}] [{:<6}] [{:G}]", -inf, inf, inf, inf, inf, -inf); // expect: [  -inf] [+inf] [INF] [    +inf] [inf   ] [-INF]
+    println("{:06} {:+}", -42, nan);
+    // expect: -00042 +nan
+    // A precision longer than any digits a double has.
+    string many = format("{:.2000f}", 0.5);
+    println("{} {} {}", many.size(), many.substr(0, 4), many.substr(1990));     // expect: 2002 0.50 000000000000
+    string exponent = format("{:.1200e}", 1.5);
+    println("{} {} {}", exponent.size(), exponent.substr(0, 4), exponent.substr(1198)); // expect: 1206 1.50 0000e+00
+    println("{}", format("{:.1500g}", 0.1) == format("{:.1100g}", 0.1));       // expect: true
+    // A char prints the character, its code with an integer type, and in quotes with ?.
+    println("[{}] [{:c}] [{:d}] [{:x}] [{:#04x}] [{:+d}] [{:5}] [{:5d}]", 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a'); // expect: [a] [a] [97] [61] [0x61] [+97] [a    ] [   97]
+    println("[{:?}] [{:?}] [{:?}] [{:?}] [{:>5?}]", 'a', '\n', '\'', char(200), 'z'); // expect: ['a'] ['\n'] ['\''] ['\xc8'] [  'z']
+    // A bool prints true or false, and 1 or 0 with an integer type.
+    println("[{}] [{:s}] [{:d}] [{:x}] [{:6}] [{:>6}] [{:03d}]", true, false, true, false, true, false, true); // expect: [true] [false] [1] [0] [true  ] [ false] [001]
+    // A string, and its first characters with a precision.
+    println("[{:s}] [{:.3}] [{:.2}] [{:>6.3}] [{:.0}] [{:.10}]", "abc", "abcdef", "日本語", "abcdef", "abc", "ab"); // expect: [abc] [abc] [日本] [   abc] [] [ab]
+    println("[{:?}] [{:?}] [{:?}] [{:12?}]", "a\tb\"c", "é", "\xff\x01", "q");   // expect: ["a\tb\"c"] ["é"] ["\xff\x01"] ["q"         ]
+    Named named = Named{"\xe9t\xc3\xa9", 'c'};
+    println("{}", named);                                                         // expect: {name: "\xe9té", c: 'c'}
+    // Anything that prints takes a width and an alignment, which pad its whole text.
+    vector<int> v = {1, 2};
+    println("[{:>14}] [{:<8}] [{:>8}] [{:^10}]", Point{1, 2}, Color::Green, v, v); // expect: [  {x: 1, y: 2}] [Green   ] [  [1, 2]] [  [1, 2]  ]
+    int? some = 5;
+    int? none = null;
+    println("[{:>4}] [{:<6}] [{:6}]", some, none, some);                         // expect: [   5] [null  ] [5     ]
+    // A pointer prints its address; 0 pads it after the 0x.
+    int* p = null;
+    println("[{}] [{:p}] [{:>6}] [{:06}] [{:<5p}]", p, p, p, p, p);             // expect: [0x0] [0x0] [   0x0] [0x0000] [0x0  ]
+    // Numbered placeholders: each value is worked out once, in the order written, whatever the order it prints in.
+    println("{1} {0} {1}", "a", "b");                                            // expect: b a b
+    println("{1}{0}{1}", next(), next());                                       // expect: 212
+    println("{0:>5}|{0:<5}|{0:^5}|", "x");                                      // expect:     x|x    |  x  |
+    // A width or a precision from a value: the one after the value, or the one numbered so.
+    int width = 6;
+    long digits = 3;
+    println("[{:{}}] [{:<{}}] [{:.{}f}] [{:{}.{}f}]", 7, width, "ab", width, 3.14159, digits, 2.5, 8, 2); // expect: [     7] [ab    ] [3.142] [    2.50]
+    println("[{0:{1}}] [{2:.{1}}] [{0:*^{1}}]", 9, 4, "abcdef");                 // expect: [   9] [abcd] [*9**]
+    println("[{:{}}] [{:.{}f}] [{:{}}]", "a", 0, 2.5, 0, 1, uint8_t(3));         // expect: [a] [2] [  1]
+    // Braces next to placeholders, and format and print.
+    println("{{{:>3}}} {{{{}}}}", 1);                                           // expect: {  1} {{}}
+    string padded = format("{:>5}|{:<5}|{:^5}|", 1, 2, 3);
+    print("{} ", padded);
+    print("{:-^7}", "end");
+    println();                                                                   // expect:     1|2    |  3  | --end--
+    // to_string takes no options: it is the text of {}.
+    println("{} {}", to_string(255), to_string(0.5));                           // expect: 255 0.5
+    return 0;
+}

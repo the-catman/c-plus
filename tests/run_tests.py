@@ -562,9 +562,10 @@ PLANNED_FEATURES = [
     ("16-bit integers", M % "int16_t n = 1;"),
     ("arrays of arrays from new", M % "auto p = new int[2][3];"),
     ("initial values for new[]", M % "auto p = new int[2]{1, 2};"),
-    ("numbered placeholders", M % 'println("{0}", 1);'),
-    ("width and alignment", M % 'println("{:>8}", 1);'),
-    ("hexadecimal format", M % 'println("{:x}", 1);'),
+    ("hexadecimal floats in format", M % 'println("{:a}", 1.5);'),
+    ("'#' with a float in format", M % 'println("{:#.2f}", 1.5);'),
+    ("a precision with {:?}", M % 'println("{:.2?}", "abc");'),
+    ("format options for the elements of a vector", M % 'vector<int> v = {1}; println("{::x}", v);'),
     ("math constants", M % "double d = M_PI;"),
     ("C functions with variable arguments", 'extern "C" int printf(string f, ...);\n' + M % ""),
     ("vectors passed to C", 'extern "C" void f(vector<int> v);\n' + M % ""),
@@ -796,6 +797,7 @@ def check_cheat_sheet(cplus, workdir):
 # What the spec's text writes that is not code: tools and what is typed at a shell, the names of other languages' things, and how
 # rules are written.
 SPEC_NOT_CODE = {
+    "[[fill]align][sign][#][0][width][.precision][type]", "\\x{HH}",
     "using Name = type;",
     "compiler/SpecRefs.h", "cplus explain <topic>", ".cplus", "\\n \\t \\r \\0 \\\\ \\\" \\'", "\\xHH", "\\012", "<cctype>", "<cmath>", "std::format", "std::string", "std::",
     "std::optional<T>", "std::optional", "std::vector", "std::array", "std::unordered_map", "std::numbers::pi", "std::println", "std::weak_ptr", "std::make_shared",
@@ -849,7 +851,8 @@ SPEC_REJECTED = {
     "f[i]": "FILE* f = null; int i = 0; auto x = f[i];", "f + 1": "FILE* f = null; auto x = f + 1;", "sizeof(FILE)": "long x = sizeof(FILE);", "typedef struct x x;": "^typedef struct x x;",
     "class X;": "^class X;", "json::Mine": "^struct json::Mine {};",
     "Point operator+(Point other) const": "^struct P2 { int x = 0; P2 operator+(P2 other) const { return other; } };", "sizeof(void)": "long x = sizeof(void);",
-    "{:x}": 'println("{:x}", 1);', 'throw "text"': '^void f2() throws { throw "text"; }', "try f() + g()": "int x = try f() + g();",
+    "{:#o}": 'println("{:#o}", 15);', "{:a}": 'println("{:a}", 1.5);', "{::x}": 'vector<int> v = {1}; println("{::x}", v);',
+    "{:n}": 'vector<int> v = {1}; println("{:n}", v);', 'throw "text"': '^void f2() throws { throw "text"; }', "try f() + g()": "int x = try f() + g();",
     "Node n = a;": 'local<Node> a = local<Node>("x"); Node n = a;', "local<Node> a = n;": 'Node n = Node("x"); local<Node> a = n;', "weak<Node>?": "weak<Node>? w = null;",
     "w == null": 'weak<Node> w; println("{}", w == null);', "largest(1, 2.5)": "auto x = largest(1, 2.5);", "Stack(1)": "auto s = Stack(1);", "spawn f(x).wait()": "int x = 1; spawn given(x).wait();",
     "v.back().x = 1": "vector<Point> v = {Point{}}; v.back().x = 1;", "v.back().set()": "vector<Settable> v = {Settable{}}; v.back().set();",

@@ -64,7 +64,7 @@ long square(long n) { return n * n; }
 | Splitting | each gives a new value and leaves `s` as it is: `vector<string> parts = s.split(",");` (`"a,,b"` gives `["a", "", "b"]`), `s.split(',')`, `s = s.trim();`, `s.trim_start()`, `s.trim_end()`, `string csv = parts.join(", ");`, `s.replace_all("a", "b")` (every match) |
 | String chars | `s[i]` and `s[i] = 'x'` (checked), `for (char c : s)`, `s + '!'`, `s += c`, `s.push_back(c)`, `s.pop_back()`, `s.front()`, `s.back()`, `string(3, '-')`, `s.find('/')` |
 | Raw strings | `R"(no "escapes" here, and any number of lines)"`, or `R"end(has )" inside)end"`, as in C++ |
-| Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them |
+| Output | `println("x = {}", x)`, `print(...)`, `println()`. `{{` `}}` for braces. Structs print as `{x: 1, y: 2}`, objects as `U {name: "a"}`, vectors as `[1, 2]`. A double prints its shortest exact digits (`0.1`); `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` choose them. Options as in C++: `{:>8}`, `{:<8}`, `{:^8}`, `{:*^8}` pad; `{:08.3f}`, `{:+}`, `{:x}`, `{:#x}`, `{:b}`; `{:?}` quotes a string; `"{1} {0}"` numbers the values; `{:{}}` takes the width from the next value. `{:x}` of -255 is `-ff` |
 | Building text | `format("{} of {}", a, b)` returns the string `println` would print. `to_string(x)` for any number |
 | Optionals | `User? u = find(name);` holds a `User` or `null`; `int? n;` starts out null. `u?.name` is null when `u` is, `u?.name ?? "nobody"` gives a fallback, `if (auto x = u)` runs with the `User` inside. `has_value()`, `value()`, `value_or(x)`, `u == null` |
 | References | as in C++. `void bump(int& n) { n += 1; }` changes the caller's variable, field or element: `bump(n)`, `bump(v[i])`, `bump(m["a"])`. `for (auto& x : v) x *= 2;` changes the elements, and `auto& e = v[i];` names one. To read without copying: `void show(const vector<int>& v) { ... }`, `for (const auto& x : v) println("{}", x);`, `const auto& first = v[0];`, `catch (const Error& e)`. A `T&` takes a place of exactly its type. A reference to an element finds it again at each use, so it never dangles. A function given one stops the program if it changes the container in another way. Not on `async` functions, `spawn` or across `await`; never a field |
@@ -274,7 +274,7 @@ long square(long n) { return n * n; }
 | Containers | iterators, erasing a range, and the algorithms that take iterators or part of a vector, such as `lower_bound` and `transform`; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |
 | References | `T& f()`, and `for (auto& e : m)` over a hashmap |
 | Structured bindings | `for (auto [k, v] : m)`, `auto [a, b] = f();` |
-| Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
+| Format options | `{:a}`, `#` with a float, a precision with `{:?}`, and for the elements of a vector, `{::x}` |
 | Files | the async `fs::readFile` and `fs::writeFile`; copying a file, and its times and permissions |
 | More C | variable arguments, vectors, C variables like `errno`, function pointers that take a struct by value |
 | Concurrency | waiting with a time limit, stopping a task, atomic values, condition variables, channels |

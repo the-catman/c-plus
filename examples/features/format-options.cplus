@@ -1,0 +1,24 @@
+// A placeholder takes C++'s options: fill and alignment, sign, #, 0, width, precision and type. `{1}` chooses a value, and
+// `{:{}}` takes the width from one.
+struct Item {
+    string name;
+    double price = 0;
+    int count = 0;
+};
+
+int main() {
+    vector<Item> items = {Item{"apple", 0.5, 12}, Item{"melon", 3.25, 2}};
+    for (Item item : items) println("{:<8}{:>6.2f}{:>4}", item.name, item.price, item.count);
+    // expect: apple     0.50  12
+    // expect: melon     3.25   2
+    println("{:x} {:#06x} {:b} {:+} {:08.3f}", 255, 255, 5, 7, 3.14159);
+    // expect: ff 0x00ff 101 +7 0003.142
+    println("[{:*^9}] [{:?}] [{:.3}]", "mid", "a\tb", "abcdef");
+    // expect: [***mid***] ["a\tb"] [abc]
+    println("{1} {0} {1}", "a", "b");
+    // expect: b a b
+    int width = 5;
+    println("[{:{}}]", 42, width);
+    // expect: [   42]
+    return 0;
+}

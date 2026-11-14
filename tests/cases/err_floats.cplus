@@ -63,9 +63,9 @@ int main() {
 // error: {:.2f} formats a float or a double, but this is 'int'
 // error: write {} for an integer, or convert it first: `double(n)`
 // error: {:.2f} formats a float or a double, but this is 'string'
-// error: this compiler does not support the format option {:x} yet
-// error: such as {:.2f}, {:e} or {:.3g}. Width and alignment are planned
-// error: this compiler does not support the format option {:.f} yet
+// error: {:x} formats an integer, but this is 'double'
+// error: convert it first: `long(d)`
+// error: the '.' in {:.f} must be followed by the precision
 // error: a cast cannot turn a value into a string
 // error: write `to_string(x)`, or `format("{}", x)`
 // error: a cast cannot read a number from a string

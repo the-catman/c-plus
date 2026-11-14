@@ -1,6 +1,7 @@
 // The C+ runtime. Intentionally small: everything here is called by generated code.
 #define _GNU_SOURCE  // for the registers in a signal's context
 #include <inttypes.h>
+#include <locale.h>
 #include <math.h>
 #include <signal.h>
 #include <stdint.h>
@@ -1046,12 +1047,29 @@ static void out_write(cplus_string* out, const char* data, int64_t length) {
 
 void cplus_print_str(cplus_string* out, const char* data, int64_t length) { out_write(out, data, length); }
 
+// The length of the UTF-8 character at s[i], or 0 if the bytes there are not one: an overlong form, a surrogate, a code
+// point above U+10FFFF, or a sequence cut short.
+static int64_t utf8_sequence(const unsigned char* s, int64_t length, int64_t i) {
+    unsigned char c = s[i];
+    if (c < 0x80) return 1;
+    int64_t n = c >= 0xC2 && c <= 0xDF ? 2 : c >= 0xE0 && c <= 0xEF ? 3 : c >= 0xF0 && c <= 0xF4 ? 4 : 0;
+    if (n == 0 || i + n > length) return 0;
+    uint32_t cp = c & (0x7F >> n);
+    for (int64_t k = 1; k < n; ++k) {
+        if ((s[i + k] & 0xC0) != 0x80) return 0;
+        cp = cp << 6 | (s[i + k] & 0x3F);
+    }
+    uint32_t least = n == 2 ? 0x80 : n == 3 ? 0x800 : 0x10000;
+    return cp < least || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF) ? 0 : n;
+}
+
 // Prints a string in double quotes with special characters escaped, as it would be
-// written in source. Used for strings inside printed structs and vectors.
+// written in source. Used for strings inside printed structs and vectors, and for `{:?}`.
+// A byte that is not part of a UTF-8 character is written as \xHH, so the text is UTF-8.
 void cplus_print_quoted(cplus_string* out, const char* data, int64_t length) {
     out_write(out, "\"", 1);
     int64_t plain = 0;  // the start of the characters not written yet
-    for (int64_t i = 0; i < length; ++i) {
+    for (int64_t i = 0; i < length;) {
         unsigned char c = (unsigned char)data[i];
         char escape[8];
         const char* e = NULL;
@@ -1062,15 +1080,25 @@ void cplus_print_quoted(cplus_string* out, const char* data, int64_t length) {
             case '\t': e = "\\t"; break;
             case '\r': e = "\\r"; break;
             default:
-                if (c < 0x20 || c == 0x7f) {
+                if (c >= 0x80) {
+                    int64_t n = utf8_sequence((const unsigned char*)data, length, i);
+                    if (n) {
+                        i += n;
+                        continue;
+                    }
+                }
+                if (c < 0x20 || c >= 0x7f) {
                     snprintf(escape, sizeof escape, "\\x%02x", c);
                     e = escape;
                 }
         }
-        if (!e) continue;
+        if (!e) {
+            ++i;
+            continue;
+        }
         out_write(out, data + plain, i - plain);
         out_write(out, e, (int64_t)strlen(e));
-        plain = i + 1;
+        plain = ++i;
     }
     if (plain < length) out_write(out, data + plain, length - plain);  // an empty string may have no data
     out_write(out, "\"", 1);
@@ -1133,6 +1161,110 @@ void cplus_print_ptr(cplus_string* out, const void* p) {
     out_write(out, text, snprintf(text, sizeof text, "0x%" PRIxPTR, (uintptr_t)p));
 }
 
+// ---- Format options ----------------------------------------------------------
+//
+// What a placeholder's options do, as C++'s std::format does them: `{:>8}`, `{:+}`, `{:#010x}`, `{:.3}` of a string.
+
+// How many places text takes, for a width: one for each character of UTF-8, and one for each byte that is not part of one.
+// C++ counts a wide character, as in Chinese, as two, and one that combines with the one before as none.
+static int64_t text_width(const char* data, int64_t length) {
+    int64_t width = 0;
+    for (int64_t i = 0; i < length; ++width) {
+        int64_t n = utf8_sequence((const unsigned char*)data, length, i);
+        i += n ? n : 1;
+    }
+    return width;
+}
+
+// `count` copies of the code point `fill`.
+static void write_fill(cplus_string* out, uint32_t fill, int64_t count) {
+    if (count <= 0) return;
+    char one[4];
+    int n = fill < 0x80 ? 1 : fill < 0x800 ? 2 : fill < 0x10000 ? 3 : 4;
+    if (n == 1) one[0] = (char)fill;
+    else {
+        for (int k = n - 1; k > 0; --k, fill >>= 6) one[k] = (char)(0x80 | (fill & 0x3F));
+        one[0] = (char)((0xF00 >> n) | fill);
+    }
+    char run[256];
+    int per = (int)sizeof run / n;
+    for (int k = 0; k < per; ++k) memcpy(run + k * n, one, (size_t)n);
+    for (; count > 0; count -= per) out_write(out, run, (int64_t)(count < per ? count : per) * n);
+}
+
+// `{:>8}` and the other alignments: the text that a value printed, with `fill` around it to make `width` places. The text
+// is released.
+void cplus_print_padded(cplus_string* out, cplus_string* text, int64_t width, int32_t fill, int32_t align) {
+    int64_t used = text_width(text->data, text->length);
+    int64_t pad = width > used ? width - used : 0;
+    int64_t before = align == '>' ? pad : align == '^' ? pad / 2 : 0;
+    write_fill(out, (uint32_t)fill, before);
+    out_write(out, text->data, text->length);
+    write_fill(out, (uint32_t)fill, pad - before);
+    cplus_str_release(text->owner);
+}
+
+// `{:.3}` of a string: its first `count` characters, counted as a width counts them.
+void cplus_print_str_prefix(cplus_string* out, const char* data, int64_t length, int64_t count) {
+    int64_t end = 0;
+    for (int64_t k = 0; k < count && end < length; ++k) {
+        int64_t n = utf8_sequence((const unsigned char*)data, length, end);
+        end += n ? n : 1;
+    }
+    out_write(out, data, end);
+}
+
+// An integer with options: `type` is 0 or 'd' for decimal, or 'x', 'X', 'o', 'b' or 'B'; `sign` is 0, '+', '-' or ' ';
+// `alt` puts 0x or 0b first; and `zero_width`, from the '0' option, is the width that zeros after the sign pad it to.
+// `bits` is the value, or the bits of a uint64_t when `is_unsigned`. A negative number prints its sign and its magnitude,
+// as in C++: -255 in hexadecimal is -ff.
+void cplus_print_int_spec(cplus_string* out, int64_t bits, int32_t is_unsigned, int32_t type, int32_t sign, int32_t alt,
+                          int64_t zero_width) {
+    int negative = !is_unsigned && bits < 0;
+    uint64_t magnitude = negative ? (uint64_t)0 - (uint64_t)bits : (uint64_t)bits;
+    unsigned base = type == 'x' || type == 'X' ? 16 : type == 'o' ? 8 : type == 'b' || type == 'B' ? 2 : 10;
+    const char* digit = type == 'X' ? "0123456789ABCDEF" : "0123456789abcdef";
+    char digits[64];
+    int n = 0;
+    do {
+        digits[sizeof digits - 1 - n++] = digit[magnitude % base];
+        magnitude /= base;
+    } while (magnitude);
+    char head[4];
+    int h = 0;
+    if (negative) head[h++] = '-';
+    else if (sign == '+' || sign == ' ') head[h++] = (char)sign;
+    if (alt && (base == 16 || base == 2)) {
+        head[h++] = '0';
+        head[h++] = (char)(base == 2 ? type : type == 'X' ? 'X' : 'x');
+    }
+    out_write(out, head, h);
+    write_fill(out, '0', zero_width - h - n);
+    out_write(out, digits + sizeof digits - n, n);
+}
+
+// `{:{}}` given a negative width or precision.
+_Noreturn void cplus_trap_format_count(int64_t value, const char* callee, const char* what, const char* file, int32_t line,
+                                       int32_t column) {
+    char message[160];
+    snprintf(message, sizeof message, "%s() was given %" PRId64 " as a %s, which is negative", callee, value, what);
+    cplus_trap(message, file, line, column);
+}
+
+// The C locale, in which a number is written and read with a '.' before its decimals, whatever locale a C library chose
+// with setlocale. C's snprintf and strtod follow that one.
+locale_t cplus_c_locale(void) {
+    static locale_t c_locale = (locale_t)0;
+    locale_t made = __atomic_load_n(&c_locale, __ATOMIC_ACQUIRE);
+    if (made) return made;
+    made = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+    if (!made) out_of_memory();
+    locale_t first = (locale_t)0;
+    if (__atomic_compare_exchange_n(&c_locale, &first, made, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return made;
+    freelocale(made);  // another thread made it first
+    return first;
+}
+
 // ---- Floating-point numbers ------------------------------------------------
 //
 // `{}` prints a float or a double as C++'s std::format does: the fewest digits that read
@@ -1185,6 +1317,45 @@ static void shortest_digits(double value, int is_float, char* digits, int* expon
         if (digits_that_read_back(value, is_float, count, digits, exponent)) return;
 }
 
+// The shortest text of a positive, finite value, which `{}` prints, into `text`, which has room for 48 bytes. Returns its
+// length.
+static int shortest_text(double value, int is_float, char* text) {
+    if (value == 0) {
+        text[0] = '0';
+        return 1;
+    }
+    locale_t saved = uselocale(cplus_c_locale());
+    char digits[24];
+    int exp10;
+    shortest_digits(value, is_float, digits, &exp10);
+    int n = (int)strlen(digits);
+    // Scientific: d.ddde+XX, with at least two digits in the exponent.
+    int s = snprintf(text, 48, "%c%s%s", digits[0], n > 1 ? "." : "", digits + 1);
+    s += snprintf(text + s, 48 - (size_t)s, "e%c%02d", exp10 < 0 ? '-' : '+', exp10 < 0 ? -exp10 : exp10);
+    // Fixed: as many zeros as the exponent needs.
+    int fixed_length = exp10 >= 0 ? (n > exp10 + 1 ? n + 1 : exp10 + 1) : n + 1 - exp10;
+    int f = 0;
+    if (fixed_length > s) {
+        f = s;
+    } else if (exp10 >= n - 1) {
+        // A whole number. Its exact digits are as short as the shortest digits padded
+        // with zeros, and closer to the value, so C++ prints them: 2^60 is
+        // 1152921504606846976, not 1152921504606847000.
+        f = snprintf(text, 48, "%.0f", value);
+    } else if (exp10 >= 0) {
+        for (int i = 0; i <= exp10; ++i) text[f++] = i < n ? digits[i] : '0';
+        text[f++] = '.';
+        for (int i = exp10 + 1; i < n; ++i) text[f++] = digits[i];
+    } else {
+        text[f++] = '0';
+        text[f++] = '.';
+        for (int i = 0; i < -exp10 - 1; ++i) text[f++] = '0';
+        for (int i = 0; i < n; ++i) text[f++] = digits[i];
+    }
+    uselocale(saved);
+    return f;
+}
+
 static void print_shortest(cplus_string* out, double value, int is_float) {
     // Every NaN prints as "nan". C++ prints "-nan" when the sign bit is set, but whether
     // it is set can change with optimization, and the output should not.
@@ -1198,66 +1369,59 @@ static void print_shortest(cplus_string* out, double value, int is_float) {
         out_write(out, "inf", 3);
         return;
     }
-    if (value == 0) {
-        out_write(out, "0", 1);
-        return;
-    }
-    char digits[24];
-    int exp10;
-    shortest_digits(value, is_float, digits, &exp10);
-    int n = (int)strlen(digits);
-    // Scientific: d.ddde+XX, with at least two digits in the exponent.
-    char sci[48];
-    int s = snprintf(sci, sizeof sci, "%c%s%s", digits[0], n > 1 ? "." : "", digits + 1);
-    s += snprintf(sci + s, sizeof sci - s, "e%c%02d", exp10 < 0 ? '-' : '+', exp10 < 0 ? -exp10 : exp10);
-    // Fixed: as many zeros as the exponent needs.
-    int fixed_length = exp10 >= 0 ? (n > exp10 + 1 ? n + 1 : exp10 + 1) : n + 1 - exp10;
-    if (fixed_length > s) {
-        out_write(out, sci, s);
-        return;
-    }
-    char fixed[48];
-    int f = 0;
-    if (exp10 >= n - 1) {
-        // A whole number. Its exact digits are as short as the shortest digits padded
-        // with zeros, and closer to the value, so C++ prints them: 2^60 is
-        // 1152921504606846976, not 1152921504606847000.
-        out_write(out, fixed, snprintf(fixed, sizeof fixed, "%.0f", value));
-        return;
-    }
-    if (exp10 >= 0) {
-        for (int i = 0; i <= exp10; ++i) fixed[f++] = i < n ? digits[i] : '0';
-        if (n > exp10 + 1) {
-            fixed[f++] = '.';
-            for (int i = exp10 + 1; i < n; ++i) fixed[f++] = digits[i];
-        }
-    } else {
-        fixed[f++] = '0';
-        fixed[f++] = '.';
-        for (int i = 0; i < -exp10 - 1; ++i) fixed[f++] = '0';
-        for (int i = 0; i < n; ++i) fixed[f++] = digits[i];
-    }
-    out_write(out, fixed, f);
+    char text[48];
+    out_write(out, text, shortest_text(value, is_float, text));
 }
 
 void cplus_print_f64(cplus_string* out, double value) { print_shortest(out, value, 0); }
 void cplus_print_f32(cplus_string* out, float value) { print_shortest(out, value, 1); }
 
-// `{:.2f}`, `{:e}`, `{:.3g}` and `{:.3}`, which print as printf's %f, %e and %g do. The
-// precision is 6 when it is left out, and `{:.3}` means `{:.3g}`.
-void cplus_print_float_spec(cplus_string* out, double value, int32_t type, int32_t precision) {
-    if (isnan(value)) {
-        out_write(out, "nan", 3);
+// A float or a double with options. `type` is 0, for the shortest digits, or `{:.3}` with a precision, which is `{:.3g}`;
+// or 'e', 'E', 'f', 'F', 'g' or 'G', which print as printf's do, with 6 digits when `precision` is -1. `sign` and
+// `zero_width` are as for cplus_print_int_spec. NaN prints as if its sign bit were clear, as `{}` prints it, and zeros do
+// not pad NaN and the infinities, which spaces pad instead.
+void cplus_print_float_spec(cplus_string* out, double value, int32_t is_float, int32_t type, int64_t precision, int32_t sign,
+                            int64_t zero_width) {
+    char head = signbit(value) && !isnan(value) ? '-' : sign == '+' || sign == ' ' ? (char)sign : 0;
+    int upper = type == 'E' || type == 'F' || type == 'G';
+    if (!isfinite(value)) {
+        write_fill(out, ' ', zero_width - (head != 0) - 3);
+        if (head) out_write(out, &head, 1);
+        out_write(out, isnan(value) ? (upper ? "NAN" : "nan") : (upper ? "INF" : "inf"), 3);
         return;
     }
-    char format[8] = {'%', '.', '*', type ? (char)type : 'g', 0};
-    if (precision < 0) precision = 6;
-    int length = snprintf(NULL, 0, format, precision, value);
+    value = fabs(value);
     char small[64];
-    char* text = length < (int)sizeof small ? small : malloc((size_t)length + 1);
-    if (!text) out_of_memory();
-    snprintf(text, (size_t)length + 1, format, precision, value);
-    out_write(out, text, length);
+    char* text = small;
+    int length;
+    int64_t zeros = 0;  // after the digits that printf gives, which are exact by then
+    char conversion = type ? (char)type : 'g';
+    if (type == 0 && precision < 0) {
+        length = shortest_text(value, is_float, small);
+    } else {
+        if (precision < 0) precision = 6;
+        // A double has no more than 767 significant digits, and none beyond 1074 places after the point.
+        if (precision > 1100) {
+            if (conversion == 'e' || conversion == 'E' || conversion == 'f' || conversion == 'F') zeros = precision - 1100;
+            precision = 1100;
+        }
+        char format[8] = {'%', '.', '*', conversion, 0};
+        locale_t saved = uselocale(cplus_c_locale());
+        length = snprintf(NULL, 0, format, (int)precision, value);
+        if (length >= (int)sizeof small && !(text = malloc((size_t)length + 1))) out_of_memory();
+        snprintf(text, (size_t)length + 1, format, (int)precision, value);
+        uselocale(saved);
+    }
+    int split = length;  // where the zeros go: before the exponent, or at the end
+    if (zeros) {
+        char* e = memchr(text, conversion == 'E' ? 'E' : 'e', (size_t)length);
+        if (e && (conversion == 'e' || conversion == 'E')) split = (int)(e - text);
+    }
+    if (head) out_write(out, &head, 1);
+    write_fill(out, '0', zero_width - (head != 0) - length - zeros);
+    out_write(out, text, split);
+    write_fill(out, '0', zeros);
+    out_write(out, text + split, length - split);
     if (text != small) free(text);
 }
 

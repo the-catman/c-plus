@@ -8056,7 +8056,119 @@ const Type* Sema::checkDelete(DeleteExpr& d, Flow& flow) {
     return Type::voidTy();
 }
 
-// print, println and format: a format string, then one value for each {} in it.
+// Where the bytes [offset, offset + length) of a string literal's text are written, so that an error about a placeholder
+// can point at it. Escapes, raw strings and literals joined on one line are followed; anything else gives the whole literal.
+static Loc placeInLiteral(const SourceFile& file, const StringLitExpr& lit, size_t offset, size_t length) {
+    if (lit.loc.line == 0 || lit.loc.col == 0) return lit.loc;
+    std::string_view line = file.line(lit.loc.line);
+    size_t col = lit.loc.col - 1, decoded = 0;
+    const size_t last = offset + std::max<size_t>(length, 1) - 1;
+    size_t start = std::string::npos, end = std::string::npos;
+    auto see = [&](size_t from, size_t to) {  // the source bytes [from, to) give the next byte of the text
+        if (decoded == offset) start = from;
+        if (decoded == last) end = to;
+        ++decoded;
+    };
+    while (col < line.size() && end == std::string::npos) {
+        const char c = line[col];
+        if (c == ' ' || c == '\t') {
+            ++col;
+        } else if (c == '"') {
+            for (++col; col < line.size() && line[col] != '"';) {
+                size_t raw = 1;
+                if (line[col] == '\\') {
+                    raw = 2;
+                    if (col + 1 < line.size() && line[col + 1] == 'x')
+                        while (raw < 4 && col + raw < line.size() && std::isxdigit((unsigned char)line[col + raw])) ++raw;
+                }
+                see(col, col + raw);
+                col += raw;
+            }
+            if (col >= line.size()) break;
+            ++col;
+        } else if (c == 'R' && col + 1 < line.size() && line[col + 1] == '"') {
+            const size_t open = line.find('(', col + 2);
+            if (open == std::string_view::npos) break;
+            const std::string close = ")" + std::string(line.substr(col + 2, open - col - 2)) + "\"";
+            const size_t stop = line.find(close, open + 1);
+            if (stop == std::string_view::npos) break;
+            for (size_t k = open + 1; k < stop; ++k) see(k, k + 1);
+            col = stop + close.size();
+        } else {
+            break;
+        }
+    }
+    if (start == std::string::npos || end == std::string::npos) return lit.loc;
+    return Loc{lit.loc.line, (uint32_t)start + 1, (uint32_t)(end - start), lit.loc.file};
+}
+
+// The length of the UTF-8 character at text[i], or 0 if the bytes there are not one.
+static size_t utf8Length(const std::string& text, size_t i) {
+    const unsigned char c = (unsigned char)text[i];
+    if (c < 0x80) return 1;
+    size_t n = c >= 0xC2 && c <= 0xDF ? 2 : c >= 0xE0 && c <= 0xEF ? 3 : c >= 0xF0 && c <= 0xF4 ? 4 : 0;
+    if (n == 0 || i + n > text.size()) return 0;
+    uint32_t cp = c & (0x7F >> n);
+    for (size_t k = 1; k < n; ++k) {
+        const unsigned char d = (unsigned char)text[i + k];
+        if ((d & 0xC0) != 0x80) return 0;
+        cp = cp << 6 | (d & 0x3F);
+    }
+    const uint32_t least = n == 2 ? 0x80 : n == 3 ? 0x800 : 0x10000;
+    return cp < least || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF) ? 0 : n;
+}
+
+// What C's printf format means, as a format string: `%d` as `{}`, `%-10s` as `{:<10}`, `%05.2f` as `{:05.2f}`.
+static std::string printfAsFormat(const std::string& text) {
+    std::string out;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '%') {
+            out += text[i] == '{' ? "{{" : text[i] == '}' ? "}}" : std::string(1, text[i]);
+            continue;
+        }
+        if (i + 1 < text.size() && text[i + 1] == '%') {
+            out += '%';
+            ++i;
+            continue;
+        }
+        size_t j = i + 1;
+        bool left = false, alt = false, zero = false;
+        char sign = 0;
+        for (; j < text.size() && std::strchr("-+ 0#", text[j]); ++j) {
+            if (text[j] == '-') left = true;
+            else if (text[j] == '#') alt = true;
+            else if (text[j] == '0') zero = true;
+            else if (text[j] == '+' || sign == 0) sign = text[j];
+        }
+        size_t widthStart = j;
+        while (j < text.size() && (std::isdigit((unsigned char)text[j]) || text[j] == '*')) ++j;
+        std::string width = text.substr(widthStart, j - widthStart);
+        std::string precision;
+        if (j < text.size() && text[j] == '.') {
+            size_t k = j + 1;
+            while (k < text.size() && (std::isdigit((unsigned char)text[k]) || text[k] == '*')) ++k;
+            precision = text.substr(j, k - j);
+            j = k;
+        }
+        while (j < text.size() && std::strchr("hlzjtLq", text[j])) ++j;
+        const char kind = j < text.size() ? text[j] : 'd';
+        if (width.find('*') != std::string::npos || precision.find('*') != std::string::npos) width = precision = "";
+        std::string spec;
+        if (!width.empty()) spec += left ? "<" : "";
+        if (std::strchr("dieEfFgG", kind) && sign) spec += sign;  // printf gives no sign to what it prints as unsigned
+        if (alt && std::strchr("xX", kind)) spec += '#';
+        if (zero && !left && !width.empty() && std::strchr("dieEfFgGxXo", kind)) spec += '0';
+        spec += width;
+        if (kind == 's' || std::strchr("eEfFgG", kind)) spec += precision == "." ? ".0" : precision;
+        if (std::strchr("eEfFgGxXo", kind) && !(kind == 'f' && precision.empty())) spec += kind;
+        out += spec.empty() ? "{}" : "{:" + spec + "}";
+        i = j;
+    }
+    return out;
+}
+
+// print, println and format: a format string, then the values its placeholders print. A placeholder's options are those of
+// C++'s std::format, [[fill]align][sign][#][0][width][.precision][type], and a width or a precision can come from a value.
 const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
     call.builtin = call.callee == "println" ? Builtin::Println
                    : call.callee == "print" ? Builtin::Print
@@ -8079,113 +8191,351 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
                      spec::Printing);
         return result;
     }
-    const std::string& fmt = static_cast<StringLitExpr&>(fmtExpr).value;
+    const auto& lit = static_cast<const StringLitExpr&>(fmtExpr);
+    const std::string& fmt = lit.value;
+    const size_t values = call.args.size() - 1;
+    auto valueType = [&](int arg) -> const Type* { return arg >= 0 && (size_t)arg < values ? call.args[arg + 1]->type : nullptr; };
+    auto at = [&](size_t offset, size_t length) { return placeInLiteral(diags_.fileOf(lit.loc), lit, offset, length); };
+
+    struct Field {
+        FormatSpec spec;
+        size_t offset = 0, length = 0;  // in the text of the format string
+        std::string text;               // as written, `{:>8}`
+    };
     std::vector<std::string> pieces{""};
-    std::vector<FormatSpec> specs;
-    std::vector<std::string> specTexts;  // as written, for errors
+    std::vector<Field> fields;
+    int automatic = 0;  // how many values the `{}`s have taken
+    bool numbered = false;
     for (size_t i = 0; i < fmt.size(); ++i) {
-        char c = fmt[i];
-        char n = i + 1 < fmt.size() ? fmt[i + 1] : '\0';
-        if (c == '{' && n == '{') { pieces.back() += '{'; ++i; }
-        else if (c == '}' && n == '}') { pieces.back() += '}'; ++i; }
-        else if (c == '{') {
-            // `{}`, or `{:.2f}`: a precision and a type, f, e or g, for a floating-point value.
-            size_t close = fmt.find('}', i);
-            std::string inside = close == std::string::npos ? "" : fmt.substr(i + 1, close - i - 1);
-            FormatSpec spec;
-            bool ok = close != std::string::npos && (inside.empty() || inside[0] == ':');
-            size_t j = 1;
-            if (ok && j < inside.size() && inside[j] == '.') {
-                size_t start = ++j;
-                while (j < inside.size() && std::isdigit((unsigned char)inside[j]) && j - start < 4) ++j;
-                ok = j > start;
-                if (ok) spec.precision = std::stoi(inside.substr(start, j - start));
+        const char c = fmt[i];
+        const char n = i + 1 < fmt.size() ? fmt[i + 1] : '\0';
+        if (c == '{' && n == '{') { pieces.back() += '{'; ++i; continue; }
+        if (c == '}' && n == '}') { pieces.back() += '}'; ++i; continue; }
+        if (c == '}') {
+            diags_.error(at(i, 1), "this format string has a '}' with no matching '{'", "write }} for a literal '}'", spec::Printing);
+            return result;
+        }
+        if (c != '{') { pieces.back() += c; continue; }
+        // The placeholder ends at its '}', after those of a width or a precision in it.
+        size_t close = i + 1;
+        for (int depth = 0; close < fmt.size() && (fmt[close] != '}' || depth > 0); ++close)
+            depth += fmt[close] == '{' ? 1 : fmt[close] == '}' ? -1 : 0;
+        if (close >= fmt.size()) {
+            diags_.error(at(i, 1), "this format string has a '{' with no matching '}'", "write {{ for a literal '{'", spec::Printing);
+            return result;
+        }
+        Field field;
+        field.offset = i;
+        field.length = close - i + 1;
+        for (char x : fmt.substr(i, field.length)) {  // as the messages show it, with what does not print escaped
+            char hex[8];
+            std::snprintf(hex, sizeof hex, "\\x%02x", (unsigned char)x);
+            field.text += (unsigned char)x < 0x20 || x == 0x7f ? std::string(hex) : std::string(1, x);
+        }
+        FormatSpec& spec = field.spec;
+        const Loc here = at(field.offset, field.length);
+        auto fail = [&](const std::string& message, const std::string& help) { diags_.error(here, message, help, spec::FormatOptions); };
+        // A value: `{}` takes the next one, and `{1}` the one numbered so, from 0.
+        auto takeValue = [&](size_t& p, int& arg) -> bool {
+            const size_t start = p;
+            while (p < close && std::isdigit((unsigned char)fmt[p])) ++p;
+            const bool isNumbered = p > start;
+            if ((isNumbered && automatic > 0) || (!isNumbered && numbered)) {
+                fail("the format string has both {} and numbered placeholders, such as {0}",
+                     "give every placeholder a number, as in \"{0} {1}\", or none of them, as in \"{} {}\"");
+                return false;
             }
-            if (ok && j < inside.size() && (inside[j] == 'f' || inside[j] == 'e' || inside[j] == 'g')) spec.type = inside[j++];
-            ok = ok && j >= inside.size();
-            if (!ok) {
-                std::string shown = close == std::string::npos ? fmt.substr(i) : "{" + inside + "}";
-                if (close != std::string::npos && !inside.empty() && std::isdigit((unsigned char)inside[0]))
-                    diags_.error(fmtExpr.loc, "this compiler does not support numbered placeholders like " + shown + " yet",
-                                 "write {} for each value, in order", spec::Printing);
-                else if (close == std::string::npos)
-                    diags_.error(fmtExpr.loc, "this format string has a '{' with no matching '}'",
-                                 "write {{ for a literal '{'", spec::Printing);
-                else
-                    diags_.error(fmtExpr.loc, "this compiler does not support the format option " + shown + " yet",
-                                 shown.size() > 1 && shown[1] != ':'
-                                     ? "a placeholder is `{}`, with the value after the format string: `println(\"{}\", name)`. A literal brace is written {{"
-                                     : "write {} to print it as it is, or give the precision of a floating-point value and f, e or g, such "
-                                       "as {:.2f}, {:e} or {:.3g}. Width and alignment are planned",
-                                 spec::Printing);
+            if (!isNumbered) {
+                arg = automatic++;
+                return true;
+            }
+            const std::string digits = fmt.substr(start, p - start);
+            if (digits.size() > 1 && digits[0] == '0') {
+                fail("the number in " + field.text + " starts with a 0", "write it without the 0: {" + std::to_string(std::stoi(digits)) + "}");
+                return false;
+            }
+            numbered = true;
+            arg = digits.size() > 6 ? 1000000 : std::stoi(digits);
+            return true;
+        };
+        auto unknown = [&](size_t p) {
+            const char x = fmt[p];
+            const Type* t = valueType(spec.arg);
+            if (t && (t->isVector() || t->isArray()) && (x == ':' || x == 'n' || x == 'm' || x == 's'))
+                return fail("this compiler does not support options for the elements of " + std::string(t->isVector() ? "a vector" : "an array") +
+                                ", such as " + field.text + ", yet",
+                            "write a loop that prints each element with its options, or give only a width and an alignment, as in {:>20}, "
+                            "which pad the whole text");
+            const std::string shown = (unsigned char)x < 0x80 && std::isprint((unsigned char)x) ? std::string(1, x) : "\\x" + [&] {
+                char hex[4];
+                std::snprintf(hex, sizeof hex, "%02x", (unsigned char)x);
+                return std::string(hex);
+            }();
+            fail("'" + shown + "' is not a format option, in " + field.text,
+                 x == ',' || x == '_' ? "remove the '" + shown + "': C+ does not group the digits of a number"
+                 : x == '%'           ? "write the % sign after the placeholder, and multiply by 100 first: `" + call.callee + "(\"{:.1f}%\", x * 100)`"
+                                      : "write the options in the order C++ has them, [[fill]align][sign][#][0][width][.precision][type], as in "
+                                        "{:>8}, {:+.2f} or {:#06x}");
+        };
+        // A width or a precision: digits, or `{}` or `{1}`, which takes it from a value.
+        auto takeCount = [&](size_t& p, int64_t& count, int& arg, const char* what) -> bool {
+            if (p < close && fmt[p] == '{') {
+                size_t q = p + 1;
+                if (!takeValue(q, arg)) return false;
+                if (fmt[q] != '}') {
+                    unknown(q);
+                    return false;
+                }
+                p = q + 1;
+                return true;
+            }
+            const size_t start = p;
+            if (std::string(what) == "precision" || fmt[p] != '0')
+                while (p < close && std::isdigit((unsigned char)fmt[p])) ++p;
+            if (p == start) return true;
+            const std::string digits = fmt.substr(start, p - start);
+            if (digits.size() > 5 || std::stol(digits) > 65535) {
+                fail(std::string("the ") + what + " in " + field.text + " is more than 65535",
+                     std::string("pass a larger ") + what + " as a value: `" + call.callee + "(\"" +
+                         (std::string(what) == "width" ? "{:{}}\", x, width" : "{:.{}f}\", x, digits") + ")`");
+                return false;
+            }
+            count = std::stol(digits);
+            return true;
+        };
+        size_t p = i + 1;
+        if (!takeValue(p, spec.arg)) return result;
+        if (p < close && fmt[p] != ':') {
+            if (p == i + 1 && (std::isalpha((unsigned char)fmt[p]) || fmt[p] == '_')) {
+                std::string name = fmt.substr(p, close - p);
+                name = name.substr(0, name.find_first_of(":!"));
+                fail("a placeholder cannot name the value it prints, as " + field.text + " does",
+                     "write {} and pass the value after the format string: `" + call.callee + "(\"{}\", " + name + ")`");
+            } else if (fmt[p] == '!') {
+                fail("'!' is not a format option, in " + field.text,
+                     "write {:?} to print a string in quotes with its escapes, as Python's !r does, or {} to print the value as it is");
+            } else if (p == i + 1) {
+                fail("this format string has a '{' that does not start a placeholder: " + field.text,
+                     "write {{ for a literal '{', and {} where a value goes: `" + call.callee + "(\"{{ x: {} }}\", x)`");
+            } else {
+                unknown(p);
+            }
+            return result;
+        }
+        if (p < close) {
+            ++p;  // the ':'
+            auto isAlign = [](char a) { return a == '<' || a == '>' || a == '^'; };
+            const size_t fillLength = utf8Length(fmt, p);
+            if (fillLength && p + fillLength < close && isAlign(fmt[p + fillLength]) && fmt[p] != '{') {
+                uint32_t cp = fillLength == 1 ? (unsigned char)fmt[p] : (unsigned char)fmt[p] & (0x7F >> fillLength);
+                for (size_t k = 1; k < fillLength; ++k) cp = cp << 6 | ((unsigned char)fmt[p + k] & 0x3F);
+                spec.fill = cp;
+                spec.align = fmt[p + fillLength];
+                p += fillLength + 1;
+            } else if (isAlign(fmt[p])) {
+                spec.align = fmt[p++];
+            }
+            if (p < close && (fmt[p] == '+' || fmt[p] == '-' || fmt[p] == ' ')) spec.sign = fmt[p++];
+            if (p < close && fmt[p] == '#') { spec.alt = true; ++p; }
+            if (p < close && fmt[p] == '0') { spec.zero = true; ++p; }
+            if (!takeCount(p, spec.width, spec.widthArg, "width")) return result;
+            if (p < close && fmt[p] == '.') {
+                ++p;
+                if (p >= close || !(std::isdigit((unsigned char)fmt[p]) || fmt[p] == '{')) {
+                    fail("the '.' in " + field.text + " must be followed by the precision",
+                         "write the number of digits after the '.', as in {:.2f}, or remove the '.'");
+                    return result;
+                }
+                if (!takeCount(p, spec.precision, spec.precisionArg, "precision")) return result;
+            }
+            if (p < close && fmt[p] == 'L') {
+                fail("'L' is not a format option in C+, which has no locales: " + field.text,
+                     "remove the 'L': a number prints the same everywhere, with a '.' before its decimals");
                 return result;
             }
-            pieces.emplace_back();
-            specs.push_back(spec);
-            specTexts.push_back("{" + inside + "}");
-            i = close;
-        } else if (c == '}') {
-            diags_.error(fmtExpr.loc, "this format string has a '}' with no matching '{'",
-                         "write }} for a literal '}'", spec::Printing);
-            return result;
-        } else pieces.back() += c;
+            if (p < close && fmt[p] && std::strchr("bBcdoxXeEfFgGaAsp?", fmt[p])) spec.type = fmt[p++];
+            if (spec.type == 'a' || spec.type == 'A') {
+                fail("this compiler does not support the format option " + field.text + " yet",
+                     "write {:e} for a number with an exponent, in decimal");
+                return result;
+            }
+            if (p < close) {
+                unknown(p);
+                return result;
+            }
+        }
+        pieces.emplace_back();
+        fields.push_back(field);
+        i = close;
     }
-    size_t placeholders = pieces.size() - 1, values = call.args.size() - 1;
-    if (placeholders != values) {
+
+    // Each value is printed, or gives a width or a precision, at least once.
+    std::vector<bool> used(values);
+    auto use = [&](int arg) { if (arg >= 0 && (size_t)arg < values) used[arg] = true; };
+    for (const Field& f : fields) {
+        use(f.spec.arg);
+        use(f.spec.widthArg);
+        use(f.spec.precisionArg);
+    }
+    if (!numbered && (size_t)automatic != values) {
+        const size_t placeholders = automatic;
         diags_.error(call.loc, "the format string has " + std::to_string(placeholders) + " {} placeholder" +
                                    (placeholders == 1 ? "" : "s") + " but " + std::to_string(values) + " value" +
                                    (values == 1 ? " was" : "s were") + " given",
-                     [&] {
-                         const Expr& format = *call.args[0];
-                         const std::string text = format.kind == Expr::Kind::StringLit ? static_cast<const StringLitExpr&>(format).value : "";
-                         if (text.find('%') == std::string::npos) return std::string("use one {} for each value after the format string");
-                         std::string out;  // `%d` as `{}`, `%.2f` as `{:.2f}`
-                         for (size_t i = 0; i < text.size(); ++i) {
-                             if (text[i] != '%') { out += text[i]; continue; }
-                             if (i + 1 < text.size() && text[i + 1] == '%') { out += '%'; ++i; continue; }
-                             size_t j = i + 1;
-                             while (j < text.size() && std::strchr("-+ 0#", text[j])) ++j;
-                             while (j < text.size() && std::isdigit((unsigned char)text[j])) ++j;
-                             std::string precision;
-                             if (j < text.size() && text[j] == '.') {
-                                 size_t k = j + 1;
-                                 while (k < text.size() && std::isdigit((unsigned char)text[k])) ++k;
-                                 precision = text.substr(j, k - j);
-                                 j = k;
-                             }
-                             while (j < text.size() && std::strchr("hlzjtL", text[j])) ++j;
-                             const char kind = j < text.size() ? text[j] : 'd';
-                             out += kind == 'f' || kind == 'F' ? (precision.empty() ? "{}" : "{:" + precision + "f}")
-                                  : kind == 'e' || kind == 'g' || kind == 'x' || kind == 'X' || kind == 'o' ? "{:" + precision + std::string(1, kind) + "}"
-                                  : std::string("{}");
-                             i = j;
-                         }
-                         return "C+ marks each value with `{}`, as C++'s `std::format` does, where C writes `%d`: write " + stringLiteral(out);
-                     }(), spec::Printing);
+                     fmt.find('%') == std::string::npos
+                         ? std::string("use one {} for each value after the format string")
+                         : "C+ marks each value with `{}`, as C++'s `std::format` does, where C writes `%d`: write " + stringLiteral(printfAsFormat(fmt)),
+                     spec::Printing);
         return result;
     }
-    for (size_t i = 1; i < call.args.size(); ++i) {
-        const Type* t = call.args[i]->type;
-        const FormatSpec& spec = specs[i - 1];
-        if (t->is(K::Void))
-            diags_.error(call.args[i]->loc, "this expression produces no value, so it cannot be printed", "call it on a line of its own, and print what it changes", spec::Printing);
-        else if (t->isPointer() && t->elem->is(K::Char) && !spec.type && spec.precision < 0) {
-            std::string n = spelled(*call.args[i], "p");
-            diags_.error(call.args[i]->loc,
+    if (numbered) {
+        for (const Field& f : fields)
+            for (int arg : {f.spec.arg, f.spec.widthArg, f.spec.precisionArg})
+                if (arg >= 0 && (size_t)arg >= values) {
+                    diags_.error(at(f.offset, f.length),
+                                 "the format string uses {" + std::to_string(arg) + "}, but " +
+                                     (values == 0 ? std::string("no value was given")
+                                                  : "the values given are numbered from {0} to {" + std::to_string(values - 1) + "}"),
+                                 values == 0 ? "pass the value after the format string: `" + call.callee + "(\"{0}\", x)`"
+                                             : std::string("write {0} for the first value after the format string, {1} for the next, and so on"),
+                                 spec::FormatOptions);
+                    return result;
+                }
+        for (size_t k = 0; k < values; ++k)
+            if (!used[k]) {
+                diags_.error(call.args[k + 1]->loc, "the format string does not use this value, {" + std::to_string(k) + "}",
+                             "print it with {" + std::to_string(k) + "} in the format string, or remove it", spec::FormatOptions);
+                return result;
+            }
+    }
+
+    // Whether each placeholder's options suit its value.
+    for (Field& f : fields) {
+        FormatSpec& s = f.spec;
+        const Loc here = at(f.offset, f.length);
+        auto fail = [&](const std::string& message, const std::string& help) { diags_.error(here, message, help, spec::FormatOptions); };
+        for (auto [arg, what] : {std::pair{s.widthArg, "width"}, std::pair{s.precisionArg, "precision"}}) {
+            if (arg < 0) continue;
+            const Expr& count = *call.args[arg + 1];
+            const Type* ct = count.type;
+            if (ct->isError() || ct->isInteger()) continue;
+            diags_.error(count.loc, std::string("the ") + what + " that " + f.text + " takes from a value must be an integer, but this is " + q(ct),
+                         ct->isFloating()                             ? "convert it first: `int(" + spelled(count, "w") + ")`"
+                         : ct->is(K::Char)                            ? "convert it to its code first: `int(" + spelled(count, "c") + ")`"
+                         : ct->isOptional() && ct->elem->isInteger() ? "give it a fallback where it is passed: `" + asBase(spelled(count, "n")) + " ?? 0`"
+                                                                      : std::string("pass the number of places, such as `10`"),
+                         spec::FormatOptions);
+        }
+        Expr& value = *call.args[s.arg + 1];
+        const Type* t = value.type;
+        if (t->isError()) continue;
+        if (t->is(K::Void)) {
+            diags_.error(value.loc, "this expression produces no value, so it cannot be printed", "call it on a line of its own, and print what it changes", spec::Printing);
+            continue;
+        }
+        if (t->isPointer() && t->elem->is(K::Char)) {
+            std::string n = spelled(value, "p");
+            diags_.error(value.loc,
                          "C++ prints a " + q(t) + " as the text it points to, but C+ cannot tell where that text ends",
                          "write `string(" + n + ")` to print the text, which must end with a zero byte, or `(" + (t->constElem ? "const " : "") + "void*)" + asBase(n) +
                              "` to print the address",
                          spec::Printing);
+            continue;
         }
-        else if ((spec.type || spec.precision >= 0) && !t->isFloating() && !t->isError())
-            diags_.error(call.args[i]->loc, specTexts[i - 1] + " formats a float or a double, but this is " + q(t),
-                         t->isInteger() ? "write {} for an integer, or convert it first: `double(n)`"
-                         : t->isOptional() && t->elem->isFloating() ? "give it a fallback where it is passed: `" + asBase(spelled(*call.args[i], "d")) + " ?? " + (t->elem->is(K::Float) ? "0.0f" : "0.0") + "`"
-                                        : "write {} to print it as it is",
-                         spec::Printing);
+        const bool integer = t->isInteger(), floating = t->isFloating(), isChar = t->is(K::Char), isBool = t->is(K::Bool),
+                   isString = t->is(K::String), pointer = t->isPointer() || t->isCFunction();
+        const char ty = s.type;
+        const bool intType = ty && std::strchr("dxXobB", ty), floatType = ty && std::strchr("eEfFgG", ty);
+        const bool asNumber = integer || floating || ((isChar || isBool) && intType);  // what takes a sign, '#' and '0'
+        // For an optional number, the fallback that gives the number.
+        const std::string fallback = t->isOptional() && t->elem->isNumber()
+                                         ? "give it a fallback where it is passed: `" + asBase(spelled(value, "x")) + " ?? " +
+                                               (t->elem->is(K::Float) ? "0.0f" : t->elem->is(K::Double) ? "0.0" : "0") + "`"
+                                         : "";
+        const std::string asItIs = fallback.empty() ? "write {} to print it as it is" : fallback;
+        const std::string what = q(t);
+        if (intType && !integer && !isChar && !isBool) {
+            fail(f.text + " formats an integer, but this is " + what,
+                 floating && ty == 'd' ? "write {:.0f} for no decimals, or convert it first: `int(" + spelled(value, "x") + ")`"
+                 : floating            ? "convert it first: `long(" + spelled(value, "x") + ")`"
+                 : t->isVector() || t->isArray() ? "write a loop that prints each element with " + f.text +
+                                                       ": options for the elements, as C++23's {::x} gives them, are planned"
+                                                 : asItIs);
+            continue;
+        }
+        if (floatType && !floating) {
+            fail(f.text + " formats a float or a double, but this is " + what,
+                 integer ? "write {} for an integer, or convert it first: `double(n)`" : asItIs);
+            continue;
+        }
+        if (ty == 'c' && !isChar) {
+            fail(f.text + " prints a char, but this is " + what, integer ? "convert it first: `char(" + spelled(value, "n") + ")`" : asItIs);
+            continue;
+        }
+        if (ty == 's' && !isString && !isBool) {
+            fail(f.text + " formats a string or a bool, but this is " + what, isChar ? std::string("write {} or {:c} for a char") : asItIs);
+            continue;
+        }
+        if (ty == '?' && !isString && !isChar) {
+            fail(f.text + " prints a string or a char in quotes, but this is " + what,
+                 t->isStruct() || t->isClass() || t->isVector() || t->isArray()
+                     ? std::string("write {}, which prints the strings and chars inside it in quotes")
+                     : asItIs);
+            continue;
+        }
+        if (ty == 'p' && !pointer) {
+            fail(f.text + " formats a pointer, but this is " + what, asItIs);
+            continue;
+        }
+        if (s.hasPrecision() && !floating && !isString) {
+            fail("a precision, as in " + f.text + ", is for a float, a double or a string, but this is " + what,
+                 integer ? "remove the precision, as an integer prints all of its digits, or convert it first: `double(" + spelled(value, "n") + ")`"
+                 : !fallback.empty() ? fallback
+                                     : std::string("remove the precision"));
+            continue;
+        }
+        if (s.hasPrecision() && ty == '?') {
+            fail("this compiler does not support a precision with {:?} yet", "remove the precision, or cut the string first: `s.substr(0, n)`");
+            continue;
+        }
+        if (s.sign && !asNumber) {
+            fail(std::string("the '") + s.sign + "' in " + f.text + " gives a number its sign, but this is " + what,
+                 !fallback.empty()  ? fallback
+                 : isChar || isBool ? std::string("remove the '") + s.sign + "', or print the code with an integer type: {:" + s.sign + "d}"
+                                    : std::string("remove the '") + s.sign + "'");
+            continue;
+        }
+        if (s.alt) {
+            if (floating) {
+                fail("this compiler does not support '#' with a float or a double yet", "remove the '#'");
+                continue;
+            }
+            if (ty == 'o') {
+                fail("C++ prints {:#o} as 017, a form of octal that C+ does not have", "write 0o{:o}, which prints 0o17, as C+ writes octal");
+                continue;
+            }
+            if (!asNumber || !(ty == 'x' || ty == 'X' || ty == 'b' || ty == 'B')) {
+                fail("the '#' in " + f.text + " puts 0x or 0b before a number in hexadecimal or binary, but " +
+                         (asNumber ? "this one has neither" : "this is " + what),
+                     !fallback.empty() ? fallback : asNumber ? "write {:#x} or {:#b}, or remove the '#'" : std::string("remove the '#'"));
+                continue;
+            }
+        }
+        if (s.zero && !asNumber && !pointer) {
+            fail("the '0' in " + f.text + " pads a number with zeros, but this is " + what,
+                 !fallback.empty() ? fallback : std::string("write the 0 before an alignment to pad with zeros anyway, as in {:0>8}"));
+            continue;
+        }
+        if (s.zero && s.align) {
+            fail(f.text + " has an alignment, so its '0' would do nothing",
+                 std::string("remove the '0' to pad with spaces, or the '") + s.align + "' to pad with zeros after the sign");
+            continue;
+        }
+        if (s.hasWidth() && !s.zero && !s.align) s.align = asNumber || pointer ? '>' : '<';
     }
     call.formatPieces = std::move(pieces);
-    call.formatSpecs = std::move(specs);
+    call.formatSpecs.clear();
+    for (const Field& f : fields) call.formatSpecs.push_back(f.spec);
     return result;
 }
 

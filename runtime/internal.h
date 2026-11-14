@@ -3,6 +3,7 @@
 
 // What the files of the runtime share with each other. Programs do not see any of this.
 
+#include <locale.h>
 #include <stddef.h>
 
 #include "reflect.h"
@@ -34,6 +35,8 @@ void* cplus_object_start(void* object);
 void cplus_print_f64(cplus_string* out, double value);
 void cplus_print_f32(cplus_string* out, float value);
 void cplus_print_quoted(cplus_string* out, const char* data, int64_t length);
+// The C locale, for writing and reading numbers with C's functions: see runtime.c.
+locale_t cplus_c_locale(void);
 void cplus_print_quoted_start(cplus_string* out, const char* data, int64_t length, int64_t most);  // `out` is a string, not stdout
 void cplus_retain(void* object);
 void cplus_str_concat(cplus_string* out, const cplus_string* parts, int64_t count);

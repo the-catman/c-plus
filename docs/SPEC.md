@@ -167,9 +167,9 @@ double average = total / 4.0;      // a double, since one side is
   A floating-point value never converts to an integer by itself; see [Casts](#casts).
 - `{}` prints the fewest digits that read back as the same value, as C++'s `std::format`
   does: `0.1` prints as `0.1`, `1.0 / 3` as `0.3333333333333333`, `100.0` as `100` and `1e21`
-  as `1e+21`. The infinities print as `inf` and `-inf`, and NaN always as `nan`; C++
-  prints `-nan` when its sign bit is set, which can change with optimization. `{:.2f}` and the
-  other options of [Printing](#printing) choose the digits. `to_string(x)` gives the same
+  as `1e+21`. The infinities print as `inf` and `-inf`, and NaN always as `nan`, as if its sign
+  bit were clear; C++ prints `-nan` when its sign bit is set, which can change with
+  optimization. `{:.2f}` and the other [format options](#format-options) choose the digits. `to_string(x)` gives the same
   text as `{}`, as in C++26; earlier C++ printed six decimals.
 
 ### bool
@@ -207,7 +207,8 @@ string word = string(1, c);       // "a"
   Without NUL-terminated strings, a test for the zero byte is rarely what was meant.
 - **Printing** a char prints the character, as `std::format` does: `println("{}", c)`
   prints `a`. Inside a struct or a vector it prints in quotes, `'a'`, with escapes such as
-  `'\n'`, and a byte that is not ASCII prints as `'\xc8'`. `int(c)` prints the code.
+  `'\n'`, and a byte that is not ASCII prints as `'\xc8'`, as `{:?}` prints it. `int(c)` or `{:d}`
+  prints the code.
 - `to_string(c)` is an error: C++ gives the code, `"97"`. Write `string(1, c)` for the
   character, or `to_string(int(c))` for the code.
 - The character functions of C++'s `<cctype>` are built in and take a `char`:
@@ -2782,11 +2783,10 @@ println("{{literal braces}}");
 - The compiler checks that the number of `{}` matches the number of arguments.
 - `{{` and `}}` print literal braces.
 - A floating-point value prints with the fewest digits that read back as the same value
-  (see [Floating-point types](#floating-point-types)). A placeholder can instead give a
-  precision and a type, as in C++: `{:.2f}` prints 2 decimals, `{:e}` uses an exponent,
-  `{:g}` the shorter of the two, and `{:.3}` 3 significant digits. These work only on
-  `float` and `double`. Other format options, such as a width, alignment and `{:x}`, are
-  planned.
+  (see [Floating-point types](#floating-point-types)).
+- A placeholder can give options, as in C++: `{:>8}` pads to 8 places, `{:.2f}` prints 2
+  decimals, `{:x}` in hexadecimal, and `{1}` prints the second value. See
+  [Format options](#format-options).
 - Numbers, `bool`, `char`, `string`, structs, class objects and vectors can be printed. A
   struct prints its fields by name, with strings inside it in quotes:
   `{name: "Ada", born: 1815}`. A vector prints its elements: `[1, 2, 3]`, `["a", "b"]`.
@@ -2807,6 +2807,82 @@ C++. `string` covers the other ways to build strings.
 string label = format("{}/{}", done, total);   // "3/10"
 string key = "user" + to_string(id);
 ```
+
+### Format options
+
+A placeholder can give options after a colon, as C++'s `std::format` does, and a number
+before the colon chooses the value it prints:
+
+```cpp
+println("[{:>8}] [{:<8}] [{:^8}]", 42, "left", "mid");  // [      42] [left    ] [  mid   ]
+println("{:08.3f} {:+} {:x} {:#06x}", 3.14159, 5, 255, 255);  // 0003.142 +5 ff 0x00ff
+println("{:*^9}", "hi");                                 // ***hi****
+println("{1} {0} {1}", "a", "b");                        // b a b
+println("{:{}}|", name, width);                          // name, padded to width places
+```
+
+The options come in this order, and each can be left out:
+`[[fill]align][sign][#][0][width][.precision][type]`.
+
+- **Alignment.** `<` puts the value on the left, `>` on the right and `^` in the middle, with
+  the fill around it: a space, or the character written before the alignment, as in
+  `{:*^9}`. With no alignment, numbers and pointers go on the right and everything else on
+  the left, as in C++.
+- **Width** is the least number of places the text takes. Each character of UTF-8 counts as
+  one, and so does each byte that is not part of one, so `{:6}` pads `"héllo"` with one
+  space. C++ counts a wide character, as in Chinese, as two, and one that combines with the
+  character before it as none, so such text lines up differently.
+- **Anything that prints takes a width and an alignment**: structs, vectors, enums and
+  optionals too, which pad their whole text, as `{:>14}` does.
+- **Sign.** `+` gives a positive number a `+`, a space gives it a space, and `-`, the
+  default, gives a sign only to a negative number.
+- **`#`** puts `0x`, `0X`, `0b` or `0B` before an integer in hexadecimal or binary: `{:#x}`
+  of 255 prints `0xff`. C++ prints `{:#o}` of 15 as `017`, which C+ does not read as octal, so
+  that is an error; write `0o{:o}`.
+- **`0`** pads a number with zeros between its sign and its digits, up to the width: `{:06}`
+  of -42 prints `-00042`. Next to an alignment it would do nothing, so the two together are
+  an error. Spaces pad NaN and the infinities instead. Other text is padded with zeros by
+  giving 0 as the fill, as in `{:0>5}`.
+- **Precision.** With `f` or `e` it is the number of digits after the point, and with `g`,
+  or with no type, the number of digits in all: `{:.3}` is `{:.3g}`. For a string, it is the
+  most characters to print, counted as a width counts them: `{:.3}` of `"abcdef"` prints
+  `abc`.
+- **Type**, which says how the value is written:
+
+| Value | Types |
+|---|---|
+| Integers | `d`, decimal, the default; `x` and `X`, hexadecimal; `o`, octal; `b` and `B`, binary |
+| `float` and `double` | none, the shortest digits; `f`; `e`, with an exponent; `g`, the shorter of the two; `F`, `E` and `G` in capitals |
+| `char` | none or `c`, the character; `?`, in quotes; an integer type, its code |
+| `bool` | none or `s`, `true` or `false`; an integer type, 1 or 0 |
+| `string` | none or `s`; `?`, in quotes |
+| Pointers | none or `p`, the address, `0x...` |
+
+- **A negative number** in hexadecimal, octal or binary prints its sign and its magnitude,
+  as in C++: `{:x}` of -255 prints `-ff`. For its bits, convert it first: `{:x}` of
+  `uint32_t(n)`, written `unchecked(uint32_t(n))` in [checked](#checked) code.
+- **NaN** prints as if its sign bit were clear, so `{:+}` gives `+nan` and never `-nan`. The
+  capital types print `NAN`, `INF` and `1E+10`.
+- **`{:?}`** prints a string or a char as it is written in C+ source, `"a\tb"` or `'\n'`: what
+  a struct or a vector prints for the strings and chars in it. A byte that is not part of a
+  UTF-8 character prints as `\xHH`, where C++ writes `\x{HH}`. C++ also escapes the Unicode
+  characters that do not show, which C+ prints as they are.
+- **Numbered placeholders.** `{0}` is the first value after the format string, `{1}` the
+  next. A value can print more than once, and in any order, but every value must be used,
+  and numbered and unnumbered placeholders cannot be mixed. Each value is worked out once,
+  in the order written.
+- **A width or a precision from a value.** `{:{}}` takes the width from the value after the
+  one it prints, and `{:.{}f}` the precision; numbered, they are `{0:{1}}`. It is an integer,
+  and a negative one stops the program, where C++ throws. One written in the
+  format string is at most 65535.
+- **The options must suit the value**, which the compiler checks: `{:x}` of a `double`,
+  `{:.2f}` of an `int` and `{:+}` of a string are errors. A number never prints as a
+  character: `{:c}` takes only a `char`, and `char(n)` converts one.
+- C+ has no locales, so `L`, which formats by one, is an error, and numbers print with a `.`
+  everywhere, even after a C library has called `setlocale`.
+- `{:a}`, `#` with a floating-point type, a precision with `{:?}`, and options for the
+  elements of a vector, as C++23's `{::x}` and `{:n}` give them, are not supported yet.
+- `to_string(x)` takes no options: it is the text of `{}`.
 
 ### Reading input
 
@@ -3755,9 +3831,10 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | `int x{5}`, `int x(5)`, brace initializers for fields | planned |
 | `short`, `int8_t` and `int16_t`: signed 8-bit and 16-bit integer types; enums held in an unsigned type | planned |
 | Arrays of arrays from `new[]`, initial values for `new T[n]` | planned |
-| Numbered format placeholders, like `{0}` | planned |
 | C functions with variable arguments; vectors passed to or from C | planned |
-| Format options for width, alignment and `{:x}`; math constants | planned |
+| Format options: fill, alignment, sign, `#`, `0`, width, precision, the types, `{:?}`, numbered placeholders, `{:{}}` | implemented |
+| Format options `{:a}`, `#` with a float, a precision with `{:?}`, and for the elements of a vector, as in `{::x}` | planned |
+| Math constants | planned |
 | Overloading functions, methods and constructors; constructors that hand their work to another | implemented |
 | A template beside a function of its name, a `const` and a non-const method that take the same parameters | planned |
 | Strings: `append`, `insert`, `erase`, `replace`, `rfind`, `compare`, `split`, `trim`, `join`, `replace_all` | implemented |

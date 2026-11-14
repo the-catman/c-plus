@@ -3,6 +3,8 @@
 // a number followed by other text, is turned down here, before they see it. The text is read by its length, so a zero byte
 // in it is one more character that is not a digit.
 
+#define _POSIX_C_SOURCE 200809L  // for uselocale
+
 #include <errno.h>
 #include <math.h>
 #include <stdbool.h>
@@ -123,7 +125,9 @@ bool cplus_parse_double(const cplus_string* text, double* out, cplus_string* pro
     char* copy = floating_text(text);
     if (!copy) return fail(text, " is not a number", problem);
     errno = 0;
+    locale_t saved = uselocale(cplus_c_locale());  // a '.' before the decimals, whatever setlocale chose
     double value = strtod(copy, NULL);
+    uselocale(saved);
     const bool too_large = errno == ERANGE && isinf(value);
     free(copy);
     if (too_large) return fail(text, " does not fit in a double", problem);
@@ -135,7 +139,9 @@ bool cplus_parse_float(const cplus_string* text, float* out, cplus_string* probl
     char* copy = floating_text(text);
     if (!copy) return fail(text, " is not a number", problem);
     errno = 0;
+    locale_t saved = uselocale(cplus_c_locale());
     float value = strtof(copy, NULL);
+    uselocale(saved);
     const bool too_large = errno == ERANGE && isinf(value);
     free(copy);
     if (too_large) return fail(text, " does not fit in a float", problem);

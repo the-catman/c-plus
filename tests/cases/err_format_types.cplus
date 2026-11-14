@@ -1,0 +1,92 @@
+// Options that do not suit the value they print, which the compiler checks.
+struct Point { int x = 0; };
+int main() {
+    double d = 1.5;
+    int n = 1;
+    int? o = 1;
+    double? od = 1.5;
+    char c = 'a';
+    bool b = true;
+    string s = "a";
+    vector<int> v = {1};
+    Point p = Point{};
+    println("{:x}", d);
+    println("{:d}", d);
+    println("{:x}", o);
+    println("{:x}", v);
+    println("{:x}", s);
+    println("{:c}", n);
+    println("{:s}", n);
+    println("{:s}", c);
+    println("{:?}", n);
+    println("{:?}", p);
+    println("{:p}", n);
+    println("{:.3}", n);
+    println("{:.3}", b);
+    println("{:.3?}", s);
+    println("{:+}", s);
+    println("{:+}", c);
+    println("{:+}", od);
+    println("{:#}", n);
+    println("{:#}", s);
+    println("{:#o}", n);
+    println("{:#.2f}", d);
+    println("{:08}", s);
+    println("{:<08}", n);
+    println("{:{}}", n, d);
+    println("{:.{}f}", d, c);
+    println("{:{}}", n, o);
+    println("{:{}}", n, s);
+    println("{:e}", n);
+    return 0;
+}
+// error: {:x} formats an integer, but this is 'double'
+// error: convert it first: `long(d)`
+// error: err_format_types.cplus:13:14
+// error: {:d} formats an integer, but this is 'double'
+// error: write {:.0f} for no decimals, or convert it first: `int(d)`
+// error: {:x} formats an integer, but this is 'int?'
+// error: give it a fallback where it is passed: `o ?? 0`
+// error: {:x} formats an integer, but this is 'vector<int>'
+// error: write a loop that prints each element with {:x}: options for the elements, as C++23's {::x} gives them, are planned
+// error: {:x} formats an integer, but this is 'string'
+// error: write {} to print it as it is
+// error: {:c} prints a char, but this is 'int'
+// error: convert it first: `char(n)`
+// error: {:s} formats a string or a bool, but this is 'int'
+// error: {:s} formats a string or a bool, but this is 'char'
+// error: write {} or {:c} for a char
+// error: {:?} prints a string or a char in quotes, but this is 'int'
+// error: {:?} prints a string or a char in quotes, but this is 'Point'
+// error: write {}, which prints the strings and chars inside it in quotes
+// error: {:p} formats a pointer, but this is 'int'
+// error: a precision, as in {:.3}, is for a float, a double or a string, but this is 'int'
+// error: remove the precision, as an integer prints all of its digits, or convert it first: `double(n)`
+// error: a precision, as in {:.3}, is for a float, a double or a string, but this is 'bool'
+// error: this compiler does not support a precision with {:?} yet
+// error: remove the precision, or cut the string first: `s.substr(0, n)`
+// error: the '+' in {:+} gives a number its sign, but this is 'string'
+// error: remove the '+'
+// error: the '+' in {:+} gives a number its sign, but this is 'char'
+// error: remove the '+', or print the code with an integer type: {:+d}
+// error: the '+' in {:+} gives a number its sign, but this is 'double?'
+// error: give it a fallback where it is passed: `od ?? 0.0`
+// error: the '#' in {:#} puts 0x or 0b before a number in hexadecimal or binary, but this one has neither
+// error: write {:#x} or {:#b}, or remove the '#'
+// error: the '#' in {:#} puts 0x or 0b before a number in hexadecimal or binary, but this is 'string'
+// error: C++ prints {:#o} as 017, a form of octal that C+ does not have
+// error: write 0o{:o}, which prints 0o17, as C+ writes octal
+// error: this compiler does not support '#' with a float or a double yet
+// error: the '0' in {:08} pads a number with zeros, but this is 'string'
+// error: write the 0 before an alignment to pad with zeros anyway, as in {:0>8}
+// error: {:<08} has an alignment, so its '0' would do nothing
+// error: remove the '0' to pad with spaces, or the '<' to pad with zeros after the sign
+// error: the width that {:{}} takes from a value must be an integer, but this is 'double'
+// error: err_format_types.cplus:36:25
+// error: convert it first: `int(d)`
+// error: the precision that {:.{}f} takes from a value must be an integer, but this is 'char'
+// error: convert it to its code first: `int(c)`
+// error: the width that {:{}} takes from a value must be an integer, but this is 'int?'
+// error: the width that {:{}} takes from a value must be an integer, but this is 'string'
+// error: pass the number of places, such as `10`
+// error: {:e} formats a float or a double, but this is 'int'

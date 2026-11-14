@@ -540,11 +540,22 @@ inline std::string cNumberReader(const std::string& name) {
     return "";
 }
 
-// The options of one placeholder, `{:.2f}`: a precision, and f, e or g. Both are for
-// floating-point values only.
+// The options of one placeholder, as C++'s std::format has them: `{:>8}`, `{:08.3f}`, `{1:#x}`, `{:{}}`. Sema has checked
+// that they suit the value, and set `align` when there is a width.
 struct FormatSpec {
-    char type = 0;       // 'f', 'e', 'g', or 0 for none
-    int precision = -1;  // -1 for none
+    int arg = 0;            // the value it prints, counted from 0 after the format string
+    uint32_t fill = ' ';    // a code point
+    char align = 0;         // '<', '>' or '^'
+    char sign = 0;          // '+', '-' or ' ', or 0 for none
+    bool alt = false;       // '#': 0x or 0b before the digits
+    bool zero = false;      // '0': zeros between the sign and the digits, up to the width
+    int64_t width = -1;     // -1 for none
+    int widthArg = -1;      // `{:{}}`: the value that gives the width
+    int64_t precision = -1; // -1 for none
+    int precisionArg = -1;  // `{:.{}f}`: the value that gives the precision
+    char type = 0;          // 'd', 'x', 'X', 'o', 'b', 'B', 'c', 'e', 'E', 'f', 'F', 'g', 'G', 's', 'p' or '?', or 0 for none
+    bool hasWidth() const { return width >= 0 || widthArg >= 0; }
+    bool hasPrecision() const { return precision >= 0 || precisionArg >= 0; }
 };
 
 // `f(args)`, a built-in like println, or `Point(1, 2)`, which builds a struct.

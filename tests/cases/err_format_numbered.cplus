@@ -1,6 +1,22 @@
+// Numbered placeholders name the values from {0}, and every value is used.
 int main() {
-    println("{0}", 1);
+    int x = 1;
+    println("{2}", x, x);
+    println("{0}");
+    println("{1}", x, x);
+    println("{0} {2}", x, x, x);
+    println("{:{}}", x);
+    println("%5d|%-8s|%05.2f|%+x|%#x|%.3s %%", x, "a", 2.5, x, x, "abcd");
     return 0;
 }
-// error: this compiler does not support numbered placeholders like {0} yet
-// error: write {} for each value, in order
+// error: the format string uses {2}, but the values given are numbered from {0} to {1}
+// error: write {0} for the first value after the format string, {1} for the next, and so on
+// error: err_format_numbered.cplus:4:14
+// error: the format string uses {0}, but no value was given
+// error: pass the value after the format string: `println("{0}", x)`
+// error: the format string does not use this value, {0}
+// error: print it with {0} in the format string, or remove it
+// error: err_format_numbered.cplus:6:20
+// error: the format string does not use this value, {1}
+// error: the format string has 2 {} placeholders but 1 value was given
+// error: C+ marks each value with `{}`, as C++'s `std::format` does, where C writes `%d`: write "{:5}|{:<8}|{:05.2f}|{:x}|{:#x}|{:.3} %"

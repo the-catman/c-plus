@@ -423,7 +423,7 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
 - Operator overloading uses C++ syntax, `Point operator+(Point other) const`, and arrives
   after function overloading. `&&`, `||` and the comma operator cannot be overloaded.
 - Printing follows C++23: `println("x = {}", x)`. The format string must be a literal and
-  the compiler checks that placeholders match arguments.
+  the compiler checks that placeholders match arguments, and that their options suit them (§2.37).
 - Source files use `.cplus`.
 - LLVM is pinned to version 18.
 
@@ -483,8 +483,8 @@ Decided 2026-11-05.
   §2.11. A cast never makes or reads a string, except `string(p)` from a `char*` and
   `string(a)` from an `array<char, N>`.
 - `{}` prints the shortest digits that read back exactly, as C++'s `std::format` does,
-  except that NaN always prints as `nan`, so output does not change with optimization.
-  `{:.2f}`, `{:e}`, `{:g}` and `{:.3}` follow `std::format`. `to_string(x)` matches `{}`,
+  except that NaN prints as if its sign bit were clear, as `nan`, so output does not change with optimization.
+  `{:.2f}`, `{:e}`, `{:g}`, `{:.3}` and the other options follow `std::format` (§2.37). `to_string(x)` matches `{}`,
   as in C++26.
 - The math functions of `<cmath>`, plus `abs`, `min` and `max`, are built in with their
   C++ names and overload rules. A function of the program with the same name takes their
@@ -786,6 +786,34 @@ Decided 2026-11-14 by the owner: a C function pointer is what it is in C and C++
 - The variables outside functions are freed after the `atexit` callbacks run, by one the runtime registers first.
 - A signal handler can interrupt an allocation or a `println`, so it should only set a number outside functions. Handing signals
   to the event loop, as Go's `signal.Notify` does, waits for the servers phase.
+
+### 2.37 Format options — DECIDED
+Decided 2026-11-14: the options of C++20's `std::format`, `[[fill]align][sign][#][0][width][.precision][type]`, with C++'s
+meanings, checked against each value's type while compiling, since the format string is always a literal.
+- Integers take `d`, `x`, `X`, `o`, `b` and `B`; floats `e`, `E`, `f`, `F`, `g` and `G`; a char `c`, `?` and the integer types,
+  which print its code; a bool `s` and the integer types, which print 1 or 0; a string `s` and `?`; a pointer `p`, and `0`,
+  which pads after the `0x`, as C++26 does. Sign, `#` and `0` are for numbers only, and a precision for floats and strings.
+  `{:c}` takes only a char: a number never becomes a char by itself, and `char(n)` converts one.
+- A negative number in hexadecimal, octal or binary prints its sign and its magnitude, as in C++: `-ff`. Its bits come from
+  converting it first, `uint32_t(n)`. `{:#o}` is an error, as C++ prints `017`, which C+ does not read as octal: write `0o{:o}`.
+- Every value that prints takes fill, alignment and width, which pad its whole text: structs, vectors, enums and optionals
+  too. Numbers and pointers go right by default, and the rest left, as in C++.
+- A width counts code points: each UTF-8 character as one, and each byte that is not part of one as one. C++ counts wide
+  characters as two and combining ones as none, which needs Unicode tables in every program and changes with Unicode
+  versions; this is a known difference. A string's precision counts the same way. The fill is one code point.
+- `{:{}}` and `{:.{}f}` take the width and the precision from the values after the one printed, which must be integers. A
+  negative one stops the program, where C++ throws. One written in the format string is at most 65535.
+- Numbered placeholders, `{0}`, as in C++: not mixed with `{}`. Unlike C++, a value that no placeholder uses is an error, as
+  it is with `{}`. Each value is worked out once, left to right, before anything prints.
+- `{:?}` for strings and chars, as C++23 has it, with C+'s escapes, `\xHH` where C++ writes `\x{HH}`. A byte that is not part
+  of a UTF-8 character prints so wherever a string is quoted, so the text is always UTF-8.
+- NaN prints as if its sign bit were clear, `+nan` with `{:+}` and never `-nan`; `E`, `F` and `G` print `NAN` and `INF`. Zeros
+  do not pad NaN and the infinities, as in C++, and spaces do.
+- `L` is an error, as C+ has no locales. Numbers are written and read with a `.` even when a C library has called
+  `setlocale`, as C++'s `std::format` does without `L`. `0` next to an alignment is an error, where C++ ignores the `0`.
+- `{:a}`, `#` with a float, a precision with `{:?}`, and the options of C++23 for the elements of a range, `{::x}` and `{:n}`,
+  are not supported yet. `to_string` takes no options, as in C++26.
+
 ## 3. Compiler architecture
 
 ```
@@ -857,15 +885,15 @@ what holds real programs back most:
 6. Function overloading, more than one constructor and default arguments, then operator overloading. Overloading also
    ends the pairs that stand in for it, such as `http::fetch` and `http::fetchWith`, before more of them are made.
 7. The rest of what everyday programs need: writing files and the rest of `fs` (§2.15), `split`, `trim`, `join` and
-   `replace` on strings, `insert` and `erase` on vectors, width, alignment and hex in `format`, unsigned integers
-   (built 2026-11-12, see §2.7), variables outside functions, and `int main(vector<string> args)`.
+   `replace` on strings, `insert` and `erase` on vectors, width, alignment and hex in `format` (built 2026-11-14, §2.37),
+   unsigned integers (built 2026-11-12, see §2.7), variables outside functions, and `int main(vector<string> args)`.
 
    Variables outside functions (2026-11-11): each is worked out before `main`, in the order written and each module
    after those it imports. One with a value known only while the program runs has a state, so that one used sooner
    is worked out then, and one that leads back to itself stops the program; C++'s order of initialization across
    files is a bug this cannot have. Their values cannot fail or `await`, and `spawn` before `main` stops the
    program, so working them out needs no locks. They are released in reverse order after the threads and the event
-   loop end. A `const` of a constant's type whose value cannot be worked out while compiling is one of these too,
+   loop end, and after the `atexit` callbacks run (§2.36). A `const` of a constant's type whose value cannot be worked out while compiling is one of these too,
    as it would be in C++. They are never moved from. `thread_local` and `static` in a function wait.
 
 Each is designed when it is reached, as before. Exit criterion: two or three programs of a few hundred lines each, one of

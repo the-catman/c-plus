@@ -1,0 +1,13 @@
+// Numbers print and read with a '.' before their decimals, as in C++'s std::format, even after a C library has chosen a
+// locale that writes a ',', as setlocale does. Where no such locale is installed, the output is the same.
+import <locale.h>;
+import json;
+int main() throws {
+    for (string name : vector<string>{"de_DE.UTF-8", "de_DE.utf8", "en_DK.utf8", "fr_FR.UTF-8", "ru_RU.UTF-8"})
+        if (setlocale(LC_ALL, name) != null) break;
+    println("{} {:.2f} {:e} {} {:g}", 1234.5, 3.14159, 0.5, 0.1, 2.5);     // expect: 1234.5 3.14 5.000000e-01 0.1 2.5
+    println("{} {}", try stod("2.5") * 2, try stof("0.25"));                // expect: 5 0.25
+    println("{}", format("{}", 1.0 / 3));                                   // expect: 0.3333333333333333
+    println("{}", json::stringify(1.5));                                    // expect: 1.5
+    return 0;
+}

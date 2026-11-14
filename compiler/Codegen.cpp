@@ -8,6 +8,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Intrinsics.h>
+#include <cstring>
 #include <optional>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -59,6 +60,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtGlobalsReleaseAtExit, rtMainReturned;
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars, rtStrFromBytes;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
+    llvm::FunctionCallee rtPrintIntSpec, rtPrintPadded, rtPrintStrPrefix, rtTrapFormatCount;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
     llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtArgs, rtGlobalsStart, rtGlobalsDone, rtDynamicCast, rtRetainObject, rtObjectStart;
     llvm::FunctionCallee rtRetainClass, rtReleaseClass, rtFreeClass, rtDestructorHold, rtReferences;
@@ -395,7 +397,11 @@ struct Codegen::Impl {
         rtStrEndsWith = decl("cplus_str_ends_with", i32, {ptrTy, i64, ptrTy, i64});
         rtPrintF32 = decl("cplus_print_f32", voidTy, {ptrTy, b.getFloatTy()});
         rtPrintF64 = decl("cplus_print_f64", voidTy, {ptrTy, b.getDoubleTy()});
-        rtPrintFloatSpec = decl("cplus_print_float_spec", voidTy, {ptrTy, b.getDoubleTy(), i32, i32});
+        rtPrintFloatSpec = decl("cplus_print_float_spec", voidTy, {ptrTy, b.getDoubleTy(), i32, i32, i64, i32, i64});
+        rtPrintIntSpec = decl("cplus_print_int_spec", voidTy, {ptrTy, i64, i32, i32, i32, i32, i64});
+        rtPrintPadded = decl("cplus_print_padded", voidTy, {ptrTy, ptrTy, i64, i32, i32});
+        rtPrintStrPrefix = decl("cplus_print_str_prefix", voidTy, {ptrTy, ptrTy, i64, i64});
+        rtTrapFormatCount = decl("cplus_trap_format_count", voidTy, {i64, ptrTy, ptrTy, ptrTy, i32, i32});
         rtTrapNarrow = decl("cplus_trap_narrow", voidTy, {i64, i32, ptrTy, ptrTy, ptrTy, ptrTy, i32, i32});
         rtTrapFloatCast = decl("cplus_trap_float_cast", voidTy, {b.getDoubleTy(), ptrTy, ptrTy, i32, i32});
         rtCString = decl("cplus_c_string", ptrTy, {ptrTy, i64, i32, ptrTy, ptrTy, i32, i32});
@@ -3071,8 +3077,51 @@ struct Codegen::Impl {
         }
     }
 
+    // A width or a precision that a placeholder takes from a value, `{:{}}`, as a long. A negative one stops the program, and
+    // a uint64_t above the largest long is as good as the largest.
+    llvm::Value* formatCount(llvm::Value* v, const Type* t, const char* what, const std::string& callee, Loc loc) {
+        if (t->is(K::UInt64)) return b.CreateSelect(b.CreateICmpSLT(v, b.getInt64(0)), b.getInt64(INT64_MAX), v);
+        if (t->isUnsigned()) return b.CreateZExt(v, b.getInt64Ty());
+        llvm::Value* n = b.CreateSExtOrTrunc(v, b.getInt64Ty());
+        auto* trapBB = llvm::BasicBlock::Create(ctx, "format.negative", fn);
+        auto* okBB = llvm::BasicBlock::Create(ctx, "format.count", fn);
+        b.CreateCondBr(b.CreateICmpSLT(n, b.getInt64(0)), trapBB, okBB, llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
+        b.SetInsertPoint(trapBB);
+        b.CreateCall(rtTrapFormatCount, {n, cstring(callee), cstring(what), fileName, b.getInt32(loc.line), b.getInt32(loc.col)});
+        b.CreateUnreachable();
+        b.SetInsertPoint(okBB);
+        return n;
+    }
+
+    // One value with the options of its placeholder, but for the fill and alignment around it. `precision` is an i64 or null,
+    // and so is `zeroWidth`, the width that the '0' option pads a number to.
+    void printWithSpec(llvm::Value* out, llvm::Value* v, const Type* t, const FormatSpec& s, llvm::Value* precision, llvm::Value* zeroWidth) {
+        const bool intType = s.type && std::strchr("dxXobB", s.type);
+        llvm::Value* zeros = zeroWidth ? zeroWidth : b.getInt64(0);
+        auto asInteger = [&](llvm::Value* bits, bool isUnsigned, char type, bool alt) {
+            b.CreateCall(rtPrintIntSpec, {out, bits, b.getInt32(isUnsigned), b.getInt32(type), b.getInt32(s.sign), b.getInt32(alt), zeros});
+        };
+        if (t->isInteger() && (intType || s.sign || s.alt || zeroWidth))
+            asInteger(t->isSigned() ? b.CreateSExtOrTrunc(v, b.getInt64Ty()) : b.CreateZExtOrTrunc(v, b.getInt64Ty()), t->isUnsigned(), s.type, s.alt);
+        else if ((t->is(K::Char) || t->is(K::Bool)) && intType)  // the code of a char, and 1 or 0 for a bool
+            asInteger(b.CreateZExt(v, b.getInt64Ty()), true, s.type, s.alt);
+        else if (t->isFloating() && (s.type || precision || s.sign || zeroWidth))
+            b.CreateCall(rtPrintFloatSpec, {out, convert(v, t, Type::doubleTy()), b.getInt32(t->is(K::Float)), b.getInt32(s.type),
+                                            precision ? precision : b.getInt64(-1), b.getInt32(s.sign), zeros});
+        else if (t->is(K::Char) && s.type == '?')
+            b.CreateCall(rtPrintCharQuoted, {out, b.CreateZExt(v, b.getInt32Ty())});
+        else if (t->is(K::String) && s.type == '?')
+            b.CreateCall(rtPrintQuoted, {out, strData(v), strLength(v)});
+        else if (t->is(K::String) && precision)
+            b.CreateCall(rtPrintStrPrefix, {out, strData(v), strLength(v), precision});
+        else if ((t->isPointer() || t->isCFunction()) && zeroWidth)  // `{:018}`: 0x, then zeros
+            asInteger(b.CreatePtrToInt(v, b.getInt64Ty()), true, 'x', true);
+        else
+            printValue(out, v, t);
+    }
+
     // print, println, format and to_string. The values are evaluated left to right
-    // before anything is written.
+    // before anything is written, and so are the widths and precisions they give.
     llvm::Value* genFormatted(const CallExpr& call) {
         size_t first = call.builtin == Builtin::ToString ? 0 : 1;  // the others start with the format string
         // A value handled through its address is printed in place, unless a later value's
@@ -3088,6 +3137,18 @@ struct Codegen::Impl {
             const Expr& arg = *call.args[i];
             values.push_back(inMemory(arg.type) && isPlace(arg) && !codeRunsLater[i] ? addressOf(arg) : gen(arg));
         }
+        const size_t fields = call.formatPieces.size() - 1;
+        std::vector<llvm::Value*> widths(fields), precisions(fields);
+        for (size_t i = 0; i < call.formatSpecs.size() && i < fields; ++i) {
+            const FormatSpec& s = call.formatSpecs[i];
+            auto count = [&](int arg, int64_t written, const char* what) -> llvm::Value* {
+                if (arg < 0) return written >= 0 ? b.getInt64(written) : nullptr;
+                const Expr& e = *call.args[arg + first];
+                return formatCount(values[arg], e.type, what, call.callee, e.loc);
+            };
+            widths[i] = count(s.widthArg, s.width, "width");
+            precisions[i] = count(s.precisionArg, s.precision, "precision");
+        }
         bool toString = call.builtin == Builtin::Format || call.builtin == Builtin::ToString;
         llvm::Value* out = llvm::ConstantPointerNull::get(b.getPtrTy());
         if (toString) {
@@ -3098,14 +3159,19 @@ struct Codegen::Impl {
         if (usesThreads && !toString) b.CreateCall(rtPrintLock, {});
         for (size_t i = 0; i < call.formatPieces.size(); ++i) {
             printText(out, call.formatPieces[i]);
-            if (i >= values.size()) continue;
-            const Type* t = call.args[i + first]->type;
-            FormatSpec spec = i < call.formatSpecs.size() ? call.formatSpecs[i] : FormatSpec{};
-            if (spec.type || spec.precision >= 0)  // `{:.2f}`, for a float or a double
-                b.CreateCall(rtPrintFloatSpec, {out, convert(values[i], t, Type::doubleTy()), b.getInt32(spec.type),
-                                                b.getInt32(spec.precision)});
-            else
-                printValue(out, values[i], t);
+            if (i == fields) break;
+            const FormatSpec spec = i < call.formatSpecs.size() ? call.formatSpecs[i] : FormatSpec{};
+            const Type* t = call.args[spec.arg + first]->type;
+            llvm::Value* v = values[spec.arg];
+            if (!widths[i] || spec.zero) {
+                printWithSpec(out, v, t, spec, precisions[i], spec.zero ? widths[i] : nullptr);
+                continue;
+            }
+            // `{:>8}`: the text of the value, then the fill around it.
+            llvm::Value* text = entryAlloca(stringTy, "padded");
+            b.CreateStore(llvm::Constant::getNullValue(stringTy), text);
+            printWithSpec(text, v, t, spec, precisions[i], nullptr);
+            b.CreateCall(rtPrintPadded, {out, text, widths[i], b.getInt32(spec.fill), b.getInt32(spec.align)});
         }
         if (call.builtin == Builtin::Println) b.CreateCall(rtPrintNewline, {});
         if (usesThreads && !toString) b.CreateCall(rtPrintUnlock, {});

@@ -1,0 +1,11 @@
+// A width that a placeholder takes from a value cannot be negative, as in C++, where it throws.
+int main() {
+    int width = 4;
+    println("[{:{}}]", 1, width);
+    width -= 10;
+    println("[{:{}}]", 1, width);
+    return 0;
+}
+// expect: [   1]
+// trap: println() was given -6 as a width, which is negative
+// trap: trap_format_width.cplus:6:27

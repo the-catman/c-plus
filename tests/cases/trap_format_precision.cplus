@@ -1,0 +1,11 @@
+// Nor can a precision, and the program stops before anything of the text is written.
+int main() {
+    long digits = -1;
+    print("before ");
+    string s = format("{:.{}f}", 2.5, digits);
+    println("{}", s);
+    return 0;
+}
+// expect: before 
+// trap: format() was given -1 as a precision, which is negative
+// trap: trap_format_precision.cplus:5:39

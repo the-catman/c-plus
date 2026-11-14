@@ -257,6 +257,14 @@ void reflectForms() {
 void numberForms() {
     println("{:.2f} {:e} {:g} {:.3}", 1.5, 1.5, 1.5, 1.5);
     // expect: 1.50 1.500000e+00 1.5 1.5
+    println("[{:>8}] [{:<8}] [{:^8}] [{:*^8}]", 1, 2, 3, "x");
+    // expect: [       1] [2       ] [   3    ] [***x****]
+    println("{:08.3f} {:+} {:x} {:#x} {:b} {:?} {:x}", 3.14159, 5, 255, 255, 5, "a\tb", -255);
+    // expect: 0003.142 +5 ff 0xff 101 "a\tb" -ff
+    println("{1} {0}", "a", "b");
+    // expect: b a
+    println("[{:{}}]", 7, 3);
+    // expect: [  7]
     print("no line, ");
     print("{}\n", "one line");
     // expect: no line, one line

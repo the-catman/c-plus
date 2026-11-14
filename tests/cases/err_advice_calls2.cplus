@@ -36,11 +36,11 @@ void printing() {
     // error: give it a fallback where it is passed: `d ?? 0.0`
     int x = 1;
     println("{ x: {} }", x);
-    // error: a placeholder is `{}`, with the value after the format string: `println("{}", name)`. A literal brace is written {{
+    // error: write {{ for a literal '{', and {} where a value goes: `println("{{ x: {} }}", x)`
     println("{name}", x);
-    // error: a placeholder is `{}`, with the value after the format string
-    println("{:d}", x);
-    // error: write {} to print it as it is, or give the precision
+    // error: write {} and pass the value after the format string: `println("{}", name)`
+    println("{:d}", 1.5);
+    // error: write {:.0f} for no decimals, or convert it first: `int(x)`
 }
 void assigning() {
     int x = 1;
