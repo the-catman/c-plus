@@ -1,10 +1,4 @@
-// What overloading does not reach yet: a template beside a function, and a const pair of methods.
-struct Point {
-    int x = 0;
-    int get(int n) { return x; }
-    int get(int n) const { return x; }
-};
-
+// What overloading does not reach yet: a template beside a function.
 template <typename T>
 T twice(T x) { return x; }
 int twice(int x) { return x; }
@@ -12,5 +6,4 @@ int twice(int x) { return x; }
 int main() {
     return 0;
 }
-// error: this compiler does not support a `const` and a non-const method that take the same parameters yet
 // error: this compiler does not support a template function and another function of the same name yet

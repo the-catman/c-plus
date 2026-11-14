@@ -1,0 +1,62 @@
+// `T& operator[]` returns the place, as in C++, and a `const` one beside it is what a struct that cannot change uses: of a
+// `const` and a non-const pair of methods, a call chooses as C++ does.
+template<typename T> struct Grid {
+    vector<T> cells;
+    long width = 2;
+    T& operator[](long i) { return cells[i]; }
+    T operator[](long i) const { return cells[i]; }
+    T& operator[](long x, long y) { return cells[y * width + x]; }
+    T& at(long i) { return cells[i]; }
+    T at(long i) const { return cells[i]; }
+    T total() const {  // `this` only reads here, so the `const` ones are chosen
+        T sum = T();
+        for (long i = 0; i < cells.size(); i += 1) sum = sum + this[i] + at(i);
+        return sum;
+    }
+};
+struct Counted {
+    vector<int> items = {0, 0};
+    int reads = 0;
+    int& get(long i) { return items[i]; }
+    int get(long i) const { return items[i] + 100; }
+};
+void bump(int& n) { n += 1; }
+int show(const Grid<int>& g) { return g[1] + g.at(1); }
+Grid<int> make() { return Grid<int>{{4, 5}}; }
+class Names {
+public:
+    vector<string> list = {"ann", "bob"};
+    Names() {}
+    string& operator[](long i) { return list[i]; }
+};
+int main() {
+    Grid<int> g = Grid<int>{{0, 0, 0, 0}};
+    long i = 1;
+    int x = 7;
+    g[i] = x;
+    g[i] += 1;
+    bump(g[i]);
+    g[0, 1] = 3;
+    g.at(3) *= 2;
+    println("{} {} {}", g.cells, g[1], show(g));     // expect: [0, 9, 3, 0] 9 18
+    auto& e = g[0];
+    e = 5;
+    println("{} {} {}", g.cells, g.total(), make()[1]);  // expect: [5, 9, 3, 0] 34 5
+    const Grid<int> fixed = g;
+    println("{} {}", fixed[0], fixed.at(2));         // expect: 5 3
+
+    Counted c = Counted();
+    c.get(0) = 1;
+    const Counted& seen = c;
+    println("{} {}", c.get(0), seen.get(0));         // expect: 1 101
+
+    Grid<string> words = Grid<string>{{"a", "b"}};
+    words[0] += "!";
+    println("{}", words.cells);                     // expect: ["a!", "b"]
+    Names names = Names();
+    names[1] += "by";
+    const Names same = names;  // a class: its object can change through any reference to it
+    same[0] = "anna";
+    println("{}", names.list);                      // expect: ["anna", "bobby"]
+    return 0;
+}

@@ -689,7 +689,7 @@ program and never dangles, but when its container is resized, replaced or was sh
   each use, so growing the container is fine while it is not used again, as in C++; a write through it also needs no copy to
   share the container, and a read does not. A reference bound to a class's `C& f()` names the object, as `C x = f()` does, and
   assigning to it, or giving it to a `C&` parameter, is an error, since it does not refer to where the object is kept
-  (decided 2026-11-14). Not yet: `T& operator[]` (§2.38).
+  (decided 2026-11-14). `T& operator[]` came with §2.38's slice 5.
 - A function that is `async`, or run with `spawn`, cannot take a reference, and no reference is alive at an `await`.
 - Elements of containers, as built 2026-11-11 in place of the pins first planned, which needed every copy in Codegen to be able
   to give a new buffer, as a copy of a pinned buffer would have to:
@@ -737,8 +737,9 @@ predict:
   A C function and `main` cannot be overloaded. The LLVM name of an overloaded function carries what it takes:
   `cplus.f(int,long)`.
 - Methods overload the same way (built the same day). A class that overrides one method of an inherited name keeps the
-  others, which C++ hides; it cannot add to them. A `const` and a non-const method with the same parameters wait for `T&`
-  returns, which are what that pair is for.
+  others, which C++ hides; it cannot add to them. A `const` and a non-const method with the same parameters, which `T&`
+  returns are for, were built 2026-11-15: a call chooses as C++ does, the `const` one for a struct that cannot change and
+  `this` in a const method. A class object can change through any reference, so on one the non-const one is chosen.
 - Constructors overload the same way (built the same day). One can hand its work to another, `User(string n) : User(n, 0)
   {}`, with nothing else in its list; a cycle of them is an error. A constructor that takes its own type is an error, as C+
   never copies a class object and copies a struct field by field: its help points to a `clone()` method.
@@ -873,7 +874,8 @@ algorithm uses.
   members only, as in C++; `[]` is `const`, can take more than one index as C++23's does, and gives a copy, so `g[i] = x`
   is an error; `()` may change the object and take default values, as in C++, and is called through a variable or a
   field, as `make()(1)` waits); 5, with `T&`
-  returns, `T& operator[]` and a `const` and a non-const pair; 6, with iterators, `++`, `--`, unary `*` and `->`. Explicit
+  returns, `T& operator[]` and a `const` and a non-const pair (built 2026-11-15; a non-const `operator[]` must return `T&`,
+  and one used on a struct that cannot change is an error without a `const` one beside it); 6, with iterators, `++`, `--`, unary `*` and `->`. Explicit
   conversion operators, operators on enums, generic free operators, `a.operator+(b)` and `constexpr` operators wait too.
 
 ## 3. Compiler architecture

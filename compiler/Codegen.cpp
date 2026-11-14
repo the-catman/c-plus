@@ -2236,7 +2236,7 @@ struct Codegen::Impl {
             case Expr::Kind::Ternary: return static_cast<const TernaryExpr&>(e).place;  // `c ? a : b` of two places
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
-                if (ix.lowered) return false;  // `g[i]`, a call of `operator[]`
+                if (ix.lowered) return isPlace(*ix.lowered);  // `g[i]`, a call of `operator[]`, which is a place if it returns `T&`
                 return ix.base->type->isPointer() || isPlace(*ix.base);  // `p[i]` is memory, wherever p came from
             }
             case Expr::Kind::Unary: return isDeref(e);
@@ -2308,6 +2308,10 @@ struct Codegen::Impl {
                 return;
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
+                if (ix.lowered) {  // `g[i]` of a `T& operator[]`, which runs now
+                    freezePlace(*ix.lowered, made);
+                    return;
+                }
                 if (ix.base->type->isPointer() || !isPlace(*ix.base)) freeze(*ix.base, gen(*ix.base));
                 else freezePlace(*ix.base, made);
                 if (ix.endMethod) {  // `v.back()`: the last one now, which a reference bound to it goes on meaning
@@ -2549,6 +2553,7 @@ struct Codegen::Impl {
             }
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
+                if (ix.lowered) return addressOf(*ix.lowered, hold, write);  // `g[i]` of a `T& operator[]`
                 const Type* vt = ix.base->type;
                 if (ix.mapSlot) return mapValueAddress(ix, hold, write);
                 if (vt->is(K::String)) return charAddress(ix, hold, write);
@@ -4621,7 +4626,9 @@ struct Codegen::Impl {
                 auto& m = static_cast<const MemberExpr&>(*x);
                 if (m.base->type && m.base->type->isClass()) return nullptr;
                 x = m.base.get();
-            } else if (x->kind == Expr::Kind::Index && !static_cast<const IndexExpr&>(*x).lowered) {
+            } else if (x->kind == Expr::Kind::Index && static_cast<const IndexExpr&>(*x).lowered) {
+                x = static_cast<const IndexExpr&>(*x).lowered.get();  // `g[i]` of a `T& operator[]`
+            } else if (x->kind == Expr::Kind::Index) {
                 x = static_cast<const IndexExpr&>(*x).base.get();
             } else if (x->kind == Expr::Kind::Name) {
                 const VarDecl* v = static_cast<const NameExpr&>(*x).decl;

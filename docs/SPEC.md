@@ -1661,7 +1661,6 @@ void doubleAll(vector<int>& v) {
   For the same reason neither can return one, and `spawn` cannot run a function that does.
   A reference cannot be a field, a constant, an element of a container, or a template
   argument. There is no `T&&` or `auto&&`.
-- **Planned.** A `T& operator[]`.
 
 ---
 
@@ -1919,8 +1918,12 @@ grow(5);                         // 5 is not a variable, so it stays
   such as `Size u;`, uses the one that takes nothing. A constructor that takes its own type,
   a copy constructor, is an error, since C+ copies a struct field by field and never copies
   a class object.
-- A template beside a function of its name, and a `const` and a non-const method that take
-  the same parameters, are not supported yet.
+- A `const` and a non-const method can take the same parameters, as `T& at(long i)` and
+  `T at(long i) const` do: a call chooses the `const` one for a struct that cannot change,
+  such as a `const` variable, a `const T&` parameter or `this` in a `const` method, and the
+  other for the rest, as C++ does. A class object can change through any reference to it,
+  so a call on one chooses the non-const one, except on `this` in a `const` method.
+- A template beside a function of its name is not supported yet.
 
 ### Default arguments
 
@@ -2634,13 +2637,16 @@ a += b;               // a = a + b
 - **`a += b`** runs `a = a + b`, for every operator that has a compound assignment, with the place of `a` found once,
   after `b`, as for numbers. C++ needs `operator+=` written as well.
 - **In a class**, an operator is a method: it is inherited and can be `virtual`.
-- **`operator[]`** gives a value, as `int operator[](long i) const { ... }` does, and is `const`. It can take more than one
-  index, as in C++23, `g[x, y]`, and be overloaded on what it takes. What it gives is a copy, so `g[i] = x` is an error,
-  whose help is a method that changes it; one that gives a `T&` is not supported yet.
+- **`operator[]`** gives a value, as `int operator[](long i) const { ... }` does, and is then `const`. It can take more
+  than one index, as in C++23, `g[x, y]`, and be overloaded on what it takes. What it gives is a copy, so `g[i] = x` is
+  an error, whose help is a method that changes it.
+- **`T& operator[](long i)`** returns the place, as in C++: `g[i] = x`, `g[i] += 1` and `bump(g[i])` change it, and
+  it is not `const`. Beside it, `T operator[](long i) const` is what a `const` one uses, chosen as for any `const`
+  and non-const pair of methods; with no such one, using `g[i]` on a struct that cannot change is an error.
 - **`operator()`** makes a value callable, `add(5)`, as a function is, and can change the object, as a method can, and
   have default values. One that returns a `T&` gives a place, as a method that does gives one. It is called through a variable or a field; `make()(1)` is not supported yet.
 - The sides are worked out left to right, as for the language's own operators, even when `100 == m` runs `m == 100`.
-- **Not supported yet:** `operator<=>`, writing a compound assignment such as `operator+=`, a `T& operator[]`, calling the
+- **Not supported yet:** `operator<=>`, writing a compound assignment such as `operator+=`, calling the
   `operator()` of what is not a variable or a field, `operator++`, `operator--`, a unary `*`, `operator->`, explicit
   conversion operators, operators on enums, and generic operators outside a type.
 - **Never:** `operator=`, as a struct is copied field by field and a class object is shared; `operator!=`; `operator&&`,
@@ -3944,7 +3950,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Format options `{:a}`, `#` with a float, a precision with `{:?}`, and for the elements of a vector, as in `{::x}` | planned |
 | Math constants | planned |
 | Overloading functions, methods and constructors; constructors that hand their work to another | implemented |
-| A template beside a function of its name, a `const` and a non-const method that take the same parameters | planned |
+| A `const` and a non-const method that take the same parameters | implemented |
+| A template beside a function of its name | planned |
 | Strings: `append`, `insert`, `erase`, `replace`, `rfind`, `compare`, `split`, `trim`, `join`, `replace_all` | implemented |
 | Reading numbers from strings: `stoi`, `stol`, `stod`, `stof` | implemented |
 | `stoul` and `stoull` | planned |
@@ -3957,8 +3964,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |
 | `final`, covariant return types, private and protected base classes | planned |
-| Operator overloading: `+ - * / % & \| ^ << >>`, unary `-` `+` `~`, `==` of structs and classes, `<` `>` `<=` `>=`, `operator[]` and `operator()` that give a value, members and free operators, `a += b` from `+`, `same_object(a, b)` | implemented |
-| `operator<=>`, written compound assignments, a `T& operator[]`, calling the `operator()` of what is not a variable or a field, `operator++`, a unary `*`, `operator->`, conversion operators, operators on enums, generic operators outside a type | planned |
+| Operator overloading: `+ - * / % & \| ^ << >>`, unary `-` `+` `~`, `==` of structs and classes, `<` `>` `<=` `>=`, `operator[]` and `operator()` that give a value or a `T&`, members and free operators, `a += b` from `+`, `same_object(a, b)` | implemented |
+| `operator<=>`, written compound assignments, calling the `operator()` of what is not a variable or a field, `operator++`, a unary `*`, `operator->`, conversion operators, operators on enums, generic operators outside a type | planned |
 | Destructors for structs, static members | planned |
 | `weak<T>` references: `lock`, `expired`, `reset` | implemented |
 | Errors: `throws`, `throw`, `try f()`, `try { } catch (E e) { }`, `catch (...)`, `throw;`, `Error`, `int main() throws` | implemented |

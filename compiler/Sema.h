@@ -235,6 +235,8 @@ private:
     void noteRefReturn(FuncDecl& f);
     static const FuncDecl* objectCallee(const Expr& e);
     const Type* mapEntryLoop(ForEachStmt& st, const Type* mapType);
+    void chooseConstness(std::vector<FuncDecl*>& candidates, bool readOnly);
+    bool onlyReads(const Expr& recv);
     static std::string objectHelp(const FuncDecl& f);
     void checkRefReturn(Expr& e, Flow& flow, const Type* ret);
     std::string refReturnRoot(const Expr& e, int depth = 0);

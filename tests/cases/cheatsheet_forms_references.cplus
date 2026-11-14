@@ -49,3 +49,13 @@ int chosen() {
     (first ? a : b).set();
     return a.x;
 }
+struct Cells {
+    vector<int> items = {0};
+    int& operator[](long i) { return items[i]; }
+    int operator[](long i) const { return items[i]; }
+};
+int indexed() {
+    Cells c = Cells();
+    c[0] = 2;
+    return c[0];
+}

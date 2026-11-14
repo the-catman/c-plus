@@ -1082,7 +1082,7 @@ static const Type* typeAtPath(const VarDecl* v, const std::string& path) {
 // pointer points to.
 static bool isPlaceKind(const Expr& e) {
     return e.kind == Expr::Kind::Name || e.kind == Expr::Kind::Member || e.kind == Expr::Kind::This ||
-           (e.kind == Expr::Kind::Index && !indexCall(e)) || isDeref(e) || placeCall(e) || refCallee(e) ||
+           (e.kind == Expr::Kind::Index && (!indexCall(e) || refCallee(*indexCall(e)))) || isDeref(e) || placeCall(e) || refCallee(e) ||
            (e.kind == Expr::Kind::Ternary && static_cast<const TernaryExpr&>(e).place);
 }
 
@@ -1953,9 +1953,7 @@ void Sema::checkMembers(StructDecl& sd) {
                 }
             }
             if (constPair) {
-                diags_.error(m->nameLoc, "this compiler does not support a `const` and a non-const method that take the same parameters yet",
-                             "keep one of them: a method that only reads the object is `const`, and can be called on any of them", spec::Overloading);
-                diags_.note(clash->nameLoc, "the other one is here");
+                // `T& at(long i)` and `const T& at(long i) const`, which a call chooses between by what it is called on, as in C++
             } else if (clash) {
                 diags_.error(m->nameLoc, q(sd.name) + " already has a method named " + q(m->name),
                              clash->retType != m->retType ? "rename one of them, or give them different parameters: what a method returns does not choose it"
@@ -5524,6 +5522,7 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
         var = nullptr;
         return false;
     }
+    if (const Expr* call = indexCall(target); call && refCallee(*call)) return true;  // `g[i] = x` of a `T& operator[]`, the place it returned
     if (const Expr* call = indexCall(target)) {  // `g[i] = x`, where `operator[]` gives a value
         const std::string written = spelled(target, "g[i]");
         diags_.error(target.loc, "`" + written + "` gives a copy, as the `operator[]` it runs returns a value, so it cannot be " + action,
@@ -6697,8 +6696,9 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             return callOperator(nameLoc);  // a field that holds something with an `operator()`
         if (FuncDecl* m = found.empty() ? nullptr : found.back()->ownMethod(call.callee)) {
             if (fn_ && fn_->lambda) noteThisCapture(nameLoc);
-            const std::vector<FuncDecl*> named = methodsNamed(*found.back(), call.callee);
+            std::vector<FuncDecl*> named = methodsNamed(*found.back(), call.callee);
             const bool chosen = named.size() > 1;
+            chooseConstness(named, fn_ && fn_->isConst);  // on `this`, which a const method only reads
             if (chosen && !(m = chooseOverload(call.callee, call.callee, found.back(), named, exprsOf(call.args), flow, nameLoc))) return Type::error();
             call.method = m;
             call.path = std::move(found);
@@ -7209,13 +7209,7 @@ void Sema::checkOperatorDecl(FuncDecl& f) {
             fail(f.nameLoc, "`operator[]` takes the index, at least", "give it a parameter: `" + std::string(f.retType->name) + " operator[](long i) const`");
             return;
         }
-        if (op == "[]" && f.returnsRef) {
-            fail(f.nameLoc, "this compiler does not support an `operator[]` that returns a reference, `" + std::string(f.retType->name) + "&`, yet",
-                 "give the value with `" + std::string(f.retType->name) + " operator[](...) const`, and write a method for the place: `" +
-                     std::string(f.retType->name) + "& at(long i) { ... }`");
-            return;
-        }
-        if (op == "[]" && !f.isConst) {  // an `operator()` may change the object, as a call of a method may
+        if (op == "[]" && !f.isConst && !f.returnsRef && !f.returnsObject) {  // an `operator()` may change the object, as a call of a method may
             fail(f.nameLoc, "an `operator[]` that gives a value only reads, so it is `const`", "write `const` after its parameters: `operator[](...) const`");
             return;
         }
@@ -7579,6 +7573,7 @@ const Type* Sema::checkIndexOperator(IndexExpr& ix, const Type* t, Flow& flow) {
     std::vector<FuncDecl*> all = methodsNamed(*t->decl, "operator[]"), candidates, tied;
     for (FuncDecl* m : all)
         if (m->params.size() + 1 == operands.size()) candidates.push_back(m);
+    chooseConstness(candidates, onlyReads(*ix.base));
     FuncDecl* f = bestOperator(candidates, operands, tied);
     std::string written = asBase(spelled(*ix.base, "g")) + "[";
     for (size_t i = 1; i < operands.size(); ++i) written += (i > 1 ? ", " : "") + spelled(*operands[i], "i");
@@ -7593,6 +7588,14 @@ const Type* Sema::checkIndexOperator(IndexExpr& ix, const Type* t, Flow& flow) {
                          "write `int operator[](long i) const { ... }` in " + q(t) + ", or call one of its methods", spec::OperatorOverloading);
         return Type::error();
     }
+    if (!f->isConst && onlyReads(*ix.base)) {  // `T& operator[]`, which may change what it is used on
+        const std::string n = spelled(*ix.base, "");
+        diags_.error(ix.loc, "the `operator[]` of " + q(t) + " may change " + (n.empty() ? std::string("what it is used on") : q(n)) +
+                                 ", which is const, as it returns a reference, `" + std::string(f->retType->name) + "&`",
+                     "write one that only reads, for what is const: `" + std::string(f->retType->name) + " operator[](long i) const { ... }`, beside it",
+                     spec::OperatorOverloading);
+        return Type::error();
+    }
     BasePath path;
     useOperator(*f, operands, ix.loc, flow, path, written);
     std::vector<ExprPtr> args;
@@ -7605,6 +7608,26 @@ const Type* Sema::checkIndexOperator(IndexExpr& ix, const Type* t, Flow& flow) {
     call->type = f->retType;
     ix.lowered = std::move(call);
     return f->retType;
+}
+
+// Whether what a method or an operator is used on only reads it, so that the `const` one of a pair is chosen: a struct that
+// cannot change, or `this` in a const method. A class object can change through any reference to it, a const one too.
+bool Sema::onlyReads(const Expr& recv) {
+    if (!isPlaceKind(recv)) return false;
+    if (recv.type && recv.type->isClass()) return recv.kind == Expr::Kind::This && fn_ && fn_->isConst;
+    return isReadOnlyPlace(recv);
+}
+
+// Of a `const` and a non-const method that take the same parameters, the one C++ chooses: the `const` one for what only reads
+// what it is called on, and the other for the rest, a temporary too.
+void Sema::chooseConstness(std::vector<FuncDecl*>& candidates, bool readOnly) {
+    std::vector<FuncDecl*> kept;
+    for (FuncDecl* f : candidates) {
+        bool twin = false;
+        for (FuncDecl* g : candidates) twin = twin || (g != f && g->isConst != f->isConst && takesSameParams(*g, *f));
+        if (!twin || f->isConst == readOnly) kept.push_back(f);
+    }
+    candidates = std::move(kept);
 }
 
 // ---- Functions that return a reference -------------------------------------
@@ -7682,6 +7705,10 @@ std::string Sema::refReturnRoot(const Expr& e, int depth) {
             }
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(*x);
+                if (ix.lowered && refCallee(*ix.lowered)) {  // the place a `T& operator[]` returned
+                    x = ix.lowered.get();
+                    continue;
+                }
                 if (ix.lowered) return value;  // what an `operator[]` gave
                 if (ix.base->type && ix.base->type->isPointer()) return "";
                 x = ix.base.get();
@@ -8422,8 +8449,9 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     }
     BasePath found = findMember(*toStart.back(), call.name, call.loc);
     FuncDecl* m = found.empty() ? nullptr : found.back()->ownMethod(call.name);
-    const std::vector<FuncDecl*> named = m ? methodsNamed(*found.back(), call.name) : std::vector<FuncDecl*>{};
+    std::vector<FuncDecl*> named = m ? methodsNamed(*found.back(), call.name) : std::vector<FuncDecl*>{};
     const bool chosen = named.size() > 1;
+    chooseConstness(named, onlyReads(recv));
     if (chosen) {
         const std::string calledAs = (call.receiver ? asBase(spelled(*call.receiver, "x")) + "." : "") + call.name;
         m = chooseOverload(call.name, calledAs, found.back(), named, exprsOf(call.args), flow, call.loc);

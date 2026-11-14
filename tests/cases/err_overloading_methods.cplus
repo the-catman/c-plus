@@ -29,7 +29,6 @@ int main() {
 }
 // error: 'speak' must take the parameters of one of the methods of 'Animal' that it replaces
 // error: make it take what one of them takes: `speak(int times)` and `speak(string word)`. A class cannot add to the methods of a name it inherits
-// error: this compiler does not support a `const` and a non-const method that take the same parameters yet
 // error: 'Point' already has a method named 'area'
 // error: rename one of them, or give them different parameters: what a method returns does not choose it
 // error: `Point.take(const string& s)` and `Point.take(string s)` would fit every call as well as each other

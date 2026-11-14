@@ -32,6 +32,11 @@ struct Box {
     vector<int> items = {1};
     int& operator[](long i) { return items[i]; }
 };
+struct Fixed {
+    vector<int> items = {1};
+    int& operator[](long i) const { return items[i]; }
+};
+int peek(const Box& b) { return b[0]; }
 vector<int> g = {1, 2};
 int& first() { return g[0]; }
 class Account {
@@ -69,8 +74,9 @@ int main() {
 // error: 'value' must have the same parameters, return type, `const` and `throws` as the method it replaces
 // error: the method in 'Base' is `int value()`
 // error: the method in 'Base' is `int& slot()`
-// error: this compiler does not support an `operator[]` that returns a reference, `int&`, yet
-// error: give the value with `int operator[](...) const`, and write a method for the place: `int& at(long i) { ... }`
+// error: the elements of 'items' cannot be returned as a reference inside const method 'operator[]'
+// error: the `operator[]` of 'Box' may change 'b', which is const, as it returns a reference, `int&`
+// error: write one that only reads, for what is const: `int operator[](long i) const { ... }`, beside it
 // error: `spawn` cannot run 'first', which returns a reference, `int&`, to a place that this thread uses
 // error: give the thread a copy of the value at the place: `auto value = first();`, then `spawn [=] { ... }()` with it, or spawn a function that returns `int`
 // error: 'acct' refers to the object that 'find' returned, not to the variable or element that holds it, so it cannot be assigned to
