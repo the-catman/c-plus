@@ -1,0 +1,57 @@
+// `for (auto& e : m)` over a hashmap changes the values in place, as in C++: `e` is each entry, found by its key at each use,
+// with `e.first` the key, which cannot change, and `e.second` the value, which can.
+class Node {
+public:
+    int n = 0;
+    Node(int k) : n(k) {}
+};
+struct Book {
+    hashmap<string, int> counts = {{"a", 1}, {"b", 2}};
+};
+hashmap<string, int> make() { return {{"x", 1}}; }
+void bump(int& n) { n += 1; }
+int main() {
+    hashmap<string, int> m = {{"a", 1}, {"b", 2}, {"c", 3}};
+    for (auto& e : m) e.second += 10;
+    println("{}", m);                       // expect: {"a": 11, "b": 12, "c": 13}
+    for (hashmap_entry<string, int>& e : m) bump(e.second);
+    println("{}", m);                       // expect: {"a": 12, "b": 13, "c": 14}
+
+    // It goes over the entries there when it starts: one erased before its round is passed by, and one added is not reached.
+    hashmap<string, int> copy = m;
+    for (auto& e : m) {
+        e.second *= 2;
+        if (e.first == "a") m.erase("b");
+        m["z"] = 0;
+    }
+    println("{} {}", m, copy);              // expect: {"a": 24, "c": 28, "z": 0} {"a": 12, "b": 13, "c": 14}
+
+    Book book = Book();
+    for (auto& e : book.counts) e.second = int(e.first.size()) + e.second;
+    println("{}", book.counts);             // expect: {"a": 2, "b": 3}
+    hashmap<int, vector<string>> lists = {{1, {"x"}}};
+    for (auto& e : lists) e.second.push_back("y");
+    println("{}", lists);                   // expect: {1: ["x", "y"]}
+
+    // Values that cannot be copied, which only a reference can go over.
+    hashmap<string, unique<Node>> owners;
+    owners["a"] = unique<Node>(1);
+    for (auto& e : owners) e.second.n += 5;
+    println("{}", owners["a"].n);           // expect: 6
+
+    vector<hashmap<string, int>> maps = {{{"a", 1}}, {{"b", 2}}};
+    for (auto& each : maps) {
+        for (auto& e : each) e.second *= 10;
+    }
+    for (auto& e : maps[1]) {
+        maps.push_back({});  // `maps[1]` is found again, wherever it is now
+        e.second += 1;
+    }
+    println("{} {}", maps[0], maps[1]);     // expect: {"a": 10} {"b": 21}
+    int seen = 0;
+    for (auto& e : make()) seen += e.second;  // a map that a call gave, which the loop could change
+    const hashmap<string, int> fixed = {{"k", 4}};
+    for (auto& e : fixed) seen += e.second;   // a `const auto&`, as the map cannot change
+    println("{}", seen);                    // expect: 5
+    return 0;
+}

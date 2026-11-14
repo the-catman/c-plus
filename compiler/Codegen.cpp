@@ -2370,11 +2370,13 @@ struct Codegen::Impl {
             b.SetInsertPoint(missingBB);
             llvm::Value* text = entryAlloca(stringTy, "text");
             b.CreateStore(llvm::Constant::getNullValue(stringTy), text);
-            printText(text, "the key ");
+            printText(text, ix.wholeEntry ? "the entry of the key " : "the key ");
             printValue(text, held, keyType, true);
-            printText(text, " is not in this hashmap; check with `contains`, or use `get`, which gives null");
+            printText(text, ix.wholeEntry ? ", which the loop's reference refers to, was erased from the hashmap; use it before erasing it"
+                                          : " is not in this hashmap; check with `contains`, or use `get`, which gives null");
             llvm::Value* message = b.CreateLoad(stringTy, text, "message");
-            auto* stop = b.CreateCall(rtTrapText, {strData(message), strLength(message), fileName, b.getInt32(ix.loc.line), b.getInt32(ix.loc.col)});
+            const Loc at = rederiving ? rederiving->loc : ix.loc;  // the use of a reference that finds it again
+            auto* stop = b.CreateCall(rtTrapText, {strData(message), strLength(message), fileName, b.getInt32(at.line), b.getInt32(at.col)});
             stop->setDoesNotReturn();
             b.CreateUnreachable();
             b.SetInsertPoint(foundBB);
@@ -2385,6 +2387,7 @@ struct Codegen::Impl {
         llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "entries");
         if (write) buf = ownInPlace(slot, buf, entries);
         if (hold) takeHold({buf, entries, buf, write, holdFrom, slot});
+        if (ix.wholeEntry) return elementAt(buf, position, entries);  // `e` of `for (auto& e : m)`
         return fieldAddress(entries->elem, elementAt(buf, position, entries), 1, "value");
     }
 
@@ -5326,6 +5329,15 @@ struct Codegen::Impl {
     // reference, so a change made in the body copies the vector instead of moving the
     // elements under the loop. For an array, it holds its own copy.
     void genForEach(const ForEachStmt& st) {
+        if (st.mapVar) {  // `for (auto& e : m)`: `auto& map = m;` first, for as long as the loop runs
+            scopes.emplace_back();
+            genStmt(*st.mapVar);
+        }
+        genForEachOver(st);
+        if (st.mapVar) popScope();
+    }
+
+    void genForEachOver(const ForEachStmt& st) {
         const Type* vt = st.rangeVar->type;
         const VarDecl& var = *st.var;
         bool str = vt->is(K::String);  // a string goes over its bytes
@@ -5408,6 +5420,18 @@ struct Codegen::Impl {
         } else {
             storeValue(value, var.type, allocaFor(var));
             if (isManaged(var.type)) scopes.back().push_back(&var);
+        }
+        if (st.entry) {  // the entry of the key, unless the loop erased it before its round
+            llvm::Value* here = genCond(*st.entryHere);
+            flushTemps();
+            auto* goneBB = llvm::BasicBlock::Create(ctx, "entry.gone", fn);
+            auto* hereBB = llvm::BasicBlock::Create(ctx, "entry.here", fn);
+            b.CreateCondBr(here, hereBB, goneBB);
+            b.SetInsertPoint(goneBB);
+            releaseScopes(loops.back().scopeDepth);
+            b.CreateBr(stepBB);
+            b.SetInsertPoint(hereBB);
+            genStmt(*st.entry);
         }
         genScoped(*st.body);
         popScope();

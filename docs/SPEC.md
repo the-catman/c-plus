@@ -1104,6 +1104,11 @@ for (auto e : ages) println("{}: {}", e.first, e.second);
 | `m.items()` | a vector of the entries, in order, with fields `first` and `second` |
 
 - `for (auto e : m)` goes over the entries as they were when the loop started, so the body can change the map.
+- `for (auto& e : m)` changes the values in place, as in C++: `e.second += 1`. It goes over the entries there when
+  it starts, passing by one that the body erased before its turn and not reaching one it added, and `e` is found
+  again by its key at each use, so the map may grow meanwhile. `e.first`, the key, cannot be changed, as the map
+  finds the entry by it, and using `e` once its entry was erased stops the program. Over a map that cannot change,
+  `auto&` is `const auto&`. The values need not be copyable, as nothing is copied but the keys.
 - `==` is true for the same entries in any order. A map prints as `{"a": 1, "b": 2}`.
 - A method of a value in a map, `m[key].go()`, works on it in place, and stops the program if its body adds to or
   otherwise changes the map through a pointer, as with [a vector](#vectors).
@@ -1653,8 +1658,7 @@ void doubleAll(vector<int>& v) {
   For the same reason neither can return one, and `spawn` cannot run a function that does.
   A reference cannot be a field, a constant, an element of a container, or a template
   argument. There is no `T&&` or `auto&&`.
-- **Planned.** A `T& operator[]`, and `for (auto& e : m)` over a hashmap, whose entries it
-  would change.
+- **Planned.** A `T& operator[]`.
 
 ---
 
@@ -3944,9 +3948,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | `hashmap<K, V>` | implemented |
 | Vector `insert(i, x)` and `erase(i)` | implemented |
 | Vector iterators and erasing a range; `find` on a hashmap, sorted maps, sets | planned |
-| References: `T&` and `const T&` parameters and local variables, to elements of vectors, strings and hashmaps too, `for (auto& x : v)` | implemented |
+| References: `T&` and `const T&` parameters and local variables, to elements of vectors, strings and hashmaps too, `for (auto& x : v)`, `for (auto& e : m)` over a hashmap | implemented |
 | Returning `T&` from functions, methods and `operator()`, checked when the statement ends; references bound to what they return, checked at each use | implemented |
-| `for (auto& e : m)` over a hashmap | planned |
 | Structured bindings, `for (auto [k, v] : m)` | planned |
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |

@@ -234,6 +234,7 @@ private:
     // Functions that return a reference, `T& f()`.
     void noteRefReturn(FuncDecl& f);
     static const FuncDecl* objectCallee(const Expr& e);
+    const Type* mapEntryLoop(ForEachStmt& st, const Type* mapType);
     static std::string objectHelp(const FuncDecl& f);
     void checkRefReturn(Expr& e, Flow& flow, const Type* ret);
     std::string refReturnRoot(const Expr& e, int depth = 0);

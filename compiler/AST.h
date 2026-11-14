@@ -646,6 +646,7 @@ struct IndexExpr : Expr {
     ExprPtr base, index;
     std::vector<ExprPtr> more;    // `g[x, y]`, as C++23 writes it, for an `operator[]` that takes more than one
     FuncDecl* mapSlot = nullptr;  // set by Sema for `m[key]` on a hashmap: finds the entry, adding it if it should
+    bool wholeEntry = false;      // the entry itself, key and value, for `for (auto& e : m)`
     bool mapAssign = false;       // the target of `m[key] = value`, which needs no value to start with
     bool mapTarget = false;       // the target of any assignment, which checks by itself that `m` can change
     // `v.back()` or `v.front()` of a container that is a place, which Sema makes this: "back" counts from the end, so that 0 is
@@ -777,6 +778,7 @@ struct VarDecl : Stmt {
     // `auto& acct = bank.find(0);`, where `find` returns a class object by `C&`: set by Sema, which makes it a variable that
     // holds the object, and cannot be assigned to, as it does not refer to where the object is kept.
     const FuncDecl* objectOf = nullptr;
+    bool mapEntry = false;  // `e` of `for (auto& e : m)`: the entry of a key, whose `first` cannot change, as the map finds it by that
     // Set by the capture check: a lambda that may outlive this function shares it, so it lives in a counted box of its own,
     // made where it is declared, which the lambda holds too. For a loop's own variable, each round has a new one.
     bool boxed = false;
@@ -866,6 +868,10 @@ struct ForEachStmt : Stmt {
     ExprPtr range;
     StmtPtr body;
     std::unique_ptr<VarDecl> rangeVar;  // holds the vector while the loop runs; set by Sema
+    // For `for (auto& e : m)` over a hashmap, set by Sema: `auto& map = m;` before the loop, which goes over `map.keys()` with
+    // `var` the key, and in each round whose key is still there, `entryHere`, `entry` is `e`, bound to the key's entry.
+    std::unique_ptr<VarDecl> mapVar, entry;
+    ExprPtr entryHere;
     ForEachStmt(Loc l, std::unique_ptr<VarDecl> v, ExprPtr r, StmtPtr b)
         : Stmt(Kind::ForEach, l), var(std::move(v)), range(std::move(r)), body(std::move(b)) {}
 };

@@ -5,12 +5,23 @@ int main() {
     for (string& x : v) {}
     const vector<int> fixed = {1};
     for (int& x : fixed) x = 2;
-    hashmap<string, int> m;
-    for (auto& e : m) {}
+    const hashmap<string, int> counts = {{"a", 1}};
+    for (hashmap_entry<string, int>& e : counts) {}
+    for (auto& e : counts) e.second = 2;  // a `const auto&`, as the map cannot change
+    hashmap<string, int> m = {{"a", 1}};
+    for (auto& e : m) {
+        e.first = "b";
+        e.first += "c";
+        e = hashmap_entry<string, int>{"d", 1};
+    }
     return 0;
 }
 // error: a reference that changes the elements of 'vector<int>' must be `int&`, as they are 'int', not 'long'
 // error: write `for (auto& x : ...)`. To work on converted copies, write `for (long x : ...)`
 // error: the elements of 'vector<int>' are 'int', so a reference to them is `int&`, not `string&`
 // error: 'fixed' is const and cannot be changed through a reference
-// error: this compiler does not support references that change the entries of a hashmap, `auto&`, in a range-based for loop yet
+// error: 'counts' is const and cannot be changed through a reference
+// error: 'e' is const, so its fields cannot be assigned to
+// error: the key of an entry of a hashmap cannot be assigned to, as the hashmap finds the entry by it
+// error: change the value, `e.second`, or put the value under another key: `auto value = e.second; m.erase(e.first); m[key] = value;`
+// error: the key of an entry of a hashmap cannot be changed, as the hashmap finds the entry by it

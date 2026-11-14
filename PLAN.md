@@ -705,7 +705,11 @@ program and never dangles, but when its container is resized, replaced or was sh
     write in place counts them as its own, so writing another element through a `vector<int>&` parameter works, as in C++,
     where the trap stopped it before; and a copy that took the container's place, which the count alone missed, stops it.
   - `v.back()`, `v.front()` and `m.at(k)` of a place are places (built 2026-11-14), changing §2.17 and §2.24. Still to
-    come: `?:` of two places as a place, and `for (auto& e : m)` over a hashmap.
+    come: `?:` of two places as a place.
+  - `for (auto& e : m)` over a hashmap (built 2026-11-15) goes over the keys the map has when it starts, passing by one
+    erased before its round, and `e` is the entry of each, found again by its key at each use, as `m.at(k)` of a place is,
+    so the map may grow meanwhile. `e.first` cannot be changed, and using `e` once its entry is erased stops the program.
+    Over a map that cannot change, `auto&` is `const auto&`, as for a vector.
 - Aliasing follows C++: `swap(v[0], v[1])` and `f(x, x)` are allowed.
 - Order: `const T&` first, with no change to the runtime, then `T&` to variables and fields, then to elements (all done
   2026-11-11), then `T&` returns with item 6 (2026-11-14).
@@ -896,7 +900,7 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, the core
-language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references except `for (auto& e : m)` over a hashmap, overloading of functions, methods and constructors, and the library parts of item 7. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references, overloading of functions, methods and constructors, and the library parts of item 7. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error

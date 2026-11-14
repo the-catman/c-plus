@@ -3796,10 +3796,76 @@ void Sema::checkSwitch(SwitchStmt& st, Flow& flow) {
     flow = after;
 }
 
+// `for (auto& e : m)` over a hashmap that can change: as C++ does, it goes over the entries that are there when it starts, and
+// `e` is each, which the loop changes in place. It becomes `auto& map = m;`, then a loop over `map.keys()` in which `e` is the
+// entry of each key that is still there, found again by the key at each use, as `m.at(key)` is. Gives the type of the keys.
+const Type* Sema::mapEntryLoop(ForEachStmt& st, const Type* mapType) {
+    const Loc loc = st.range->loc;
+    const Type* keyType = mapType->decl->templateArgs[0].type;
+    const Type* entryType = nullptr;  // of its entries, which `items()` would copy, and a value may not be copyable
+    for (const auto& f : mapType->decl->fields)
+        if (f.name == "entries_") entryType = f.type->elem;
+    auto name = [&](VarDecl& v) {
+        auto n = std::make_unique<NameExpr>(loc, v.name);
+        n->decl = &v;
+        n->type = v.type;
+        return n;
+    };
+    auto call = [&](const char* method, std::vector<ExprPtr> args) {
+        auto c = std::make_unique<MethodCallExpr>(loc, name(*st.mapVar), method, std::move(args));
+        c->method = mapMethod(mapType, method);
+        c->path = BasePath{mapType->decl};
+        c->type = c->method->retType;
+        return c;
+    };
+    st.mapVar = std::make_unique<VarDecl>(loc, "map#", mapType, loc);
+    st.mapVar->type = mapType;
+    st.mapVar->isRef = isPlaceKind(*st.range);  // or a copy of the map a call gave, which the loop changes
+    st.mapVar->init = std::move(st.range);
+    st.entry = std::move(st.var);
+    st.entry->type = entryType;
+    st.entry->mapEntry = true;
+    st.var = std::make_unique<VarDecl>(loc, "key#", keyType, loc);
+    st.var->type = keyType;
+    st.range = call("keys", {});
+    st.entryHere = call("contains", {});
+    static_cast<MethodCallExpr&>(*st.entryHere).args.push_back(name(*st.var));
+    auto entry = std::make_unique<IndexExpr>(loc, name(*st.mapVar), name(*st.var));
+    entry->mapSlot = mapMethod(mapType, "__existing");
+    entry->wholeEntry = true;
+    entry->type = entryType;
+    st.entry->init = std::move(entry);
+    return st.range->type;
+}
+
+// Whether `target`, which is about to change, is the key of `e` in `for (auto& e : m)`, or all of `e`, which holds the key.
+static bool changesEntryKey(const Expr& target) {
+    const Expr* x = &target;
+    const MemberExpr* onEntry = nullptr;  // the member of `e` it goes through
+    while (true) {
+        if (x->kind == Expr::Kind::Member) {
+            onEntry = static_cast<const MemberExpr*>(x);
+            x = onEntry->base.get();
+        } else if (x->kind == Expr::Kind::Index && !indexCall(*x)) {
+            onEntry = nullptr;
+            x = static_cast<const IndexExpr*>(x)->base.get();
+        } else if (const Expr* place = placeCall(*x)) {
+            onEntry = nullptr;
+            x = place;
+        } else {
+            break;
+        }
+    }
+    if (x->kind != Expr::Kind::Name || !static_cast<const NameExpr*>(x)->decl || !static_cast<const NameExpr*>(x)->decl->mapEntry) return false;
+    return x == &target || (onEntry && onEntry->base.get() == x && onEntry->field == "first");
+}
+
 // `for (T x : range)`: the body runs once for each element, possibly never.
 void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
     const Type* rangeType = checkExpr(*st.range, flow);
     const Type* elem = Type::error();
+    if (isHashmap(rangeType) && st.var->isRef && !st.var->isConst && !(isPlaceKind(*st.range) && isReadOnlyPlace(*st.range)))
+        rangeType = mapEntryLoop(st, rangeType);
     if (isHashmap(rangeType)) {  // its entries, as they are when the loop starts
         const Type* value = rangeType->decl->templateArgs[1].type;
         if (!isCopyable(value)) {
@@ -3857,12 +3923,9 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
     const bool changes = v.isRef && !v.isConst;  // `for (auto& x : v)`, which changes the elements themselves
     if (v.isRef) refSources_[&v] = st.range.get();  // for `return x;` in a function that returns a reference
     if (!changes) loopCopies_[&v] = loop;
-    if (changes && isMap && !rangeType->isError()) {
-        diags_.error(v.typeLoc, "this compiler does not support references that change the entries of a hashmap, `auto&`, in a range-based for loop yet",
-                     "loop over the keys and change each value in the map: `for (auto key : " + asBase(loop.list.empty() ? std::string("m") : loop.list) +
-                         ".keys()) " + asBase(loop.list.empty() ? std::string("m") : loop.list) + "[key] = ...;`. To read the entries without copying them, write `for (const auto& " +
-                         v.name + " : ...)`",
-                     spec::Status);
+    if (changes && isMap && !rangeType->isError()) {  // a map that cannot change: `auto&` over it is a `const auto&`, as in C++
+        if (!v.declType->is(K::Auto)) checkChangeable(*list, "changed through a reference", nullptr, "");
+        else v.isConst = true;
     } else if (changes && !rangeType->isError() && isPlaceKind(*st.range)) {
         // As in C++, `auto&` over what cannot change is a `const auto&`, and an explicit `int&` is an error.
         if (!v.declType->is(K::Auto)) checkChangeable(*st.range, "changed through a reference", nullptr, "");
@@ -3894,6 +3957,10 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
     Flow body = flow;
     declare(v);
     markAssigned(body, &v, "");
+    if (st.entry) {
+        declare(*st.entry);
+        markAssigned(body, st.entry.get(), "");
+    }
     checkLoopBody(*st.body, body);
     checkMovedInLoop(head, movesBefore, body);
     Flow after = flow;
@@ -4899,6 +4966,13 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
     }
     const VarDecl* rootVar = rootVariable(*root);
     if (!rootVar) return false;  // an unknown name, already reported
+    if (rootVar->mapEntry && changesEntryKey(target)) {
+        diags_.error(target.loc, "the key of an entry of a hashmap cannot be " + std::string(action) + ", as the hashmap finds the entry by it",
+                     "change the value, `" + rootVar->name + ".second`, or put the value under another key: `auto value = " + rootVar->name +
+                         ".second; m.erase(" + rootVar->name + ".first); m[key] = value;`",
+                     spec::HashMaps);
+        return false;
+    }
     for (const Expr* at = &target; at;) {  // `m[key]` itself was reported, and also what is changed through it
         if (at == constMapReported_) return false;
         at = at->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(at)->base.get()

@@ -585,7 +585,6 @@ PLANNED_FEATURES = [
     ("queue", M % "queue<int> d;"),
     ("pair", M % "pair<int, int> d;"),
     ("tuple", M % "tuple<int, int> d;"),
-    ("references that change the entries of a hashmap", M % "hashmap<string, int> m; for (auto& e : m) {}"),
     ("bindings in loops", M % 'hashmap<string, int> m; for (auto [k, v] : m) {}'),
     ("bindings", 'struct P { int x; int y; };\n' + M % "auto [a, b] = P{1, 2};"),
     ("final classes", 'class A final { public: int x = 0; };\n' + M % ""),
@@ -887,7 +886,7 @@ SPEC_REJECTED = {
     "v.erase(std::remove_if(...), v.end())": "vector<int> v; v.erase(std::remove_if(v.begin(), v.end(), [](int x) { return x > 1; }), v.end());",
     "std::greater<int>()": "vector<int> v; sort(v, std::greater<int>());", "sort<int>(v)": "vector<int> v; sort<int>(v);",
     "return a - b;": "vector<int> v; sort(v, [](int a, int b) { return a - b; });", "auto f = [](auto x) { return x; };": "auto f = [](auto x) { return x; };",
-    "void f(auto x)": "^void f2(auto x) {}", "spawn [=] { ... }": "int n = 1; spawn [=] { println(\"{}\", n); };", "for (auto& e : m)": "hashmap<string, int> m; for (auto& e : m) {}", "switch (auto k = f(); k)": "switch (auto k = f(); k) { default: break; }",
+    "void f(auto x)": "^void f2(auto x) {}", "spawn [=] { ... }": "int n = 1; spawn [=] { println(\"{}\", n); };", "switch (auto k = f(); k)": "switch (auto k = f(); k) { default: break; }",
 }
 SPEC_REJECT_PRELUDE = """struct HoldsSettable { Settable p; };
 class Base { public: int id = 0; };

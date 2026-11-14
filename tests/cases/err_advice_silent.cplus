@@ -18,12 +18,6 @@ public:
     int x{7};
     // error: move what is in the braces after `=`: `int x = ...;`
 };
-void refInLoop() {
-    hashmap<long, int> m;
-    for (auto& e : m) {}
-    // error: this compiler does not support references that change the entries of a hashmap, `auto&`, in a range-based for loop yet
-    // error: loop over the keys and change each value in the map: `for (auto key : m.keys()) m[key] = ...;`
-}
 struct Holder { vector<int> items; };
 void refInPath() {
     Holder g;

@@ -10,6 +10,9 @@ int main() {
     for (auto e : ages) println("{} is {}", e.first, e.second);
     // expect: Ada is 37
     // expect: Grace is 85
+    for (auto& e : ages) e.second += 1;  // each value in place
+    println("{}", ages);
+    // expect: {"Ada": 38, "Grace": 86}
     ages.erase("Ada");
     println("{}", ages.keys());
     // expect: ["Grace"]

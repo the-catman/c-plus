@@ -1,0 +1,12 @@
+// The entry that `e` of `for (auto& e : m)` is was erased, and then used: the program stops there.
+int main() {
+    hashmap<string, int> m = {{"a", 1}, {"b", 2}};
+    for (auto& e : m) {
+        println("{}", e.second);  // expect: 1
+        m.erase(e.first);
+        println("{}", e.second);
+    }
+    return 0;
+}
+// trap: the entry of the key "a", which the loop's reference refers to, was erased from the hashmap; use it before erasing it
+// trap: trap_map_entry_erased.cplus:7:23
