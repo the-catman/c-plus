@@ -1,0 +1,74 @@
+// What a lambda that runs on another thread can use, and how spawn is written with one.
+struct Point {
+    int x = 0;
+    void later() { spawn [=] { println("{}", x); }(); }
+    // error: a lambda that is kept cannot share the struct that the method runs on, which may be gone by then
+};
+class Node {
+public:
+    int v = 7;
+};
+extern "C" int abs(int n);
+int call(function<int()> f) { return f(); }
+
+void sharesTotal() {
+    int total = 0;
+    spawn [&] { total += 1; }();
+    // error: a lambda that runs on another thread cannot share 'total' with the code that started it, as both could change it at once
+    // error: copy it, with `[=]` or `[total]`, and give back what the thread works out through its task: `auto t = spawn [=] { return ...; }();`, then `t.wait()`
+}
+void sharesThroughArgument() {
+    int count = 0;
+    auto t = spawn call([&] { count += 1; return count; });
+    // error: a lambda that runs on another thread cannot share 'count' with the code that started it
+}
+void sharesInside() {
+    int seen = 0;
+    spawn [&] { auto inner = [&] { seen++; }; inner(); }();
+    // error: cannot share 'seen' with the code that started it
+}
+void sharesCallersVariable(int& k) {
+    spawn [&] { k++; }();
+    // error: 'k' is the caller's variable, which this lambda can outlive
+}
+void takesReference() {
+    int k = 0;
+    spawn [](int& x) { x++; }(k);
+    // error: `spawn` cannot pass this to a parameter that is a reference, `int& x`, since the thread runs on after this line
+    // error: take the value, `int x`
+}
+void notCalled() {
+    spawn [=] { println("x"); };
+    // error: `spawn` runs a call on a thread, and this lambda is not called
+    // error: call it, with what it takes in the parentheses: `spawn [=] { ... }()`
+}
+void valueNotCalled() {
+    function<void()> job = [] {};
+    spawn job;
+    // error: call it: `spawn job()`
+}
+void constructor() {
+    auto t = spawn Point(1);
+    // error: `spawn` runs a function or method written in C+, and this is a constructor
+    // error: run it in a lambda: `spawn [=] { return Point(1); }()`
+}
+void cFunction() {
+    auto t = spawn abs(-1);
+    // error: run it in a lambda: `spawn [=] { return abs(-1); }()`
+}
+void copiesLocal() {
+    local<Node> l = local<Node>();
+    spawn [=] { println("{}", l.v); }();
+    // error: capturing 'l' would give another thread a local reference
+}
+void holdsLocal() {
+    local<Node> l = local<Node>();
+    spawn [n = l] { println("{}", n.v); }();
+    // error: capturing 'n' would give another thread a local reference
+}
+void waitsWithoutTry() {
+    auto t = spawn [=]() throws { throw Error("x"); }();
+    t.wait();
+    // error: 'wait' can fail, so its call must say what happens then
+}
+int main() { return 0; }

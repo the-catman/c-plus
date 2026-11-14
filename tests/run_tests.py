@@ -544,7 +544,6 @@ PLANNED_FEATURES = [
     ("enumerator values that use enumerators", 'enum class Color { Red, Blue = Red };\n' + M % ""),
     ("a switch with an initializer", M % "int n = 1; switch (int k = n; k) { case 1: break; }"),
     ("await inside a lambda", 'async int f() { return 1; }\nasync int g() { auto h = [] { return await f(); }; return h(); }\n' + M % ""),
-    ("spawn of a lambda", M % "auto f = [] { return 1; }; auto t = spawn f();"),
     ("a lambda sharing a reference variable", M % "vector<int> v = {1}; for (auto& x : v) { auto f = [&] { x += 1; }; f(); }"),
     ("moving from a variable that a lambda shares", M % "vector<int> v = {1}; auto f = [&] { return v.size(); }; auto w = move(v);"),
     ("default values for the parameters of a lambda", M % "auto f = [](int x = 1) { return x; };"),
@@ -867,7 +866,7 @@ SPEC_REJECTED = {
     "v.erase(std::remove_if(...), v.end())": "vector<int> v; v.erase(std::remove_if(v.begin(), v.end(), [](int x) { return x > 1; }), v.end());",
     "std::greater<int>()": "vector<int> v; sort(v, std::greater<int>());", "sort<int>(v)": "vector<int> v; sort<int>(v);",
     "return a - b;": "vector<int> v; sort(v, [](int a, int b) { return a - b; });", "auto f = [](auto x) { return x; };": "auto f = [](auto x) { return x; };",
-    "void f(auto x)": "^void f2(auto x) {}", "for (auto& e : m)": "hashmap<string, int> m; for (auto& e : m) {}", "switch (auto k = f(); k)": "switch (auto k = f(); k) { default: break; }",
+    "void f(auto x)": "^void f2(auto x) {}", "spawn [=] { ... }": "int n = 1; spawn [=] { println(\"{}\", n); };", "for (auto& e : m)": "hashmap<string, int> m; for (auto& e : m) {}", "switch (auto k = f(); k)": "switch (auto k = f(); k) { default: break; }",
 }
 SPEC_REJECT_PRELUDE = """struct HoldsSettable { Settable p; };
 class Base { public: int id = 0; };

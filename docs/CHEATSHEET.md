@@ -43,7 +43,7 @@ long square(long n) { return n * n; }
 | Constraints | `template<Comparable T>`, `template<Number T>`, `template<Integer T>`, `template<Floating T>`, `template<Hashable T>`, `template<Speaker T>` for an interface or class. Your own: `template<typename T> concept Addable = requires(T a, T b) { a + b; };` |
 | Unique references | `unique<Node> a = unique<Node>("x");` is the one owner, never empty: `a.name`, `a.go()`. `unique<Node> b = move(a);` leaves `a` with no value. `take(move(b))` hands it over, `lend(a.get())` lends it as a `Node`. `unique<Node>?` can be empty. Copying is an error |
 | Local references | `local<Node> a = local<Node>("x");` counts without atomic steps, so only one thread can use it. `local<Node> b = a;` shares it. `a.name`, `a.go()`, `a.get()` lends it as a `Node`. `local<Node>?` can be empty. Cannot go into `spawn` |
-| Threads | `Task<long> t = spawn sum(v);` or `auto t = spawn obj.method(x);`, then `t.wait()`, `t.done()`. `Task<void>` for no result. The function `throws`: `Task<long, throws>`, and `try t.wait()`. Arguments are copied, class references are shared. The program waits for its threads when `main` returns. An error that no `wait()` can see fails the program |
+| Threads | `Task<long> t = spawn sum(v);` or `auto t = spawn obj.method(x);`, then `t.wait()`, `t.done()`. A lambda, with its call: `auto t = spawn [=] { return work(n); }();`, which copies what it uses: sharing with `[&]` is an error. `spawn job();` for a function value. `Task<void>` for no result. The function `throws`: `Task<long, throws>`, and `try t.wait()`. Arguments are copied, class references are shared. The program waits for its threads when `main` returns. An error that no `wait()` can see fails the program |
 | Locks | `Mutex m = Mutex();`, `m.lock()`, `m.unlock()`, `m.try_lock()`. `LockGuard g = LockGuard(m);` unlocks at the end of the block. Locking twice on one thread **stops the program**. `cplus run app.cplus --race` finds what is not protected |
 | Async | `async string load(string name) { await delay(10); return name; }`. A call starts it, and gives a `Task<string>`: `auto t = load("a");`, then `await t` in an async function, or `t.wait()` in a plain one. `async int main()`. A function that `throws` gives a `Task<string, throws>`, and is waited for with `try await t`. `await` works on `spawn`'s tasks too. `delay(ms)` waits. A task must be kept or waited for, and the program waits for async work when `main` returns. No `LockGuard` or `local` across an `await` |
 | Vectors | `vector<int> v = {1, 2};` is a **value**, copied like a struct (cheaply: copy-on-write). `vector<int> v;` is empty. `v.push_back(x)`, `v.pop_back()`, `v.insert(i, x)` (before index `i`), `v.erase(i)`, `v[i]`, `v.size()` (a `long`), `v.empty()`, `v.front()`, `v.back()`, `v.clear()` |
@@ -138,7 +138,8 @@ long square(long n) { return n * n; }
 | `std::thread t(f, x); t.join();`, `std::async(f, x)`, `pthread_create` | `auto t = spawn f(x);`, then `t.wait()`. A task can be let go of: it keeps running, and the program waits for it at the end |
 | `std::future<int> r = ...; r.get();` | `Task<int> r = spawn f();`, then `r.wait()`, which can be called again |
 | `spawn try f()`, `try spawn f()` | `auto t = spawn f();`, then `try t.wait()` |
-| `spawn println("x")`, `spawn usleep(1)`, `spawn P(1)` | `spawn` takes a C+ function or method. Write a function that does it |
+| `spawn println("x")`, `spawn usleep(1)`, `spawn P(1)` | `spawn` takes a call of C+ code: `spawn [=] { println("x"); }();` |
+| `spawn [&] { ... }`, `go func() { ... }()` | `spawn [=] { ... }();`: the call, and copies, as a thread cannot share a variable |
 | `spawn f(x).wait()` | `spawn` takes all of the call after it: `(spawn f(x)).wait()` |
 | `std::mutex m;`, `std::lock_guard<std::mutex> g(m);` | `Mutex m = Mutex();`, `LockGuard g = LockGuard(m);` |
 | `std::atomic<int>` | planned. Use a class field and a `Mutex` |
@@ -264,7 +265,7 @@ long square(long n) { return n * n; }
 | Memory | pointers into vectors and strings |
 | Types | unions, `const` fields, types nested in a type or a function, `short`, `int8_t` and `int16_t`, enums held in an unsigned type |
 | Functions | default arguments in generics, `auto` parameters and return types, as in `void f(auto x)` |
-| Lambdas | `await` inside one, `spawn` of one, sharing a reference variable such as the `x` of `for (auto& x : v)`, default values for its parameters, `auto` parameters whose types nothing says, as in `auto f = [](auto x) { return x; };` |
+| Lambdas | `await` inside one, sharing a reference variable such as the `x` of `for (auto& x : v)`, default values for its parameters, `auto` parameters whose types nothing says, as in `auto f = [](auto x) { return x; };` |
 | Statements | a declaration before a switch's value: `switch (auto k = f(); k)` |
 | Top level | `thread_local`, `static` variables in a function, `constexpr` methods and structs |
 | Containers | iterators, erasing a range, and the algorithms that take iterators or part of a vector, such as `lower_bound` and `transform`; `find` on a hashmap; sorted maps and sets; `deque`, `list`, `stack`, `queue`, `pair`, `tuple` |

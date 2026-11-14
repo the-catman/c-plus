@@ -3563,6 +3563,7 @@ struct Codegen::Impl {
     // their own, for a function made for this call, which runs on the new thread and gets them from there. A function owns its
     // arguments, so that is all it has to do with those. A struct's method runs on a copy of the struct.
     llvm::Value* genSpawn(const SpawnExpr& s) {
+        if (s.through) return genSpawnValue(s);
         const FuncDecl& target = *s.target;
         const Type* taskType = &s.task->type;
         const auto* method = s.call->kind == Expr::Kind::MethodCall ? static_cast<const MethodCallExpr*>(s.call.get()) : nullptr;
@@ -3668,6 +3669,97 @@ struct Codegen::Impl {
         };
         if (selfType) put(self, selfType);
         for (size_t i = 0; i < values.size(); ++i) put(values[i], target.params[i]->type);
+        pending.resize(mark);
+        b.CreateCall(rtThreadStart, {run, closure});
+        return task;
+    }
+
+    // `spawn job()` or `spawn [=] { ... }()`: the function value and the arguments go in memory of their own, as for a
+    // function. A function value only borrows what it is given by its address (see paramsOf), so the thread owns those,
+    // and lets go of them once the call is done, and then of the function value.
+    llvm::Value* genSpawnValue(const SpawnExpr& s) {
+        const CallValueExpr& call = *s.through;
+        const Type* ft = call.callee->type;
+        const Type* taskType = &s.task->type;
+        const auto& params = paramsOf(ft);
+        size_t mark = pending.size();
+        llvm::Value* function = holdOwned(*call.callee, ft);
+        std::vector<llvm::Value*> values;
+        for (size_t i = 0; i < call.args.size(); ++i) values.push_back(holdOwned(*call.args[i], (*ft->params)[i].type));
+
+        // What memory from cplus_alloc starts with, the task, the function value, and each argument.
+        std::vector<llvm::Type*> slots{b.getInt64Ty(), b.getPtrTy(), b.getPtrTy(), fnTy};
+        for (auto& p : *ft->params) slots.push_back(llvmType(p.type));
+        auto* closureTy = llvm::StructType::get(ctx, slots);
+
+        auto* run = internalFunction("cplus.spawn", b.getVoidTy(), {b.getPtrTy()});
+        {
+            SavedPoint saved(*this);
+            startHelper(run);
+            startLineTable(s.loc);
+            llvm::Value* closure = run->getArg(0);
+            llvm::Value* task = b.CreateLoad(b.getPtrTy(), b.CreateStructGEP(closureTy, closure, 2), "task");
+            llvm::Value* value = b.CreateLoad(fnTy, b.CreateStructGEP(closureTy, closure, 3), "function");
+            std::vector<llvm::Value*> args;
+            llvm::Value* result = nullptr;
+            if (inMemory(ft->elem)) {
+                result = entryAlloca(llvmType(ft->elem), "result");
+                args.push_back(result);
+            }
+            args.push_back(b.CreateExtractValue(value, 1, "env"));
+            for (size_t i = 0; i < params.size(); ++i) {
+                llvm::Value* slot = b.CreateStructGEP(closureTy, closure, (unsigned)(4 + i));
+                args.push_back(passedByRef(*params[i]) ? slot : b.CreateLoad(llvmType(params[i]->type), slot, params[i]->name));
+            }
+            llvm::Value* errorSlot = nullptr;
+            if (ft->throws) {
+                errorSlot = entryAlloca(b.getPtrTy(), "error");
+                b.CreateStore(llvm::ConstantPointerNull::get(b.getPtrTy()), errorSlot);
+                args.push_back(errorSlot);
+            }
+            llvm::Value* returned = b.CreateCall(codeType(ft), b.CreateExtractValue(value, 0, "code"), args);
+            if (!result && !ft->elem->is(K::Void)) result = returned;
+            for (size_t i = 0; i < params.size(); ++i)  // what the function borrowed; it took the others
+                if (passedByRef(*params[i]))
+                    releaseValue(peekValue(params[i]->type, b.CreateStructGEP(closureTy, closure, (unsigned)(4 + i))), params[i]->type);
+            releaseValue(value, ft);
+            b.CreateCall(rtFree, {closure});
+            auto finish = [&] {
+                if (!result) result = llvm::Constant::getNullValue(llvmType(s.finish->params[0]->type));  // the empty struct of `Task<void>`
+                callFunction(*s.finish, {task, result});
+            };
+            if (ft->throws) {
+                llvm::Value* error = b.CreateLoad(b.getPtrTy(), errorSlot, "error");
+                auto* failedBB = llvm::BasicBlock::Create(ctx, "failed", fn);
+                auto* doneBB = llvm::BasicBlock::Create(ctx, "done", fn);
+                auto* endBB = llvm::BasicBlock::Create(ctx, "end", fn);
+                b.CreateCondBr(b.CreateIsNotNull(error), failedBB, doneBB);
+                b.SetInsertPoint(failedBB);
+                callFunction(*s.fail, {task, error});
+                b.CreateBr(endBB);
+                b.SetInsertPoint(doneBB);
+                finish();
+                b.CreateBr(endBB);
+                b.SetInsertPoint(endBB);
+            } else {
+                finish();
+            }
+            releaseValue(task, taskType);
+            b.CreateRetVoid();
+            endLineTable();
+        }
+
+        llvm::Value* task = construct(*s.task, {}, s.task->defaultConstructor());
+        retainValue(task, taskType);  // one for the thread, and one for this expression
+        llvm::Value* closure = b.CreateCall(rtAlloc, {b.getInt64(mod->getDataLayout().getTypeAllocSize(closureTy))}, "closure");
+        b.CreateStore(task, b.CreateStructGEP(closureTy, closure, 2));
+        b.CreateStore(function, b.CreateStructGEP(closureTy, closure, 3));
+        for (size_t i = 0; i < values.size(); ++i) {
+            const Type* t = (*ft->params)[i].type;
+            llvm::Value* slot = b.CreateStructGEP(closureTy, closure, (unsigned)(4 + i));
+            if (inMemory(t)) b.CreateMemCpy(slot, llvm::MaybeAlign(), values[i], llvm::MaybeAlign(), mod->getDataLayout().getTypeAllocSize(llvmType(t)));
+            else b.CreateStore(values[i], slot);
+        }
         pending.resize(mark);
         b.CreateCall(rtThreadStart, {run, closure});
         return task;

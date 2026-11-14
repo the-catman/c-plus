@@ -218,6 +218,7 @@ struct VarDecl;
 struct FuncDecl;
 struct TemplateDecl;
 struct LambdaExpr;
+struct CallValueExpr;
 
 // What is given for a parameter of a generic: a type, or a value such as the 16 of `array<T, 16>`.
 struct TemplateArg {
@@ -363,10 +364,12 @@ struct SizeofExpr : Expr {
     SizeofExpr(Loc l, const Type* t, ExprPtr e) : Expr(Kind::Sizeof, l), target(t), operand(std::move(e)) {}
 };
 
-// `spawn f(args)` or `spawn x.m(args)`. What it needs is worked out here, and the call runs on a new thread.
+// `spawn f(args)`, `spawn x.m(args)`, or `spawn [=] { ... }()` and `spawn job()`, calls of a function value. What it needs is
+// worked out here, and the call runs on a new thread.
 struct SpawnExpr : Expr {
     ExprPtr call;
     const FuncDecl* target = nullptr;    // set by Sema: the function or method it runs
+    const CallValueExpr* through = nullptr;  // set by Sema instead, for a call of a function value: that call
     const StructDecl* task = nullptr;    // set by Sema: its `Task`
     const FuncDecl* finish = nullptr;    // set by Sema: the method of the task that takes the result
     const FuncDecl* fail = nullptr;      // set by Sema: the method that takes the error, for a target that can fail

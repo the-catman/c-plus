@@ -238,6 +238,22 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
 - ThreadSanitizer's own stack holds 64K calls and is not checked, and going past it writes over what the loader uses, so a crash report can no longer be trusted. So `--race` stops a program at 60000 calls, with a message, by putting a count in the way of what it calls for each function (`runtime/race_stack.c`). A smaller thread stack would have done it too, but only for threads, and at a cost to a program with large frames that never gets near the limit.
 - A fatal error is reported by one thread. Any other that stops as well waits for the first to end the program, so there is one message. The report does not wait long for a thread stuck in the output.
 
+`spawn` with a lambda decided 2026-11-14 by the owner:
+- `spawn` still takes a call: `spawn [=] { return work(n); }()`, as Go writes `go func() { ... }()`, and `spawn job()` for a
+  function value. A lambda with no call after it is an error that says to add `()`. The call is also how a thread is handed a
+  `unique`, as a parameter of the lambda. The form without `()` can still come later, and could not be taken away.
+- A lambda written at the `spawn`, or as an argument of the spawned call, cannot share a variable with `[&]`, as two threads
+  would change it at once, and a string or a vector that two threads change can break. It copies, and gives back what it
+  works out through its task. A `const` variable is copied anyway. A class's `this` is shared, as `spawn this.method()` shares
+  it, and a struct's follows the rule of kept lambdas. Its captures cannot hold a `local<T>`, as arguments cannot.
+- A function value can be spawned, though its type does not show what its lambda shares. Closing that would take a second
+  function type, such as Swift's `@Sendable`, which §2.34 decided against; as with `local<T>`, the check catches the common
+  mistake, and `--race` the rest.
+- A built-in, a C function or a constructor still needs C+ code around it, which is now a lambda:
+  `spawn [=] { println("{}", n); }()`. What the lambda's body works out runs on the thread, unlike an argument of the call.
+- The task's type comes from the function's: `[=]() throws { ... }` gives a `Task<T, throws>`, as the lambda is marked.
+- An object used after it was freed, in a program with threads, is most likely a race, so the report says to run with `--race`.
+
 `async` decided 2026-11-10:
 - An async function is written `async int f() throws`, with `async` in front as in JavaScript. Calling it gives a `Task<int, throws>`, the same type `spawn` gives, so `await t` and `t.wait()` work on any task, whatever runs it. A second, promise-like type would mean nearly the same thing.
 - A call runs the function until it waits for something that is not done yet, and then gives the task, as in JavaScript. What it throws goes in the task, as with `spawn`, so the call takes no `try`, while waiting for a task that can fail does: `try await t`.
@@ -725,7 +741,7 @@ Decided 2026-11-11 by the owner (§6), built 2026-11-12: a lambda captures as a 
   a struct's method, `this` is copied in a `const` method and an error otherwise.
 - A value of a function type is its code and a counted environment of copies and boxes. A lambda that an object holds and
   that captures the object keeps it alive; `weak<T>` breaks the circle, and a debug build reports the leak.
-- Not yet: `await` in a lambda, `spawn` of a lambda, default values for its parameters, sharing a reference variable, moving
+- Not yet: `await` in a lambda, default values for its parameters, sharing a reference variable, moving
   from a shared variable, a kept lambda sharing a variable of a condition, a `catch` or an async function's parameter, and C
   functions as values. Then `sort` and the other functions that take one, `spawn` with a lambda, and C callbacks.
 
@@ -816,7 +832,7 @@ what holds real programs back most:
    parameter can be. It may replace the rules of §2.17 and §2.24 on when a result is a copy, and is where the safety of
    §2.7 is tested hardest. `return &x;` of a local, which compiles today, is caught first.
 5. Lambdas, and a type for a function (built 2026-11-12, see §2.34), then `sort` and the other functions that take one
-   (§2.35), `spawn` with a lambda, and C callbacks.
+   (built 2026-11-14, §2.35), `spawn` with a lambda (built 2026-11-14, §2.9), and C callbacks.
 6. Function overloading, more than one constructor and default arguments, then operator overloading. Overloading also
    ends the pairs that stand in for it, such as `http::fetch` and `http::fetchWith`, before more of them are made.
 7. The rest of what everyday programs need: writing files and the rest of `fs` (§2.15), `split`, `trim`, `join` and

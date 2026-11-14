@@ -2002,7 +2002,7 @@ it is gone, and a variable that it shares moves into a counted box of its own. W
   do. Capture a [weak reference](#weak-references) instead: `weak<Timer> self = this;`, then
   `[self] { if (auto t = self.lock()) t.ticks += 1; }`. A [debug build](#debug-builds) reports such a leak.
 
-**Not yet:** `await` inside a lambda, `spawn` of a lambda, default values for its parameters, sharing a reference
+**Not yet:** `await` inside a lambda, default values for its parameters, sharing a reference
 variable, such as the `x` of `for (auto& x : v)`, moving from a variable that a lambda shares, a kept lambda sharing a
 variable declared in a condition, in a `catch` or as a parameter of an async function, a C function as a value, and
 `auto` parameters whose types nothing says.
@@ -3260,12 +3260,39 @@ auto b = spawn sum(second);           // the same, with the type worked out
 println("{}", a.wait() + b.wait());
 ```
 
-**What `spawn` takes** is a call of a function or a method written in C+: `spawn f(x)`, `spawn object.method(x)`. The arguments, and what a
-method is called on, are worked out right there, in order, before the thread starts, so an error or a change after that has nothing to do with
-them. For a built-in such as `println`, a C function or a constructor, write a function that does it, and spawn that. Generic functions work,
-and `try` does not belong on the call, since its error goes in the task: an argument that can fail is written `spawn f(try g())`.
+**What `spawn` takes** is a call of a function or a method written in C+, or of a [lambda](#lambdas) or another function value:
+`spawn f(x)`, `spawn object.method(x)`, `spawn [=] { return work(n); }()`, `spawn job()`. The arguments, and what a method is called
+on, are worked out right there, in order, before the thread starts, so an error or a change after that has nothing to do with them. For a
+built-in such as `println`, a C function or a constructor, run it in a lambda: `spawn [=] { println("{}", n); }()`. What the lambda's body
+works out, it works out on the thread. Generic functions work, and `try` does not belong on the call, since its error goes in the task: an
+argument that can fail is written `spawn f(try g())`.
 
 `spawn` takes all of the call after it, so `spawn f(x).wait()` would wait inside the new thread, for what `f` gave. To wait for the task at once, write `(spawn f(x)).wait()`.
+
+**A lambda on a thread** is written with its call, as in Go:
+
+```cpp
+int n = 21;
+vector<string> names = {"Ada", "Linus"};
+auto t = spawn [=] { return work(n) + names.size(); }();   // the call is what runs on the thread
+auto u = spawn [](unique<Node> node) { return take(move(node)); }(move(first));
+println("{} {}", t.wait(), u.wait());
+```
+
+- **The `()` is needed**: `spawn [=] { ... }` is an error that says to add it. What the lambda takes, the call passes, worked out
+  before the thread starts. That is how a thread is handed a `unique`, which a lambda that holds it could not give away.
+- **It copies what it uses.** A lambda that `spawn` runs, or that is given to the call that `spawn` runs, cannot share a variable
+  with `[&]`, since two threads could then change it at once, and a string or a vector that two threads change can break. That is
+  an error that says to copy it with `[=]`, and to give back what the thread works out through its task. A `const` variable is
+  copied anyway, so it can be shared.
+- **What threads share is a class object.** `[=]` copies a class reference, so both threads reach one object, and a
+  [Mutex](#mutex) guards what changes in it. In a method of a class, the lambda shares `this` too, as `spawn this.method()` does. In a
+  method of a struct, it copies `this` in a `const` method, and is an error in any other, as for any lambda that is
+  [kept](#lambdas).
+- A lambda marked `throws` gives a `Task<T, throws>`, as a function marked `throws` does.
+- **A function value can be spawned**, `spawn job()` or `spawn handlers[i](e)`. Its type does not show whether the lambda in it shares a
+  variable, so the compiler cannot check that one. A build with [`--race`](#the-race-check) finds two threads that change one at
+  once, and an object that was freed early because of that is reported as what such a race can do.
 
 **A thread gets values of its own.** Strings, vectors, hashmaps, structs and arrays are values, so the thread has a copy, which is cheap, and
 what it changes does not show anywhere else. The method of a struct runs on a copy of the struct. A `unique` reference is handed over with
@@ -3360,8 +3387,8 @@ Not yet: stopping a task, and waiting with a time limit. [`http::fetch`](#http) 
 
 ### Mutex
 
-Two threads must not use the same memory at the same time if either of them is changing it, which in C+ can only be a class's field or what a
-pointer leads to. A wrong result from that can take a very long time to show up. A `Mutex` keeps them apart:
+Two threads must not use the same memory at the same time if either of them is changing it, which in C+ can only be a class's field, what a
+pointer leads to, or a variable that a lambda shares, through a function value given to another thread. A wrong result from that can take a very long time to show up. A `Mutex` keeps them apart:
 
 ```cpp
 class Account {
@@ -3660,7 +3687,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | `constexpr` values and functions, `if constexpr`, array sizes and template arguments worked out while compiling | implemented |
 | `constexpr` methods and structs; a generic `constexpr` function in an array's size | planned |
 | Lambdas: captures by name, `[&]`, `[=]`, `[this]`, `[*this]`, `[n = 0]`; `function<R(Args...)>`, `throws` and `function<...>?`; functions by name as values; borrowed and kept lambdas, shared variables in boxes, a new loop variable each round; `auto` parameters where the type a lambda is given to says what they are | implemented |
-| `await` in a lambda, `spawn` of a lambda, default values for its parameters, a lambda sharing a reference variable, C functions as values | planned |
+| `await` in a lambda, default values for its parameters, a lambda sharing a reference variable, C functions as values | planned |
 | Enums held in other integer types, enumerator values that use enumerators, a switch with an initializer | planned |
 | Default arguments | implemented |
 | Default arguments in generics, `auto` return types, `auto` parameters of functions and of lambdas whose types nothing says | planned |
@@ -3706,7 +3733,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Files: `fs::readFile` and `fs::writeFile`, for `await` | planned |
 | Modules of your own: `import net.server;`, `export`, `net::server::start()` | implemented |
 | `export { ... }`, `export import`, `export extern "C"`, aliases of modules | planned |
-| Threads: `spawn`, `Task`, `Mutex`, `LockGuard`, `--race` | implemented |
+| Threads: `spawn` of functions, methods, lambdas and function values, `Task`, `Mutex`, `LockGuard`, `--race` | implemented |
 | `async` functions, `await`, `delay` | implemented |
 | Atomic values, condition variables, channels | planned |
 

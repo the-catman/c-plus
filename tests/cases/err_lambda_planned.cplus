@@ -37,9 +37,4 @@ void moves() {
     auto g = [v = move(w)] { return move(v); };
     // error: 'v' cannot be moved, as the lambda holds 'v', which never changes
 }
-void spawnLambda() {
-    auto f = [] { return 1; };
-    auto t = spawn f();
-    // error: this compiler does not support `spawn` of a lambda or a function value yet
-}
 int main() { return 0; }

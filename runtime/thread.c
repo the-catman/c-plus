@@ -61,6 +61,12 @@ static void* thread_main(void* given) {
     return NULL;
 }
 
+static int any_started;
+
+int cplus_threads_started(void) {
+    return __atomic_load_n(&any_started, __ATOMIC_RELAXED);
+}
+
 void cplus_thread_start(void (*entry)(void*), void* closure) {
     extern int cplus_before_main;
     if (cplus_before_main)
@@ -76,6 +82,7 @@ void cplus_thread_start(void (*entry)(void*), void* closure) {
     pthread_mutex_lock(&running_lock);
     running++;
     pthread_mutex_unlock(&running_lock);
+    __atomic_store_n(&any_started, 1, __ATOMIC_RELAXED);
     pthread_t thread;
     int result = pthread_create(&thread, &attributes, thread_main, start);
     pthread_attr_destroy(&attributes);

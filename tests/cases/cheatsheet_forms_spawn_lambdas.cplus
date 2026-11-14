@@ -1,0 +1,16 @@
+// The forms of spawn with a lambda that the cheat sheet writes.
+int work(int x) { return x * 2; }
+
+int main() {
+    int n = 21;
+    auto t = spawn [=] { return work(n); }();
+    function<void()> job = [] {};
+    spawn job();
+    auto printed = spawn [=] { println("x"); }();
+    printed.wait();
+    spawn [=] { work(n); }();
+    println("{}", t.wait());
+    return 0;
+}
+// expect: x
+// expect: 42

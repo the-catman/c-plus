@@ -388,9 +388,17 @@ static int leak_checking(void) {
     return check_leaks;
 }
 
+// Whether `spawn` ever started a thread, from thread.c, which a program without threads does not have.
+int cplus_threads_started(void) __attribute__((weak));
+
 _Noreturn static void bad_count(void) {
     cplus_fatal_begin();
-    fputs("internal error: an object was used after it was freed; this is a bug in the C+ compiler\n", stderr);
+    if (cplus_threads_started && cplus_threads_started())  // two threads that change one variable at once can do this
+        fputs("fatal error: an object was used after it was freed, which two threads that change one variable at once can do\n"
+              "  = help: run the program with `--race`, which shows where they do, and guard what both change with a Mutex\n",
+              stderr);
+    else
+        fputs("internal error: an object was used after it was freed; this is a bug in the C+ compiler\n", stderr);
     stop_program();
 }
 

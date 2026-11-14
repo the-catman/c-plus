@@ -4,4 +4,4 @@ int main() {
     return 0;
 }
 // error: `spawn` runs a call on a thread, and this is not one
-// error: write `spawn f(x)` or `spawn object.method(x)`
+// error: write `spawn f(x)`, `spawn object.method(x)` or `spawn [=] { ... }()`

@@ -6,4 +6,6 @@ int main() {
     return 0;
 }
 // error: `spawn` runs a function or method written in C+, and this is built in
-// error: write a function that does this, and spawn that
+// error: run it in a lambda: `spawn [=] { println("hi"); }()`
+// error: run it in a lambda: `spawn [=] { return v.size(); }()`
+// error: run it in a lambda: `spawn [=] { return sqrt(...); }()`

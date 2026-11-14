@@ -1,0 +1,97 @@
+// spawn runs a call of a lambda, or of a function value, on a thread. The lambda copies what it uses, and what it is given is
+// worked out before the thread starts.
+struct Point {
+    int x = 0;
+    int y = 0;
+    string label;
+};
+class Counter {
+public:
+    int n = 0;
+    Mutex m = Mutex();
+    Task<void> bumpLater() { return spawn [=] { LockGuard g = LockGuard(m); n += 1; }(); }
+    void method() { LockGuard g = LockGuard(m); n += 10; }
+    Task<void> viaMethod() { return spawn this.method(); }
+};
+class Node {
+public:
+    int v = 7;
+};
+struct Holder {
+    function<int(int)> f;
+};
+int take(unique<Node> u) { return u.v; }
+int work(int x) { return x * 2; }
+template<typename T> T waitFor(Task<T, throws> t) throws { return try t.wait(); }
+
+int main() throws {
+    int n = 21;
+    string s = "hi";
+    vector<int> v = {1, 2, 3};
+    Point p = {1, 2, "p"};
+    auto first = spawn [=] { return work(n) + v.size() + s.size() + p.x; }();
+    println("{}", first.wait());
+    // expect: 48
+    auto t = spawn [=] { return work(n); }();
+    println("{}", t.wait());
+    // expect: 42
+    // A T parameter is the lambda's own copy, and changing it changes nothing here.
+    function<string(string, vector<int>, Point)> join = [](string w, vector<int> xs, const Point& q) { w += "!"; xs.push_back(4); return w + to_string(xs.size()) + q.label; };
+    auto b = spawn join(s, v, p);
+    println("{} {} {}", b.wait(), s, v);
+    // expect: hi!4p hi [1, 2, 3]
+    auto c = spawn [](string w, int k, const Point& q) { return w + to_string(k) + q.label; }(s + "x", n, p);
+    println("{}", c.wait());
+    // expect: hix21p
+    vector<function<int(int)>> handlers = {[](int x) { return x + 1; }, work};
+    int i = 1;
+    int e = 5;
+    auto d = spawn handlers[i](e);
+    Holder h = {[](int x) { return x * 10; }};
+    auto f = spawn h.f(3);
+    println("{} {}", d.wait(), f.wait());
+    // expect: 10 30
+    auto fails = spawn [=]() throws { if (n > 20) throw Error("too big"); return n; }();
+    try {
+        println("{}", try fails.wait());
+    } catch (Error err) {
+        println("caught {}", err.what());
+    }
+    // expect: caught too big
+    println("{}", try waitFor(spawn [=]() throws { return n + 1; }()));
+    // expect: 22
+    auto quiet = spawn [=] { println("void {}", n); }();
+    quiet.wait();
+    // expect: void 21
+    Counter counter = Counter();
+    vector<Task<void>> ts;
+    for (int k = 0; k < 8; k++) ts.push_back(counter.bumpLater());
+    ts.push_back(counter.viaMethod());
+    for (auto task : ts) task.wait();
+    println("{}", counter.n);
+    // expect: 18
+    unique<Node> u = unique<Node>();
+    auto handed = spawn [](unique<Node> w) { return take(move(w)); }(move(u));
+    println("{}", handed.wait());
+    // expect: 7
+    vector<Task<long>> many;
+    for (int k = 0; k < 20; k++) many.push_back(spawn [=] { long sum = 0; for (int j = 0; j <= k; j++) sum += j + v[0]; return sum; }());
+    long sum = 0;
+    for (auto task : many) sum += task.wait();
+    println("{}", sum);
+    // expect: 1540
+    // The function value the thread calls is its own: replacing the variable after changes nothing.
+    function<int()> job = [=] { return n * 3; };
+    auto j = spawn job();
+    job = [] { return 0; };
+    println("{}", j.wait());
+    // expect: 63
+    const int fixed = 4;
+    auto shared = spawn [&] { return fixed * 2; }();
+    println("{}", shared.wait());
+    // expect: 8
+    spawn job();
+    spawn [=] { println("let go {}", s); }();
+    return 0;
+}
+// expect: let go hi

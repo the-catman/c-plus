@@ -2802,9 +2802,24 @@ const Type* Sema::checkSpawn(SpawnExpr& s, Flow& flow) {
                      "write `auto t = spawn f();`, then `try t.wait()`, which is where its error comes out", spec::Concurrency);
         return Type::error();
     }
-    if (call.kind != Expr::Kind::Call && call.kind != Expr::Kind::MethodCall) {
+    if (call.kind == Expr::Kind::Lambda) {  // `spawn [=] { ... }`, as other languages hand a thread the function itself
+        checkLooseValue(call, flow);
+        auto& l = static_cast<LambdaExpr&>(call);
+        const std::string head = l.byDefault == LambdaExpr::Default::Copy ? "[=]" : l.written.empty() && l.byDefault == LambdaExpr::Default::None ? "[]" : "[...]";
+        diags_.error(call.loc, "`spawn` runs a call on a thread, and this lambda is not called",
+                     "call it, with what it takes in the parentheses: `spawn " + head + (l.fn->params.empty() ? " { ... }()`" : "(...) { ... }(...)`"),
+                     spec::Concurrency);
+        return Type::error();
+    }
+    if (call.kind != Expr::Kind::Call && call.kind != Expr::Kind::MethodCall && call.kind != Expr::Kind::CallValue) {
+        const std::string name = call.kind == Expr::Kind::Name ? static_cast<NameExpr&>(call).name : "";
+        const VarDecl* v = name.empty() ? nullptr : lookup(name);
+        const bool value = v && v->type && v->type->isFunction();
+        const bool callable = value || (!v && !name.empty() && funcs_.count(name));  // `spawn job`, `spawn work`
+        const bool none = value ? v->type->params->empty() : callable && funcs_.at(name)->params.empty();
         diags_.error(call.loc, "`spawn` runs a call on a thread, and this is not one",
-                     "write `spawn f(x)` or `spawn object.method(x)`", spec::Concurrency);
+                     !callable ? "write `spawn f(x)`, `spawn object.method(x)` or `spawn [=] { ... }()`" : "call it: `spawn " + name + (none ? "()`" : "(...)`"),
+                     spec::Concurrency);
         return Type::error();
     }
     const Expr* outer = spawned_;
@@ -2813,58 +2828,108 @@ const Type* Sema::checkSpawn(SpawnExpr& s, Flow& flow) {
     spawned_ = outer;
     if (result->isError()) return result;
     const FuncDecl* target = nullptr;
+    const CallValueExpr* through = nullptr;  // a call of a function value
     if (call.kind == Expr::Kind::Call) {
         auto& c = static_cast<CallExpr&>(call);
         target = c.target ? c.target : c.method;
-    } else {
+        if (c.lowered && c.lowered->kind == Expr::Kind::CallValue) through = static_cast<const CallValueExpr*>(c.lowered.get());
+    } else if (call.kind == Expr::Kind::MethodCall) {
         auto& m = static_cast<MethodCallExpr&>(call);
         if (!m.lowered) target = m.method;
+        else if (m.lowered->kind == Expr::Kind::CallValue) through = static_cast<const CallValueExpr*>(m.lowered.get());
+    } else {
+        through = static_cast<const CallValueExpr*>(&call);
     }
-    const Expr* lowered = call.kind == Expr::Kind::Call ? static_cast<CallExpr&>(call).lowered.get() : static_cast<MethodCallExpr&>(call).lowered.get();
-    if (lowered && lowered->kind == Expr::Kind::CallValue) {
-        diags_.error(call.loc, "this compiler does not support `spawn` of a lambda or a function value yet",
-                     "write a function that does this, and spawn that: `spawn work(x)`", spec::Concurrency);
+    const Type* ft = through ? through->callee->type : nullptr;
+    if (through && (!ft || !ft->isFunction())) return Type::error();  // reported
+    if (!target && !through) {
+        const auto* c = call.kind == Expr::Kind::Call ? static_cast<const CallExpr*>(&call) : nullptr;
+        const std::string text = spelled(call, "");
+        diags_.error(call.loc, std::string("`spawn` runs a function or method written in C+, and this is ") + (c && c->constructs ? "a constructor" : "built in"),
+                     "run it in a lambda: `spawn [=] { " + std::string(result->is(K::Void) ? "" : "return ") + (text.empty() ? std::string("...") : text) + "; }()`",
+                     spec::Concurrency);
         return Type::error();
     }
-    if (!target || target->isExtern) {
-        diags_.error(call.loc, std::string("`spawn` runs a function or method written in C+, and this is ") + (target ? "a C function" : "built in"),
-                     "write a function that does this, and spawn that", spec::Concurrency);
+    if (target && target->isExtern) {
+        const std::string text = spelled(call, "");
+        diags_.error(call.loc, "`spawn` runs a function or method written in C+, and this is a C function",
+                     "run it in a lambda: `spawn [=] { " + std::string(result->is(K::Void) ? "" : "return ") + (text.empty() ? std::string("...") : text) + "; }()`",
+                     spec::Concurrency);
         return Type::error();
     }
     // Its count is not safe to work on from two threads. This looks at the types that are passed, and so cannot see a reference
     // that a function keeps somewhere, or that `x.get()` lent: a build with --race catches those.
     auto refuseLocal = [&](const Type* t, Loc loc, const std::string& what) {
-        if (t->isError() || !holdsLocal(t)) return false;
+        if (!t || t->isError() || !holdsLocal(t)) return false;
         diags_.error(loc, what + " would give another thread a local reference" + (t->isLocal() ? "" : ", which " + q(t) + " holds"),
                      "use a class reference, whose count works across threads, or give the thread a copy of what it needs from the object", spec::Local);
         return true;
     };
-    const auto& args = call.kind == Expr::Kind::Call ? static_cast<CallExpr&>(call).args : static_cast<MethodCallExpr&>(call).args;
-    bool refused = false;
-    for (size_t i = 0; i < args.size() && i < target->params.size(); ++i)
-        if (target->params[i]->isRef) {
-            diags_.error(args[i]->loc, "`spawn` cannot pass this to " + q(target->name) + ", whose parameter " + q(target->params[i]->name) +
-                                           " is a reference, since the thread runs on after this line",
-                         "have " + q(target->name) + " take the value, `" + std::string(target->params[i]->type->name) + " " + target->params[i]->name +
-                             "`: a copy of a vector or a string shares its buffer, so it costs little",
-                         spec::References);
-            refused = true;
+    // A lambda written here, or given to the call, which the thread runs while this one goes on: what it shares, both could
+    // change at once, and a string or a vector that two threads change can break. A function value that holds such a lambda
+    // cannot be seen through, which is left to --race.
+    auto refuseShared = [&](const LambdaExpr& l) {
+        bool bad = false;
+        for (auto& c : l.captured) {
+            if (c.self) continue;
+            const VarDecl& v = *c.var;
+            bad = refuseLocal(v.type, c.at, "capturing " + q(v.name)) || bad;
+            if (!c.shares || v.isRef || (v.isConst && isCopyable(v.type))) continue;  // a reference is reported as for any kept lambda; a const one is copied
+            diags_.error(c.at, "a lambda that runs on another thread cannot share " + q(v.name) + " with the code that started it, as both could change it at once",
+                         "copy it, with `[=]` or `[" + v.name + "]`, and give back what the thread works out through its task: `auto t = spawn [=] { return ...; }();`, "
+                         "then `t.wait()`. What threads share is a class object, with a Mutex for what changes",
+                         spec::Concurrency);
+            bad = true;
         }
-    for (size_t i = 0; i < args.size(); ++i)
+        for (auto& c : l.written)
+            if (c.mode == LambdaExpr::Capture::Mode::Init && c.var) bad = refuseLocal(c.var->type, c.loc, "capturing " + q(c.name)) || bad;
+        return bad;
+    };
+    const auto& args = through ? through->args : call.kind == Expr::Kind::Call ? static_cast<CallExpr&>(call).args : static_cast<MethodCallExpr&>(call).args;
+    bool refused = false;
+    if (through) {
+        const auto& params = *ft->params;
+        const auto* lambda = through->callee->kind == Expr::Kind::Lambda ? static_cast<const LambdaExpr*>(through->callee.get()) : nullptr;
+        for (size_t i = 0; i < args.size() && i < params.size(); ++i)
+            if (params[i].isRef) {
+                const std::string name = lambda && i < lambda->fn->params.size() ? lambda->fn->params[i]->name : "";
+                diags_.error(args[i]->loc, "`spawn` cannot pass this to a parameter that is a reference, `" + std::string(params[i].type->name) + "&" +
+                                               (name.empty() ? "" : " " + name) + "`, since the thread runs on after this line",
+                             "take the value, `" + std::string(params[i].type->name) + (name.empty() ? "" : " " + name) +
+                                 "`: a copy of a vector or a string shares its buffer, so it costs little",
+                             spec::References);
+                refused = true;
+            }
+        if (lambda) refused = refuseShared(*lambda) || refused;
+    } else {
+        for (size_t i = 0; i < args.size() && i < target->params.size(); ++i)
+            if (target->params[i]->isRef) {
+                diags_.error(args[i]->loc, "`spawn` cannot pass this to " + q(target->name) + ", whose parameter " + q(target->params[i]->name) +
+                                               " is a reference, since the thread runs on after this line",
+                             "have " + q(target->name) + " take the value, `" + std::string(target->params[i]->type->name) + " " + target->params[i]->name +
+                                 "`: a copy of a vector or a string shares its buffer, so it costs little",
+                             spec::References);
+                refused = true;
+            }
+    }
+    for (size_t i = 0; i < args.size(); ++i) {
         refused = refuseLocal(args[i]->type ? args[i]->type : Type::error(), args[i]->loc, "this argument") || refused;
-    if (call.kind == Expr::Kind::MethodCall) {
+        if (args[i]->kind == Expr::Kind::Lambda) refused = refuseShared(static_cast<const LambdaExpr&>(*args[i])) || refused;
+    }
+    if (call.kind == Expr::Kind::MethodCall && !through) {
         const Expr& recv = *static_cast<MethodCallExpr&>(call).receiver;
         const Expr* inner = recv.kind == Expr::Kind::Borrow ? static_cast<const BorrowExpr&>(recv).operand.get() : &recv;
         refused = refuseLocal(inner->type, recv.loc, "calling a method on this") || refused;
-    } else if (static_cast<CallExpr&>(call).method) {
+    } else if (call.kind == Expr::Kind::Call && static_cast<CallExpr&>(call).method) {
         refused = refuseLocal(&fn_->owner->type, call.loc, "calling a method on `this`") || refused;
     }
-    refused = refuseLocal(target->retType, call.loc, "what this call returns") || refused;
+    refused = refuseLocal(through ? ft->elem : target->retType, call.loc, "what this call returns") || refused;
     if (refused) return Type::error();
     if (diags_.hasErrors() && !program_->findTemplate("Task")) return Type::error();  // it has a Task of its own, as was reported
-    const Type* task = parser_.taskType(target->bodyRet(), target->isThrows, call.loc);
+    const Type* task = through ? parser_.taskType(ft->elem, ft->throws, call.loc) : parser_.taskType(target->bodyRet(), target->isThrows, call.loc);
     adoptTypes();
     s.target = target;
+    s.through = through;
     s.task = task->decl;
     auto* decl = const_cast<StructDecl*>(s.task);
     FuncDecl* finish = decl->ownMethod("__finish");
@@ -4751,8 +4816,12 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
             if (c.var.get() == rootVar) {
                 std::string what = element ? std::string("the ") + parts + " of " + q(outerVectorName(target)) : q(var && !path.empty() ? path : rootVar->name);
                 diags_.error(target.loc, what + " cannot be " + action + ", as the lambda holds " + q(rootVar->name) + ", which never changes",
-                             std::string(action) == "moved" ? "copy it: write `" + rootVar->name + "` in place of `move(" + rootVar->name + ")`"
-                                                            : "declare it outside the lambda, and share it: `int n = 0; auto f = [&] { n += 1; };`",
+                             std::string(action) != "moved" ? "declare it outside the lambda, and share it: `int n = 0; auto f = [&] { n += 1; };`"
+                             : isCopyable(rootVar->type)
+                                 ? "copy it: write `" + rootVar->name + "` in place of `move(" + rootVar->name + ")`"
+                                 // a lambda can be called more than once, so it cannot give away what it holds; a parameter it can
+                                 : "take it as a parameter of the lambda, which can give it away, and pass it in the call: `[](" +
+                                       std::string(rootVar->type->name) + " " + rootVar->name + ") { ... }(move(x))`",
                              spec::Lambdas);
                 return false;
             }
@@ -6163,6 +6232,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         auto callee = std::make_unique<NameExpr>(at, call.callee);
         call.lowered = std::make_unique<CallValueExpr>(call.loc, std::move(callee), std::move(call.args));
         call.args.clear();
+        if (&call == spawned_) spawned_ = call.lowered.get();  // which is what the thread runs
         return checkExpr(*call.lowered, flow);
     };
     if (call.templateArgs.empty() && call.loc.line != 0)
@@ -7255,6 +7325,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         member->type = field.type;
         auto through = std::make_unique<CallValueExpr>(call.loc, std::move(member), std::move(call.args));
         call.args.clear();
+        if (&call == spawned_) spawned_ = through.get();  // which is what the thread runs
         const Type* result = checkCallValue(*through, flow);
         through->type = result;
         call.lowered = std::move(through);
@@ -9155,7 +9226,7 @@ const Type* Sema::checkCallValue(CallValueExpr& c, Flow& flow) {
         boundByRef_ = bound;
         if (params[i].isRef && !params[i].isConst) checkRefBinding(*c.args[i], params[i].type, "argument " + std::to_string(i + 1) + " of " + shown);
     }
-    if (t->throws) checkCanFailNamed(shown == "the function" ? "the function" : name, c.loc);
+    if (t->throws && &c != spawned_) checkCanFailNamed(shown == "the function" ? "the function" : name, c.loc);
     return t->elem;
 }
 
@@ -9284,9 +9355,16 @@ struct CaptureCheck {
                 for (size_t i = 0; i < c->args.size(); ++i) expr(c->args[i].get(), Use::Arg, target, i);
                 return;
             }
-            case Expr::Kind::Spawn: {  // what runs on another thread keeps all it is given
+            case Expr::Kind::Spawn: {  // what runs on another thread keeps all it is given, and the function value it calls
                 Expr* call = static_cast<SpawnExpr*>(e)->call.get();
-                if (call->kind == Expr::Kind::Call && !static_cast<CallExpr*>(call)->lowered) {
+                Expr* through = call->kind == Expr::Kind::CallValue ? call
+                                : call->kind == Expr::Kind::Call ? static_cast<CallExpr*>(call)->lowered.get()
+                                : call->kind == Expr::Kind::MethodCall ? static_cast<MethodCallExpr*>(call)->lowered.get()
+                                                                         : nullptr;
+                if (through && through->kind == Expr::Kind::CallValue) {
+                    expr(static_cast<CallValueExpr*>(through)->callee.get(), Use::Kept);
+                    for (auto& a : static_cast<CallValueExpr*>(through)->args) expr(a.get(), Use::Kept);
+                } else if (call->kind == Expr::Kind::Call && !static_cast<CallExpr*>(call)->lowered) {
                     for (auto& a : static_cast<CallExpr*>(call)->args) expr(a.get(), Use::Kept);
                 } else if (call->kind == Expr::Kind::MethodCall && !static_cast<MethodCallExpr*>(call)->lowered) {
                     expr(static_cast<MethodCallExpr*>(call)->receiver.get(), Use::Kept);

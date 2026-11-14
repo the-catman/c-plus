@@ -1,0 +1,23 @@
+// A function value's type does not show what its lambda shares, so the compiler cannot refuse to give one that shares to a
+// thread. A build with --race finds the two threads that change the variable at once.
+extern "C" int usleep(int microseconds);
+int call(function<int()> f) { return f(); }
+
+int main() {
+    int total = 0;
+    function<int()> job = [&] {
+        for (int i = 0; i < 200; i++) {
+            total += 1;
+            usleep(100);
+        }
+        return 1;
+    };
+    auto a = spawn call(job);
+    auto b = spawn job();
+    a.wait();
+    b.wait();
+    println("{}", total);
+    return 0;
+}
+// race: two threads used the same memory at the same time
+// race: race_function_value_shares.cplus:10
