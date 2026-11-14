@@ -44,7 +44,11 @@ header_opaque* header_open(int n) {
 }
 int header_value(const header_opaque* h) { return h->n; }
 void header_close(header_opaque* h) { free(h); }
-int header_call_back(header_callback f, void* data) { return f == NULL && data == NULL ? 1 : 0; }
+int header_call_back(header_callback f, void* data) {
+    if (f == NULL) return data == NULL ? 1 : 0;
+    f(data);
+    return 2;
+}
 int header_words_sum(struct header_words w) { return w.class + w.new + w.string; }
 int header_union_int(union header_either* e) { return e->i; }
 int header_keyword_params(int string, int new, int private) { return string * 100 + new * 10 + private; }

@@ -1,0 +1,64 @@
+// How a C function pointer is written, and what it can take: each mistake says what to write.
+using Named = void (*h)(int);
+// error: a function pointer type has no name of its own here, as the alias names it
+// error: leave out 'h': `using Named = void (*)(...);`
+void noName() {
+    void (*)(int) = null;
+    // error: expected a name for the variable
+}
+void notTakes() {
+    void (*f);
+    // error: a function pointer says what it takes, in parentheses after its name
+}
+void pointerToOne() {
+    void (**f)(int) = null;
+    // error: this compiler does not support pointers and references to C function pointers yet
+}
+void variadic() {
+    int (*f)(const char*, ...) = null;
+    // error: this compiler does not support C function pointers with variable arguments yet
+}
+void notAType() {
+    void (*f)(1) = null;
+    // error: expected the type of a parameter, found
+}
+void reference() {
+    void (*f)(int& n) = null;
+    // error: C has no references
+    // error: write a pointer, `int*`, which C passes the same way
+}
+void arrayParameter() {
+    void (*f)(int values[]) = null;
+    // error: a C array parameter is written as a pointer
+}
+void voidParameter() {
+    void (*f)(int a, void) = null;
+    // error: a parameter cannot be 'void'
+}
+void twoInOne() {
+    int a = 0, (*f)(int) = null;
+    // error: a function pointer is declared on its own
+}
+struct TwoFields {
+    int a, (*f)(int);
+    // error: a function pointer is declared on its own
+};
+void vectorParameter() {
+    void (*f)(vector<int> v) = null;
+    // error: a C function pointer cannot take 'vector<int>', which C has no equivalent of
+}
+void pointerToVector() {
+    void (*f)(vector<int>* v) = null;
+    // error: a C function pointer cannot take 'vector<int>*', because C has no equivalent of a pointer to a vector
+}
+void functionParameter() {
+    void (*f)(function<void()> g) = null;
+    // error: take a C function pointer, `R (*f)(...)`, which C can call
+}
+void bytesFromInts() {
+    array<int, 2> a = {1, 2};
+    string s = string(a.data(), 2);
+    // error: string(p, n) copies the bytes a char* points to, but this is 'int*'
+    // error: cast it first, as C++ needs too: `string((const char*)a.data(), n)`
+}
+int main() { return 0; }

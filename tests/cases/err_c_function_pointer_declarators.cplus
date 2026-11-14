@@ -1,0 +1,12 @@
+// C writes some function pointers inside another declaration, which C+ reads only through a `using`.
+void (*handlers[4])(int);
+// error: C+ reads a function pointer array only through a name for its type
+// error: name the type first: `using Handler = void (*)(int);`, then write `Handler` where it goes
+extern "C" void (*signal(int sig, void (*handler)(int)))(int);
+// error: C+ reads a function pointer that a function returns only through a name for its type
+// error: name the type first: `using Handler = void (*)(int);`, then `Handler signal(...);`
+void (*pick(int n))(int) { return null; }
+// error: then `Handler pick(...) { ... }`
+int (*f)(int) throws = null;
+// error: a function that C calls cannot fail, as C cannot pass an error on
+int main() { return 0; }

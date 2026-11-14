@@ -1,0 +1,33 @@
+// The forms of C function pointers that the cheat sheet writes.
+extern "C" void qsort(void* base, long n, long size, int (*compare)(const void*, const void*));
+using Handler = void (*)(int);
+extern "C" Handler signal(int sig, Handler func);
+
+struct Seen {
+    int count = 0;
+};
+
+int byValue(const void* x, const void* y) { return *(const int*)x - *(const int*)y; }
+void walk(void* data, void (*visit)(void* data)) { visit(data); }
+void visit(void* data) {
+    auto seen = (Seen*)data;
+    seen->count++;
+}
+void handle(int n) {}
+
+int main() {
+    array<int, 4> a = {4, 3, 2, 1};
+    qsort(a.data(), 4, sizeof(int), byValue);
+    qsort(a.data(), 4, sizeof(int), [](const void* x, const void* y) { return *(const int*)x - *(const int*)y; });
+    Seen seen;
+    walk(&seen, visit);
+    Handler h = handle;
+    int sig = 1;
+    h(sig);
+    array<char, 3> bytes = {'a', 'b', 'c'};
+    char* p = bytes.data();
+    long n = 2;
+    println("{} {} {}", a, seen.count, string(p, n));
+    return 0;
+}
+// expect: [1, 2, 3, 4] 1 ab

@@ -1,0 +1,9 @@
+// string(p, n) copies n bytes, and a negative count stops the program, as string(count, c) does.
+int main() {
+    array<char, 2> a = {'a', 'b'};
+    long n = -1;
+    println("{}", string(a.data(), n));
+    return 0;
+}
+// trap: string(p, n) was given the negative count -1
+// trap: trap_string_bytes_negative.cplus:5:

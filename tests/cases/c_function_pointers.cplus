@@ -1,0 +1,82 @@
+// C function pointers: written as in C, given a function by its name or a lambda that captures nothing, called, compared,
+// cast, and held in variables, fields and vectors.
+extern "C" {
+    void qsort(void* base, long count, long size, int (*compare)(const void*, const void*));
+    int atexit(void (*f)());
+}
+using Handler = void (*)(int);
+extern "C" Handler signal(int sig, Handler handler);
+extern "C" int raise(int sig);
+
+struct Ops {
+    int (*combine)(int a, int b) = null;
+    const char* (*name)();
+};
+
+int byValue(const void* a, const void* b) {
+    int x = *(const int*)a;
+    int y = *(const int*)b;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+int got = 0;
+void onSignal(int sig) { got = sig; }
+void bye() { println("bye"); }
+int apply(int (*f)(int), int x) { return f(x); }
+int applyC(int (*f)(int), int x) { return (*f)(x); }
+void each(void* data, void (*visit)(void*, int)) {
+    for (int i = 0; i < 3; i++) visit(data, i);
+}
+int (*kept)(int) = [](int x) { return x + 100; };
+
+int main() {
+    array<int, 5> a = {5, 1, 4, 2, 3};
+    qsort(a.data(), 5, sizeof(int), byValue);
+    println("{}", a);
+    // expect: [1, 2, 3, 4, 5]
+    qsort(a.data(), 5, sizeof(int), [](const void* p, const void* q) { return *(const int*)q - *(const int*)p; });
+    println("{}", a);
+    // expect: [5, 4, 3, 2, 1]
+    qsort(a.data(), 5, sizeof(int), [](auto p, auto q) { return *(const int*)p - *(const int*)q; });
+    println("{}", a);
+    // expect: [1, 2, 3, 4, 5]
+    atexit(bye);
+    Handler old = signal(10, onSignal);
+    raise(10);
+    Handler mine = signal(10, old);
+    println("{} {} {}", got, old == null, mine == onSignal);
+    // expect: 10 true true
+    int (*twice)(int) = [](int x) { return x * 2; };
+    println("{} {} {} {}", twice(21), apply(twice, 5), applyC(twice, 6), (*twice)(7));
+    // expect: 42 10 12 14
+    println("{} {}", apply([](int x) { return x + 1; }, 1), kept(1));
+    // expect: 2 101
+    vector<int> seen;
+    each(&seen, [](void* data, int i) { auto v = (vector<int>*)data; v->push_back(i * 10); });
+    println("{}", seen);
+    // expect: [0, 10, 20]
+    Handler none = null;
+    if (!none && twice) println("{} {}", none == null, twice != null);
+    // expect: true true
+    Ops ops = {null, null};
+    println("{}", ops.combine == null);
+    // expect: true
+    ops.combine = [](int x, int y) { return x * y; };
+    ops.name = [] { return (const char*)null; };
+    println("{} {}", ops.combine(6, 7), ops.name() == null);
+    // expect: 42 true
+    vector<int (*)(int)> steps = {twice, [](int x) { return x - 1; }};
+    int v = 5;
+    for (auto step : steps) v = step(v);
+    println("{}", v);
+    // expect: 9
+    void* raw = (void*)twice;
+    int (*back)(int) = (int (*)(int))raw;
+    Handler ign = reinterpret_cast<Handler>(1);
+    println("{} {} {}", back(4), reinterpret_cast<long>(ign), back == twice);
+    // expect: 8 1 true
+    Handler chosen = got > 0 ? onSignal : null;
+    println("{}", chosen == onSignal);
+    // expect: true
+    return 0;
+}
+// expect: bye

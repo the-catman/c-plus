@@ -56,7 +56,8 @@ struct Codegen::Impl {
     llvm::GlobalVariable* hashSeed = nullptr;
     llvm::FunctionCallee rtTrapIndex, rtTrapArrayIndex, rtTrapGone, rtVecNew, rtVecRelease, rtVecReserve;
     llvm::FunctionCallee rtStrRelease, rtStrCompare, rtStrConcat, rtStrAppend, rtStrSubstr, rtStrFind;
-    llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars;
+    llvm::FunctionCallee rtGlobalsReleaseAtExit, rtMainReturned;
+    llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars, rtStrFromBytes;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
     llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtArgs, rtGlobalsStart, rtGlobalsDone, rtDynamicCast, rtRetainObject, rtObjectStart;
@@ -258,6 +259,7 @@ struct Codegen::Impl {
     std::unordered_map<const LambdaExpr*, LambdaInfo> lambdaInfos;
     std::vector<const LambdaExpr*> lambdaQueue;  // lambdas whose code is still to be generated
     std::unordered_map<const FuncDecl*, llvm::Function*> valueThunks;  // a function used as a value: see functionThunk
+    std::map<std::pair<const void*, const Type*>, llvm::Function*> cAdapters;  // what C calls for a function or a lambda: see cAdapter
     std::unordered_map<const Type*, std::vector<std::unique_ptr<VarDecl>>> fnParams;  // what a function type takes, for genArguments
     // A variable that a kept lambda shares lives in a box, { i64 count, ptr table, T value }, which the lambda holds too. The
     // place each one's box is in: a slot of the function, or of the env of the lambda that shares it.
@@ -419,6 +421,8 @@ struct Codegen::Impl {
         rtStart = decl("cplus_start", voidTy, {});
         rtArgs = decl("cplus_args", ptrTy, {i32, ptrTy});
         rtGlobalsStart = decl("cplus_globals_start", voidTy, {});
+        rtGlobalsReleaseAtExit = decl("cplus_globals_release_at_exit", voidTy, {ptrTy});
+        rtMainReturned = decl("cplus_main_returned", voidTy, {});
         rtGlobalsDone = decl("cplus_globals_done", voidTy, {});
         rtDynamicCast = decl("cplus_dynamic_cast", ptrTy, {ptrTy, ptrTy});
         rtRetainObject = decl("cplus_retain_object", voidTy, {ptrTy});
@@ -435,6 +439,7 @@ struct Codegen::Impl {
         rtObjectStart = decl("cplus_object_start", ptrTy, {ptrTy});
         rtStrMutable = decl("cplus_str_mutable", ptrTy, {ptrTy});
         rtStrRepeat = decl("cplus_str_repeat", voidTy, {ptrTy, i64, i32, ptrTy, i32, i32});
+        rtStrFromBytes = decl("cplus_str_from_bytes", voidTy, {ptrTy, ptrTy, i64, ptrTy, i32, i32});
         rtVecNew = decl("cplus_vec_new", ptrTy, {i64, i64});
         rtVecRelease = decl("cplus_vec_release", voidTy, {ptrTy, i64, ptrTy});
         rtVecReserve = decl("cplus_vec_reserve", ptrTy, {ptrTy, i64, i64, ptrTy, ptrTy});
@@ -461,7 +466,7 @@ struct Codegen::Impl {
             case K::String: return stringTy;
             case K::Struct: return types.at(t->decl).layout;
             case K::Array: return llvm::ArrayType::get(llvmType(t->elem), (uint64_t)t->length);
-            case K::Class: case K::Vector: case K::Null: case K::Pointer: case K::Weak: case K::Unique: case K::Local: return b.getPtrTy();
+            case K::Class: case K::Vector: case K::Null: case K::Pointer: case K::Weak: case K::Unique: case K::Local: case K::CFunction: return b.getPtrTy();
             case K::Enum: return llvmType(t->decl->underlying);  // its number
             case K::Function: return fnTy;
             // An optional class reference is a pointer that may be null. Any other
@@ -1903,7 +1908,7 @@ struct Codegen::Impl {
             case K::Struct:
                 if (const FuncDecl* ctor = t->decl->defaultConstructor()) return construct(*t->decl, {}, ctor);
                 return buildAggregate(*t->decl, {});
-            case K::Class: case K::Vector: case K::Pointer: case K::Weak: case K::Unique: case K::Local:
+            case K::Class: case K::Vector: case K::Pointer: case K::Weak: case K::Unique: case K::Local: case K::CFunction:
                 return llvm::ConstantPointerNull::get(b.getPtrTy());
             case K::Optional: return zeroValue(t);  // null
             case K::Function: return llvm::Constant::getNullValue(fnTy);  // no code: Sema makes sure it is given a value before a call
@@ -2126,7 +2131,7 @@ struct Codegen::Impl {
         if (t->isInteger()) return b.CreateICmpNE(v, llvm::ConstantInt::get(v->getType(), 0));
         if (t->isFloating()) return b.CreateFCmpUNE(v, llvm::ConstantFP::get(v->getType(), 0.0));  // NaN is true
         if (t->isOptional()) return hasValue(v, t);
-        if (t->isPointer()) return b.CreateIsNotNull(v);
+        if (t->isPointer() || t->isCFunction()) return b.CreateIsNotNull(v);
         return v;
     }
 
@@ -2528,6 +2533,8 @@ struct Codegen::Impl {
                 // A constant is a literal by now, or a function of its own for what must happen
                 // when it is used, such as a pointer's value or stopping at `1 / 0`.
                 const VarDecl* decl = static_cast<const NameExpr&>(e).decl;
+                if (const FuncDecl* f = static_cast<const NameExpr&>(e).function; f && e.type->isCFunction())  // for C: its own code, or an adapter
+                    return f->isExtern ? (llvm::Value*)funcs.at(f) : cAdapter(f, nullptr, e.type);
                 if (const FuncDecl* f = static_cast<const NameExpr&>(e).function) {  // `square`, as a value: it has no env
                     owned = true;
                     return llvm::ConstantStruct::get(fnTy, {functionThunk(*f), llvm::ConstantPointerNull::get(b.getPtrTy())});
@@ -2567,6 +2574,7 @@ struct Codegen::Impl {
             }
             case Expr::Kind::Unary: {
                 auto& u = static_cast<const UnaryExpr&>(e);
+                if (u.op == UnOp::Deref && u.operand->type && u.operand->type->isCFunction()) return gen(*u.operand);  // `(*compare)(a, b)`
                 if (u.op == UnOp::Deref) return loadPlace(e, "deref");
                 if (u.op == UnOp::AddrOf) return addressOf(*u.operand);
                 if (u.op == UnOp::Not) return b.CreateNot(genCond(*u.operand));
@@ -2923,7 +2931,7 @@ struct Codegen::Impl {
     llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
         switch (t->kind) {
             case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer: case K::Unique: case K::Local:
-            case K::UInt8: case K::UInt16: case K::UInt32: case K::UInt64:
+            case K::UInt8: case K::UInt16: case K::UInt32: case K::UInt64: case K::CFunction:
                 return b.CreateICmpEQ(l, r);
             case K::Float: case K::Double: return b.CreateFCmpOEQ(l, r);
             case K::Enum: return b.CreateICmpEQ(l, r);
@@ -3042,7 +3050,7 @@ struct Codegen::Impl {
                 b.SetInsertPoint(endBB);
                 break;
             }
-            case K::Pointer: b.CreateCall(rtPrintPtr, {out, v}); break;  // the address, as std::format prints a void*
+            case K::Pointer: case K::CFunction: b.CreateCall(rtPrintPtr, {out, v}); break;  // the address, as std::format prints a void*
             case K::Function: printText(out, "function"); break;  // what it does is not something it can say
             case K::Enum: b.CreateCall(enumPrinter(*t->decl), {v, out}); break;
             case K::Optional: {
@@ -3125,10 +3133,11 @@ struct Codegen::Impl {
         if (from->isEnum() || to->isEnum()) return genEnumCast(c, v);
         if (to->isClass() || to->isOptional() || to->isWeak()) return convert(v, from, to);  // to a base class, or a weak reference
         Loc loc = c.loc;
-        if (to->isPointer()) {
+        if (to->isPointer() || to->isCFunction()) {
             if (from->isInteger()) return b.CreateIntToPtr(convert(v, from, Type::longTy()), b.getPtrTy());  // reinterpret_cast
             return v;  // from another pointer, or null: the same address
         }
+        if (from->isCFunction()) return to->is(K::Long) ? b.CreatePtrToInt(v, b.getInt64Ty()) : v;
         if (from->isPointer()) {
             if (to->is(K::Long)) return b.CreatePtrToInt(v, b.getInt64Ty());  // reinterpret_cast
             if (to->is(K::Bool)) return b.CreateIsNotNull(v);
@@ -3511,6 +3520,13 @@ struct Codegen::Impl {
         if (call.vectorType) return genVectorConstruction(call);
         if (call.builtin == Builtin::Math) return genMath(call);
         if (call.builtin == Builtin::CharFn) return genCharFn(call);
+        if (call.builtin == Builtin::StringBytes) {  // `string(p, n)`: n bytes from where p points
+            llvm::Value* p = gen(*call.args[0]);
+            llvm::Value* n = genConverted(*call.args[1], Type::longTy());
+            llvm::AllocaInst* out = entryAlloca(stringTy, "bytes");
+            b.CreateCall(rtStrFromBytes, {out, p, n, fileName, b.getInt32(call.loc.line), b.getInt32(call.loc.col)});
+            return b.CreateLoad(stringTy, out, "bytes");
+        }
         if (call.builtin == Builtin::StringFill) {  // `string(count, c)`, or `string()`
             if (call.args.empty()) return llvm::Constant::getNullValue(stringTy);
             llvm::Value* count = genConverted(*call.args[0], Type::longTy());
@@ -3973,7 +3989,7 @@ struct Codegen::Impl {
         if (!inserted) return info;
         const FuncDecl& f = *l.fn;
         std::string name = fn->getName().str() + "#lambda" + std::to_string(l.loc.line) + "." + std::to_string(l.loc.col);
-        info.code = llvm::Function::Create(codeType(l.type), llvm::Function::InternalLinkage, name, mod.get());
+        info.code = llvm::Function::Create(codeType(l.valueType ? l.valueType : l.type), llvm::Function::InternalLinkage, name, mod.get());
         unsigned first = inMemory(f.retType) ? 1 : 0;
         if (first) info.code->getArg(0)->setName("result");
         info.code->getArg(first)->setName("env");
@@ -4014,6 +4030,7 @@ struct Codegen::Impl {
 
     // `[&](int x) { return x + n; }`: a function value that owns its env.
     llvm::Value* genLambda(const LambdaExpr& l) {
+        if (l.valueType) return cAdapter(nullptr, &l, l.type);  // given to C, which calls an adapter: it captures nothing
         LambdaInfo& info = lambdaInfo(l);
         if (!info.env) return llvm::ConstantStruct::get(fnTy, {info.code, llvm::ConstantPointerNull::get(b.getPtrTy())});
         const FuncDecl& f = *l.fn;
@@ -4096,6 +4113,7 @@ struct Codegen::Impl {
     // `f(x)`, through a function value. The value is held while the call runs, as the call could replace it.
     llvm::Value* genCallValue(const CallValueExpr& call) {
         const Type* ft = call.callee->type;
+        if (ft->isCFunction()) return genCPointerCall(call);
         const Expr& callee = *call.callee;
         llvm::Value* value;
         const VarDecl* var = callee.kind == Expr::Kind::Name ? static_cast<const NameExpr&>(callee).decl : nullptr;
@@ -4122,6 +4140,85 @@ struct Codegen::Impl {
         checkHeld(held, specs, var ? var->name : "the function", call.loc);
         if (result) return result;
         return ft->elem->is(K::Void) ? nullptr : inst;
+    }
+
+    // The LLVM type of what a C function pointer leads to, and the attributes C's ABI gives it: a bool, a char and the smaller
+    // unsigned types are extended to a register, as the platform's C compiler does, and each side may count on that.
+    llvm::FunctionType* cFunctionType(const Type* ft) {
+        std::vector<llvm::Type*> params;
+        for (auto& p : *ft->params) params.push_back(llvmType(p.type));
+        return llvm::FunctionType::get(ft->elem->is(K::Void) ? b.getVoidTy() : llvmType(ft->elem), params, false);
+    }
+    llvm::Attribute::AttrKind cExtension(const Type* t) {
+        if (t->is(K::Bool) || t->is(K::UInt8) || t->is(K::UInt16)) return llvm::Attribute::ZExt;
+        if (t->is(K::Char)) return cCharIsSigned() ? llvm::Attribute::SExt : llvm::Attribute::ZExt;
+        return llvm::Attribute::None;
+    }
+    llvm::AttributeList cFunctionAttributes(const Type* ft) {
+        llvm::AttributeList list;
+        for (size_t i = 0; i < ft->params->size(); ++i)
+            if (auto ext = cExtension((*ft->params)[i].type); ext != llvm::Attribute::None) list = list.addParamAttribute(ctx, (unsigned)i, ext);
+        if (auto ext = cExtension(ft->elem); ext != llvm::Attribute::None) list = list.addRetAttribute(ctx, ext);
+        return list;
+    }
+
+    // `handler(sig)`, through a pointer that C gave: a null one stops the program, and a string goes as a copy that ends in a
+    // zero byte, which is freed when the call returns, as for a C function.
+    llvm::Value* genCPointerCall(const CallValueExpr& call) {
+        const Type* ft = call.callee->type;
+        llvm::Value* target = gen(*call.callee);
+        const std::string shown = call.callee->kind == Expr::Kind::Name ? static_cast<const NameExpr&>(*call.callee).name : "the function pointer";
+        std::vector<llvm::Value*> args, copies;
+        for (size_t i = 0; i < call.args.size(); ++i) {
+            const Type* p = (*ft->params)[i].type;
+            const Type* t = call.args[i]->type;
+            if (!t->is(K::String) && !(t->isOptional() && t->elem->is(K::String))) {
+                args.push_back(genConverted(*call.args[i], p));
+                continue;
+            }
+            llvm::Value* v = gen(*call.args[i]);
+            llvm::Value* present = b.getInt32(1);
+            if (t->isOptional()) {
+                present = b.CreateZExt(hasValue(v, t), b.getInt32Ty());
+                v = valueOf(v, t);  // zero bytes when null
+            }
+            llvm::Value* copy = b.CreateCall(rtCString, {strData(v), strLength(v), present, cstring(shown), fileName, b.getInt32(call.args[i]->loc.line),
+                                                         b.getInt32(call.args[i]->loc.col)});
+            args.push_back(copy);
+            copies.push_back(copy);
+        }
+        trapIf(b.CreateIsNull(target), "null pointer: '" + shown + "' was called, but it is null", call.loc);
+        llvm::CallInst* result = b.CreateCall(cFunctionType(ft), target, args);
+        result->setAttributes(cFunctionAttributes(ft));
+        for (llvm::Value* copy : copies) b.CreateCall(rtCFree, {copy});
+        return ft->elem->is(K::Void) ? nullptr : result;
+    }
+
+    // What C calls for a function of the program, or for a lambda that captures nothing, given where a C function pointer goes:
+    // it takes what C passes, as C passes it, and calls the C+ code, which has conventions of its own. One for each.
+    llvm::Function* cAdapter(const FuncDecl* f, const LambdaExpr* l, const Type* ft) {
+        auto [it, inserted] = cAdapters.try_emplace({f ? (const void*)f : (const void*)l, ft}, nullptr);
+        if (!inserted) return it->second;
+        llvm::Function* code = f ? funcs.at(f) : lambdaInfo(*l).code;
+        llvm::Function* adapter = llvm::Function::Create(cFunctionType(ft), llvm::Function::InternalLinkage, code->getName() + "#c", mod.get());
+        adapter->setAttributes(cFunctionAttributes(ft));
+        it->second = adapter;
+        llvm::IRBuilderBase::InsertPointGuard guard(b);
+        llvm::Function* outer = fn;
+        startHelper(adapter);
+        std::vector<llvm::Value*> args;
+        for (auto& a : adapter->args()) args.push_back(&a);
+        llvm::Value* result;
+        if (f) {
+            result = emitCall(*f, std::move(args), false, nullptr);
+        } else {
+            args.insert(args.begin(), llvm::ConstantPointerNull::get(b.getPtrTy()));  // no env, as it captures nothing
+            result = b.CreateCall(code->getFunctionType(), code, args);
+        }
+        if (ft->elem->is(K::Void)) b.CreateRetVoid();
+        else b.CreateRet(result);
+        fn = outer;
+        return adapter;
     }
 
     // The code of a function used as a value, which takes an env it has no use for, and calls the function. A function value is
@@ -4993,11 +5090,7 @@ struct Codegen::Impl {
         else if (sig.resultParts.size() == 2) result = llvm::StructType::get(ctx, sig.resultParts);
         auto* type = llvm::FunctionType::get(result, params, false);
         auto* func = llvm::Function::Create(type, llvm::Function::ExternalLinkage, f.name, mod.get());
-        auto extension = [&](const Type* t) {
-            if (t->is(K::Bool)) return llvm::Attribute::ZExt;
-            if (t->is(K::Char)) return cCharIsSigned() ? llvm::Attribute::SExt : llvm::Attribute::ZExt;
-            return llvm::Attribute::None;
-        };
+        auto extension = [&](const Type* t) { return cExtension(t); };
         unsigned index = 0;
         if (sig.memoryResult) {
             llvm::Type* st = llvmType(f.retType);
@@ -5152,7 +5245,7 @@ struct Codegen::Impl {
         scopes.emplace_back();
         for (size_t i = 0; i < f.params.size(); ++i) {
             // A lambda is given its arguments as paramsOf says, which may not be as it takes them.
-            const bool lent = f.lambda ? passedByRef(*paramsOf(f.lambda->type)[i]) : passedByRef(*f.params[i]);
+            const bool lent = f.lambda ? passedByRef(*paramsOf(f.lambda->valueType ? f.lambda->valueType : f.lambda->type)[i]) : passedByRef(*f.params[i]);
             if (passedByRef(*f.params[i])) {  // the caller's place, which the caller keeps
                 llvm::Value* place = fn->getArg(first + i);
                 if (!lent) {  // a `const Point&` of a lambda, given a small value: it lies here
@@ -5348,6 +5441,14 @@ struct Codegen::Impl {
         startLineTable(userMain.nameLoc);
         b.CreateCall(rtStart, {});
         if (!globalOrder.empty()) {  // the variables outside functions, in the order they are written, before main
+            llvm::Function* release = internalFunction("cplus.release_globals", b.getVoidTy(), {});
+            {
+                SavedPoint saved(*this);
+                startHelper(release);
+                releaseGlobals();
+                b.CreateRetVoid();
+            }
+            b.CreateCall(rtGlobalsReleaseAtExit, {release});  // after what the program gives to `atexit`, which may use them
             b.CreateCall(rtGlobalsStart, {});
             for (const VarDecl* g : globalOrder)
                 if (llvm::Function* init = globalVars.at(g).init) b.CreateCall(init, {});
@@ -5373,7 +5474,7 @@ struct Codegen::Impl {
         auto finish = [&](llvm::Value* code) {
             if (usesAsync) b.CreateCall(rtLoopFinish, {});
             if (usesThreads) b.CreateCall(rtThreadsFinish, {});
-            releaseGlobals();
+            if (!globalOrder.empty()) b.CreateCall(rtMainReturned, {});  // the globals are let go of at exit
             b.CreateRet(code);
         };
         llvm::AllocaInst* place = nullptr;

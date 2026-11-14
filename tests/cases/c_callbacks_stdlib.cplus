@@ -1,0 +1,51 @@
+// Callbacks through the C library's own headers: qsort's comparator, signal's handler and its constants, atexit, and a
+// thread that C starts, which runs the program's code.
+import <stdlib.h>;
+import <signal.h>;
+import <pthread.h>;
+
+struct Job {
+    int n = 0;
+    long result = 0;
+};
+
+int got = 0;
+void onSignal(int sig) { got = sig; }
+
+long sumTo(int n) {
+    vector<long> parts;
+    for (int i = 1; i <= n; i++) parts.push_back(i);
+    long t = 0;
+    for (long p : parts) t += p;
+    return t;
+}
+
+int main() {
+    array<int, 4> a = {3, 1, 4, 2};
+    qsort(a.data(), 4, sizeof(int), [](const void* p, const void* q) { return *(const int*)p - *(const int*)q; });
+    println("{}", a);
+    // expect: [1, 2, 3, 4]
+    auto old = signal(SIGUSR1, onSignal);
+    raise(SIGUSR1);
+    println("{} {} {}", got == SIGUSR1, old == SIG_DFL, signal(SIGUSR1, SIG_IGN) == onSignal);
+    // expect: true true true
+    raise(SIGUSR1);
+    println("{}", signal(SIGUSR1, SIG_DFL) == SIG_IGN && SIG_ERR != SIG_IGN);
+    // expect: true
+    __sighandler_t h = onSignal;
+    println("{}", h != null);
+    // expect: true
+    Job job = {100, 0};
+    uint64_t thread = 0;
+    pthread_create(&thread, null, [](void* data) -> void* {
+        auto j = (Job*)data;
+        j->result = sumTo(j->n);
+        return null;
+    }, &job);
+    pthread_join(thread, null);
+    println("{}", job.result);
+    // expect: 5050
+    atexit([] { println("at exit"); });
+    return 0;
+}
+// expect: at exit

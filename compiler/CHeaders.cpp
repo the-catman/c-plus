@@ -169,7 +169,7 @@ std::string wholeConstant(const std::string& name, long long v, long long size) 
     return "const long " + name + " = " + std::to_string(v) + (v < INT_MIN || v > INT_MAX ? "L" : "") + ";";
 }
 
-enum class Use { Param, Result, Field, Pointee };
+enum class Use { Param, Result, Field, Pointee, Callback };  // Callback: what a function pointer takes and gives, as C passes them
 
 class Translator {
 public:
@@ -211,6 +211,7 @@ private:
         std::string str;
         CXTypeKind type = CXType_Invalid;
         long long size = 0;
+        std::string pointerType;  // the typedef of a function pointer it is cast to, `((__sighandler_t) 1)`
     };
 
     CXTranslationUnit tu_;
@@ -232,6 +233,8 @@ private:
     std::map<std::string, size_t> fileImport_;  // a header's file, to the import that brought it in
 
     std::vector<std::string> declarations_, constants_;
+    std::map<std::string, std::string> functionAliases_;  // a typedef of a function pointer, to the `using` that C+ reads it as
+    std::vector<std::string> aliasOrder_;
     std::vector<std::string> decided_;  // records, in the order they were written
     std::deque<std::string> pending_;
 
@@ -249,6 +252,7 @@ private:
         out_.notImported[name] = NotImported{std::move(message), std::move(help)};
     }
     std::string type(CXType t, Use use, std::string& why);
+    std::string functionPointer(CXType pointee, std::string& why);
     std::string recordName(CXCursor decl, bool byValue, std::string& why);
     void decide(Record& r);
 };
@@ -425,6 +429,14 @@ void Translator::evaluated(CXTranslationUnit probes) {
             }
         }
         if (r) clang_EvalResult_dispose(r);
+        if (v.kind == Value::Kind::Pointer)  // `((__sighandler_t) 1)`: a function pointer, by the typedef it is cast to
+            for (size_t i = 0; i + 2 < macro.body.size(); ++i)
+                if (macro.body[i] == "(" && macro.body[i + 2] == ")" && typedefs_.count(macro.body[i + 1])) {
+                    CXType named = clang_getCanonicalType(clang_getTypedefDeclUnderlyingType(typedefs_[macro.body[i + 1]]));
+                    const CXTypeKind to = named.kind == CXType_Pointer ? clang_getCanonicalType(clang_getPointeeType(named)).kind : CXType_Invalid;
+                    if (to == CXType_FunctionProto || to == CXType_FunctionNoProto) v.pointerType = macro.body[i + 1];
+                    break;
+                }
         if (v.kind != Value::Kind::None) values_[name] = v;
     }
 }
@@ -505,9 +517,9 @@ void Translator::take(const std::string& n) {
         if (written == "string?") written = "const char*";  // as a type of its own, and not one for passing text to C
         const bool toFunction = canonical.kind == CXType_Pointer && (clang_getCanonicalType(clang_getPointeeType(canonical)).kind == CXType_FunctionProto ||
                                                                       clang_getCanonicalType(clang_getPointeeType(canonical)).kind == CXType_FunctionNoProto);
+        if (toFunction && type(clang_getCursorType(t->second), Use::Field, why) == n) return;  // its `using` is written
         if (toFunction)
-            notImported(n, "`" + n + "` from " + header + " is C's name for a pointer to a function, which C+ writes as `void*`, as it has no callbacks yet",
-                        "write `void*`, and pass `null` where C allows it");
+            notImported(n, "C+ has no type for `" + n + "` from " + header + ", which is C's name for `" + spelling(canonical) + "`" + why, generic);
         else if (!written.empty())
             notImported(n, "`" + n + "` from " + header + " is C's name for `" + spelling(canonical) + "`, which C+ writes as `" + written + "`",
                         "write `" + written + "`");
@@ -583,7 +595,9 @@ void Translator::function(const std::string& n, CXCursor c) {
         if (!isIdentifier(shown) || isCPlusKeyword(shown) || isBuiltinName(shown) || recordNamed_.count(shown) || names_.types.count(shown) ||
             !taken.insert(shown).second)
             shown.clear();
-        params += (i ? ", " : "") + t + (shown.empty() ? "" : " " + shown);
+        std::string named = t + (shown.empty() ? "" : " " + shown);
+        if (const size_t at = t.find("(*)"); at != std::string::npos && !shown.empty()) named = t.substr(0, at) + "(*" + shown + ")" + t.substr(at + 3);  // C's declarator
+        params += (i ? ", " : "") + named;
     }
     declarations_.push_back(result + " " + n + "(" + params + ");");
 }
@@ -604,6 +618,14 @@ bool Translator::macroConstant(const std::string& n) {
     switch (v.kind) {
         case Value::Kind::Text: constants_.push_back("const string " + n + " = " + quoted(v.str) + ";"); return true;
         case Value::Kind::Pointer:
+            if (!v.pointerType.empty()) {  // `const __sighandler_t SIG_IGN = reinterpret_cast<__sighandler_t>(1);`
+                std::string why;
+                const std::string t = type(clang_getCursorType(typedefs_[v.pointerType]), Use::Field, why);
+                if (!t.empty() && t.find("(*") == std::string::npos) {
+                    constants_.push_back("const " + t + " " + n + " = " + (v.whole == 0 ? std::string("null") : "reinterpret_cast<" + t + ">(" + std::to_string(v.whole) + ")") + ";");
+                    return true;
+                }
+            }
             constants_.push_back("void* const " + n + " = " + (v.whole == 0 ? std::string("null") : "reinterpret_cast<void*>(" + std::to_string(v.whole) +
                                                                                                     (v.whole < INT_MIN || v.whole > INT_MAX ? "L" : "") + ")") + ";");
             return true;
@@ -637,6 +659,26 @@ std::string Translator::type(CXType written, Use use, std::string& why) {
         }
         const std::string name = text(clang_getTypedefName(w));
         if (name == "size_t" || name == "uintptr_t") return "long";
+        CXType canonical = clang_getCanonicalType(w);
+        const CXTypeKind pointee = canonical.kind == CXType_Pointer ? clang_getCanonicalType(clang_getPointeeType(canonical)).kind : CXType_Invalid;
+        // `sighandler_t`, which C+ names with a `using` of its own. C's reserved names, `__sighandler_t`, are not C+'s own, which are of functions.
+        if ((pointee == CXType_FunctionProto || pointee == CXType_FunctionNoProto) && isIdentifier(name) && !isCPlusKeyword(name) && !isLanguageName(name) &&
+            name.rfind("cplus_", 0) != 0 && !names_.types.count(name) && !recordNamed_.count(name)) {
+            if (!functionAliases_.count(name)) {
+                functionAliases_[name] = "";  // while what it takes is translated, which may name it again
+                CXType under = clang_getTypedefDeclUnderlyingType(clang_getTypeDeclaration(w));
+                while (under.kind == CXType_Elaborated || under.kind == CXType_Typedef)
+                    under = under.kind == CXType_Elaborated ? clang_Type_getNamedType(under) : clang_getTypedefDeclUnderlyingType(clang_getTypeDeclaration(under));
+                const std::string inner = under.kind == CXType_Pointer ? functionPointer(clang_getPointeeType(under), why) : "";
+                if (inner.empty()) {
+                    functionAliases_.erase(name);
+                    return "";
+                }
+                functionAliases_[name] = "using " + name + " = " + inner + ";";
+                aliasOrder_.push_back(name);
+            }
+            return name;
+        }
         if (name == "uint8_t" && use != Use::Pointee) return "uint8_t";
         w = clang_getTypedefDeclUnderlyingType(clang_getTypeDeclaration(w));
     }
@@ -677,14 +719,19 @@ std::string Translator::type(CXType written, Use use, std::string& why) {
         case CXType_Double: return "double";
         case CXType_Pointer: {
             CXType pointee = clang_getCanonicalType(clang_getPointeeType(t));
-            if (pointee.kind == CXType_FunctionProto || pointee.kind == CXType_FunctionNoProto) return "void*";  // no callbacks yet
+            if (pointee.kind == CXType_FunctionProto || pointee.kind == CXType_FunctionNoProto) {  // as the header writes it, so that a size_t is a long
+                CXType w = written;
+                while (w.kind == CXType_Elaborated || w.kind == CXType_Typedef)
+                    w = w.kind == CXType_Elaborated ? clang_Type_getNamedType(w) : clang_getTypedefDeclUnderlyingType(clang_getTypeDeclaration(w));
+                return functionPointer(w.kind == CXType_Pointer ? clang_getPointeeType(w) : pointee, why);
+            }
             const bool isConst = clang_isConstQualifiedType(pointee);
-            if (isConst && (pointee.kind == CXType_Char_S || pointee.kind == CXType_Char_U)) {
+            if (isConst && (pointee.kind == CXType_Char_S || pointee.kind == CXType_Char_U) && use != Use::Callback) {
                 if (use == Use::Param) return "string?";  // text, or null
                 if (use == Use::Result) return "string";  // which stops the program if it is NULL, as following one does
             }
             // `const unsigned char*`, as for bytes, which C+ passes to and from C as `char*`: a `const char*` would be text.
-            if (isConst && (pointee.kind == CXType_SChar || pointee.kind == CXType_UChar) && (use == Use::Param || use == Use::Result)) return "char*";
+            if (isConst && (pointee.kind == CXType_SChar || pointee.kind == CXType_UChar) && (use == Use::Param || use == Use::Result || use == Use::Callback)) return "char*";
             std::string inner = type(pointee, Use::Pointee, why);
             why.clear();
             if (inner.empty()) return isConst ? "const void*" : "void*";  // what C+ cannot read can still be passed on
@@ -706,9 +753,43 @@ std::string Translator::type(CXType written, Use use, std::string& why) {
             }
             return "array<" + element + ", " + std::to_string(clang_getArraySize(t)) + ">";
         }
-        case CXType_Record: return recordName(clang_getTypeDeclaration(t), use != Use::Pointee, why);
+        case CXType_Record:
+            if (use == Use::Callback) {
+                why = ", a struct by value, which this compiler does not support in a function pointer yet";
+                return "";
+            }
+            return recordName(clang_getTypeDeclaration(t), use != Use::Pointee, why);
         default: why = ", which C+ has no type for yet"; return "";
     }
+}
+
+// What a C function pointer is written as in C+, `int (*)(const void*, const void*)`, from the function it points to, as the header
+// writes it. One that returns another is read through a typedef, as C+ reads no declarator inside another.
+std::string Translator::functionPointer(CXType fn, std::string& why) {
+    while (fn.kind == CXType_Elaborated || fn.kind == CXType_Typedef || fn.kind == CXType_Unexposed) {
+        CXType next = fn.kind == CXType_Elaborated ? clang_Type_getNamedType(fn) : fn.kind == CXType_Typedef ? clang_getTypedefDeclUnderlyingType(clang_getTypeDeclaration(fn))
+                                                                                                        : clang_getCanonicalType(fn);
+        if (clang_equalTypes(next, fn)) break;
+        fn = next;
+    }
+    if (fn.kind == CXType_FunctionProto && clang_isFunctionTypeVariadic(fn)) {
+        why = ", a function pointer that takes a variable number of arguments, which C+ cannot pass yet";
+        return "";
+    }
+    const std::string result = type(clang_getResultType(fn), Use::Callback, why);
+    if (result.empty()) return "";
+    if (result.find("(*") != std::string::npos) {
+        why = ", a function pointer that returns another, which C+ reads only through a typedef";
+        return "";
+    }
+    std::string params;
+    const int count = fn.kind == CXType_FunctionNoProto ? 0 : clang_getNumArgTypes(fn);
+    for (int i = 0; i < count; ++i) {
+        const std::string t = type(clang_getArgType(fn, (unsigned)i), Use::Callback, why);
+        if (t.empty()) return "";
+        params += (i ? ", " : "") + t;
+    }
+    return result + " (*)(" + params + ")";
 }
 
 // The name of a struct, and its declaration among those written. Through a pointer, C+ needs only its name; by value, its fields.
@@ -783,7 +864,8 @@ void Translator::decide(Record& r) {
             align = std::max(align, fieldAlign);
             std::string field = unclashed(name);
             while (!taken.insert(field).second) field += "_";
-            body += "        " + t + " " + field + ";\n";
+            if (const size_t at = t.find("(*)"); at != std::string::npos) body += "        " + t.substr(0, at) + "(*" + field + ")" + t.substr(at + 3) + ";\n";  // C's declarator
+            else body += "        " + t + " " + field + ";\n";
             ++fields;
         });
         if (complete && fields == 0) {
@@ -801,8 +883,10 @@ void Translator::decide(Record& r) {
 }
 
 std::string Translator::source() const {
-    if (decided_.empty() && declarations_.empty() && constants_.empty()) return "";
-    std::string out = "extern \"C\" {\n";
+    if (decided_.empty() && declarations_.empty() && constants_.empty() && aliasOrder_.empty()) return "";
+    std::string out;
+    for (const std::string& name : aliasOrder_) out += functionAliases_.at(name) + "\n";
+    out += "extern \"C\" {\n";
     for (const std::string& name : decided_) out += records_.at(recordNamed_.at(name)).text;
     for (const std::string& d : declarations_) out += "    " + d + "\n";
     out += "}\n";

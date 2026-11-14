@@ -1,0 +1,36 @@
+// A C function that calls back a function it is given takes a function by its name, or a lambda that captures nothing.
+extern "C" {
+    void qsort(void* base, long count, long size, int (*compare)(const void*, const void*));
+    int atexit(void (*f)());
+}
+
+using Visit = void (*)(void* data, int value);
+
+int ascending(const void* a, const void* b) {
+    return *(const int*)a - *(const int*)b;
+}
+
+// What C code does with one: calls it, with what it was given to pass on.
+void each(int count, Visit visit, void* data) {
+    for (int i = 1; i <= count; i++) visit(data, i);
+}
+
+int main() {
+    array<int, 5> a = {5, 1, 4, 2, 3};
+    qsort(a.data(), a.size(), sizeof(int), ascending);
+    println("{}", a);
+    // expect: [1, 2, 3, 4, 5]
+    qsort(a.data(), a.size(), sizeof(int), [](const void* x, const void* y) { return *(const int*)y - *(const int*)x; });
+    println("{}", a);
+    // expect: [5, 4, 3, 2, 1]
+    vector<int> squares;
+    each(4, [](void* data, int value) { ((vector<int>*) data)->push_back(value * value); }, &squares);
+    println("{}", squares);
+    // expect: [1, 4, 9, 16]
+    Visit none = null;
+    println("{}", none == null);
+    // expect: true
+    atexit([] { println("done"); });
+    return 0;
+}
+// expect: done

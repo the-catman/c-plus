@@ -1,0 +1,13 @@
+using Handler = void (*)(int);
+extern "C" void qsort(void* base, long n, long size, int (*compare)(const void*, const void*));
+struct Ops {
+    int (*add)(int a, int b);
+};
+int apply(int (*f)(int), int x) { return f(x); }
+int main() {
+    int (*twice)(int) = [](int x) { return x * 2; };
+    Handler h = null;
+    auto p = (void*)h;
+    h = (Handler)p;
+    return apply(twice, (*twice)(1));
+}

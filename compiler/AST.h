@@ -22,7 +22,7 @@ struct TemplatePattern;
 struct Type {
     enum class Kind { Error, Void, Bool, Int, Long, Float, Double, Char, String, Auto, UInt8, UInt16, UInt32, UInt64,
                       Struct, Class, Vector, Optional, Null,
-                      Pointer, Opaque, Array, Weak, Unique, Local, Enum, Function,
+                      Pointer, Opaque, Array, Weak, Unique, Local, Enum, Function, CFunction,
                       // Only while a generic definition is read, to learn its shape; never in checked code.
                       TypeParam, Dependent };
     Kind kind;
@@ -59,6 +59,9 @@ struct Type {
     bool isEnum() const { return kind == Kind::Enum; }
     // `function<R(Args...)>`: code to call, with what it captured. Copies share what it captured, and it is never empty.
     bool isFunction() const { return kind == Kind::Function; }
+    // `int (*)(const void*, const void*)`: the address of a function that C can call, which captured nothing, and may be null.
+    // `elem` is what it returns, and `params` what it takes, each a C type passed by value.
+    bool isCFunction() const { return kind == Kind::CFunction; }
     bool isError() const { return kind == Kind::Error; }
     // `uint8_t` to `uint64_t`. Signed and unsigned never mix without a cast, except that the two smaller ones become
     // an int in arithmetic, as a char does.
@@ -194,6 +197,24 @@ struct Type {
             it->second.second = Type{Kind::Function, it->second.first.first.c_str(), nullptr, ret};
             it->second.second.params = &it->second.first.second;
             it->second.second.throws = throws;
+        }
+        return &it->second.second;
+    }
+
+    // `ret (*)(params...)`, as C and C++ write the type of a function pointer. One Type per signature, like functionOf.
+    static const Type* cFunctionOf(const Type* ret, const std::vector<const Type*>& types) {
+        std::vector<Param> params;
+        for (const Type* t : types) params.push_back({t, false, false});
+        static std::map<std::pair<const Type*, std::vector<Param>>, std::pair<std::pair<std::string, std::vector<Param>>, Type>> made;
+        auto [it, inserted] = made.try_emplace({ret, params});
+        if (inserted) {
+            std::string name = std::string(ret->name) + " (*)(";
+            for (size_t i = 0; i < params.size(); ++i) name += (i ? ", " : "") + std::string(params[i].type->name);
+            name += ")";
+            it->second.first.first = name;
+            it->second.first.second = params;
+            it->second.second = Type{Kind::CFunction, it->second.first.first.c_str(), nullptr, ret};
+            it->second.second.params = &it->second.first.second;
         }
         return &it->second.second;
     }
@@ -461,7 +482,7 @@ struct IncDecExpr : Expr {
         : Expr(Kind::IncDec, l), increment(inc), prefix(pre), target(std::move(t)) {}
 };
 
-enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill, Move, Hash, SameBuffer, Swap };
+enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill, StringBytes, Move, Hash, SameBuffer, Swap };
 
 // The math functions of C++'s <cmath>, and abs, min and max.
 enum class MathFn {
@@ -964,6 +985,9 @@ struct LambdaExpr : Expr {
     // Set by the capture check: whether it can outlive the code it is written in, which then keeps what it needs alive.
     // A borrowed one is only called before the function it is written in goes on, and boxes nothing.
     bool kept = true;
+    // Set by Sema for one given where a C function pointer goes, `[](int sig) { ... }`: then `type` is that, and `valueType` the
+    // function type that its code has, which an adapter calls for C.
+    const Type* valueType = nullptr;
     const FuncDecl* enclosing = nullptr;  // the function or lambda it is written in
     explicit LambdaExpr(Loc l) : Expr(Kind::Lambda, l) {}
     const Captured* capture(const VarDecl* v) const {

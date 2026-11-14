@@ -1,0 +1,24 @@
+// `string(p, n)` copies n bytes from where p points, zero bytes too, as C++'s does: what C hands a callback with a length.
+long onData(char* bytes, long size, long count, void* data) {
+    *(string*)data += string(bytes, size * count);
+    return size * count;
+}
+
+void feed(long (*write)(char*, long, long, void*), void* data) {
+    array<char, 5> chunk = {'a', '\0', 'b', 'c', 'd'};
+    write(chunk.data(), 1, 5, data);
+    write(chunk.data(), 1, 2, data);
+}
+
+int main() {
+    string got;
+    feed(onData, &got);
+    println("{} {}", got.size(), got == string("a") + string(1, '\0') + "bcda" + string(1, '\0'));
+    // expect: 7 true
+    char* none = null;
+    array<char, 6> hello = {'h', 'e', 'l', 'l', 'o', '\0'};
+    const char* text = hello.data();
+    println("[{}] [{}] [{}]", string(none, 0), string(text, 4), string(text));
+    // expect: [] [hell] [hello]
+    return 0;
+}

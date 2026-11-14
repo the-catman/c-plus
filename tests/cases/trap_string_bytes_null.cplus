@@ -1,0 +1,10 @@
+// string(p, n) with a null pointer stops the program, unless there is nothing to copy.
+int main() {
+    char* p = null;
+    println("[{}]", string(p, 0));
+    println("{}", string(p, 3));
+    return 0;
+}
+// expect: []
+// trap: null pointer: string(p, n) was given a pointer that is null
+// trap: trap_string_bytes_null.cplus:5:

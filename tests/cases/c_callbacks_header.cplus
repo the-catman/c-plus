@@ -1,0 +1,56 @@
+// A C library that takes, keeps, gives back and calls function pointers, through its header.
+// link-c: tests/c/callbacks.c
+import "../c/callbacks.h";
+
+struct Seen {
+    vector<int> values;
+    vector<string> words;
+};
+
+int collect(void* data, int value) {
+    auto seen = (Seen*)data;
+    seen->values.push_back(value);
+    return value == 3 ? 30 : 0;
+}
+
+int main() {
+    Seen seen;
+    println("{} {}", cb_each(5, collect, &seen), seen.values);
+    // expect: 30 [1, 2, 3]
+    cb_words([](const char* text, void* data) { ((Seen*)data)->words.push_back(string(text)); }, &seen);
+    println("{}", seen.words);
+    // expect: ["one", "two", "three"]
+    cb_ops ops;
+    ops.add = [](int a, int b) { return a + b; };
+    ops.scale = [](double x) { return x * 2; };
+    ops.test = [](char c, uint8_t small, uint16_t medium) { return c == 'x' && small == 200 && medium == 60000; };
+    println("{}", cb_use_ops(&ops));
+    // expect: 108
+    cb_visit before = cb_keep(collect);
+    println("{} {}", before == null, cb_call_kept(&seen, 3));
+    // expect: true 30
+    cb_visit again = cb_keep(cb_double);
+    println("{} {} {}", again == collect, cb_call_kept(null, 21), again(&seen, 9));
+    // expect: true 42 0
+    cb_visit mine = cb_double;
+    println("{} {}", mine(null, 4), mine == cb_double);
+    // expect: 8 true
+    println("{}", cb_on_thread([](void* data, int value) {
+        auto s = (Seen*)data;
+        s->words.push_back("thread " + to_string(value));
+        return value + 1;
+    }, &seen));
+    // expect: 8
+    println("{}", seen.words[3]);
+    // expect: thread 7
+    string got;
+    long n = cb_feed([](char* bytes, long size, long count, void* data) {
+        *(string*)data += string(bytes, size * count);
+        return size * count;
+    }, &got);
+    println("{} {}", n, got.size());
+    // expect: 4 4
+    println("{}", cb_feed(cb_write, null));
+    // expect: 4
+    return 0;
+}

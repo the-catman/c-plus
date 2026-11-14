@@ -267,6 +267,20 @@ int cplus_before_main = 0;
 void cplus_globals_start(void) { cplus_before_main = 1; }
 void cplus_globals_done(void) { cplus_before_main = 0; }
 
+// The variables outside functions are let go of after the functions given to C's `atexit` run, as they may use them: what
+// does it is given to `atexit` before main, so it runs after those, and only once main has returned, as other threads may
+// still use them when a C function calls `exit`. The leak report comes after it, as a destructor.
+static void (*release_globals)(void);
+static int main_returned;
+static void release_at_exit(void) {
+    if (main_returned && release_globals) release_globals();
+}
+void cplus_globals_release_at_exit(void (*release)(void)) {
+    release_globals = release;
+    atexit(release_at_exit);
+}
+void cplus_main_returned(void) { main_returned = 1; }
+
 // Called as the program starts.
 void cplus_start(void) {
     leak_checking();  // it keeps what it finds out, which must not happen in two threads at once
@@ -990,6 +1004,23 @@ void cplus_str_from_chars(cplus_string* out, const char* chars, int64_t size) {
     cplus_str_buf* b = str_buf_new(length);
     memcpy(buf_bytes(b), chars, (size_t)length);
     *out = (cplus_string){buf_bytes(b), length, b};
+}
+
+// `string(p, n)`: n bytes from where p points, zero bytes too, as C++'s `std::string(p, n)` takes them.
+void cplus_str_from_bytes(cplus_string* out, const char* bytes, int64_t count, const char* file, int32_t line, int32_t column) {
+    if (count < 0) {
+        char message[128];
+        snprintf(message, sizeof message, "string(p, n) was given the negative count %" PRId64, count);
+        cplus_trap(message, file, line, column);
+    }
+    if (count > 0 && !bytes) cplus_trap("null pointer: string(p, n) was given a pointer that is null", file, line, column);
+    if (count == 0) {
+        *out = (cplus_string){NULL, 0, NULL};
+        return;
+    }
+    cplus_str_buf* b = str_buf_new(count);
+    memcpy(buf_bytes(b), bytes, (size_t)count);
+    *out = (cplus_string){buf_bytes(b), count, b};
 }
 
 void cplus_str_from_c(cplus_string* out, const char* text) {

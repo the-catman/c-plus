@@ -18,6 +18,7 @@ using K = Type::Kind;
 static bool canConvert(const Type* from, const Type* to) {
     if (from->isError() || to->isError()) return true;
     if (from == to) return true;
+    if (to->isCFunction()) return from->isNull();  // a function or a lambda for one is in Sema::checkCFunctionValue
     if (to->isPointer()) {
         // `null`; a `T*` to a `const T*`, which only reads; any pointer to a `void*`, as in
         // C++, keeping const.
@@ -58,6 +59,8 @@ static bool canConvert(const Type* from, const Type* to) {
 // The pointer type that pointers `a` and `b` (or null) both convert to, for comparing
 // them or choosing between them; null if there is none.
 static const Type* commonPointer(const Type* a, const Type* b) {
+    if ((a->isCFunction() && b->isNull()) || (a->isCFunction() && a == b)) return a;
+    if (b->isCFunction() && a->isNull()) return b;
     if (a->isPointer() && b->isNull()) return a;
     if (b->isPointer() && a->isNull()) return b;
     if (!a->isPointer() || !b->isPointer()) return nullptr;
@@ -857,7 +860,7 @@ static std::string zeroOf(const Type* t) {
     if (t->is(K::String)) return "\"\"";
     if (t->isStruct()) return hasDefault(t) ? "{}" : t->decl->constructor ? std::string(t->name) + "(...)" : "{...}";
     if (t->isClass()) return std::string(t->name) + "(...)";
-    if (t->isPointer()) return "null";
+    if (t->isPointer() || t->isCFunction()) return "null";
     if (t->isArray()) return "{...}";
     if (t->isEnum()) return enumSample(t);
     if (t->isFunction()) {
@@ -2221,6 +2224,7 @@ static std::string whatCLacks(const Type* t, std::set<const StructDecl*>& seen) 
     if (t->isOptional()) return "an optional";
     if (t->isEnum()) return "a C+ enum, whose values C does not check";
     if (t->isArray()) return t->length == 0 ? "an array with no elements" : whatCLacks(t->elem, seen);
+    if (t->isCFunction()) return "";  // what it takes is checked where it is written
     if (t->isPointer()) {
         std::string lacks = t->elem->is(K::Void) ? "" : whatCLacks(t->elem, seen);
         return lacks.empty() || lacks.rfind("field ", 0) == 0 ? lacks : "a pointer to " + lacks;
@@ -2316,7 +2320,7 @@ void Sema::checkExternFunction(FuncDecl& fn) {
                          spec::Enums);
             return;
         }
-        if (t->isNumber() || t->is(K::Char) || t->is(K::Bool) || t->is(K::String) || t->isError()) return;
+        if (t->isNumber() || t->is(K::Char) || t->is(K::Bool) || t->is(K::String) || t->isError() || t->isCFunction()) return;
         if (t->isOptional() && t->elem->is(K::String)) return;
         if (isReturn && t->is(K::Void)) return;
         if (t->isArray()) {
@@ -3234,7 +3238,7 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
 // As in C++, a number used as a condition is true when it is not zero, and an optional
 // when it holds a value. A `bool?` would be ambiguous, so it is not a condition.
 static bool usableAsCondition(const Type* t) {
-    return t->isError() || t->is(K::Bool) || t->isNumber() || t->isPointer() ||
+    return t->isError() || t->is(K::Bool) || t->isNumber() || t->isPointer() || t->isCFunction() ||
            (t->isOptional() && !t->elem->is(K::Bool));
 }
 
@@ -4100,6 +4104,8 @@ void Sema::checkValue(Expr& e, Flow& flow, const Type* expected, const std::stri
         checkInitList(static_cast<InitListExpr&>(e), flow, expected->isOptional() ? expected->elem : expected);
         return;
     }
+    if (expected && expected->isCFunction() && (e.kind == Expr::Kind::Lambda || e.kind == Expr::Kind::Name || e.kind == Expr::Kind::Ternary))
+        return checkCFunctionValue(e, flow, expected, context);
     expectedFn_ = expected && (expected->isFunction() || (expected->isOptional() && expected->elem->isFunction())) ? expected : nullptr;
     checkExpr(e, flow);
     expectedFn_ = nullptr;
@@ -4933,10 +4939,154 @@ bool Sema::checkStorable(const Type* t, Loc loc) {
         if (inner->isPointer() && inner->elem->isOpaque()) return true;  // what such a type is for
         inner = inner->elem;
     }
+    if (inner->isCFunction()) return checkCSignature(inner, loc);
     if (!inner->isOpaque()) return true;
     diags_.error(loc, q(inner) + " is a C type known only by name, so C+ can only hold a pointer to it",
                  "write `" + std::string(inner->name) + "*`", spec::CTypes);
     return false;
+}
+
+// What a C function pointer takes and gives, which C passes as they are: numbers, chars, bools, pointers and other function
+// pointers. Each type is reported once, where it is first written.
+bool Sema::checkCSignature(const Type* t, Loc loc) {
+    if (!checkedSignatures_.insert(t).second) return true;
+    bool ok = true;
+    auto one = [&](const Type* p, bool isReturn) {
+        if (p->isError() || p->isNumber() || p->is(K::Char) || p->is(K::Bool) || (isReturn && p->is(K::Void))) return;
+        if (p->isCFunction()) {
+            ok = checkCSignature(p, loc) && ok;
+            return;
+        }
+        ok = false;
+        const std::string what = isReturn ? "return" : "take";
+        if (p->isPointer()) {
+            std::set<const StructDecl*> seen;
+            if (std::string lacks = whatCLacks(p, seen); !lacks.empty())
+                diags_.error(loc, "a C function pointer cannot " + what + " " + q(p) + ", because C has no equivalent of " + lacks, kCTypesHelp, spec::CFunctionPointers);
+            else
+                ok = true;
+            return;
+        }
+        if (p->is(K::String) || (p->isOptional() && p->elem->is(K::String)))
+            diags_.error(loc, "C passes text to and from a function pointer as `const char*`, not as " + q(p),
+                         std::string("write `const char*`, and read the text with `string(p)`") + (isReturn ? ", or `char*`" : ", which copies it"), spec::CFunctionPointers);
+        else if (p->isStruct())
+            diags_.error(loc, "this compiler does not support a function pointer that " + std::string(isReturn ? "returns" : "takes") + " a struct by value yet",
+                         "pass a pointer to it, `" + std::string(p->name) + "*`, which C reads the same way", spec::CFunctionPointers);
+        else if (p->isEnum())
+            diags_.error(loc, "a C function pointer cannot " + what + " an enum, as C would not keep to its values", "write `int`, and convert with `" + std::string(p->name) + "(n)`", spec::Enums);
+        else if (p->is(K::Void))
+            diags_.error(loc, "a parameter cannot have type void", "a function pointer that takes nothing is written `(*f)()` or `(*f)(void)`", spec::CFunctionPointers);
+        else
+            diags_.error(loc, "a C function pointer cannot " + what + " " + q(p) + ", which C has no equivalent of",
+                         p->isFunction() ? std::string("take a C function pointer, `R (*f)(...)`, which C can call") : std::string(kCTypesHelp), spec::CFunctionPointers);
+    };
+    one(t->elem, true);
+    for (auto& p : *t->params) one(p.type, false);
+    return ok;
+}
+
+// `qsort(..., byName)`, `signal(SIGINT, [](int sig) { ... })`: what C can call is a function by its name, a C function, or a lambda
+// written there that captures nothing, as C++ converts them, for which Codegen makes an adapter. C has no room for what a lambda
+// captures, and cannot pass an error on.
+void Sema::checkCFunctionValue(Expr& e, Flow& flow, const Type* to, const std::string& context) {
+    const Type* asValue = Type::functionOf(to->elem, *to->params, false);  // what it is checked as, which chooses among functions of a name
+    auto takesShown = [&] {
+        std::string out = "(";
+        for (size_t i = 0; i < to->params->size(); ++i) out += (i ? ", " : "") + std::string((*to->params)[i].type->name);
+        return out + ")";
+    };
+    auto fits = [&](const FuncDecl& f, Loc at) {
+        if (f.callFails()) {
+            diags_.error(at, q(f.name) + " can fail, and C cannot pass an error on", "catch the error inside it, and return what C takes as one, such as -1", spec::CFunctionPointers);
+            return false;
+        }
+        bool same = f.params.size() == to->params->size() && (f.bodyRet() == to->elem || f.isAsync);
+        for (size_t i = 0; same && i < f.params.size(); ++i) same = !f.params[i]->isRef && f.params[i]->declType == (*to->params)[i].type;
+        if ((!same || f.isAsync) && f.isExtern) {  // declared with C+ types, such as a string that C+ copies for it
+            std::string params, args;
+            for (size_t i = 0; i < to->params->size(); ++i) {
+                const Type* p = (*to->params)[i].type;
+                const std::string name(1, (char)('a' + i));
+                params += (i ? ", " : "") + std::string(p->name) + " " + name;
+                const bool text = i < f.params.size() && (f.params[i]->declType->is(K::String) || f.params[i]->declType->isOptional());
+                args += (i ? ", " : "") + (text ? "string(" + name + ")" : name);
+            }
+            diags_.error(at, "the C function " + q(f.name) + " is declared to take and return what C+ converts for it, not what a " + q(to) + " does",
+                         "write a lambda that calls it: `[](" + params + ") { " + (to->elem->is(K::Void) ? "" : "return ") + f.name + "(" + args + "); }`", spec::CFunctionPointers);
+            return false;
+        }
+        if (!same || f.isAsync) {
+            std::string params;
+            for (size_t i = 0; i < to->params->size(); ++i)
+                params += (i ? ", " : "") + std::string((*to->params)[i].type->name) + " " + (i < f.params.size() && !f.params[i]->name.empty() ? f.params[i]->name : std::string(1, (char)('a' + i)));
+            diags_.error(at, q(f.name) + " does not take and return what a " + q(to) + " does, which C calls with exactly that",
+                         "declare it as `" + std::string(to->elem->name) + " " + f.name + "(" + params + ")`, or write a lambda that calls it", spec::CFunctionPointers);
+            return false;
+        }
+        return true;
+    };
+    if (e.kind == Expr::Kind::Ternary) {  // `ok ? onSignal : null`, each side as one
+        auto& t = static_cast<TernaryExpr&>(e);
+        checkCondition(*t.cond, flow, "condition of '?:'");
+        checkValue(*t.thenExpr, flow, to, context);
+        checkValue(*t.elseExpr, flow, to, context);
+        e.type = to;
+        return;
+    }
+    if (e.kind == Expr::Kind::Name) {  // a C function by its name is already one
+        auto& n = static_cast<NameExpr&>(e);
+        auto f = funcs_.find(n.name);
+        if (!lookup(n.name) && f != funcs_.end() && f->second->isExtern) {
+            if (fits(*f->second, n.loc)) {
+                n.function = f->second;
+                e.type = to;
+            } else {
+                e.type = Type::error();
+            }
+            return;
+        }
+    }
+    if (e.kind == Expr::Kind::Lambda && static_cast<LambdaExpr&>(e).fn->isThrows) {
+        expectedFn_ = Type::functionOf(to->elem, *to->params, true);  // so that only this is reported
+        checkExpr(e, flow);
+        expectedFn_ = nullptr;
+        diags_.error(e.loc, "this lambda can fail, and C cannot pass an error on", "catch the error inside it, and return what C takes as one, such as -1", spec::CFunctionPointers);
+        e.type = Type::error();
+        return;
+    }
+    expectedFn_ = asValue;
+    const Type* t = checkExpr(e, flow);
+    expectedFn_ = nullptr;
+    if (t->isError() || t == to || !t->isFunction()) return requireConvertible(e, to, context);
+    if (e.kind == Expr::Kind::Lambda) {
+        auto& l = static_cast<LambdaExpr&>(e);
+        bool init = false;
+        for (auto& c : l.written) init = init || c.mode == LambdaExpr::Capture::Mode::Init;
+        if (!l.captured.empty() || l.capturesThis || init) {
+            const std::string what = !l.captured.empty() ? q(l.captured[0].var->name) : l.capturesThis ? std::string("`this`") : std::string("what its capture list holds");
+            diags_.error(!l.captured.empty() ? l.captured[0].at : l.loc, "this lambda captures " + what + ", and C has nowhere to keep what a lambda captures",
+                         "pass it through the C function's `void*` argument, as C does, and cast it back inside: `auto rows = (vector<string>*)data;`. A lambda that "
+                         "captures nothing can be given",
+                         spec::CFunctionPointers);
+            e.type = Type::error();
+            return;
+        }
+        if (t != asValue) return requireConvertible(e, asValue, context);  // reported as for any lambda
+        l.valueType = t;
+        e.type = to;
+        return;
+    }
+    if (e.kind == Expr::Kind::Name && static_cast<NameExpr&>(e).function) {
+        if (fits(*static_cast<NameExpr&>(e).function, e.loc)) e.type = to;
+        else e.type = Type::error();
+        return;
+    }
+    diags_.error(e.loc, "a " + q(t) + " cannot go to C, which has no room for what a lambda captures",
+                 "give a function by its name, or a lambda written here that captures nothing, `[]" + takesShown() + " { ... }`, and pass what it needs "
+                 "through the C function's `void*` argument",
+                 spec::CFunctionPointers);
+    e.type = Type::error();
 }
 
 namespace {
@@ -5241,6 +5391,11 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
         }
         case Expr::Kind::Unary: {
             auto& u = static_cast<UnaryExpr&>(e);
+            if (u.op == UnOp::Deref && !u.isArrow() && u.operand->kind == Expr::Kind::Name)  // `(*compare)(a, b)`, as C calls through one
+                if (const VarDecl* v = lookup(static_cast<NameExpr&>(*u.operand).name); v && v->type && v->type->isCFunction()) {
+                    result = checkExpr(*u.operand, flow);
+                    break;
+                }
             if (u.op == UnOp::Deref) {
                 const VarDecl* var;
                 std::string path;
@@ -5302,6 +5457,13 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             }
             bool equality = b.op == BinOp::Eq || b.op == BinOp::Ne;
             auto isFn = [](const Type* t) { return t->isFunction() || (t->isOptional() && t->elem->isFunction()); };
+            if ((l->isCFunction() && isFn(r)) || (r->isCFunction() && isFn(l))) {  // `old == onSignal`: the function's code, as C has it
+                Expr& side = l->isCFunction() ? *b.rhs : *b.lhs;
+                if (side.kind == Expr::Kind::Name && static_cast<NameExpr&>(side).function) {
+                    checkCFunctionValue(side, flow, l->isCFunction() ? l : r, "for '" + std::string(sym) + "'");
+                    (l->isCFunction() ? r : l) = side.type;
+                }
+            }
             if (isFn(l) || isFn(r)) {  // what a function does cannot be compared, and a plain one is never null
                 const Type* fnType = isFn(l) ? l : r;
                 const Expr& side = isFn(l) ? *b.lhs : *b.rhs;
@@ -5344,6 +5506,20 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             if (const Type* common = equality ? commonReference(l, r) : nullptr) {  // a Dog and an Animal
                 b.operandType = common;
                 result = Type::boolTy();
+                break;
+            }
+            if (l->isCFunction() || r->isCFunction()) {  // `old == SIG_ERR`, `f != null`, `old == onSignal`
+                const Type* fp = l->isCFunction() ? l : r;
+                const Type* other = fp == l ? r : l;
+                if (equality && (other == fp || other->isNull())) {
+                    b.operandType = fp;
+                    result = Type::boolTy();
+                    break;
+                }
+                diags_.error(b.loc, equality ? "'" + std::string(sym) + "' compares a function pointer with another of its type, or with null, but this is " + q(other)
+                                             : "function pointers have no order, so '" + std::string(sym) + "' cannot compare them",
+                             equality ? "compare it with a " + q(fp) + ", or with null" : "compare them with `==` or `!=`", spec::CFunctionPointers);
+                result = comparison ? Type::boolTy() : Type::error();
                 break;
             }
             if (l->isPointer() || r->isPointer()) {
@@ -5806,7 +5982,15 @@ const Type* Sema::checkStringFill(CallExpr& call, Flow& flow) {
         return Type::stringTy();
     }
     if (call.args.empty()) return Type::stringTy();
-    checkValue(*call.args[0], flow, Type::longTy(), "as the count for string(count, c)");
+    if (const Type* p = checkExpr(*call.args[0], flow); p->isPointer()) {  // `string(p, n)`, as C++'s: n bytes from where p points, zeros too
+        call.builtin = Builtin::StringBytes;
+        if (!p->elem->is(K::Char))
+            diags_.error(call.args[0]->loc, "string(p, n) copies the bytes a char* points to, but this is " + q(p),
+                         "cast it first, as C++ needs too: `string((const char*)" + asBase(spelled(*call.args[0], "p")) + ", n)`", spec::Strings);
+        checkValue(*call.args[1], flow, Type::longTy(), "as the number of bytes for string(p, n)");
+        return Type::stringTy();
+    }
+    requireConvertible(*call.args[0], Type::longTy(), "as the count for string(count, c)");
     Expr& c = *call.args[1];
     bool oneLetter = c.kind == Expr::Kind::StringLit && static_cast<StringLitExpr&>(c).value.size() == 1;
     if (checkExpr(c, flow)->is(K::String) && !oneLetter)
@@ -6227,7 +6411,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     nameLoc.len = (uint32_t)call.callee.size();
     // `f(x)` where f is a variable: a call through the function it holds. A variable hides a function of its name, as in C++,
     // unless it cannot be called, which is then the mistake to report.
-    auto callable = [](const Type* t) { return t && (t->isFunction() || (t->isOptional() && t->elem->isFunction()) || t->isError()); };
+    auto callable = [](const Type* t) { return t && (t->isFunction() || t->isCFunction() || (t->isOptional() && t->elem->isFunction()) || t->isError()); };
     auto callThrough = [&](Loc at) {
         auto callee = std::make_unique<NameExpr>(at, call.callee);
         call.lowered = std::make_unique<CallValueExpr>(call.loc, std::move(callee), std::move(call.args));
@@ -7310,7 +7494,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     const auto fieldCalled = [&] {
         if (found.empty() || found.back()->fieldIndex(call.name) < 0) return false;
         const Type* t = found.back()->fields[found.back()->fieldIndex(call.name)].type;
-        return t && (t->isFunction() || (t->isOptional() && t->elem->isFunction()));
+        return t && (t->isFunction() || t->isCFunction() || (t->isOptional() && t->elem->isFunction()));
     };
     if (!m && fieldCalled()) {  // `button.onClick(e)`: a field that holds a function
         const StructDecl* declaring = found.back();
@@ -8037,6 +8221,8 @@ const Type* Sema::checkToString(CallExpr& call, Flow& flow) {
 // pointers it is like the other casts, as in C++.
 const Type* Sema::checkReinterpretCast(CastExpr& c, const Type* from, const Type* to) {
     if (from->isError()) return to;
+    if (to->isCFunction() && (from->isInteger() || from->isPointer() || from->isCFunction() || from->isNull())) return to;  // `reinterpret_cast<Handler>(1)`, as SIG_IGN is
+    if (from->isCFunction() && (to->is(K::Long) || to->isPointer())) return to;
     if (to->isPointer() && from->isInteger()) return to;
     if (to->isPointer() && (from->isPointer() || from->isNull())) return checkPointerCast(c, from, to);
     if (from->isPointer() && to->is(K::Long)) return to;
@@ -8098,6 +8284,13 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
         else if (needsValue(c.target))
             diags_.error(c.loc, "a " + q(c.target) + " has no default value, since it is never empty",
                          "give it a value. For one that can be empty, use `" + std::string(c.target->name) + "?`", spec::Unique);
+        return c.target;
+    }
+    const bool namesFunction = c.operand && c.operand->kind == Expr::Kind::Name && !lookup(static_cast<NameExpr&>(*c.operand).name) &&
+                               (funcs_.count(static_cast<NameExpr&>(*c.operand).name) || overloads_.count(static_cast<NameExpr&>(*c.operand).name));
+    if (c.target->isCFunction() && !c.reinterpret && (namesFunction || c.operand->kind == Expr::Kind::Lambda)) {  // `(Handler)onSignal`
+        checkStorable(c.target, c.loc);
+        checkCFunctionValue(*c.operand, flow, c.target, "for the cast to " + q(c.target));
         return c.target;
     }
     const Type* from = checkExpr(*c.operand, flow);
@@ -8169,6 +8362,17 @@ const Type* Sema::checkCast(CastExpr& c, Flow& flow) {
         }
     }
     if (to->isEnum() || from->isEnum()) return checkEnumCast(c, from, to);
+    if (to->isCFunction() || from->isCFunction()) {  // `(Compare)dlsym(lib, "compare")`, as C writes it
+        const bool ok = to->isCFunction() ? from->isNull() || from->isCFunction() || (from->isPointer() && from->elem->is(K::Void)) : to->isPointer() && to->elem->is(K::Void);
+        if (!ok && !from->isError())
+            diags_.error(c.loc, "a cast turns a function pointer into a `void*` or another function pointer, and back, but this goes from " + q(from) + " to " + q(to),
+                         to->isCFunction() && from->isInteger() ? "write `reinterpret_cast<" + std::string(to->name) + ">(n)`, for a C constant such as SIG_IGN"
+                         : to->is(K::Bool) ? std::string("compare it with null: `f != null`")
+                         : to->isInteger() ? std::string("the address as a number is `reinterpret_cast<long>(f)`")
+                                           : std::string("write `(void*)f`, which C's dlsym gives back, or the function pointer type"),
+                         spec::CFunctionPointers);
+        return to;
+    }
     if (to->isPointer() || (from->isPointer() && !to->is(K::Bool) && !to->is(K::String)))
         return checkPointerCast(c, from, to);
     std::string cast = std::string(to->name) + "(x)";
@@ -9203,6 +9407,27 @@ const Type* Sema::checkCallValue(CallValueExpr& c, Flow& flow) {
                      "unwrap it first: `if (auto g = " + n + ") g(...)`", spec::Lambdas);
         return Type::error();
     }
+    if (t->isCFunction()) {  // `handler(sig)`, through what C gave: a string goes as a copy for a `const char*`, as to a C function
+        const auto& params = *t->params;
+        if (c.args.size() != params.size()) {
+            loose();
+            diags_.error(c.loc, shown + " takes " + std::to_string(params.size()) + " argument" + (params.size() == 1 ? "" : "s") + " but " + std::to_string(c.args.size()) +
+                                    (c.args.size() == 1 ? " was" : " were") + " given",
+                         "pass one value for each parameter of " + q(t), spec::CFunctionPointers);
+            return t->elem;
+        }
+        for (size_t i = 0; i < params.size(); ++i) {
+            const Type* p = params[i].type;
+            if (p->isPointer() && p->constElem && p->elem->is(K::Char)) {
+                const Type* a = checkExpr(*c.args[i], flow);
+                if (a->is(K::String) || (a->isOptional() && a->elem->is(K::String))) continue;
+                requireConvertible(*c.args[i], p, "for argument " + std::to_string(i + 1) + " of " + shown);
+                continue;
+            }
+            checkValue(*c.args[i], flow, p, "for argument " + std::to_string(i + 1) + " of " + shown);
+        }
+        return t->elem;
+    }
     if (!t->isFunction()) {
         loose();
         diags_.error(c.callee->loc, (shown == "the function" ? std::string("this") : shown) + " has type " + q(t) + ", which cannot be called",
@@ -9244,6 +9469,18 @@ const Type* Sema::functionValue(NameExpr& n, const Type* expected) {
         diags_.error(n.loc, q(n.name) + " is the name of more than one function, so which one is meant is not known",
                      "say which with the type it is given: `" + std::string(functionTypeOf(*all[0])->name) + " f = " + n.name + ";`", spec::Lambdas);
         return Type::error();
+    }
+    if (chosen->isExtern && !want) {  // `old == free`: a C function by its name is a C function pointer, when it takes C's types
+        std::vector<const Type*> types;
+        bool plain = !chosen->retType->is(K::String) && !chosen->retType->isOptional() && !chosen->retType->isStruct();
+        for (auto& p : chosen->params) {
+            plain = plain && !p->declType->is(K::String) && !p->declType->isOptional() && !p->declType->isStruct();
+            types.push_back(p->declType);
+        }
+        if (plain) {
+            n.function = chosen;
+            return Type::cFunctionOf(chosen->retType, types);
+        }
     }
     if (chosen->isExtern) {
         std::string params, args;

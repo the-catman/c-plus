@@ -1,0 +1,97 @@
+// What a C function pointer can take and be given: C's types, and a function or a lambda with nothing captured that cannot fail.
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+enum class Color { Red };
+using Handler = void (*)(int);
+extern "C" void qsort(void* base, long count, long size, int (*compare)(const void*, const void*));
+extern "C" long strlen(string s);
+int fails(const void* a, const void* b) throws { return 0; }
+int wrong(int a, int b) { return 0; }
+int refs(const void*& a, const void* b) { return 0; }
+
+void capturesVariable() {
+    int n = 0;
+    Handler h = [&](int s) { n = s; };
+    // error: this lambda captures 'n', and C has nowhere to keep what a lambda captures
+    // error: pass it through the C function's `void*` argument, as C does, and cast it back inside
+}
+void capturesCopy() {
+    vector<int> v;
+    Handler h = [v](int s) {};
+    // error: this lambda captures 'v', and C has nowhere to keep what a lambda captures
+}
+void lambdaFails() {
+    Handler h = [](int s) throws { throw Error("x"); };
+    // error: this lambda can fail, and C cannot pass an error on
+    // error: catch the error inside it, and return what C takes as one, such as -1
+}
+void functionValue() {
+    function<void(int)> f = [](int s) {};
+    Handler h = f;
+    // error: a 'function<void(int)>' cannot go to C, which has no room for what a lambda captures
+    // error: give a function by its name, or a lambda written here that captures nothing, `[](int) { ... }`
+}
+void functionFails() {
+    array<int, 2> a = {1, 2};
+    qsort(a.data(), 2, 4, fails);
+    // error: 'fails' can fail, and C cannot pass an error on
+}
+void wrongParameters() {
+    array<int, 2> a = {1, 2};
+    qsort(a.data(), 2, 4, wrong);
+    // error: 'wrong' does not take and return what a 'int (*)(const void*, const void*)' does, which C calls with exactly that
+    // error: declare it as `int wrong(const void* a, const void* b)`, or write a lambda that calls it
+}
+void referenceParameter() {
+    array<int, 2> a = {1, 2};
+    qsort(a.data(), 2, 4, refs);
+    // error: declare it as `int refs(const void* a, const void* b)`
+}
+void stringParameter() {
+    void (*f)(string s) = null;
+    // error: C passes text to and from a function pointer as `const char*`, not as 'string'
+    // error: write `const char*`, and read the text with `string(p)`, which copies it
+}
+void structParameter() {
+    void (*f)(Point p) = null;
+    // error: this compiler does not support a function pointer that takes a struct by value yet
+    // error: pass a pointer to it, `Point*`, which C reads the same way
+}
+void enumParameter() {
+    void (*f)(Color c) = null;
+    // error: a C function pointer cannot take an enum, as C would not keep to its values
+}
+void tooManyArguments() {
+    Handler h = null;
+    h(1, 2);
+    // error: 'h' takes 1 argument but 2 were given
+}
+void ordered() {
+    Handler h = null;
+    bool b = h < h;
+    // error: function pointers have no order, so '<' cannot compare them
+    // error: compare them with `==` or `!=`
+}
+void comparedWithNumber() {
+    Handler h = null;
+    bool b = h == 1;
+    // error: '==' compares a function pointer with another of its type, or with null, but this is 'int'
+}
+void cFunctionWithString() {
+    long (*f)(const char*) = strlen;
+    // error: the C function 'strlen' is declared to take and return what C+ converts for it, not what a 'long (*)(const char*)' does
+    // error: write a lambda that calls it: `[](const char* a) { return strlen(string(a)); }`
+}
+void castToInt() {
+    Handler h = null;
+    int x = (int)h;
+    // error: a cast turns a function pointer into a `void*` or another function pointer, and back
+    // error: the address as a number is `reinterpret_cast<long>(f)`
+}
+void castFromNumber() {
+    Handler h = (Handler)5;
+    // error: write `reinterpret_cast<void (*)(int)>(n)`, for a C constant such as SIG_IGN
+}
+int main() { return 0; }

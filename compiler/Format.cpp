@@ -521,6 +521,9 @@ private:
         if (br == Role::CaseColon) return false;
         if (ar == Role::TemplateClose) return bk != Tok::LParen;
         if (ar == Role::Prefix || ar == Role::CastClose) return false;
+        if (bk == Tok::LParen && kind(b + 1) == Tok::Star && (isTypeKeyword(ak) || ak == Tok::Ident || ar == Role::Pointer || ar == Role::TemplateClose) &&
+            ((kind(b + 2) == Tok::RParen && kind(b + 3) == Tok::LParen) || (kind(b + 2) == Tok::Ident && kind(b + 3) == Tok::RParen && kind(b + 4) == Tok::LParen)))
+            return true;  // `int (*compare)(const void*, const void*)`, a C function pointer, as C++ is written
         if (bk == Tok::LParen)
             return !(ak == Tok::Ident || ak == Tok::RParen || ak == Tok::RBracket || isTypeKeyword(ak) || ak == Tok::KwSizeof || ar == Role::Pointer ||
                      ar == Role::Optional);  // `new T?(x)`

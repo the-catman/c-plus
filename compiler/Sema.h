@@ -151,6 +151,9 @@ private:
     std::string changeForm(const Expr& base, const std::string& change, const std::string& opening, const std::string& how, const std::string& before = "");
     std::string storeItBack(const Expr& recv, const std::string& method, bool hasArguments, const std::string& before = "", const std::string& keepAs = "");
     const Type* checkSpawn(SpawnExpr& s, Flow& flow);
+    bool checkCSignature(const Type* t, Loc loc);
+    void checkCFunctionValue(Expr& e, Flow& flow, const Type* to, const std::string& context);
+    std::set<const Type*> checkedSignatures_;  // C function pointer types already checked, which report once
     const Type* checkAwait(AwaitExpr& a, Flow& flow);
     void prepareAsync(FuncDecl& fn);  // an async function's call gives its Task: see FuncDecl::declaredRet
     void checkTaskKept(const FuncDecl& f, const Expr& call, Loc loc);  // `f();`, which throws away the task of an async call

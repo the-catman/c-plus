@@ -85,6 +85,8 @@ private:
     [[noreturn]] void failStd(Loc loc, const Token& name);
     const Type* parseBaseType(Loc& loc);
     const Type* parseFunctionType(const Token& word, Loc& loc);
+    const Type* parseCFunctionPointer(const Type* ret, Loc& loc, const Token** name);
+    const Token& declaredName(const Type*& ty, Loc& typeLoc, const std::string& context);
     ExprPtr parseLambda();  // at the '['
     ExprPtr parseCoalesce();
     void addBuiltins();  // what is written in C+ itself, for a program that uses it. See Builtins.h

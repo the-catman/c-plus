@@ -72,7 +72,8 @@ long square(long n) { return n * n; }
 | Manual memory | `int* p = new int(5); delete p;`, `new Point{1, 2}`, `int* a = new int[n]; delete[] a;`. Values start as their default, and each `new`/`delete` **warns**. Turn it off with `[[allow(new_delete)]]` before a function, `[[allow(new_delete)]];` at the top of the file, or `-Wno-new-delete`. The wrong form of delete **stops the program** |
 | C functions | `extern "C" int abs(int n);` or `extern "C" { ... }`, written with C+ types: `long strlen(string s);`, `string? getenv(string name);`, `void* malloc(long n);`, `double frexp(double x, int* e);`. Strings are converted at each call. Link other libraries with `-lname` |
 | C types by name | `extern "C" struct FILE;`, then `FILE* f = fopen(...)`. Only pointers to it can be used |
-| C headers | `import <sqlite3.h>;` or `import "mine.h";` (next to the program first), then its functions, structs, macro constants and enum constants by their C names. `-I dir` for another folder. A `const char*` parameter is `string?`, a `const char*` result `string`, `size_t` `long`, a function pointer `void*`. What C+ cannot take, such as `printf` or `short`, is an error that says why. The program's own declaration of a name wins |
+| C function pointers | `extern "C" void qsort(void* base, long n, long size, int (*compare)(const void*, const void*));`, then `qsort(a.data(), 4, sizeof(int), byValue);` with a function by its name, or `qsort(a.data(), 4, sizeof(int), [](const void* x, const void* y) { return *(const int*)x - *(const int*)y; });`, a lambda that captures nothing. `using Handler = void (*)(int);` names the type. State goes through C's `void*`: `walk(&seen, visit)`, then `auto seen = (Seen*)data;` inside. `h(sig)` calls one that C gave back, and a null one **stops the program**. `string(p, n)` copies n bytes |
+| C headers | `import <sqlite3.h>;` or `import "mine.h";` (next to the program first), then its functions, structs, macro constants and enum constants by their C names. `-I dir` for another folder. A `const char*` parameter is `string?`, a `const char*` result `string`, `size_t` `long`, a function pointer as C writes it, and its typedef a `using`. What C+ cannot take, such as `printf` or `short`, is an error that says why. The program's own declaration of a name wins |
 | C structs | `extern "C" { struct ldiv_t { long quot; long rem; }; ldiv_t ldiv(long a, long b); tm* gmtime_r(const long* t, tm* out); }`. Fields are numbers, `char`, `bool`, pointers, such structs and arrays of those, in C's order. By value or through a pointer. Before C fills one: `tm t = {};` |
 | Control flow | `if`/`else`, `while`, `do`/`while`, `for`, `for (auto x : v)` over a vector or an array, `break`, `continue`, `?:` |
 | Enums | `enum class Color { Red, Green, Blue };`, `enum class Big : long { Far = 5000000000 };`, then `Color c = Color::Green;`. Nothing converts by itself: `int(c)` is its number, and `Color(n)` **stops the program** unless `n` is the value of one. `==` and `<` on one enum. `println("{}", c)` prints `Green`. A hashmap key; JSON writes the name |
@@ -108,6 +109,8 @@ long square(long n) { return n * n; }
 | `short` in a C struct | not supported yet; use the struct through pointers, declared by name |
 | `void f(int v[])` in `extern "C"` | `void f(int* v)` |
 | `extern "C" int printf(const char*, ...);` | variable arguments are not supported; use `println` |
+| `void (*signal(int sig, void (*func)(int)))(int);` | name the type first: `using Handler = void (*)(int);`, then `Handler signal(int sig, Handler func);` |
+| `[&](const void* a, const void* b) { ... }` given to C | a lambda for C captures nothing: pass what it needs through the C function's `void*`, and cast it back inside |
 | `std::cout << x`, `printf` | `println("{}", x)` |
 | `std::vector<int>`, `std::string`, `std::to_string` | `vector<int>`, `string`, `to_string`, with no `std::` |
 | `std::`, `using namespace std` | no `std::`; built-ins have no prefix |
@@ -273,7 +276,7 @@ long square(long n) { return n * n; }
 | Structured bindings | `for (auto [k, v] : m)`, `auto [a, b] = f();` |
 | Format options | width and alignment, `{:x}`, `{:>8}`, numbered placeholders like `{0}` |
 | Files | the async `fs::readFile` and `fs::writeFile`; copying a file, and its times and permissions |
-| More C | variable arguments, vectors, C variables like `errno`, callbacks |
+| More C | variable arguments, vectors, C variables like `errno`, function pointers that take a struct by value |
 | Concurrency | waiting with a time limit, stopping a task, atomic values, condition variables, channels |
 
 ## Tools

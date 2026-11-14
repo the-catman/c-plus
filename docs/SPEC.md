@@ -1454,7 +1454,8 @@ if (p) println("{}", *p);       // a pointer is true when it is not null
   itself: write `p != null` or `bool(p)`. A number and a pointer convert only with
   [`reinterpret_cast`](#casts): `(int*)0x1000` and `int* p = 0;` are errors.
 - **Text.** `string(p)` copies the text that a `char*` or `const char*` points to, up to
-  its zero byte, as C stores it. A null pointer stops the program.
+  its zero byte, as C stores it. `string(p, n)` copies n bytes, zero bytes too, as C++'s
+  does. A null pointer stops the program, unless n is 0.
 - **Printing.** A pointer prints its address in hex, such as `0x7ffd5e8c`, and null
   prints `0x0`. Printing a `char*` is an error: C++ prints the text it points to, but C+
   cannot tell where that text ends. Write `string(p)` for the text, or `(void*)p` for the
@@ -2072,6 +2073,7 @@ int main() {
 | `char*` or `const char*` result | `string?`, which is null when the result is NULL, or `string` when it never is |
 | `char*` that the function writes to, or that must be freed | `char*` |
 | `int*`, `double*`, `void*` and other pointers | the same pointer type |
+| `int (*compare)(const void*, const void*)` and other function pointers | the same, see [C function pointers](#c-function-pointers) |
 | `FILE*`, `sqlite3*` and other types used only through pointers | the same, after [`extern "C" struct FILE;`](#c-types-known-by-name) |
 | `struct tm`, `div_t` and other structs whose fields C+ reads, by value or through a pointer | the same fields, [declared in C+](#c-structs) |
 
@@ -2102,8 +2104,10 @@ int main() {
 - C's output functions, such as `puts`, share their buffer with `print` and `println`, so
   output comes out in the order it was written.
 - A C function cannot be named `main`, or start with `cplus_`, which the C+ runtime uses.
+- A function pointer that C calls, such as `qsort`'s comparator, is written as in C: see
+  [C function pointers](#c-function-pointers).
 - Not supported yet: `long double`; functions with a variable number of arguments, such as
-  `printf`; callbacks; and C variables such as `errno`.
+  `printf`; and C variables such as `errno`.
 
 #### C structs
 
@@ -2184,6 +2188,60 @@ extern "C" struct sqlite3;      // one type on its own
 - C's `typedef struct x x;` is not needed and is an error; neither is `class X;`. A C
   struct whose fields C+ reads is not supported yet.
 
+#### C function pointers
+
+A C function that calls back a function it is given, as `qsort` calls a comparator and `atexit` the function to run at
+exit, declares the type of the pointer as C and C++ do. It is given a function by its name, or a lambda that captures
+nothing, which C++ converts too:
+
+```cpp
+extern "C" {
+    void qsort(void* base, long count, long size, int (*compare)(const void*, const void*));
+    int atexit(void (*f)());
+}
+
+int ascending(const void* a, const void* b) {
+    return *(const int*)a - *(const int*)b;
+}
+
+int main() {
+    array<int, 4> a = {3, 1, 4, 2};
+    qsort(a.data(), a.size(), sizeof(int), ascending);  // [1, 2, 3, 4]
+    qsort(a.data(), a.size(), sizeof(int), [](const void* x, const void* y) { return *(const int*)y - *(const int*)x; });
+    atexit([] { println("done"); });                    // after main returns
+    return 0;
+}
+```
+
+- **The type is written as in C**: `int (*compare)(const void*, const void*)` for a parameter, a field or a variable, and
+  `void (*)(int)` by itself. `using Handler = void (*)(int);` names one, which is how a function that returns one, or an
+  array of them, is written: `Handler signal(int sig, Handler handler);`, where C writes the declaration inside another,
+  which is an error that shows the `using`.
+- **What it takes and returns are C's types**: numbers, `char`, `bool`, pointers and other function pointers. Text is a
+  `const char*`, read with `string(p)`, and `string(p, n)` copies n bytes from where p points, zero bytes too. A
+  `string` there is an error, and a struct by value is not supported yet: pass a pointer to it.
+- **What C can call** is a function of the program by its name, a C function, or a lambda written where the pointer goes
+  that captures nothing, and each takes and returns exactly what the pointer does. A C+ function or lambda gets code of
+  its own that C calls, made while compiling. Neither can be `throws`, as C cannot pass an error on: catch it inside, and
+  return what C takes as an error, such as -1. A `function<...>` value cannot go to C, which has no room for what a lambda
+  captured, and a lambda that captures is an error that says this.
+- **What a callback needs goes through the C function's `void*`**, as C passes it: `walk(&seen, visit)` passes the
+  address of a variable, which the callback casts back, `auto seen = (Seen*)data;`. A callback that C calls after the
+  function returns needs memory that lives that long, from [`new`](#new-and-delete).
+- **A function pointer can be null**, as a pointer can: it starts out null, is a [condition](#conditions), and `==` and
+  `!=` compare it with another of its type, with `null`, or with a function by its name. Calling a null one stops the
+  program. One that C gives back is called as in C, `handler(sig)` or `(*handler)(sig)`, and a `string` given for a
+  `const char*` is copied for the call, as for a C function. It does not convert to a `function<...>`, which is never
+  empty: `[p](int x) { return p(x); }` does that. Casts turn it into a `void*` and back, `(Handler)dlsym(lib, "f")`, and
+  `reinterpret_cast<Handler>(1)` makes a constant such as `SIG_IGN`.
+- **C may call one on a thread it started.** The program's code runs there as on its own threads, and what two threads
+  change needs a [Mutex](#mutex). Running out of stack on such a thread is a crash with no report of where, and the
+  program does not wait for such a thread when `main` returns.
+- **The variables outside functions** live until the functions given to `atexit` have run, which can use them.
+- **A signal handler** can stop the program anywhere, even in the middle of an allocation or a `println`, which it must
+  not use then. It sets a number outside functions, `int got = 0;`, which the program reads later.
+- `qsort` works on an [array](#arrays) and on memory from `malloc`. A vector is sorted with [`sort`](#algorithms).
+
 #### C headers
 
 `import <sqlite3.h>;` reads a C header, as `#include` does in C, and declares in C+ what the
@@ -2219,10 +2277,12 @@ int main() {
   `const char*` parameter is a `string?`, which takes a `string` or `null`, and a
   `const char*` result is a `string`, which stops the program if C returns NULL. A `char*`
   stays a `char*`, and a `const unsigned char*`, which is bytes rather than text, is one too.
-  Other pointers stay as they are. A pointer to a function is a `void*`, as C+ has no
-  callbacks yet, so `null` can be passed for one. An enum is an `int`. C's names for types,
-  such as `size_t` and `pid_t`, are not names in C+: using one is an error that says what
-  to write instead.
+  Other pointers stay as they are. A pointer to a function is a
+  [C function pointer](#c-function-pointers), and a typedef of one is a `using`, as
+  `<stdlib.h>` has `using __compar_fn_t = int (*)(const void*, const void*);` for `qsort`. A
+  constant that C casts to one, such as `SIG_IGN`, has its type. An enum is an `int`. C's names
+  for other types, such as `size_t` and `pid_t`, are not names in C+: using one is an error that
+  says what to write instead.
 - **Structs.** A struct whose fields are all C types that C+ has is declared with them, as in
   [C structs](#c-structs), and C+ checks that its layout is the one the C compiler gives it.
   Any other is declared [by name](#c-types-known-by-name), and works through pointers. A
@@ -3725,7 +3785,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Pointers into vectors and strings | planned |
 | `unique<T>` references and `move(x)` | implemented |
 | `local<T>` references | implemented |
-| C callbacks and variables in `extern "C"`; signed 16-bit integers and unions in C structs; C's macros with arguments and inline functions | planned |
+| C function pointers: functions and lambdas that capture nothing given to C, calls through what C gives back, `using` for their types, from headers too | implemented |
+| C function pointers that take or return a struct by value; variables in `extern "C"`; signed 16-bit integers and unions in C structs; C's macros with arguments and inline functions | planned |
 | Modules `http`, `json` and `reflect`, and raw strings | implemented |
 | `http::fetch` | implemented |
 | `import fs;` and `fs::read`; `readLine()` | implemented |

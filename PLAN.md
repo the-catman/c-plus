@@ -81,8 +81,8 @@ C++20, built with clang. Self-hosting in C+ is a later milestone, not a requirem
   aarch64, the Tier 1 targets. Other targets report an error. Decided 2026-11-05.
 - A C array field is written `array<char, 64> name;` (see §2.23). A C array parameter stays
   a pointer. Decided 2026-11-06.
-- 16-bit integers in structs, unions, variadic functions and callbacks follow with the
-  features they need.
+- 16-bit integers in structs, unions and variadic functions follow with the features they
+  need. Callbacks are §2.36.
 
 ### 2.5 C++ interop — DECIDED
 None. C++ libraries are consumed through hand-written `extern "C"` shims. No tooling
@@ -659,7 +659,7 @@ looked for next to the program first, as `#include` does, and `-I` adds folders.
   says what a header cannot, such as that a `const char*` result can be NULL.
 - C types become the C+ types of the C-functions table. A `const char*` parameter is `string?`, and a `const char*` result
   `string`, which stops the program on NULL, as following a null pointer does; `char*` stays a pointer, since text C hands out
-  may have to be freed. A function pointer is `void*` until there are callbacks.
+  may have to be freed. A function pointer is a C function pointer type, named by an alias (§2.36).
 - A struct is declared with its fields only when they are all C+ types and C's layout is the one C+ would give them; otherwise
   by name, for pointers. Object-like macros are evaluated by clang as the values of declarations, and become constants when
   they are numbers, strings or pointers.
@@ -765,6 +765,27 @@ free functions with those forms and no `std::ranges::`, so that no name changes 
 - A lambda's `auto` parameters take their types from the function type it is given to. `void f(auto x)` as a generic, and
   a lambda with `auto` parameters whose types are not known, are planned.
 
+
+### 2.36 C callbacks — DECIDED
+Decided 2026-11-14 by the owner: a C function pointer is what it is in C and C++, and only code with nothing captured goes to C.
+- It is written as in C: `int (*compare)(const void*, const void*)` for a parameter, field or variable, `void (*)(int)` as a type,
+  and `using Handler = void (*)(int);` to name one. A declarator nested in another, as `signal` is declared, is an error that
+  shows the `using`. Header import gives aliases, with the header's typedef name where it has one. `function<...>` cannot be
+  one, as it holds what a lambda captured, is never empty, and cannot be compared.
+- What goes to C for one is a function by name, a C function, or a lambda written there that captures nothing, as C++ converts
+  them, with one adapter made for each while compiling. Not a `function<...>` value, and nothing that `throws`, as C cannot pass
+  an error on. State goes through the C function's `void*`, as in C: `&rows`, or `new` memory for a callback that runs later.
+  Code made at run time, as libffi does, is refused on hardened systems, and C never says when it could be freed.
+- What a callback takes and gives are numbers, `char`, `bool` and pointers. `const char*` is the pointer, read with `string(p)`,
+  and `string(p, n)` reads n bytes. Strings converted at the boundary can come later, and structs by value are not supported yet.
+- A pointer that C gives back can be called, `f(x)`, with a `string` copied for a `const char*`, as for a C function; calling a
+  null one stops the program. It compares with `==`, for `SIG_ERR`. It does not convert to a `function<...>`, which is never
+  empty: `[p](int x) { return p(x); }` says that.
+- C may call one on a thread it started. Its counts work there; running out of stack is only reported as a crash, and `main`
+  does not wait for such a thread.
+- The variables outside functions are freed after the `atexit` callbacks run, by one the runtime registers first.
+- A signal handler can interrupt an allocation or a `println`, so it should only set a number outside functions. Handing signals
+  to the event loop, as Go's `signal.Notify` does, waits for the servers phase.
 ## 3. Compiler architecture
 
 ```
@@ -832,7 +853,7 @@ what holds real programs back most:
    parameter can be. It may replace the rules of §2.17 and §2.24 on when a result is a copy, and is where the safety of
    §2.7 is tested hardest. `return &x;` of a local, which compiles today, is caught first.
 5. Lambdas, and a type for a function (built 2026-11-12, see §2.34), then `sort` and the other functions that take one
-   (built 2026-11-14, §2.35), `spawn` with a lambda (built 2026-11-14, §2.9), and C callbacks.
+   (built 2026-11-14, §2.35), `spawn` with a lambda (built 2026-11-14, §2.9), and C callbacks (built 2026-11-14, §2.36).
 6. Function overloading, more than one constructor and default arguments, then operator overloading. Overloading also
    ends the pairs that stand in for it, such as `http::fetch` and `http::fetchWith`, before more of them are made.
 7. The rest of what everyday programs need: writing files and the rest of `fs` (§2.15), `split`, `trim`, `join` and

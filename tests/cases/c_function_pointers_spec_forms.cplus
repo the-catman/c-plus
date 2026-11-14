@@ -1,0 +1,39 @@
+// The forms that the spec's section on C function pointers writes, each as it is written there.
+using Handler = void (*)(int);
+extern "C" void* dlsym(void* handle, string symbol);
+
+struct Seen {
+    vector<int> values;
+};
+
+void walk(void* data, void (*visit)(void* data, int value)) {
+    for (int i = 1; i <= 3; i++) visit(data, i);
+}
+void visit(void* data, int value) {
+    auto seen = (Seen*)data;
+    seen->values.push_back(value);
+}
+int got = 0;
+void onSignal(int sig) { got += sig; }
+
+int main() {
+    Seen seen;
+    walk(&seen, visit);
+    println("{}", seen.values);
+    // expect: [1, 2, 3]
+    Handler handler = onSignal;
+    int sig = 2;
+    handler(sig);
+    (*handler)(sig);
+    println("{}", got);
+    // expect: 4
+    int (*p)(int) = [](int x) { return x * 3; };
+    function<int(int)> f = [p](int x) { return p(x); };
+    println("{}", f(5));
+    // expect: 15
+    void* lib = null;
+    Handler none = (Handler)dlsym(lib, "f");
+    println("{}", none == null);
+    // expect: true
+    return 0;
+}

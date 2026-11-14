@@ -12,8 +12,6 @@ int main() {
 }
 // error: `header_size_t` from "../c/header.h" is C's name for `unsigned long`, which C+ writes as `long`
 // error: write `long`
-// error: `header_callback` from "../c/header.h" is C's name for a pointer to a function, which C+ writes as `void*`, as it has no callbacks yet
-// error: write `void*`, and pass `null` where C allows it
 // error: `header_port` from "../c/header.h" is C's name for `unsigned short`, which C+ writes as `uint16_t`
 // error: write `uint16_t`
 // error: `header_size` from "../c/header.h" is C's name for an enum, which C+ writes as `int`

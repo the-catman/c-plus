@@ -1,0 +1,11 @@
+// A function pointer can be null, as a pointer can, and calling a null one stops the program, as following one does.
+using Handler = void (*)(int);
+void run(Handler h) { h(1); }
+int main() {
+    run([](int n) { println("ran {}", n); });
+    run(null);
+    return 0;
+}
+// expect: ran 1
+// trap: null pointer: 'h' was called, but it is null
+// trap: trap_null_function_pointer.cplus:3:

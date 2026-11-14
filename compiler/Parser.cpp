@@ -704,6 +704,11 @@ void Parser::addHeaders() {
             ++i;
             continue;
         }
+        if (t.kind == Tok::Ident && t.text == "using" && next == Tok::Ident && i + 2 < toks_.size() && toks_[i + 2].kind == Tok::Assign) {
+            names.types[toks_[i + 1].text] = names.types[toks_[i + 1].text];  // `using Handler = ...;`, which a header's does not replace
+            ++i;
+            continue;
+        }
         if (t.kind != Tok::Ident) continue;
         const Tok before = i ? toks_[i - 1].kind : Tok::Eof;
         if (before == Tok::Dot || before == Tok::Arrow || before == Tok::QuestionDot || before == Tok::ColonColon || next == Tok::ColonColon)
@@ -828,7 +833,8 @@ void Parser::scanDeclarations(Program& prog) {
                 if (depth == 0) enumStarts_.push_back(i);
             }
         }
-        if (kind == Tok::Ident && depth == 0 && !inBuiltins && toks_[i].text == "using" && toks_[i + 1].kind == Tok::Ident && i + 2 < toks_.size() &&
+        // `using Id = long;`, of the program, or a C header's for a function pointer, `using sighandler_t = void (*)(int);`.
+        if (kind == Tok::Ident && depth == 0 && toks_[i].text == "using" && toks_[i + 1].kind == Tok::Ident && i + 2 < toks_.size() &&
             toks_[i + 2].kind == Tok::Assign && !prog.findTemplate(toks_[i + 1].text) && !builtinTypeWord(toks_[i + 1].text)) {  // `using Id = long;`
             auto alias = std::make_unique<TemplateDecl>();
             alias->kind = TemplateDecl::Kind::Alias;
@@ -1394,6 +1400,9 @@ void Parser::aliasEnd(const TemplateDecl& alias, const Type* type, Loc typeLoc) 
              "remove the `&`, and write it where the reference is meant: `const " + alias.name + "& x`", spec::TypeAliases);
     if (type->is(Type::Kind::Auto))
         fail(typeLoc, "a type alias stands for a type, and `auto` is none", "write the type itself: `using " + alias.name + " = long;`", spec::TypeAliases);
+    if (check(Tok::LParen) && peek(1).kind == Tok::Star && peek(2).kind == Tok::Ident)  // `using Handler = void (*h)(int);`
+        fail(peek(2).loc, "a function pointer type has no name of its own here, as the alias names it",
+             "leave out '" + peek(2).text + "': `using " + alias.name + " = " + std::string(type->name) + " (*)(...);`", spec::CFunctionPointers);
     if (!check(Tok::Semi))
         fail(peek().loc, "expected ';' after the type of '" + alias.name + "', found " + describeToken(peek()),
              "write one type, then ';': `using " + alias.name + " = vector<int>;`", spec::TypeAliases);
@@ -2193,6 +2202,10 @@ void Parser::parseTopLevel(Program& prog) {
     }
     if (ret->is(Type::Kind::Auto) && (!check(Tok::Ident) || peek(1).kind == Tok::LParen)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `int`");
     if (check(Tok::Ident) && peek(1).kind == Tok::ColonColon && peek(2).kind == Tok::Ident) expectNewName("for the name");  // `int net::server::extra()`
+    if (check(Tok::LParen) && peek(1).kind == Tok::Star && peek(2).kind == Tok::Ident && peek(3).kind == Tok::LParen)
+        fail(peek(2).loc, "C+ reads a function pointer that a function returns only through a name for its type",
+             "name the type first: `using Handler = " + std::string(ret->name) + " (*)(int);`, then `Handler " + peek(2).text + "(...) { ... }`", spec::CFunctionPointers);
+    if (check(Tok::LParen) && peek(1).kind == Tok::Star) return parseGlobals(prog, ret, retLoc, isConst);  // `void (*handler)(int) = onSignal;`
     if (check(Tok::Ident) && peek(1).kind != Tok::LParen) {
         if (ret->isPointer() && ret->elem->is(Type::Kind::Char) && peek(1).kind == Tok::Assign && peek(2).kind == Tok::StringLit)
             fail(peek().loc, "text is a `string`, not a `char*`", "write `string " + peek().text + " = ...;`, or `const string " + peek().text + " = ...;` for text that never changes",
@@ -2352,6 +2365,9 @@ std::unique_ptr<FuncDecl> Parser::parseExternFunction() {
     auto fn = std::make_unique<FuncDecl>();
     fn->isExtern = true;
     fn->retType = parseCType(fn->retTypeLoc, true);
+    if (check(Tok::LParen) && peek(1).kind == Tok::Star && peek(2).kind == Tok::Ident && peek(3).kind == Tok::LParen)  // `void (*signal(int sig, ...))(int)`
+        fail(peek(2).loc, "C+ reads a function pointer that a function returns only through a name for its type",
+             "name the type first: `using Handler = " + std::string(fn->retType->name) + " (*)(int);`, then `Handler " + peek(2).text + "(...);`", spec::CFunctionPointers);
     const Token& name = expectNewName("for the name of the C function");
     fn->name = name.text;
     fn->nameLoc = name.loc;
@@ -2371,11 +2387,16 @@ std::unique_ptr<FuncDecl> Parser::parseExternFunction() {
                      spec::CFunctions);
             Loc typeLoc;
             const Type* ty = parseCType(typeLoc, false);
-            if (check(Tok::LParen) && peek(1).kind == Tok::Star)
-                notYet(peek().loc, "C callbacks", "a C function that takes a function pointer cannot be declared yet. Write a small wrapper for it in C, and declare that");
             Loc nameLoc = typeLoc;
             std::string pname;
-            if (check(Tok::Ident)) {
+            if (check(Tok::LParen) && peek(1).kind == Tok::Star) {  // `int (*compare)(const void*, const void*)`
+                const Token* named = nullptr;
+                ty = parseCFunctionPointer(ty, typeLoc, peek(2).kind == Tok::Ident ? &named : nullptr);
+                if (named) {
+                    pname = named->text;
+                    nameLoc = named->loc;
+                }
+            } else if (check(Tok::Ident)) {
                 const Token& t = advance();
                 pname = t.text;
                 nameLoc = t.loc;
@@ -2615,6 +2636,9 @@ bool Parser::isTypeStart(size_t ahead) const {
                                                           peek(ahead).kind == Tok::Star))
                 ++ahead;  // `Point* p`, `Node** head`, `Point* const p`
             if (peek(ahead + 1).kind == Tok::Amp || peek(ahead + 1).kind == Tok::AmpAmp) ++ahead;  // `Point& p`
+            if (peek(ahead + 1).kind == Tok::LParen && peek(ahead + 2).kind == Tok::Star && peek(ahead + 3).kind == Tok::Ident &&
+                peek(ahead + 4).kind == Tok::RParen && peek(ahead + 5).kind == Tok::LParen)
+                return true;  // `sqlite3* (*open)(const char*)`, a function pointer
             return peek(ahead + 1).kind == Tok::Ident;
         case Tok::KwString: return peek(ahead + 1).kind != Tok::ColonColon;  // not `string::npos`
         case Tok::KwInt: case Tok::KwLong: case Tok::KwBool:
@@ -2641,6 +2665,9 @@ bool Parser::isValueOfType() const {
             break;
         default: return false;
     }
+    if (peek(after).kind == Tok::LParen && peek(after + 1).kind == Tok::Star && peek(after + 2).kind == Tok::Ident && peek(after + 3).kind == Tok::RParen &&
+        peek(after + 4).kind == Tok::LParen)
+        return false;  // `int (*twice)(int) = ...;`, which declares a function pointer
     return peek(after).kind == Tok::LParen || peek(after).kind == Tok::LBrace || peek(after).kind == Tok::ColonColon;
 }
 
@@ -2990,6 +3017,7 @@ const Type* Parser::parseType(Loc& loc, bool* isConst) {
         loc = start;
         if (prev().loc.line == start.line) loc.len = prev().loc.col + prev().loc.len - start.col;
     }
+    if (check(Tok::LParen) && peek(1).kind == Tok::Star && peek(2).kind == Tok::RParen) t = parseCFunctionPointer(t, loc, nullptr);  // `void (*)(int)`
     if (varConst) {
         if (!isConst)
             fail(constLoc, "'const' cannot be used here",
@@ -3193,6 +3221,79 @@ const Type* Parser::parseBaseType(Loc& loc) {
     }
 }
 
+// After the type that a C function pointer returns: `(*)(const void*, const void*)`, as C and C++ write the type, or
+// `(*compare)(const void*, const void*)`, with the name of what is declared, where `name` can take one. What C writes inside
+// that, as `signal` is declared, is read only through a `using`.
+const Type* Parser::parseCFunctionPointer(const Type* ret, Loc& loc, const Token** name) {
+    const Loc start = loc;
+    advance();  // '('
+    advance();  // '*'
+    const std::string retName = ret->name;
+    auto useAlias = [&](Loc at, const std::string& what) {
+        fail(at, "C+ reads a function pointer " + what + " only through a name for its type",
+             "name the type first: `using Handler = " + retName + " (*)(int);`, then write `Handler` where it goes", spec::CFunctionPointers);
+    };
+    if (check(Tok::Star) || check(Tok::Amp)) notYet(peek().loc, "pointers and references to C function pointers", "hold it in a variable of its own: `" + retName + " (*f)(...)`");
+    const Token* declared = nullptr;
+    if (check(Tok::Ident) && name) {
+        declared = &peek();
+        expectNewName("for the name of the function pointer");
+        if (check(Tok::LParen)) useAlias(declared->loc, "that a function returns");  // `void (*signal(int, void (*)(int)))(int)`
+        if (check(Tok::LBracket)) useAlias(declared->loc, "array");                   // `void (*handlers[4])(int)`
+    } else if (name) {
+        fail(peek().loc, "expected the name of the function pointer, found " + describeToken(peek()),
+             "write it after the '*': `" + retName + " (*name)(...)`", spec::CFunctionPointers);
+    }
+    expect(Tok::RParen, "after the '*' of a function pointer");
+    if (!check(Tok::LParen))
+        fail(peek().loc, "a function pointer says what it takes, in parentheses after its name", "write e.g. `" + retName + " (*f)(int)`, or `" + retName + " (*f)(void)` for one that takes nothing",
+             spec::CFunctionPointers);
+    advance();
+    std::vector<const Type*> params;
+    if (check(Tok::KwVoid) && peek(1).kind == Tok::RParen) advance();  // `(void)`, as C writes nothing
+    if (!check(Tok::RParen)) {
+        do {
+            if (check(Tok::Dot) && peek(1).kind == Tok::Dot && peek(2).kind == Tok::Dot)
+                notYet(peek().loc, "C function pointers with variable arguments", "declare one with fixed parameters");
+            if (!isTypeStart() && !isTypeAt(0))
+                fail(peek().loc, "expected the type of a parameter, found " + describeToken(peek()), "write the types it takes, e.g. `" + retName + " (*f)(int, const char*)`",
+                     spec::CFunctionPointers);
+            Loc typeLoc;
+            bool isConst = false;  // `const int n` says nothing to the caller, as in C
+            const Type* ty = parseType(typeLoc, &isConst);
+            if (check(Tok::LParen) && peek(1).kind == Tok::Star) {  // a function pointer it takes, with a name
+                const Token* inner = nullptr;
+                ty = parseCFunctionPointer(ty, typeLoc, &inner);
+            } else {
+                match(Tok::Ident);  // a name, which says nothing
+            }
+            if (check(Tok::Amp) || check(Tok::AmpAmp))
+                fail(peek().loc, "C has no references", "write a pointer, `" + std::string(ty->name) + "*`, which C passes the same way", spec::CFunctionPointers);
+            if (check(Tok::LBracket))
+                fail(peek().loc, "a C array parameter is written as a pointer", "write `" + std::string(ty->name) + "*`: C passes an array as a pointer to its first element", spec::CFunctionPointers);
+            if (ty->is(Type::Kind::Void) || ty->is(Type::Kind::Auto))
+                fail(typeLoc, std::string("a parameter cannot be '") + ty->name + "'", "write the type it takes, e.g. `" + retName + " (*f)(int)`", spec::CFunctionPointers);
+            params.push_back(ty);
+        } while (match(Tok::Comma));
+    }
+    expect(Tok::RParen, "to close what the function pointer takes");
+    if (check(Tok::KwThrows))
+        fail(peek().loc, "a function that C calls cannot fail, as C cannot pass an error on", "remove `throws`, and return what C takes as an error, such as -1", spec::CFunctionPointers);
+    loc = start;
+    if (prev().loc.line == start.line) loc.len = prev().loc.col + prev().loc.len - start.col;
+    if (name) *name = declared;
+    return Type::cFunctionOf(ret, params);
+}
+
+// The name a declaration gives, after its type, which for `int (*compare)(const void*, const void*)` is inside what C writes after
+// the type, which then is the function pointer's.
+const Token& Parser::declaredName(const Type*& ty, Loc& typeLoc, const std::string& context) {
+    if (!(check(Tok::LParen) && peek(1).kind == Tok::Star)) return expectNewName(context);
+    const Token* name = nullptr;
+    ty = parseCFunctionPointer(ty, typeLoc, &name);
+    return *name;
+}
+
 // `function<int(const string&, int) throws>`, after the word `function`: what it returns, then what it takes, each of which can
 // have a name, which says nothing more.
 const Type* Parser::parseFunctionType(const Token& word, Loc& loc) {
@@ -3359,7 +3460,7 @@ void Parser::parseParams(FuncDecl& fn) {
             if (ty->is(Type::Kind::Auto) && !lambdaParams_)
                 notYet(typeLoc, "`auto` parameters of a function", "write the parameter type. A function for any type is a generic: `template<typename T> void f(T x)`");
             bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) && parseReferenceMark(ty, ReferencePlace::Parameter);
-            const Token& pname = expectNewName("for the parameter name");
+            const Token& pname = declaredName(ty, typeLoc, "for the parameter name");
             rejectTemplateParamName(pname);
             if (check(Tok::LBracket) && fn.name == "main" && fn.role == FuncDecl::Role::Free) {
                 // Reported, and read as what it means, so that this is still the program's main.
@@ -3867,13 +3968,15 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
     if (sd.isInterface)
         fail(check(Tok::Ident) ? peek().loc : typeLoc, "an interface cannot have fields",
              "an interface only lists methods. Use a class for fields", spec::Interfaces);
-    if (ty->is(Type::Kind::Void))
+    if (ty->is(Type::Kind::Void) && !(check(Tok::LParen) && peek(1).kind == Tok::Star))
         fail(typeLoc, "a field cannot have type void", "pick a type such as int, or leave the field out", spec::Structs);
     std::string firstName;
     do {
         if (!firstName.empty()) parseLaterStars(ty, firstName, "field");
         if (check(Tok::Amp)) notYet(peek().loc, "reference types", "a field holds a value, or a pointer: `int* p;`");
-        const Token& name = expectNewName("for the field name");
+        if (!firstName.empty() && check(Tok::LParen) && peek(1).kind == Tok::Star)
+            fail(peek().loc, "a function pointer is declared on its own", "declare it on a line of its own", spec::CFunctionPointers);
+        const Token& name = firstName.empty() ? declaredName(ty, typeLoc, "for the field name") : expectNewName("for the field name");
         if (firstName.empty()) firstName = name.text;
         FieldDecl field{name.text, name.loc, ty, typeLoc, nullptr, access};
         if (match(Tok::Assign)) field.defaultValue = parseAssign();
@@ -4005,7 +4108,7 @@ void Parser::parseLaterStars(const Type* ty, const std::string& firstName, const
 }
 
 StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
-    if (ty->is(Type::Kind::Void)) {
+    if (ty->is(Type::Kind::Void) && !(check(Tok::LParen) && peek(1).kind == Tok::Star)) {  // `void (*f)(int)` returns void
         if (peek().kind == Tok::Ident && peek(1).kind == Tok::LParen) {  // `void g() { ... }`
             int depth = 1;
             size_t at = 2;
@@ -4029,8 +4132,9 @@ StmtPtr Parser::parseDeclarators(bool isConst, const Type* ty, Loc typeLoc) {
         Loc refLoc = peek().loc;
         bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) &&
                      parseReferenceMark(ty, localScopes_.empty() ? ReferencePlace::Constant : ReferencePlace::Local);
-        const Token& name =
-            expectNewName(decls.empty() ? "for the variable name" : "for the next variable name after ','");
+        if (!decls.empty() && check(Tok::LParen) && peek(1).kind == Tok::Star)
+            fail(peek().loc, "a function pointer is declared on its own", "declare it on a line of its own", spec::CFunctionPointers);
+        const Token& name = decls.empty() ? declaredName(ty, typeLoc, "for the variable name") : expectNewName("for the next variable name after ','");
         rejectTemplateParamName(name);
         auto var = std::make_unique<VarDecl>(name.loc, name.text, ty, typeLoc);
         var->isConst = isConst;
@@ -4748,6 +4852,25 @@ ExprPtr Parser::parsePrimary() {
             if (peek(i).kind == Tok::Ident && peek(i + 1).kind == Tok::Less && isTypeAt(i)) {  // `(array<int, 3>*)p`
                 afterBase = afterAngles(i + 1);
                 baseType = afterBase != 0;
+            }
+            if (baseType) {  // `(int (*)(int))p`, to a C function pointer type
+                size_t j = afterBase;
+                while (peek(j).kind == Tok::Star || peek(j).kind == Tok::KwConst) ++j;
+                if (peek(j).kind == Tok::LParen && peek(j + 1).kind == Tok::Star && peek(j + 2).kind == Tok::RParen && peek(j + 3).kind == Tok::LParen) {
+                    size_t k = j + 4;
+                    for (int depth = 1; depth > 0 && k < j + 256 && peek(k).kind != Tok::Eof; ++k) {
+                        if (peek(k).kind == Tok::LParen) ++depth;
+                        else if (peek(k).kind == Tok::RParen) --depth;
+                    }
+                    if (peek(k).kind == Tok::RParen) {
+                        Loc typeLoc;
+                        const Type* ty = parseType(typeLoc);
+                        expect(Tok::RParen, "to close the cast");
+                        Loc loc = t.loc;
+                        if (prev().loc.line == loc.line) loc.len = prev().loc.col + 1 - t.loc.col;
+                        return std::make_unique<CastExpr>(loc, ty, parseUnary());
+                    }
+                }
             }
             if (baseType && peek(afterBase).kind == Tok::Star) {
                 for (i = afterBase; peek(i).kind == Tok::Star || peek(i).kind == Tok::KwConst; ++i) {}

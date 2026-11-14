@@ -1,0 +1,18 @@
+// The variables outside functions are let go of after the functions given to atexit run, which can use them.
+extern "C" int atexit(void (*f)());
+vector<string> steps = {"start"};
+class Tracker {
+public:
+    string name = "tracker";
+};
+Tracker tracker = Tracker();
+
+int main() {
+    atexit([] {
+        steps.push_back("exit");
+        println("{} {}", steps, tracker.name);
+    });
+    steps.push_back("main");
+    return 0;
+}
+// expect: ["start", "main", "exit"] tracker

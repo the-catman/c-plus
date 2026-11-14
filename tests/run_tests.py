@@ -603,7 +603,6 @@ PLANNED_FEATURES = [
     ("working out a generic type's arguments", 'template<typename T> class Stack { public: T v; Stack(T a) : v(a) {} };\n' + M % "auto s = Stack(1);"),
     ("pointers into vectors", M % "vector<int> v = {1}; int* p = &v[0];"),
     ("pointers into strings", M % 'string s = "a"; char* p = &s[0];'),
-    ("C callbacks", 'extern "C" void qsort(void* base, long n, long size, int (*cmp)(void*, void*));\n' + M % ""),
     ("C variables", 'extern "C" int errno;\n' + M % ""),
     ("16-bit integers in C structs", 'extern "C" { struct S { short a; }; }\n' + M % ""),
     ("unions in C structs", 'extern "C" { struct S { union { int a; long b; }; }; }\n' + M % ""),
