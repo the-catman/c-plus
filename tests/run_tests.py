@@ -586,7 +586,6 @@ PLANNED_FEATURES = [
     ("pair", M % "pair<int, int> d;"),
     ("tuple", M % "tuple<int, int> d;"),
     ("references that change the entries of a hashmap", M % "hashmap<string, int> m; for (auto& e : m) {}"),
-    ("functions that return references", 'int& f(int& n) { return n; }\n' + M % ""),
     ("bindings in loops", M % 'hashmap<string, int> m; for (auto [k, v] : m) {}'),
     ("bindings", 'struct P { int x; int y; };\n' + M % "auto [a, b] = P{1, 2};"),
     ("final classes", 'class A final { public: int x = 0; };\n' + M % ""),
@@ -822,6 +821,7 @@ SPEC_NOT_CODE = {
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
+    "auto& e = grid.at(1);": "^struct G { vector<int> cells = {1, 2}; int& at(int i) { return cells[i]; } };\nvoid f() { G grid = G(); auto& e = grid.at(1); }",
     "using namespace": "^using namespace std;", "using Tree = vector<Tree>;": "^using Tree = vector<Tree>;",
     "using Map = std::unordered_map<std::string, int>;": "^using Map = std::unordered_map<std::string, int>;", "typedef long UserId;": "^typedef long UserId;",
     "move(count)": "^int count = 0;\nint f() { return move(count); }",
@@ -881,7 +881,7 @@ SPEC_REJECTED = {
     "for (auto [k, v] : m)": "hashmap<string, int> m; for (auto [k, v] : m) {}",
     "return &x;": "^int* f() { int x = 1; return &x; }", "return a.data();": "^int* f() { array<int, 2> a = {1, 2}; return a.data(); }",
     "T&&": "^void f(vector<int>&& v) {}", "auto&&": "vector<int> v = {1}; for (auto&& x : v) {}",
-"int& at(int i)": "^struct G { int c = 0; int& at(int i) { return c; } };", "f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
+"f<vector<T>>": "^template<typename T> void grows(T x) { grows<vector<T>>(vector<T>{x}); }\nvoid uses() { grows(1); }",
     "enum struct": "^enum struct Hue { Red };", "using enum": "^enum class Hue { Red };\nusing enum Hue;", "case 1, 2:": "int n = 1; switch (n) { case 1, 2: break; }",
     "case 1 ... 5:": "int n = 1; switch (n) { case 1 ... 5: break; }",
     "std::sort(v.begin(), v.end())": "vector<int> v; std::sort(v.begin(), v.end());", "v.begin()": "vector<int> v; sort(v.begin(), v.end());",

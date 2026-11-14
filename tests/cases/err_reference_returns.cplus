@@ -1,0 +1,58 @@
+// What a function that returns `T&` cannot return, and where one cannot be used yet, or ever.
+int& local() {
+    int x = 1;
+    return x;
+}
+int& byValue(int x) { return x; }
+int& made(int& x) { return x + 1; }
+long& other(int& x) { return x; }
+int& element(vector<int> v) { return v[0]; }
+struct Counter {
+    int n = 0;
+    int& peek() const { return n; }
+};
+async int& later() {
+    await delay(1);
+    return 1;
+}
+class Base {
+public:
+    int n = 1;
+    Base() {}
+    virtual int value() { return n; }
+    virtual int& slot() { return n; }
+};
+class Derived : public Base {
+public:
+    Derived() {}
+    int& value() override { return n; }
+    int slot() override { return n; }
+};
+struct Box {
+    vector<int> items = {1};
+    int& operator[](long i) { return items[i]; }
+};
+vector<int> g = {1, 2};
+int& first() { return g[0]; }
+int main() {
+    int& r = first();
+    auto t = spawn first();
+    t.wait();
+    return 0;
+}
+// error: 'local' returns a reference to its local variable 'x', which is gone when 'local' returns
+// error: return a field, an element, a `int&` parameter or a variable outside functions, or make the return type `int`, which gives a copy
+// error: 'byValue' returns a reference to its parameter 'x', which is a copy that is gone when 'byValue' returns
+// error: 'made' returns a reference, which refers to a place, but this is a value
+// error: 'other' returns a `long&`, but this is 'int'
+// error: 'element' returns a reference to its parameter 'v', which is a copy that is gone when 'element' returns
+// error: 'n' cannot be returned as a reference inside const method 'peek'
+// error: an async function cannot return a reference, as it returns after its caller has moved on
+// error: 'value' must have the same parameters, return type, `const` and `throws` as the method it replaces
+// error: the method in 'Base' is `int value()`
+// error: the method in 'Base' is `int& slot()`
+// error: this compiler does not support an `operator[]` that returns a reference, `int&`, yet
+// error: give the value with `int operator[](...) const`, and write a method for the place: `int& at(long i) { ... }`
+// error: this compiler does not support binding a reference to what a function returns yet
+// error: `spawn` cannot run 'first', which returns a reference, `int&`, to a place that this thread uses
+// error: give the thread a copy of the value at the place: `auto value = first();`, then `spawn [=] { ... }()` with it, or spawn a function that returns `int`

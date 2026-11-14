@@ -8,6 +8,12 @@ bool same(const Point& a, const Point& b) { return a.x == b.x && a.y == b.y; }
 
 void bump(int& n) { n += 1; }
 
+// A function that returns `T&` returns the place, which its caller can change.
+struct Grid {
+    vector<int> cells = {0, 0, 0};
+    int& at(int i) { return cells[i]; }
+};
+
 int total(const vector<int>& v) {
     int sum = 0;
     for (const auto& x : v) sum += x;  // each element in place
@@ -39,5 +45,11 @@ int main() {
     last += 1;
     println("{}", scores);
     // expect: [31, 40, 51, 60]
+    Grid grid = Grid();
+    grid.at(1) = 5;
+    grid.at(1) += 1;
+    bump(grid.at(2));
+    println("{}", grid.cells);
+    // expect: [0, 6, 1]
     return 0;
 }

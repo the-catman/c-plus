@@ -477,6 +477,7 @@ struct AssignExpr : Expr {
     // of `a` found once.
     FuncDecl* overload = nullptr;
     BasePath path;
+    bool tryTarget = false;  // `try find(k) = v`: the `try` was on the target, which has a call that can fail, and not on `v`
     AssignExpr(Loc opLoc, std::optional<BinOp> o, ExprPtr t, ExprPtr v)
         : Expr(Kind::Assign, opLoc), op(o), target(std::move(t)), value(std::move(v)) {}
 };
@@ -970,6 +971,7 @@ struct FuncDecl {
     bool isOverride = false;      // marked `override`
     bool isPure = false;          // `virtual int f() = 0;`, which has no body
     bool isDefaulted = false;     // a class's `bool operator==(const C&) const = default;`, whose body Codegen makes
+    bool returnsRef = false;      // `T& f()`: a call is the place it returns, as in C++ (see "References" in docs/SPEC.md)
     bool isThrows = false;        // `int f() throws`
     bool isConstexpr = false;     // `constexpr int f()`, which can run while compiling
     bool isAsync = false;         // `async int f()`: a call gives a `Task<int>`, and the body returns an int
@@ -1389,6 +1391,21 @@ inline bool isHashable(const Type* t, std::vector<const StructDecl*>& seen) {
 inline bool isHashable(const Type* t) {
     std::vector<const StructDecl*> seen;
     return isHashable(t, seen);
+}
+
+// The function or method that `e` calls when it returns a reference, `T& f()`: the call is then the place it returned.
+inline const FuncDecl* refCallee(const Expr& e) {
+    if (e.kind == Expr::Kind::Call) {
+        auto& c = static_cast<const CallExpr&>(e);
+        if (c.lowered) return refCallee(*c.lowered);
+        const FuncDecl* f = c.target ? c.target : c.method;
+        return f && f->returnsRef ? f : nullptr;
+    }
+    if (e.kind == Expr::Kind::MethodCall) {
+        auto& m = static_cast<const MethodCallExpr&>(e);
+        return !m.lowered && m.method && m.method->returnsRef ? m.method : nullptr;
+    }
+    return nullptr;
 }
 
 struct ImportDecl {

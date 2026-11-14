@@ -61,7 +61,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars, rtStrFromBytes;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintIntSpec, rtPrintPadded, rtPrintStrPrefix, rtTrapFormatCount;
-    llvm::FunctionCallee rtHoldsMark, rtHold, rtHoldsRelease, rtHoldsCheck, rtStillHeld, rtVecOwn;
+    llvm::FunctionCallee rtHoldsMark, rtHold, rtHoldsRelease, rtHoldsCheck, rtStillHeld, rtVecOwn, rtHoldsSetAside, rtHoldsRestore;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
     llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtArgs, rtGlobalsStart, rtGlobalsDone, rtDynamicCast, rtRetainObject, rtObjectStart;
     llvm::FunctionCallee rtRetainClass, rtReleaseClass, rtFreeClass, rtDestructorHold, rtReferences;
@@ -195,6 +195,9 @@ struct Codegen::Impl {
         llvm::Value* value;
         const Type* type;  // null for the holds of the runtime taken since `value`, a mark (see Holds in runtime.c)
         bool inMemory;  // `value` is the address of the value
+        std::string check = {};  // for holds: what gave the place they are for, which is checked before they go
+        Loc loc = {};
+        const Expr* from = nullptr;  // the call of `T& f()` they came with
     };
     std::vector<Temp> temps;
     // Values of an expression still being worked out, owned and waiting to be used, such as the
@@ -454,6 +457,8 @@ struct Codegen::Impl {
         rtHold = decl("cplus_hold", voidTy, {ptrTy, ptrTy, i64, ptrTy, ptrTy});
         rtHoldsRelease = decl("cplus_holds_release", voidTy, {i64});
         rtHoldsCheck = decl("cplus_holds_check", voidTy, {i64, ptrTy, ptrTy, i32, i32});
+        rtHoldsSetAside = decl("cplus_holds_set_aside", i64, {i64});
+        rtHoldsRestore = decl("cplus_holds_restore", voidTy, {i64});
         rtStillHeld = decl("cplus_still_held", i32, {ptrTy, ptrTy});
         rtVecOwn = decl("cplus_vec_own", ptrTy, {ptrTy, i64, ptrTy, ptrTy});
         rtVecReserve = decl("cplus_vec_reserve", ptrTy, {ptrTy, i64, i64, ptrTy, ptrTy});
@@ -1652,8 +1657,13 @@ struct Codegen::Impl {
         while (temps.size() > mark) {
             Temp t = temps.back();
             temps.pop_back();
-            if (!t.type) b.CreateCall(rtHoldsRelease, {t.value});
-            else releaseValue(t.inMemory ? peekValue(t.type, t.value) : t.value, t.type);
+            if (!t.type) {
+                if (!t.check.empty())  // what was written through the place `T& f()` returned is still where it was
+                    b.CreateCall(rtHoldsCheck, {t.value, cstring(t.check), fileName, b.getInt32(t.loc.line), b.getInt32(t.loc.col)});
+                b.CreateCall(rtHoldsRelease, {t.value});
+            } else {
+                releaseValue(t.inMemory ? peekValue(t.type, t.value) : t.value, t.type);
+            }
         }
     }
 
@@ -2206,7 +2216,8 @@ struct Codegen::Impl {
                 auto& m = static_cast<const MemberExpr&>(e);
                 return m.base->type->isClass() || isPlace(*m.base);
             }
-            case Expr::Kind::MethodCall: return placeCall(e) && isPlace(*placeCall(e));  // `v.back()`, the element
+            case Expr::Kind::MethodCall: return placeCall(e) ? isPlace(*placeCall(e)) : refCallee(e) != nullptr;  // `v.back()`, the element
+            case Expr::Kind::Call: return refCallee(e) != nullptr;  // `f()` of `T& f()`
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
                 if (ix.lowered) return false;  // `g[i]`, a call of `operator[]`
@@ -2271,6 +2282,10 @@ struct Codegen::Impl {
             }
             case Expr::Kind::MethodCall:  // `v.back()`, which is the element
                 if (const Expr* place = placeCall(e)) freezePlace(*place, made);
+                else if (refCallee(e)) freeze(e, refCallPlace(e));  // `f()` of `T& f()`, which runs now, as `*p` does
+                return;
+            case Expr::Kind::Call:
+                if (refCallee(e)) freeze(e, refCallPlace(e));
                 return;
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
@@ -2394,8 +2409,8 @@ struct Codegen::Impl {
     }
 
     // Puts `h` on this thread's holds (see Holds in runtime.c), which let go of it when the statement releases the mark.
-    void pushHold(const Hold& h) {
-        retainValue(h.value, h.type);
+    void pushHold(const Hold& h, bool retained = false) {
+        if (!retained) retainValue(h.value, h.type);
         llvm::Value* slot = h.slot ? h.slot : llvm::ConstantPointerNull::get(b.getPtrTy());
         if (h.type->is(K::String)) {
             b.CreateCall(rtHold, {slot, h.buf, b.getInt64(-1), llvm::ConstantPointerNull::get(b.getPtrTy()), llvm::ConstantPointerNull::get(b.getPtrTy())});
@@ -2481,7 +2496,10 @@ struct Codegen::Impl {
                 return locals.at(n.decl);
             }
             case Expr::Kind::This: return thisPtr;
-            case Expr::Kind::MethodCall: return addressOf(*placeCall(e), hold, write);  // `v.back()`, the element
+            case Expr::Kind::MethodCall:
+                if (const Expr* place = placeCall(e)) return addressOf(*place, hold, write);  // `v.back()`, the element
+                return refCallPlace(e);
+            case Expr::Kind::Call: return refCallPlace(e);
             case Expr::Kind::Member: {
                 auto& m = static_cast<const MemberExpr&>(e);
                 const Type* baseType = m.base->type;
@@ -2855,6 +2873,7 @@ struct Codegen::Impl {
             case Expr::Kind::Call: {
                 auto& call = static_cast<const CallExpr&>(e);
                 if (call.lowered) return genRaw(*call.lowered, owned);
+                if (refCallee(call)) return readRefCall(call, owned);
                 owned = true;
                 return genCall(call);
             }
@@ -2863,6 +2882,7 @@ struct Codegen::Impl {
             case Expr::Kind::MethodCall: {
                 auto& call = static_cast<const MethodCallExpr&>(e);
                 if (call.lowered) return genRaw(*call.lowered, owned);
+                if (refCallee(call)) return readRefCall(call, owned);
                 owned = true;
                 return genMethodCall(call);
             }
@@ -4454,6 +4474,32 @@ struct Codegen::Impl {
             }
             args.push_back(a);
         }
+        if (f.returnsRef) {  // `T& f()` as a value gives a copy of what is at the place, as a call that reads it does
+            llvm::Value* mark = b.CreateCall(rtHoldsMark, {}, "holds");
+            llvm::Value* address = b.CreateCall(target, llvm::ArrayRef<llvm::Value*>(args).drop_front(env));
+            if (f.callFails()) {  // with an error, there is no place
+                auto* failedBB = llvm::BasicBlock::Create(ctx, "failed", thunk);
+                auto* okBB = llvm::BasicBlock::Create(ctx, "ok", thunk);
+                llvm::Value* error = b.CreateLoad(b.getPtrTy(), thunk->getArg(thunk->arg_size() - 1), "error");
+                b.CreateCondBr(b.CreateIsNotNull(error), failedBB, okBB);
+                b.SetInsertPoint(failedBB);
+                b.CreateCall(rtHoldsRelease, {mark});
+                if (thunk->getReturnType()->isVoidTy()) b.CreateRetVoid();
+                else b.CreateRet(llvm::Constant::getNullValue(thunk->getReturnType()));
+                b.SetInsertPoint(okBB);
+            }
+            llvm::Value* v = loadValue(f.retType, address);
+            retainValue(v, f.retType);
+            b.CreateCall(rtHoldsRelease, {mark});
+            if (env) {
+                storeValue(v, f.retType, thunk->getArg(0));
+                b.CreateRetVoid();
+            } else {
+                b.CreateRet(v);
+            }
+            fn = outer;
+            return thunk;
+        }
         llvm::CallInst* inst = b.CreateCall(target, args);
         if (thunk->getReturnType()->isVoidTy()) b.CreateRetVoid();
         else b.CreateRet(inst);
@@ -4474,7 +4520,7 @@ struct Codegen::Impl {
             callee = llvm::FunctionCallee(funcs.at(&f)->getFunctionType(),
                                           vtableSlot(loadVtable(args[0]), kVtableMethods + f.vtableSlot, f.name.c_str()));
         if (f.callFails()) args.push_back(errorPlace);
-        if (inMemory(f.retType)) {
+        if (resultInMemory(f)) {
             llvm::AllocaInst* result = entryAlloca(llvmType(f.retType), "result");
             args.insert(args.begin(), result);
             b.CreateCall(callee, args);
@@ -4501,6 +4547,80 @@ struct Codegen::Impl {
         llvm::AllocaInst* slot = entryAlloca(llvmType(e.type), "given");
         b.CreateStore(v, slot);
         return slot;
+    }
+
+    // The class objects that the place `e` lies in, nearest first, each retained, for the holds `T& f()` gives its caller:
+    // what lies in an object stays while the object does.
+    std::vector<llvm::Value*> objectsOnTheWay(const Expr& e) {
+        std::vector<llvm::Value*> out;
+        for (const Expr* x = &e; x;) {
+            if (const Expr* place = placeCall(*x)) {
+                x = place;
+            } else if (x->kind == Expr::Kind::Member) {
+                auto& m = static_cast<const MemberExpr&>(*x);
+                if (m.base->type && m.base->type->isClass()) {
+                    llvm::Value* object = frozenValue(*m.base);
+                    if (!object) object = gen(*m.base);
+                    retainValue(object, m.base->type);
+                    out.push_back(object);
+                    break;  // which holds what lies behind it
+                }
+                x = m.base.get();
+            } else if (x->kind == Expr::Kind::Index && !static_cast<const IndexExpr&>(*x).lowered) {
+                x = static_cast<const IndexExpr&>(*x).base.get();
+            } else {
+                break;
+            }
+        }
+        return out;
+    }
+
+    // The call of `T& g()` that the place `e` lies in, as `g()[i].x` does, unless a class object comes first, which holds it.
+    static const Expr* refRoot(const Expr& e) {
+        for (const Expr* x = &e; x;) {
+            if (x->kind == Expr::Kind::Call && static_cast<const CallExpr&>(*x).lowered) {
+                x = static_cast<const CallExpr&>(*x).lowered.get();
+            } else if (const Expr* place = placeCall(*x)) {
+                x = place;
+            } else if (refCallee(*x)) {
+                return x;
+            } else if (x->kind == Expr::Kind::Member) {
+                auto& m = static_cast<const MemberExpr&>(*x);
+                if (m.base->type && m.base->type->isClass()) return nullptr;
+                x = m.base.get();
+            } else if (x->kind == Expr::Kind::Index && !static_cast<const IndexExpr&>(*x).lowered) {
+                x = static_cast<const IndexExpr&>(*x).base.get();
+            } else {
+                return nullptr;
+            }
+        }
+        return nullptr;
+    }
+
+    // `f()` of `T& f()`, read: a copy of what is at the place it returned, after which the holds it came with go at once.
+    llvm::Value* readRefCall(const Expr& e, bool& owned) {
+        llvm::Value* mark = b.CreateCall(rtHoldsMark, {}, "holds");
+        llvm::Value* address = e.kind == Expr::Kind::Call ? genCall(static_cast<const CallExpr&>(e)) : genMethodCall(static_cast<const MethodCallExpr&>(e));
+        llvm::Value* v = loadValue(e.type, address);
+        retainValue(v, e.type);
+        b.CreateCall(rtHoldsRelease, {mark});
+        owned = true;
+        return v;
+    }
+
+    // `f()` of `T& f()` as a place: the address it returned, whose holds stay until the statement ends, and are checked then,
+    // so that what was written through it is not lost.
+    llvm::Value* refCallPlace(const Expr& e) {
+        if (llvm::Value* frozenAddress = frozenValue(e)) return frozenAddress;
+        if (e.kind == Expr::Kind::Call && static_cast<const CallExpr&>(e).lowered) return refCallPlace(*static_cast<const CallExpr&>(e).lowered);
+        llvm::Value* mark = b.CreateCall(rtHoldsMark, {}, "holds");
+        llvm::Value* address = e.kind == Expr::Kind::Call ? genCall(static_cast<const CallExpr&>(e)) : genMethodCall(static_cast<const MethodCallExpr&>(e));
+        Temp t{mark, nullptr, false};
+        t.check = "'" + refCallee(e)->name + "'";
+        t.loc = e.loc;
+        t.from = &e;
+        temps.push_back(t);
+        return address;
     }
 
     // A call of an operator of the program, with the sides as it takes them: `this` first for a member, through `path` for a
@@ -5049,6 +5169,36 @@ struct Codegen::Impl {
                     return;
                 }
                 const Type* rt = fnDecl->retType;
+                if (st.value && fnDecl->returnsRef) {  // `T& f()`: the address of the place, with what holds it for the caller
+                    std::vector<const Expr*> made;
+                    freezePlace(*st.value, made);
+                    std::vector<Hold> forCaller;
+                    auto* outer = deferredHolds;
+                    deferredHolds = &forCaller;
+                    llvm::Value* place = addressOf(*st.value, /*hold=*/true, /*write=*/true);
+                    deferredHolds = outer;
+                    for (const Hold& h : forCaller) retainValue(h.value, h.type);  // kept while the function lets go of its own
+                    std::vector<llvm::Value*> objects = objectsOnTheWay(*st.value);
+                    llvm::Value* aside = nullptr;  // for `return g()[i]`: the holds that came with `g()`, which the caller gets too
+                    if (const Expr* root = refRoot(*st.value)) {
+                        for (Temp& t : temps) {
+                            if (t.from != root) continue;
+                            aside = b.CreateCall(rtHoldsSetAside, {t.value}, "aside");
+                            t.check.clear();
+                            break;
+                        }
+                    }
+                    for (const Expr* part : made) frozen.erase(part);
+                    flushTemps();
+                    releaseScopes(0);
+                    if (aside) b.CreateCall(rtHoldsRestore, {aside});
+                    for (const Hold& h : forCaller) pushHold(h, /*retained=*/true);
+                    for (llvm::Value* object : objects)
+                        b.CreateCall(rtHold, {llvm::ConstantPointerNull::get(b.getPtrTy()), object, b.getInt64(0), llvm::ConstantPointerNull::get(b.getPtrTy()), objectRelease});
+                    b.CreateRet(place);
+                    startDeadBlock();
+                    return;
+                }
                 if (st.value && inMemory(rt)) {  // written to the memory the caller gave, the hidden first argument
                     llvm::Value* v;
                     if (st.value->type == rt && isPlace(*st.value)) {
@@ -5208,15 +5358,18 @@ struct Codegen::Impl {
 
     // ---- Functions ---------------------------------------------------------
 
+    // Whether a function gives its result through memory its caller passes, the hidden first argument. `T& f()` gives an address.
+    bool resultInMemory(const FuncDecl& f) { return inMemory(f.retType) && !f.returnsRef; }
+
     void declareFunction(const FuncDecl& f) {
         if (f.isExtern) return declareCFunction(f);
         std::vector<llvm::Type*> params;
-        bool result = inMemory(f.retType);
+        bool result = resultInMemory(f);
         if (result) params.push_back(b.getPtrTy());  // where the result goes; see callFunction
         if (f.owner) params.push_back(b.getPtrTy());  // `this`
         for (auto& p : f.params) params.push_back(passedByRef(*p) ? b.getPtrTy() : valueType(p->type));
         if (f.callFails()) params.push_back(b.getPtrTy());  // where an error goes; see errorPlace
-        auto* type = llvm::FunctionType::get(result ? b.getVoidTy() : llvmType(f.retType), params, false);
+        auto* type = llvm::FunctionType::get(result ? b.getVoidTy() : f.returnsRef ? b.getPtrTy() : llvmType(f.retType), params, false);
         // User functions get a prefixed, internal symbol so they never collide with C
         // library names; `main` is wrapped by a C-ABI entry point below. Generated
         // functions use '#', which no user name contains.
@@ -5536,7 +5689,7 @@ struct Codegen::Impl {
             endLineTable();
             return;
         }
-        unsigned first = (inMemory(f.retType) ? 1 : 0) + (f.owner || f.lambda ? 1 : 0);
+        unsigned first = (resultInMemory(f) ? 1 : 0) + (f.owner || f.lambda ? 1 : 0);
         thisPtr = f.owner && !f.lambda ? fn->getArg(first - 1) : nullptr;
         if (f.lambda) enterLambda(*f.lambda, fn->getArg(first - 1));
         // Parameters own their values, like locals, and are released when the function ends.
@@ -6408,7 +6561,7 @@ struct Codegen::Impl {
         startHelper(thunk);
         std::vector<llvm::Value*> args;
         for (llvm::Argument& a : thunk->args()) args.push_back(&a);
-        unsigned self = inMemory(f.retType) ? 1 : 0;
+        unsigned self = resultInMemory(f) ? 1 : 0;
         args[self] = b.CreateInBoundsGEP(b.getInt8Ty(), args[self], b.getInt64(-(int64_t)distance));
         llvm::CallInst* call = b.CreateCall(target, args);
         call->setTailCallKind(llvm::CallInst::TCK_MustTail);

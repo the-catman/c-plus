@@ -812,12 +812,14 @@ static bool holdsAPlace(const Expr& e) {
 // `?:` counts when both of what it chooses from are places, as then C++ would change the one it chose.
 static std::string copyOnTheWay(const Expr& e, bool resultUsed) {
     const Expr* x = &e;
+    if (refCallee(*x)) return "";  // the place `T& f()` returned
     while (x->kind == Expr::Kind::Member || x->kind == Expr::Kind::Index || placeCall(*x)) {
         x = x->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(x)->base.get()
             : placeCall(*x)               ? placeCall(*x)  // `v.back()`, the element itself
             : indexCall(*x)               ? indexCall(*x)
                                           : static_cast<const IndexExpr*>(x)->base.get();
         if (x->type && (x->type->isClass() || x->type->isPointer())) return "";
+        if (refCallee(*x)) return "";
     }
     switch (x->kind) {
         // Where C++ would change what it refers to, the habit is caught whether or not the result is used. Elsewhere C++ copies
@@ -1079,7 +1081,7 @@ static const Type* typeAtPath(const VarDecl* v, const std::string& path) {
 // pointer points to.
 static bool isPlaceKind(const Expr& e) {
     return e.kind == Expr::Kind::Name || e.kind == Expr::Kind::Member || e.kind == Expr::Kind::This ||
-           (e.kind == Expr::Kind::Index && !indexCall(e)) || isDeref(e) || placeCall(e);
+           (e.kind == Expr::Kind::Index && !indexCall(e)) || isDeref(e) || placeCall(e) || refCallee(e);
 }
 
 // ---- Definite assignment ---------------------------------------------------
@@ -1502,8 +1504,10 @@ void Sema::check(Program& program) {
 #endif
     adoptTypes();
 
-    for (auto& fn : program.funcs)
+    for (auto& fn : program.funcs) {
+        noteRefReturn(*fn);
         if (fn->isOperator()) noteOwnEquals(*fn);
+    }
     for (auto& fn : program.funcs) {
         if (fn->isOperator()) checkOperatorDecl(*fn);
         if (isBuiltinFunction(fn->name)) {
@@ -1638,9 +1642,11 @@ void Sema::checkNewStructs() {
     size_t first = structsChecked_;
     structsChecked_ = program_->structs.size();
     size_t end = structsChecked_;
-    for (size_t i = first; i < end; ++i)  // before anything asks whether a type can be a key
-        for (auto& m : program_->structs[i]->methods)
+    for (size_t i = first; i < end; ++i)  // before anything asks whether a type can be a key, or what a call is
+        for (auto& m : program_->structs[i]->methods) {
+            noteRefReturn(*m);
             if (m->role == FuncDecl::Role::Method && m->isOperator()) noteOwnEquals(*m);
+        }
     // A class without an `==` of its own compares as the base class it inherits one from does.
     std::function<const FuncDecl*(const StructDecl&)> inherited = [&](const StructDecl& d) -> const FuncDecl* {
         if (d.ownEquals) return d.ownEquals;
@@ -2149,7 +2155,7 @@ void Sema::checkOverrides(StructDecl& sd) {
                 break;
             }
             bool same = m->retType == method->retType && m->params.size() == method->params.size() &&
-                        m->isConst == method->isConst && m->isThrows == method->isThrows;
+                        m->isConst == method->isConst && m->isThrows == method->isThrows && m->returnsRef == method->returnsRef;
             for (size_t i = 0; same && i < m->params.size(); ++i)
                 same = m->params[i]->declType == method->params[i]->declType && m->params[i]->isRef == method->params[i]->isRef;
             if (!same && m->retType != method->retType && m->retType->isClass() && method->retType->isClass() && m->retType->decl->derivesFrom(method->retType->decl)) {
@@ -2162,7 +2168,8 @@ void Sema::checkOverrides(StructDecl& sd) {
             if (!same) {
                 diags_.error(m->nameLoc, q(m->name) + " must have the same parameters, return type, `const` and `throws` as the "
                                              "method it replaces",
-                             "the method in " + q(other->name) + " is `" + (method->isAsync ? "async " : "") + method->bodyRet()->name + " " +
+                             "the method in " + q(other->name) + " is `" + (method->isAsync ? "async " : "") + method->bodyRet()->name +
+                                 (method->returnsRef ? "& " : " ") +
                                  signature(*method).substr(other->name.size() + 1) + (method->isConst ? " const" : "") +
                                  (method->isThrows ? " throws" : "") + "`",
                              spec::Inheritance);
@@ -2915,6 +2922,14 @@ const Type* Sema::checkSpawn(SpawnExpr& s, Flow& flow) {
                      spec::Concurrency);
         return Type::error();
     }
+    if (target && target->returnsRef) {  // the place lies in what this thread uses, and its holds are this thread's
+        const std::string text = spelled(call, "");
+        diags_.error(call.loc, "`spawn` cannot run " + q(target->name) + ", which returns a reference, `" + std::string(result->name) + "&`, to a place that this thread uses",
+                     "give the thread a copy of the value at the place: `auto value = " + (text.empty() ? std::string("...") : text) +
+                         ";`, then `spawn [=] { ... }()` with it, or spawn a function that returns `" + std::string(result->name) + "`",
+                     spec::Concurrency);
+        return Type::error();
+    }
     if (target && target->isExtern) {
         const std::string text = spelled(call, "");
         diags_.error(call.loc, "`spawn` runs a function or method written in C+, and this is a C function",
@@ -3285,7 +3300,11 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
         v.type = v.declType->is(K::Auto) ? Type::error() : v.declType;
     }
     boundByRef_ = bound;
-    if (v.isRef && !v.isConst && v.init) checkRefBinding(*v.init, v.type, "reference " + q(v.name));
+    if (v.isRef && v.init && refCallee(*v.init))
+        diags_.error(v.init->loc, "this compiler does not support binding a reference to what a function returns yet",
+                     "use the call where the reference would be, as in `" + spelled(*v.init, "f()") + " = ...;`, or keep a copy: `auto " + v.name + " = ...;`",
+                     spec::References);
+    else if (v.isRef && !v.isConst && v.init) checkRefBinding(*v.init, v.type, "reference " + q(v.name));
     if (v.isConstexpr) foldConstexpr(v);
     declare(v);  // after the initializer: `int x = x;` refers to an outer x, as in C++
     if (v.init) {
@@ -3557,7 +3576,9 @@ void Sema::checkStmt(Stmt& s, Flow& flow) {
                 flow.reachable = false;
                 return;
             }
-            if (st.value) {
+            if (st.value && fn_->returnsRef) {  // `return x;` in `T& f()`: the place it is
+                checkRefReturn(*st.value, flow, ret);
+            } else if (st.value) {
                 if (ret->is(K::Void)) {
                     const Type* t = checkExpr(*st.value, flow);
                     if (fn_->role == FuncDecl::Role::Constructor || fn_->role == FuncDecl::Role::Destructor)
@@ -3830,6 +3851,7 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
              : nullptr;
     }
     const bool changes = v.isRef && !v.isConst;  // `for (auto& x : v)`, which changes the elements themselves
+    if (v.isRef) refSources_[&v] = st.range.get();  // for `return x;` in a function that returns a reference
     if (!changes) loopCopies_[&v] = loop;
     if (changes && isMap && !rangeType->isError()) {
         diags_.error(v.typeLoc, "this compiler does not support references that change the entries of a hashmap, `auto&`, in a range-based for loop yet",
@@ -4402,7 +4424,7 @@ const FuncDecl* Sema::checkConstruction(const StructDecl& sd, std::vector<Constr
 }
 
 const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::string& path) {
-    if (e.kind == Expr::Kind::MethodCall) {  // `v.back()`, which checking it makes an element
+    if (e.kind == Expr::Kind::MethodCall || e.kind == Expr::Kind::Call) {  // `v.back()` or `f()` of `T& f()`, once checked
         var = nullptr;
         path.clear();
         return e.type ? e.type : checkExpr(e, flow);
@@ -4663,6 +4685,7 @@ enum class Storage { Variable, Object, Pointer, Temporary };
 // reached through a pointer, to the `*p` or `p[i]` that follows it.
 static Storage storageOf(const Expr& e, const Expr*& root) {
     if (const Expr* place = placeCall(e)) return storageOf(*place, root);  // `v.back()`, the element
+    if (refCallee(e)) return Storage::Object;  // what `T& f()` returned, which can change, as its function checked
     switch (e.kind) {
         case Expr::Kind::Name:
         case Expr::Kind::This: root = &e; return Storage::Variable;
@@ -5366,14 +5389,15 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
                      spec::Optionals);
         return false;
     }
-    if (target.kind == Expr::Kind::MethodCall) {  // `v.back() = x` or `m.at(k) = x`: the element, which can change where it is
+    if (target.kind == Expr::Kind::MethodCall || target.kind == Expr::Kind::Call) {  // `v.back() = x`, `m.at(k) = x`, `f() = x`
         const Type* t = checkExpr(target, flow);
         if (t->isError()) return false;
         if (placeCall(target)) return checkChangeable(target, action, nullptr, "", change, before);
+        if (refCallee(target)) return true;  // the place `T& f()` returned
     }
     if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index &&
         !isDeref(target)) {
-        if (target.kind != Expr::Kind::MethodCall) checkExpr(target, flow);
+        if (target.kind != Expr::Kind::MethodCall && target.kind != Expr::Kind::Call) checkExpr(target, flow);
         std::string help = target.kind == Expr::Kind::This ? "assign to its fields, or to a variable: 'this' always refers to the current object" : copyHelp(target, change, false, before);
         diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action, help,
                      spec::Variables);
@@ -5745,7 +5769,9 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 static_cast<IndexExpr&>(*a.target).mapTarget = true;
                 static_cast<IndexExpr&>(*a.target).mapAssign = !a.op;
             }
+            if (a.tryTarget) ++tryPrefixes_;  // `try find(k) = v`, whose `try` says that the target can fail, but not `v`
             bool ok = checkAssignable(*a.target, flow, a.op ? "changed" : "assigned to", var, path, a.op ? " " + std::string(binOpSpelling(*a.op)) + "= ..." : " = ...");
+            if (a.tryTarget) --tryPrefixes_;
             const Type* t = a.target->type ? a.target->type : Type::error();
             std::string name = var                                 ? q(placeName(var, path))
                                : a.target->kind == Expr::Kind::Member ? "field " + q(static_cast<MemberExpr&>(*a.target).field)
@@ -7053,6 +7079,12 @@ void Sema::checkOperatorDecl(FuncDecl& f) {
             fail(f.nameLoc, "`operator[]` takes the index, at least", "give it a parameter: `" + std::string(f.retType->name) + " operator[](long i) const`");
             return;
         }
+        if (op == "[]" && f.returnsRef) {
+            fail(f.nameLoc, "this compiler does not support an `operator[]` that returns a reference, `" + std::string(f.retType->name) + "&`, yet",
+                 "give the value with `" + std::string(f.retType->name) + " operator[](...) const`, and write a method for the place: `" +
+                     std::string(f.retType->name) + "& at(long i) { ... }`");
+            return;
+        }
         if (op == "[]" && !f.isConst) {  // an `operator()` may change the object, as a call of a method may
             fail(f.nameLoc, "an `operator[]` that gives a value only reads, so it is `const`", "write `const` after its parameters: `operator[](...) const`");
             return;
@@ -7443,6 +7475,101 @@ const Type* Sema::checkIndexOperator(IndexExpr& ix, const Type* t, Flow& flow) {
     call->type = f->retType;
     ix.lowered = std::move(call);
     return f->retType;
+}
+
+// ---- Functions that return a reference -------------------------------------
+//
+// `T& f()` returns a place, which a call of it then is, as in C++: see "References" in docs/SPEC.md. What it returns must
+// outlive the call: a field of `this`, what a `T&` parameter refers to, a variable outside functions, or what lies behind
+// a class object or a pointer. Its buffers are held for the caller, who checks them after writing through it.
+
+// For a class, `C& f()` gives the object itself, which a class reference already is.
+void Sema::noteRefReturn(FuncDecl& f) {
+    if (!f.returnsRef) return;
+    if (f.retType->isClass()) {
+        f.returnsRef = false;
+        return;
+    }
+    if (f.isAsync) {
+        diags_.error(f.retTypeLoc, "an async function cannot return a reference, as it returns after its caller has moved on",
+                     "return the value: write `" + std::string(f.retType->name) + "`", spec::References);
+        f.returnsRef = false;
+    }
+}
+
+// Why the place `e`, returned by reference, would be gone when the function returns; nothing when it outlives the call.
+std::string Sema::refReturnRoot(const Expr& e, int depth) {
+    const std::string name = q(fn_->name);
+    const std::string value = "this is a value made in " + name + ", which is gone when it returns";
+    if (depth > 32) return "";
+    const Expr* x = &e;
+    while (true) {
+        if (const Expr* place = placeCall(*x)) {
+            x = place;
+            continue;
+        }
+        if (refCallee(*x)) {  // what it returned lies in its receiver or in a `T&` argument
+            const Expr* call = x->kind == Expr::Kind::Call && static_cast<const CallExpr*>(x)->lowered ? static_cast<const CallExpr*>(x)->lowered.get() : x;
+            const FuncDecl& f = *refCallee(*call);
+            const std::vector<ExprPtr>& args = call->kind == Expr::Kind::Call ? static_cast<const CallExpr*>(call)->args : static_cast<const MethodCallExpr*>(call)->args;
+            for (size_t i = 0; i < args.size() && i < f.params.size(); ++i)
+                if (f.params[i]->isRef && !f.params[i]->isConst)
+                    if (std::string why = refReturnRoot(*args[i], depth + 1); !why.empty()) return why;
+            if (call->kind == Expr::Kind::MethodCall) {
+                const Expr* recv = static_cast<const MethodCallExpr*>(call)->receiver.get();
+                if (recv && recv->type && !recv->type->isClass()) return refReturnRoot(*recv, depth + 1);
+            }
+            return "";
+        }
+        switch (x->kind) {
+            case Expr::Kind::Member: {
+                auto& m = static_cast<const MemberExpr&>(*x);
+                if (m.base->type && m.base->type->isClass()) return "";  // the object, which is held for the caller
+                x = m.base.get();
+                continue;
+            }
+            case Expr::Kind::Index: {
+                auto& ix = static_cast<const IndexExpr&>(*x);
+                if (ix.lowered) return value;  // what an `operator[]` gave
+                if (ix.base->type && ix.base->type->isPointer()) return "";
+                x = ix.base.get();
+                continue;
+            }
+            case Expr::Kind::Unary: return isDeref(*x) ? "" : value;  // behind a pointer, which is not checked
+            case Expr::Kind::This: return "";
+            case Expr::Kind::Borrow: x = static_cast<const BorrowExpr*>(x)->operand.get(); continue;
+            case Expr::Kind::Name: {
+                auto& n = static_cast<const NameExpr&>(*x);
+                const VarDecl* v = n.decl;
+                if (n.implicitField >= 0 || !v || v->isGlobal || v->isTopLevel) return "";
+                if (v->isParam)
+                    return v->isRef ? "" : name + " returns a reference to its parameter " + q(v->name) + ", which is a copy that is gone when " + name + " returns";
+                if (v->isRef) {
+                    auto source = refSources_.find(v);
+                    if (source != refSources_.end()) return refReturnRoot(*source->second, depth + 1);
+                    return v->init ? refReturnRoot(*v->init, depth + 1) : "";
+                }
+                return name + " returns a reference to its local variable " + q(v->name) + ", which is gone when " + name + " returns";
+            }
+            default: return value;
+        }
+    }
+}
+
+// `return e;` in `T& f()`: a place of exactly `T` that can change and outlives the call, which a call of `f` then is.
+void Sema::checkRefReturn(Expr& e, Flow& flow, const Type* ret) {
+    const VarDecl* var = nullptr;
+    std::string path;
+    const Type* t = isPlaceKind(e) ? resolvePlace(e, flow, var, path) : checkExpr(e, flow);
+    if (var && !t->isError()) requireAssigned(flow, var, path, t, e.loc);
+    if (t->isError() || ret->isError()) return;
+    const std::string T = ret->name;
+    const std::string where = "return a field, an element, a `" + T + "&` parameter or a variable outside functions, or make the return type `" + T + "`, which gives a copy";
+    auto fail = [&](const std::string& message, const std::string& help) { diags_.error(e.loc, message, help, spec::References); };
+    if (!isPlaceKind(e)) return fail(q(fn_->name) + " returns a reference, which refers to a place, but this is a value", where);
+    if (t != ret) return fail(q(fn_->name) + " returns a `" + T + "&`, but this is " + q(t), "return a place of type " + q(ret) + ", or change the return type");
+    if (std::string why = refReturnRoot(e); !why.empty()) return fail(why, where);
+    checkChangeable(e, "returned as a reference", var, path, "", "");
 }
 
 // `same_object(a, b)`: whether two class references refer to one object, which `==` says only of a class without an

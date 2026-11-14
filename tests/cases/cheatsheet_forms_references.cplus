@@ -1,0 +1,13 @@
+// The forms the cheat sheet gives for functions that return a reference.
+struct Grid {
+    vector<int> cells = {0, 0, 0};
+    int& at(int i) { return cells[i]; }
+};
+int main() {
+    Grid grid = Grid();
+    int i = 1;
+    grid.at(i) = 5;
+    grid.at(i) += 1;
+    println("{}", grid.cells);  // expect: [0, 6, 0]
+    return 0;
+}

@@ -1,0 +1,154 @@
+// A function or a method that returns `T&` returns a place, as in C++: a call of it can be written to, changed, given to a
+// `T&` parameter, or read, which copies.
+struct Grid {
+    vector<int> cells = {0, 0, 0};
+    vector<vector<int>> rows = {{1, 2}, {3, 4}};
+    int& at(int i) { return cells[i]; }
+    vector<int>& row(int r) { return rows[r]; }
+    int& cell(int r, int c) { return row(r)[c]; }  // what another `T&` call returns
+};
+struct Sum {
+    int total = 0;
+    Sum& add(int k) { total += k; return this; }
+};
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+struct Shape {
+    Point corner;
+    Point& where() { return corner; }
+};
+void bump(int& n) { n += 1; }
+int& pick(int& a, int& b, bool first) {
+    if (first) return a;
+    return b;
+}
+int counter = 0;
+int& count() { return counter; }
+vector<string> names = {"ann", "bob"};
+string& name(int i) { return names[i]; }
+int& first() { return counter; }
+template<typename T> T& firstOf(vector<T>& v) { return v[0]; }
+int& tally(hashmap<string, int>& m, string k) { return m[k]; }
+int& find(vector<int>& v, int x) throws {
+    for (int i = 0; i < v.size(); i += 1) {
+        if (v[i] == x) return v[i];
+    }
+    throw Error("no " + to_string(x));
+}
+
+// Classes: a field of the object, which the class shares, and virtual methods.
+class Account {
+public:
+    long balance = 0;
+    vector<long> history;
+    Account() {}
+    long& money() { return balance; }
+    virtual long& last() { return history[history.size() - 1]; }
+};
+class Savings : public Account {
+public:
+    long interest = 0;
+    Savings() {}
+    long& last() override { return interest; }
+};
+struct Table {
+    vector<int> cells = {0, 0, 0};
+    int& operator()(int i) { return cells[i]; }
+};
+int calls = 0;
+int index() {
+    calls += 1;
+    return 1;
+}
+
+int main() {
+    Grid grid = Grid();
+    grid.at(1) = 5;
+    grid.at(1) += 1;
+    bump(grid.at(1));
+    int n = grid.at(1);
+    n += 100;
+    println("{} {}", grid.cells, n);              // expect: [0, 7, 0] 107
+    grid.cell(1, 0) = 30;
+    grid.row(0).push_back(5);
+    grid.cell(0, 1) *= 10;
+    println("{} {}", grid.rows, grid.cell(1, 0) + grid.cell(0, 0));  // expect: [[1, 20, 5], [30, 4]] 31
+
+    // The place is found once, as `v[i]` is.
+    grid.at(index()) -= 7;
+    println("{} {}", grid.cells, calls);          // expect: [0, 0, 0] 1
+
+    Sum s = Sum();
+    s.add(1).add(2).add(3);
+    println("{}", s.total);                        // expect: 6
+    Shape shape = Shape();
+    shape.where().x = 4;
+    shape.where().y += 2;
+    println("{}", shape.corner);                   // expect: {x: 4, y: 2}
+    vector<Shape> shapes = {shape};
+    shapes[0].where().x = 9;
+    println("{}", shapes[0].corner.x);             // expect: 9
+
+    int a = 1;
+    int b = 2;
+    pick(a, b, true) = 10;
+    pick(a, b, false) += 5;
+    println("{} {}", a, b);                        // expect: 10 7
+    count() = 3;
+    count() += 1;
+    println("{} {}", counter, first());            // expect: 4 4
+    name(1) += "by";
+    println("{} {} {}", names, name(0).size(), name(1));  // expect: ["ann", "bobby"] 3 bobby
+
+    vector<string> words = {"x", "y"};
+    firstOf(words) += "!";
+    vector<int> ns = {4, 5};
+    firstOf(ns) *= 10;
+    println("{} {} {}", words, ns, firstOf(ns) + 1);  // expect: ["x!", "y"] [40, 5] 41
+    hashmap<string, int> m;
+    tally(m, "a") += 1;
+    tally(m, "a") += 1;
+    tally(m, "b") = 7;
+    println("{}", m);                              // expect: {"a": 2, "b": 7}
+
+    // `try` on the target says that finding it can fail.
+    vector<int> v = {1, 2, 3};
+    int k = 2;
+    try {
+        try find(v, k) = 20;
+        try find(v, 3) += 1;
+        int x = 1;
+        int y = 10;
+        try find(v, x) = y;
+        println("{}", v);                          // expect: [10, 20, 4]
+        try find(v, 9) = 90;
+        println("not reached");
+    } catch (Error e) {
+        println("{}", e.what());                   // expect: no 9
+    }
+
+    Account acct = Account();
+    Account same = acct;
+    acct.money() = 50;
+    same.money() += 25;
+    acct.history = {1, 2};
+    acct.last() = 20;
+    println("{} {}", acct.balance, acct.history);  // expect: 75 [1, 20]
+    Savings saving = Savings();
+    Account base = saving;
+    base.last() = 3;
+    println("{}", saving.interest);                // expect: 3
+
+    Table table = Table();
+    table(1) = 5;
+    table(2) += 7;
+    println("{} {}", table.cells, table(1) + table(2));  // expect: [0, 5, 7] 12
+
+    // A function value gives a copy of what is at the place.
+    function<int()> f = first;
+    function<string(int)> g = name;
+    println("{} {}", f(), g(0));                   // expect: 4 ann
+    return 0;
+}

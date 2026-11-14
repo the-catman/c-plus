@@ -231,6 +231,11 @@ private:
     bool hasOrdering(const Type* t);
     const Type* checkSameObject(CallExpr& call, Flow& flow);
     const Type* checkIndexOperator(IndexExpr& ix, const Type* t, Flow& flow);
+    // Functions that return a reference, `T& f()`.
+    void noteRefReturn(FuncDecl& f);
+    void checkRefReturn(Expr& e, Flow& flow, const Type* ret);
+    std::string refReturnRoot(const Expr& e, int depth = 0);
+    std::unordered_map<const VarDecl*, const Expr*> refSources_;  // what a reference local, or `for (auto& x : ...)`, refers into
     // One value given when building a struct or class: `Type(args)` or a `{ }` list.
     struct ConstructArg {
         std::string designator;  // field name for `.x = value`, empty for positional

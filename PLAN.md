@@ -678,8 +678,14 @@ program and never dangles, but when its container is resized, replaced or was sh
 - Being a reference belongs to a declaration, not to a type. A parameter of a function, method or constructor, the variable of a
   range-based `for` loop, and a local variable can be references. A field, a constant, an element of a container, a template
   argument and an optional cannot. `T&&` and `auto&&` are errors. `catch (const Error& e)` means `catch (Error e)`.
-- `const T&` returns the value, as a copy. `T& f()` comes after the first slices of operator overloading (§2.38), through a
-  stack of what the callee holds.
+- `const T&` returns the value, as a copy. `T& f()` returns a place, built 2026-11-14, after the first slices of operator
+  overloading (§2.38). What it returns must outlive the call: a field, an element, a `T&` parameter, a variable outside
+  functions, or what another `T&` call returns; the compiler says why anything else is gone. The callee puts the buffers on the
+  way to the place, and the class object it lies in, on the runtime's holds for the caller, which keeps them until the statement
+  ends and then checks that the place is still in its container, or stops the program. A read copies and lets go of them at
+  once. A class `C&` return means the object. `spawn` of one is an error, as the holds are the thread's, an override must
+  return `T&` if what it replaces does, a function value of one gives a copy, and `try find(k) = v` puts the `try` on the
+  target alone. Not yet: binding a local reference to what one returns, and `T& operator[]` (§2.38).
 - A function that is `async`, or run with `spawn`, cannot take a reference, and no reference is alive at an `await`.
 - Elements of containers, as built 2026-11-11 in place of the pins first planned, which needed every copy in Codegen to be able
   to give a new buffer, as a copy of a pinned buffer would have to:
@@ -698,7 +704,7 @@ program and never dangles, but when its container is resized, replaced or was sh
     come: `?:` of two places as a place, and `for (auto& e : m)` over a hashmap.
 - Aliasing follows C++: `swap(v[0], v[1])` and `f(x, x)` are allowed.
 - Order: `const T&` first, with no change to the runtime, then `T&` to variables and fields, then to elements (all done
-  2026-11-11), then `T&` returns with item 6.
+  2026-11-11), then `T&` returns with item 6 (2026-11-14).
 
 ### 2.32 Enums and switch — DECIDED
 Decided and built 2026-11-11, with C++'s syntax and meaning where they agree:
@@ -886,7 +892,7 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, the core
-language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references except the functions that return them, overloading of functions, methods and constructors, and the library parts of item 7. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references except binding one to what a function returns, overloading of functions, methods and constructors, and the library parts of item 7. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error

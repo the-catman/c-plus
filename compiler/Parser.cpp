@@ -1,5 +1,7 @@
 #include "Parser.h"
 
+#include <utility>
+
 #include "Builtins.h"
 
 #include "SpecRefs.h"
@@ -95,13 +97,9 @@ bool Parser::parseReturnReference(const Type* ret, bool isConst, bool member) {
              "remove the `&`, for a variable of its own, `" + name + " " + (peek(1).kind == Tok::Ident ? peek(1).text : "x") +
                  " = ...;`. Or write the variable it would refer to, by its own name",
              spec::Globals);
-    if (isConst) {
-        advance();
-        return true;
-    }
-    notYet(peek().loc, "functions that return a reference, `" + name + "&`",
-           "return the value: write `" + name + " " + peek(1).text + "(...)`. A struct is copied and a class object is shared. To let "
-           "the caller change it, return a pointer, `" + name + "*`, to something that outlives the call");
+    advance();
+    if (!isConst) refReturn_ = true;  // `T& f()`, which the function or method about to be read returns
+    return true;
 }
 
 // A name being declared. What a module has is only read, by the name that joinModuleNames makes.
@@ -1376,6 +1374,7 @@ void Parser::readTemplate(TemplateDecl& t) {
             Loc retLoc;
             bool isConst = false;
             const Type* ret = parseType(retLoc, &isConst);
+            if (parseReturnReference(ret, isConst, false)) isConst = false;
             if (isConst) fail(retLoc, "a function cannot return a const value", "remove `const`", spec::Functions);
             if (ret->is(Type::Kind::Auto)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `T`");
             if (check(Tok::KwOperator) || (check(Tok::Amp) && peek(1).kind == Tok::KwOperator))
@@ -1721,6 +1720,7 @@ FuncDecl* Parser::instantiateFunction(TemplateDecl& t, const std::vector<Templat
         Loc retLoc;
         bool isConst = false;
         const Type* ret = parseType(retLoc, &isConst);
+        parseReturnReference(ret, isConst, false);
         auto fn = parseFunction(ret, retLoc);
         fn->isConstexpr = isConstexpr;
         fn->isAsync = isAsync;
@@ -3634,6 +3634,7 @@ std::unique_ptr<FuncDecl> Parser::parseFunction(const Type* retType, Loc retLoc)
     auto fn = std::make_unique<FuncDecl>();
     fn->retType = retType;
     fn->retTypeLoc = retLoc;
+    fn->returnsRef = std::exchange(refReturn_, false);
     if (check(Tok::KwOperator)) {
         fn->name = parseOperatorName(fn->nameLoc, nullptr);
     } else {
@@ -4025,6 +4026,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         auto method = std::make_unique<FuncDecl>();
         method->retType = ty;
         method->retTypeLoc = typeLoc;
+        method->returnsRef = std::exchange(refReturn_, false);
         if (check(Tok::KwOperator)) {
             method->name = parseOperatorName(method->nameLoc, &sd);
         } else {
@@ -4542,7 +4544,11 @@ ExprPtr Parser::parseAssign() {
     if (auto op = assignOp(peek().kind)) {
         Loc opLoc = advance().loc;
         ExprPtr rhs = parseAssign();
-        return std::make_unique<AssignExpr>(opLoc, *op, std::move(lhs), std::move(rhs));
+        const bool tryTarget = lhs->kind == Expr::Kind::Try;  // `try find(k) = v`, where `find` returns `T&` and can fail
+        if (tryTarget) lhs = std::move(static_cast<TryExpr&>(*lhs).operand);
+        auto assign = std::make_unique<AssignExpr>(opLoc, *op, std::move(lhs), std::move(rhs));
+        assign->tryTarget = tryTarget;
+        return assign;
     }
     return lhs;
 }

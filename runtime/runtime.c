@@ -1486,6 +1486,8 @@ typedef struct {
 
 static _Thread_local hold* holds;
 static _Thread_local int64_t holds_used, holds_room;
+static _Thread_local hold* aside;  // holds that a function returning `T&` passes on to its caller, while it lets go of its own
+static _Thread_local int64_t aside_used, aside_room;
 
 int64_t cplus_holds_mark(void) { return holds_used; }
 
@@ -1502,6 +1504,31 @@ void cplus_hold(void** slot, void* buf, int64_t elem_size, cplus_elem_fn release
     holds[holds_used++] = (hold){slot, buf, elem_size, release_elem, release_object};
 }
 
+// Takes the holds since `mark` off this thread's holds, still held, while the function that is returning a place given by
+// `T& g()` lets go of its own: its caller gets them back from cplus_holds_restore, with the value this gives.
+int64_t cplus_holds_set_aside(int64_t mark) {
+    int64_t start = aside_used;
+    int64_t n = holds_used - mark;
+    if (n <= 0) return start;
+    if (aside_used + n > aside_room) {
+        aside_room = aside_used + n > 2 * aside_room ? aside_used + n : 2 * aside_room;
+        aside = realloc(aside, (size_t)aside_room * sizeof(hold));
+        if (!aside) out_of_memory();
+    }
+    memcpy(aside + aside_used, holds + mark, (size_t)n * sizeof(hold));
+    aside_used += n;
+    holds_used = mark;
+    return start;
+}
+
+void cplus_holds_restore(int64_t start) {
+    for (int64_t i = start; i < aside_used; ++i) {
+        hold h = aside[i];
+        cplus_hold(h.slot, h.buf, h.elem_size, h.release_elem, h.release_object);
+    }
+    aside_used = start;
+}
+
 // Lets go of the holds taken since `mark`, the last first.
 void cplus_holds_release(int64_t mark) {
     while (holds_used > mark) {
@@ -1516,6 +1543,7 @@ void cplus_holds_release(int64_t mark) {
 static int64_t holds_on(const void* buf) {
     int64_t n = 0;
     for (int64_t i = 0; i < holds_used; ++i) n += holds[i].buf == buf;
+    for (int64_t i = 0; i < aside_used; ++i) n += aside[i].buf == buf;
     return n;
 }
 
@@ -1530,15 +1558,15 @@ static int held_alone(const void* buf) {
 int32_t cplus_still_held(void** slot, void* buf) { return held_alone(buf) && (!slot || *slot == buf); }
 
 // Stops the program unless each place held since `mark` is still in its container: the container keeps the buffer, and no
-// copy shares it, as a write through the place would be lost or seen by the copy. `what` says what gave the place.
+// copy shares it, as a write through the place would be lost or seen by the copy. `what` names the function that gave it.
 void cplus_holds_check(int64_t mark, const char* what, const char* file, int32_t line, int32_t column) {
     for (int64_t i = mark; i < holds_used; ++i) {
         const hold h = holds[i];
         if (!h.slot || (held_alone(h.buf) && *h.slot == h.buf)) continue;
         char message[320];
         snprintf(message, sizeof message,
-                 "the vector, string or hashmap that %s refers into was grown, shrunk, copied, replaced or freed while it was in use, "
-                 "which would lose what was written through it",
+                 "%s returned a place in a vector, string or hashmap that was grown, shrunk, copied, replaced or freed while "
+                 "the place was in use, which would lose what was written through it",
                  what);
         cplus_trap(message, file, line, column);
     }

@@ -72,6 +72,7 @@ private:
     const Token& expectNewName(const std::string& context);
     std::string operatorNameAt(size_t at, size_t& tokens, const StructDecl* owner);
     std::string parseOperatorName(Loc& loc, const StructDecl* owner);
+    bool refReturn_ = false;  // parseReturnReference read the `&` of `T& f()`, for the function read next
     void rejectOperatorAhead(size_t at, const StructDecl* owner = nullptr);
     [[noreturn]] void failUnknownGeneric(size_t at);
     bool isValueArgument(const Token& k);
