@@ -333,8 +333,13 @@ private:
         case Expr::Kind::IncDec: expr(static_cast<const IncDecExpr*>(e)->target.get()); break;
         case Expr::Kind::Index: {
             auto* i = static_cast<const IndexExpr*>(e);
+            if (i->lowered) {  // `g[i]`, which runs `operator[]`: its meaning is the operator's
+                expr(i->lowered.get());
+                break;
+            }
             expr(i->base.get());
             expr(i->index.get());
+            for (auto& more : i->more) expr(more.get());
             break;
         }
         case Expr::Kind::InitList: {

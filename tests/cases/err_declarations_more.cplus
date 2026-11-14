@@ -14,7 +14,7 @@ extern "C" void c_reference(int& n);
 struct WithOperator {
     int x = 0;
     int operator[](int i) { return i; }
-    // error: this compiler does not support `operator[]` yet
+    // error: an `operator[]` that gives a value only reads, so it is `const`
 };
 struct WithLongerOperator {
     int x = 0;

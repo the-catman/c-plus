@@ -1,7 +1,7 @@
 // Operators that C+ cannot overload, or not yet, and C++'s ways of writing them that C+ reads otherwise.
 struct A { int x = 0; A operator+=(const A& o) const { return o; } };
 struct B { int x = 0; B operator++() const { return this; } };
-struct C { int x = 0; int operator()(int k) const { return k; } };
+struct C { int x = 0; int operator[]() const { return x; } };
 struct D { int x = 0; int operator->() const { return x; } };
 struct E { int x = 0; bool operator&&(const E& o) const { return true; } };
 struct F { int x = 0; bool operator!() const { return false; } };
@@ -29,8 +29,6 @@ int main() {
 // error: err_operator_syntax.cplus:2:25
 // error: this compiler does not support `operator++` yet
 // error: write a method, such as `void next()`, or `p = p + 1` with an `operator+`
-// error: this compiler does not support `operator()` yet
-// error: use a lambda, as in `auto twice = [](int x) { return x * 2; };`, or write a method
 // error: this compiler does not support `operator->` yet
 // error: write a method that gives what it leads to
 // error: `operator&&` cannot be written, as `&&`, `||` and `,` decide what runs
@@ -65,3 +63,5 @@ int main() {
 // error: write a function: `Meters meters(double x) { ... }`
 // error: C+ has no streams, so this `operator>>` has nothing to read from
 // error: read a line with `readLine()`, and the parts of it with `stoi` and the like
+// error: `operator[]` takes the index, at least
+// error: give it a parameter: `int operator[](long i) const`

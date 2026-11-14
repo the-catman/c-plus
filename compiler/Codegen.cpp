@@ -1719,6 +1719,7 @@ struct Codegen::Impl {
                 return !base.type->isClass() && stablePlace(base);
             }
             case Expr::Kind::Index: {
+                if (indexCall(e)) return false;  // what `operator[]` gives is no place
                 const Expr& base = *static_cast<const IndexExpr&>(e).base;
                 return base.type->isArray() && stablePlace(base);
             }
@@ -1735,6 +1736,7 @@ struct Codegen::Impl {
                 return !base.type->isClass() && inContainerElement(base);
             }
             case Expr::Kind::Index: {
+                if (indexCall(e)) return false;
                 const Expr& base = *static_cast<const IndexExpr&>(e).base;
                 if (base.type->isArray()) return inContainerElement(base);
                 return !base.type->isPointer();
@@ -1776,7 +1778,7 @@ struct Codegen::Impl {
             case Expr::Kind::Member: return addsKey(*static_cast<const MemberExpr&>(e).base);
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
-                return (ix.mapSlot && !ix.mapSlot->isConst) || addsKey(*ix.base);
+                return !ix.lowered && ((ix.mapSlot && !ix.mapSlot->isConst) || addsKey(*ix.base));
             }
             default: return false;
         }
@@ -2157,6 +2159,7 @@ struct Codegen::Impl {
             }
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
+                if (ix.lowered) return false;  // `g[i]`, a call of `operator[]`
                 return ix.base->type->isPointer() || isPlace(*ix.base);  // `p[i]` is memory, wherever p came from
             }
             case Expr::Kind::Unary: return isDeref(e);
@@ -2181,7 +2184,7 @@ struct Codegen::Impl {
             case Expr::Kind::Member: return mayRunCode(*static_cast<const MemberExpr&>(e).base);
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
-                return ix.mapSlot || mayRunCode(*ix.base) || mayRunCode(*ix.index);  // a map may have to add the key
+                return ix.lowered || ix.mapSlot || mayRunCode(*ix.base) || mayRunCode(*ix.index);  // a map may have to add the key
             }
             case Expr::Kind::Unary: return static_cast<const UnaryExpr&>(e).overload || mayRunCode(*static_cast<const UnaryExpr&>(e).operand);
             case Expr::Kind::Binary: {
@@ -2562,7 +2565,9 @@ struct Codegen::Impl {
                 // A field of a struct value that is not stored anywhere, e.g. makePoint().x
                 return loadField(*m.base->type->decl, gen(*m.base), m.fieldIndex);
             }
-            case Expr::Kind::Index: return loadPlace(e, "elem");
+            case Expr::Kind::Index:
+                if (const Expr* call = indexCall(e)) return genRaw(*call, owned);  // `g[i]`, which runs `operator[]`
+                return loadPlace(e, "elem");
             case Expr::Kind::InitList:
                 owned = true;
                 return genInitList(static_cast<const InitListExpr&>(e), e.type);

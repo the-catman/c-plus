@@ -81,7 +81,7 @@ bool Parser::parseReturnReference(const Type* ret, bool isConst, bool member) {
     const std::string name = ret->name;
     if (check(Tok::AmpAmp))
         fail(peek().loc, "C+ has no rvalue references, `&&`", "return the value: write `" + name + "`", spec::References);
-    bool function = peek(1).kind == Tok::Ident && peek(2).kind == Tok::LParen;
+    bool function = (peek(1).kind == Tok::Ident && peek(2).kind == Tok::LParen) || peek(1).kind == Tok::KwOperator;  // `T& operator[](...)` too
     if (!function && member)
         fail(peek().loc, "a field cannot be a reference",
              "a field would outlive what it refers to: hold the value, `" + name + " x;`, make the type a `class` to share it, or use a "
@@ -166,8 +166,12 @@ std::string Parser::operatorNameAt(size_t at, size_t& tokens, const StructDecl* 
         }
         case Tok::PlusPlus: case Tok::MinusMinus:
             notYet(loc, std::string("`operator") + tokSpelling(op.kind) + "`", "write a method, such as `void next()`, or `p = p + 1` with an `operator+`");
-        case Tok::LBracket: notYet(loc, "`operator[]`", "write a method that gives the element, such as `int at(long i) const`");
-        case Tok::LParen: notYet(loc, "`operator()`", "use a lambda, as in `auto twice = [](int x) { return x * 2; };`, or write a method");
+        case Tok::LBracket: case Tok::LParen:  // `operator[]` and `operator()`
+            if (peek(at + 2).kind != (op.kind == Tok::LBracket ? Tok::RBracket : Tok::RParen))
+                fail(op.loc, std::string("expected `operator") + (op.kind == Tok::LBracket ? "[]" : "()") + "`, with nothing between the brackets",
+                     std::string("write `operator") + (op.kind == Tok::LBracket ? "[]" : "()") + "`, and then its parameters", spec::OperatorOverloading);
+            tokens = 2;
+            return op.kind == Tok::LBracket ? "operator[]" : "operator()";
         case Tok::Arrow: notYet(loc, "`operator->`", "write a method that gives what it leads to");
         case Tok::AmpAmp: case Tok::PipePipe: case Tok::Comma:
             fail(loc, std::string("`operator") + tokSpelling(op.kind) + "` cannot be written, as `&&`, `||` and `,` decide what runs",
@@ -4847,11 +4851,12 @@ ExprPtr Parser::parsePostfix(ExprPtr e) {
             advance();
             if (check(Tok::RBracket)) fail(peek().loc, "expected an index inside [ ]", "write e.g. `items[0]`", spec::Vectors);
             ExprPtr index = parseExpr();
-            if (check(Tok::Comma))
-                fail(peek().loc, "an element is picked with one index",
-                     "for a vector of vectors, write `grid[i][j]`", spec::Vectors);
+            std::vector<ExprPtr> more;  // `g[x, y]`, for an `operator[]` that takes two; Sema says what else takes one
+            while (match(Tok::Comma)) more.push_back(parseExpr());
             expect(Tok::RBracket, "to close the index");
-            e = std::make_unique<IndexExpr>(t.loc, std::move(e), std::move(index));
+            auto ix = std::make_unique<IndexExpr>(t.loc, std::move(e), std::move(index));
+            ix->more = std::move(more);
+            e = std::move(ix);
         } else {
             return close();
         }

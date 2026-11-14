@@ -643,11 +643,20 @@ struct MemberExpr : Expr {
 // `base[index]`, an element of a vector or an array, or a char of a string.
 struct IndexExpr : Expr {
     ExprPtr base, index;
+    std::vector<ExprPtr> more;    // `g[x, y]`, as C++23 writes it, for an `operator[]` that takes more than one
     FuncDecl* mapSlot = nullptr;  // set by Sema for `m[key]` on a hashmap: finds the entry, adding it if it should
     bool mapAssign = false;       // the target of `m[key] = value`, which needs no value to start with
     bool mapTarget = false;       // the target of any assignment, which checks by itself that `m` can change
+    // Set by Sema for `g[i]` of a struct or a class: the call of its `operator[]` that this is, which then owns `base`,
+    // `index` and `more`. What looks at the parts of an IndexExpr looks there first: see indexCall.
+    ExprPtr lowered;
     IndexExpr(Loc bracketLoc, ExprPtr b, ExprPtr i) : Expr(Kind::Index, bracketLoc), base(std::move(b)), index(std::move(i)) {}
 };
+
+// The call of `operator[]` that an IndexExpr really is, or null.
+inline const Expr* indexCall(const Expr& e) {
+    return e.kind == Expr::Kind::Index ? static_cast<const IndexExpr&>(e).lowered.get() : nullptr;
+}
 
 // `{1, 2}`, `{.x = 1, .y = 2}`, or `Point{1, 2}`. Without a type name, the list takes its
 // type from where it is used, e.g. the declared type of the variable it initializes.

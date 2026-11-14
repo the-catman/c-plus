@@ -230,6 +230,7 @@ private:
                               const std::vector<const Type*>& sides, Loc loc);
     bool hasOrdering(const Type* t);
     const Type* checkSameObject(CallExpr& call, Flow& flow);
+    const Type* checkIndexOperator(IndexExpr& ix, const Type* t, Flow& flow);
     // One value given when building a struct or class: `Type(args)` or a `{ }` list.
     struct ConstructArg {
         std::string designator;  // field name for `.x = value`, empty for positional

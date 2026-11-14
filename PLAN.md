@@ -849,7 +849,10 @@ algorithm uses.
   C++20 does. `same_object(a, b)` is identity, for references of related classes and optionals of them, and is what an
   `operator==` writes in place of `this == other`, which would run it again and is an error there.
 - Later slices, each a "not yet" error until it comes: 2, written compound assignments; 3, `<=>` with `strong_ordering`, `weak_ordering` and
-  `partial_ordering`, `= default`, and the four comparisons made from it; 4, `[]` and `()` that give a value; 5, with `T&`
+  `partial_ordering`, `= default`, and the four comparisons made from it; 4, `[]` and `()` that give a value (built 2026-11-14:
+  members only, as in C++; `[]` is `const`, can take more than one index as C++23's does, and gives a copy, so `g[i] = x`
+  is an error; `()` may change the object and take default values, as in C++, and is called through a variable or a
+  field, as `make()(1)` waits); 5, with `T&`
   returns, `T& operator[]` and a `const` and a non-const pair; 6, with iterators, `++`, `--`, unary `*` and `->`. Explicit
   conversion operators, operators on enums, generic free operators, `a.operator+(b)` and `constexpr` operators wait too.
 

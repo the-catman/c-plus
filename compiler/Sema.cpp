@@ -227,7 +227,7 @@ static bool namesOnePlace(const Expr& e) {
         case Expr::Kind::Member: return namesOnePlace(*static_cast<const MemberExpr&>(e).base);
         case Expr::Kind::Index: {
             auto& ix = static_cast<const IndexExpr&>(e);
-            return namesOnePlace(*ix.base) && !plainKey(*ix.index).empty();
+            return !ix.lowered && namesOnePlace(*ix.base) && !plainKey(*ix.index).empty();  // what an `operator[]` gives is no place
         }
         case Expr::Kind::Borrow: return namesOnePlace(*static_cast<const BorrowExpr&>(e).operand);
         case Expr::Kind::Binary: {  // `p + n`, a pointer or a number, and nothing that is only a value made here, as `a + b` of strings would be
@@ -268,6 +268,16 @@ static std::string spelled(const Expr& e, const std::string& fallback) {
     if (isDeref(e)) {
         std::string base = spelled(*static_cast<const UnaryExpr&>(e).operand, "");
         if (!base.empty()) return "*" + (hasOperator(base) ? "(" + base + ")" : base);
+    }
+    if (const Expr* call = indexCall(e)) {  // `g[i]`, which runs `operator[]`
+        auto& m = static_cast<const MethodCallExpr&>(*call);
+        std::string text = asBase(spelled(*m.receiver, "")) + "[";
+        for (size_t i = 0; i < m.args.size(); ++i) {
+            const std::string arg = spelled(*m.args[i], "");
+            if (arg.empty()) return fallback;
+            text += (i ? ", " : "") + arg;
+        }
+        return text.size() > 1 ? text + "]" : fallback;
     }
     if (e.kind == Expr::Kind::Index) {  // `v[0]` or `v[i]`
         auto& ix = static_cast<const IndexExpr&>(e);
@@ -326,7 +336,7 @@ static bool throughOptionalChain(const Expr& e) {
     switch (e.kind) {
         case Expr::Kind::OptValue: return true;
         case Expr::Kind::Member: return throughOptionalChain(*static_cast<const MemberExpr&>(e).base);
-        case Expr::Kind::Index: return throughOptionalChain(*static_cast<const IndexExpr&>(e).base);
+        case Expr::Kind::Index: return throughOptionalChain(indexCall(e) ? *indexCall(e) : *static_cast<const IndexExpr&>(e).base);
         default: return false;
     }
 }
@@ -435,7 +445,9 @@ static bool hasFailingCall(const Expr& e) {
             return false;
         }
         case Expr::Kind::Member: return hasFailingCall(*static_cast<const MemberExpr&>(e).base);
-        case Expr::Kind::Index: return hasFailingCall(*static_cast<const IndexExpr&>(e).base) || hasFailingCall(*static_cast<const IndexExpr&>(e).index);
+        case Expr::Kind::Index:
+            if (const Expr* call = indexCall(e)) return hasFailingCall(*call);
+            return hasFailingCall(*static_cast<const IndexExpr&>(e).base) || hasFailingCall(*static_cast<const IndexExpr&>(e).index);
         case Expr::Kind::Unary: {
             auto& u = static_cast<const UnaryExpr&>(e);
             return (u.overload && u.overload->callFails()) || hasFailingCall(*u.operand);
@@ -481,6 +493,7 @@ std::string Sema::constHolderHelp(const Expr& e, bool canCopy) {
         switch (x->kind) {
             case Expr::Kind::Member: x = static_cast<const MemberExpr*>(x)->base.get(); break;
             case Expr::Kind::Index: {
+                if (indexCall(*x)) return "";  // what `operator[]` gives is a value of its own
                 x = static_cast<const IndexExpr*>(x)->base.get();
                 if (x->type && x->type->isPointer()) return throughPointer(*x);
                 break;
@@ -514,7 +527,7 @@ static bool throughContainerMethod(const Expr& e) {
     while (true) {
         switch (x->kind) {
             case Expr::Kind::Member: x = static_cast<const MemberExpr*>(x)->base.get(); continue;
-            case Expr::Kind::Index: x = static_cast<const IndexExpr*>(x)->base.get(); continue;
+            case Expr::Kind::Index: x = indexCall(*x) ? indexCall(*x) : static_cast<const IndexExpr*>(x)->base.get(); continue;
             case Expr::Kind::OptChain: x = static_cast<const OptChainExpr*>(x)->base.get(); continue;
             case Expr::Kind::OptValue: x = static_cast<const OptValueExpr*>(x)->chain->base.get(); continue;
             case Expr::Kind::MethodCall: {
@@ -534,7 +547,7 @@ static bool throughContainerMethod(const Expr& e) {
 // When the root of `e` is the variable of a `for (auto x : list)` loop, which is a copy of the element: how to change the element.
 std::string Sema::loopCopyNote(const Expr& e) {
     const Expr* x = &e;
-    while (x->kind == Expr::Kind::Member || x->kind == Expr::Kind::Index)
+    while (x->kind == Expr::Kind::Member || (x->kind == Expr::Kind::Index && !indexCall(*x)))
         x = x->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(x)->base.get() : static_cast<const IndexExpr*>(x)->base.get();
     if (x->kind != Expr::Kind::Name) return "";
     for (const Expr* y = &e; y != x;) {  // a class object or what a pointer points to is the element itself, and not a copy
@@ -679,6 +692,7 @@ static bool reachesAPlace(const Expr& e) {
             return (base.type && (base.type->isClass() || base.type->isPointer())) || isDeref(base) || reachesAPlace(base);
         }
         case Expr::Kind::Index: {
+            if (const Expr* call = indexCall(e)) return reachesAPlace(*call);
             const Expr& base = *static_cast<const IndexExpr&>(e).base;
             return (base.type && base.type->isPointer()) || reachesAPlace(base);
         }
@@ -739,6 +753,7 @@ static bool isReferenceInCpp(const Expr& e) {
             return (base.type && (base.type->isClass() || base.type->isPointer())) || isDeref(base) || isReferenceInCpp(base);
         }
         case Expr::Kind::Index: {
+            if (indexCall(e)) return false;  // an `operator[]` that gives a value
             const Expr& base = *static_cast<const IndexExpr&>(e).base;
             return (base.type && base.type->isPointer()) || isReferenceInCpp(base);
         }
@@ -769,7 +784,7 @@ static bool holdsAPlace(const Expr& e) {
             return holdsAPlace(*t.thenExpr) || holdsAPlace(*t.elseExpr);
         }
         case Expr::Kind::Member: return reachesAPlace(e) || holdsAPlace(*static_cast<const MemberExpr&>(e).base);
-        case Expr::Kind::Index: return reachesAPlace(e) || holdsAPlace(*static_cast<const IndexExpr&>(e).base);
+        case Expr::Kind::Index: return indexCall(e) ? holdsAPlace(*indexCall(e)) : reachesAPlace(e) || holdsAPlace(*static_cast<const IndexExpr&>(e).base);
         default: return reachesAPlace(e);
     }
 }
@@ -780,7 +795,7 @@ static bool holdsAPlace(const Expr& e) {
 static std::string copyOnTheWay(const Expr& e, bool resultUsed) {
     const Expr* x = &e;
     while (x->kind == Expr::Kind::Member || x->kind == Expr::Kind::Index) {
-        x = x->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(x)->base.get() : static_cast<const IndexExpr*>(x)->base.get();
+        x = x->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(x)->base.get() : indexCall(*x) ? indexCall(*x) : static_cast<const IndexExpr*>(x)->base.get();
         if (x->type && (x->type->isClass() || x->type->isPointer())) return "";
     }
     switch (x->kind) {
@@ -807,6 +822,7 @@ static bool inOptionalCopy(const Expr& e) {
             return !(base.type && base.type->isClass()) && inOptionalCopy(base);
         }
         case Expr::Kind::Index: {
+            if (const Expr* call = indexCall(e)) return inOptionalCopy(*call);
             const Expr& base = *static_cast<const IndexExpr&>(e).base;
             return !(base.type && base.type->isPointer()) && inOptionalCopy(base);
         }
@@ -1042,7 +1058,7 @@ static const Type* typeAtPath(const VarDecl* v, const std::string& path) {
 // pointer points to.
 static bool isPlaceKind(const Expr& e) {
     return e.kind == Expr::Kind::Name || e.kind == Expr::Kind::Member || e.kind == Expr::Kind::This ||
-           e.kind == Expr::Kind::Index || isDeref(e);
+           (e.kind == Expr::Kind::Index && !indexCall(e)) || isDeref(e);
 }
 
 // ---- Definite assignment ---------------------------------------------------
@@ -3788,7 +3804,7 @@ void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
             break;
         }
         root = root->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(root)->base.get()
-             : root->kind == Expr::Kind::Index ? static_cast<const IndexExpr*>(root)->base.get()
+             : root->kind == Expr::Kind::Index ? (indexCall(*root) ? indexCall(*root) : static_cast<const IndexExpr*>(root)->base.get())
              : root->kind == Expr::Kind::MethodCall && static_cast<const MethodCallExpr*>(root)->receiver ? static_cast<const MethodCallExpr*>(root)->receiver.get()
              : nullptr;
     }
@@ -4440,6 +4456,12 @@ const Type* Sema::resolvePlace(Expr& e, Flow& flow, const VarDecl*& var, std::st
         if (var && !baseType->isError()) requireAssigned(flow, var, path, baseType, ix.base->loc);
         var = nullptr;
         path.clear();
+        if (const Type* given = checkIndexOperator(ix, baseType, flow)) return e.type = given;  // `g[i]` with an `operator[]`
+        if (!ix.more.empty()) {  // `v[i, j]`, which only an `operator[]` of the program takes
+            for (auto& more : ix.more) checkLooseValue(*more, flow);
+            diags_.error(ix.more[0]->loc, "an element is picked with one index", "for a vector of vectors, write `grid[i][j]`", spec::Vectors);
+            ix.more.clear();
+        }
         if (isHashmap(baseType)) return e.type = checkMapIndex(ix, flow, baseType);
         const Type* indexType = checkExpr(*ix.index, flow);
         e.type = Type::error();
@@ -4623,6 +4645,7 @@ static Storage storageOf(const Expr& e, const Expr*& root) {
             return storageOf(base, root);
         }
         case Expr::Kind::Index: {
+            if (const Expr* call = indexCall(e)) return storageOf(*call, root);
             const Expr& base = *static_cast<const IndexExpr&>(e).base;
             if (base.type && base.type->isPointer()) {
                 root = &e;
@@ -4654,6 +4677,7 @@ static bool insideContainer(const Expr& e) {
             return !(base.type && base.type->isClass()) && insideContainer(base);
         }
         case Expr::Kind::Index: {
+            if (indexCall(e)) return false;  // what `operator[]` gives is a value of its own
             const Expr& base = *static_cast<const IndexExpr&>(e).base;
             if (base.type->isArray()) return insideContainer(base);
             return !base.type->isPointer();
@@ -4665,6 +4689,7 @@ static bool insideContainer(const Expr& e) {
 // Whether a place lies in a class object that only a temporary refers to, as in
 // `makeUser().name`. The object is freed when the statement ends.
 static bool inTemporaryObject(const Expr& e) {
+    if (indexCall(e)) return false;
     if (e.kind == Expr::Kind::Index) {
         const Expr& base = *static_cast<const IndexExpr&>(e).base;
         return base.type && base.type->isArray() && inTemporaryObject(base);
@@ -4676,7 +4701,7 @@ static bool inTemporaryObject(const Expr& e) {
 }
 
 static bool containsIndex(const Expr& e) {
-    if (e.kind == Expr::Kind::Index) return true;
+    if (e.kind == Expr::Kind::Index) return !indexCall(e);
     return e.kind == Expr::Kind::Member && containsIndex(*static_cast<const MemberExpr&>(e).base);
 }
 
@@ -4691,7 +4716,7 @@ static std::string outerVectorName(const Expr& e) {
             std::string base = outerVectorName(*m.base);
             return containsIndex(*m.base) ? base : base + "." + m.field;
         }
-        case Expr::Kind::Index: return outerVectorName(*static_cast<const IndexExpr&>(e).base);
+        case Expr::Kind::Index: return indexCall(e) ? "" : outerVectorName(*static_cast<const IndexExpr&>(e).base);
         default: return "";
     }
 }
@@ -4821,10 +4846,10 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
     for (const Expr* at = &target; at;) {  // `m[key]` itself was reported, and also what is changed through it
         if (at == constMapReported_) return false;
         at = at->kind == Expr::Kind::Member ? static_cast<const MemberExpr*>(at)->base.get()
-             : at->kind == Expr::Kind::Index ? static_cast<const IndexExpr*>(at)->base.get() : nullptr;
+             : at->kind == Expr::Kind::Index && !indexCall(*at) ? static_cast<const IndexExpr*>(at)->base.get() : nullptr;
     }
     bool element = containsIndex(target);
-    bool inString = target.kind == Expr::Kind::Index && static_cast<const IndexExpr&>(target).base->type &&
+    bool inString = target.kind == Expr::Kind::Index && !indexCall(target) && static_cast<const IndexExpr&>(target).base->type &&
                     static_cast<const IndexExpr&>(target).base->type->is(K::String);
     const char* parts = inString ? "chars" : "elements";
     if (rootVar == thisVar() && fn_->isConst && fn_->lambda) {
@@ -5320,6 +5345,14 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
     }
     const Type* t = resolvePlace(target, flow, var, path);
     if (t->isError()) return false;
+    if (const Expr* call = indexCall(target)) {  // `g[i] = x`, where `operator[]` gives a value
+        const std::string written = spelled(target, "g[i]");
+        diags_.error(target.loc, "`" + written + "` gives a copy, as the `operator[]` it runs returns a value, so it cannot be " + action,
+                     "write a method that changes it, such as `void set(long i, " + std::string(call->type ? call->type->name : "int") + " value)`, and call that",
+                     spec::OperatorOverloading);
+        var = nullptr;
+        return false;
+    }
     // In a constructor's initializer list, a field that gets its value later would lose this one.
     if ((initField_ || buildingBase_) && var && var == thisVar() && !path.empty() && !isAssigned(flow, var, t, path)) {
         diags_.error(target.loc, q(path.substr(0, path.find('.'))) + " cannot be " + action + " while " +
@@ -6448,9 +6481,18 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         if (&call == spawned_) spawned_ = call.lowered.get();  // which is what the thread runs
         return checkExpr(*call.lowered, flow);
     };
+    // `f(x)` where f holds a struct or a class with an `operator()`: a call of that, as of a method.
+    auto hasCallOperator = [&](const Type* t) { return t && (t->isStruct() || t->isClass()) && t->decl && !methodsNamed(*t->decl, "operator()").empty(); };
+    auto callOperator = [&](Loc at) {
+        auto callee = std::make_unique<NameExpr>(at, call.callee);
+        call.lowered = std::make_unique<MethodCallExpr>(call.loc, std::move(callee), "operator()", std::move(call.args));
+        call.args.clear();
+        if (&call == spawned_) spawned_ = call.lowered.get();
+        return checkExpr(*call.lowered, flow);
+    };
     if (call.templateArgs.empty() && call.loc.line != 0)
         if (VarDecl* v = lookup(call.callee); v && !(fieldHides(call.callee) && (v->isTopLevel || v->isGlobal)) && (callable(v->type) || !funcs_.count(call.callee)))
-            return callThrough(nameLoc);
+            return hasCallOperator(v->type) ? callOperator(nameLoc) : callThrough(nameLoc);
     if (call.templateArgs.empty() && call.loc.line == 0)  // what comes with the language calls only its own parameters and locals
         if (VarDecl* v = lookup(call.callee); v && !v->isTopLevel && !v->isGlobal && callable(v->type)) return callThrough(nameLoc);
 
@@ -6459,6 +6501,8 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         BasePath found = findMember(*o, call.callee, nameLoc);
         if (!found.empty() && found.back()->fieldIndex(call.callee) >= 0 && callable(found.back()->fields[found.back()->fieldIndex(call.callee)].type))
             return callThrough(nameLoc);  // a field that holds a function
+        if (!found.empty() && found.back()->fieldIndex(call.callee) >= 0 && hasCallOperator(found.back()->fields[found.back()->fieldIndex(call.callee)].type))
+            return callOperator(nameLoc);  // a field that holds something with an `operator()`
         if (FuncDecl* m = found.empty() ? nullptr : found.back()->ownMethod(call.callee)) {
             if (fn_ && fn_->lambda) noteThisCapture(nameLoc);
             const std::vector<FuncDecl*> named = methodsNamed(*found.back(), call.callee);
@@ -6963,6 +7007,34 @@ void Sema::checkOperatorDecl(FuncDecl& f) {
     const std::string self = member ? f.owner->name : !f.params.empty() ? std::string(f.params[0]->declType->name) : "Point";
     const bool unaryToo = op == "-" || op == "+" || op == "~" || op == "*" || op == "&";
     auto fail = [&](Loc loc, const std::string& message, const std::string& help) { diags_.error(loc, message, help, spec::OperatorOverloading); };
+    if (op == "[]" || op == "()") {  // a method of the type it indexes or calls, as in C++, with any parameters
+        if (!member) {
+            fail(f.nameLoc, "`" + f.name + "` is written in the type it " + (op == "[]" ? "indexes" : "calls") + ", as in C++",
+                 "move it into the struct or class, where `this` is what is " + std::string(op == "[]" ? "indexed" : "called"));
+            return;
+        }
+        if (op == "[]" && f.params.empty()) {
+            fail(f.nameLoc, "`operator[]` takes the index, at least", "give it a parameter: `" + std::string(f.retType->name) + " operator[](long i) const`");
+            return;
+        }
+        if (op == "[]" && !f.isConst) {  // an `operator()` may change the object, as a call of a method may
+            fail(f.nameLoc, "an `operator[]` that gives a value only reads, so it is `const`", "write `const` after its parameters: `operator[](...) const`");
+            return;
+        }
+        for (auto& p : f.params) {
+            if (op == "[]" && p->defaultArg) {
+                fail(p->loc, "the parameters of `operator[]` cannot have default values", "remove the `= ...`");
+                return;
+            }
+            if (op == "[]" && p->isRef && !p->isConst) {
+                fail(p->loc, "an `operator[]` only reads its index, so it cannot take a `" + std::string(p->declType->name) + "&`",
+                     "take it by value, or as `const " + std::string(p->declType->name) + "&`");
+                return;
+            }
+        }
+        if (f.isAsync) fail(f.asyncLoc, "an operator cannot be async", "remove `async`");
+        return;
+    }
     if (operands == 1 && (op == "*" || op == "&")) {
         if (op == "*") fail(f.nameLoc, "this compiler does not support a unary `operator*` yet", "write a method that gives what it leads to, such as `int get() const`");
         else fail(f.nameLoc, "a unary `operator&` cannot be written, as `&x` always gives the address of x", "remove it");
@@ -7295,6 +7367,46 @@ bool Sema::checkOperatorAssign(AssignExpr& a, const Type* t, Flow& flow) {
     a.overload = f;
     useOperator(*f, operands, a.loc, flow, a.path, target + " " + sym + "= " + value);
     return true;
+}
+
+// `g[i]` and `g[x, y]` of a struct or a class: a call of its `operator[]`, which the IndexExpr then is (IndexExpr::lowered).
+// Null leaves it to what the language says about indexing.
+const Type* Sema::checkIndexOperator(IndexExpr& ix, const Type* t, Flow& flow) {
+    if (!takesOperators(t)) return nullptr;
+    std::vector<Expr*> operands{ix.base.get(), ix.index.get()};
+    for (auto& more : ix.more) operands.push_back(more.get());
+    bool broken = false;
+    for (size_t i = 1; i < operands.size(); ++i) broken = checkExpr(*operands[i], flow)->isError() || broken;
+    if (broken) return Type::error();
+    std::vector<FuncDecl*> all = methodsNamed(*t->decl, "operator[]"), candidates, tied;
+    for (FuncDecl* m : all)
+        if (m->params.size() + 1 == operands.size()) candidates.push_back(m);
+    FuncDecl* f = bestOperator(candidates, operands, tied);
+    std::string written = asBase(spelled(*ix.base, "g")) + "[";
+    for (size_t i = 1; i < operands.size(); ++i) written += (i > 1 ? ", " : "") + spelled(*operands[i], "i");
+    written += "]";
+    if (!f) {
+        std::vector<const Type*> sides;
+        for (Expr* x : operands) sides.push_back(x->type);
+        if (!tied.empty() || !all.empty())
+            reportOperatorChoice("operator[]", all, tied, sides, ix.loc);
+        else
+            diags_.error(ix.loc, q(t) + " cannot be indexed, as it has no `operator[]`",
+                         "write `int operator[](long i) const { ... }` in " + q(t) + ", or call one of its methods", spec::OperatorOverloading);
+        return Type::error();
+    }
+    BasePath path;
+    useOperator(*f, operands, ix.loc, flow, path, written);
+    std::vector<ExprPtr> args;
+    args.push_back(std::move(ix.index));
+    for (auto& more : ix.more) args.push_back(std::move(more));
+    ix.more.clear();
+    auto call = std::make_unique<MethodCallExpr>(ix.loc, std::move(ix.base), "operator[]", std::move(args));
+    call->method = f;
+    call->path = std::move(path);
+    call->type = f->retType;
+    ix.lowered = std::move(call);
+    return f->retType;
 }
 
 // `same_object(a, b)`: whether two class references refer to one object, which `==` says only of a class without an
@@ -7983,10 +8095,16 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         m = chooseOverload(call.name, calledAs, found.back(), named, exprsOf(call.args), flow, call.loc);
         if (!m) return Type::error();
     }
+    const auto fieldType = [&]() -> const Type* {
+        return found.empty() || found.back()->fieldIndex(call.name) < 0 ? nullptr : found.back()->fields[found.back()->fieldIndex(call.name)].type;
+    };
+    const auto callsOperator = [&] {  // `button.handler(e)`, where the field holds a struct or a class with an `operator()`
+        const Type* t = fieldType();
+        return t && (t->isStruct() || t->isClass()) && t->decl && !methodsNamed(*t->decl, "operator()").empty();
+    };
     const auto fieldCalled = [&] {
-        if (found.empty() || found.back()->fieldIndex(call.name) < 0) return false;
-        const Type* t = found.back()->fields[found.back()->fieldIndex(call.name)].type;
-        return t && (t->isFunction() || t->isCFunction() || (t->isOptional() && t->elem->isFunction()));
+        const Type* t = fieldType();
+        return (t && (t->isFunction() || t->isCFunction() || (t->isOptional() && t->elem->isFunction()))) || callsOperator();
     };
     if (!m && fieldCalled()) {  // `button.onClick(e)`: a field that holds a function
         const StructDecl* declaring = found.back();
@@ -7999,6 +8117,15 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
         const FieldDecl& field = declaring->fields[member->fieldIndex];
         if (!canAccess(*declaring, field.access, &sd)) reportAccess(*declaring, field.name, false, field.access, call.loc);
         member->type = field.type;
+        if (callsOperator()) {
+            auto inner = std::make_unique<MethodCallExpr>(call.loc, std::move(member), "operator()", std::move(call.args));
+            call.args.clear();
+            if (&call == spawned_) spawned_ = inner.get();
+            const Type* result = checkMethodCall(*inner, flow);
+            inner->type = result;
+            call.lowered = std::move(inner);
+            return result;
+        }
         auto through = std::make_unique<CallValueExpr>(call.loc, std::move(member), std::move(call.args));
         call.args.clear();
         if (&call == spawned_) spawned_ = through.get();  // which is what the thread runs
@@ -10270,6 +10397,12 @@ const Type* Sema::checkCallValue(CallValueExpr& c, Flow& flow) {
         }
         return t->elem;
     }
+    if (!t->isFunction() && (t->isStruct() || t->isClass()) && t->decl && !methodsNamed(*t->decl, "operator()").empty()) {
+        loose();  // `make()(x)` or `v[i](x)`, which a variable or a field can take the place of
+        diags_.error(c.loc, "this compiler does not support calling the `operator()` of what is not a variable or a field yet",
+                     "store it in a variable first, `auto f = ...;`, and call that: `f(...)`", spec::OperatorOverloading);
+        return Type::error();
+    }
     if (!t->isFunction()) {
         loose();
         diags_.error(c.callee->loc, (shown == "the function" ? std::string("this") : shown) + " has type " + q(t) + ", which cannot be called",
@@ -10481,7 +10614,14 @@ struct CaptureCheck {
             }
             case Expr::Kind::IncDec: f(static_cast<IncDecExpr*>(e)->target.get()); break;
             case Expr::Kind::Member: f(static_cast<MemberExpr*>(e)->base.get()); break;
-            case Expr::Kind::Index: f(static_cast<IndexExpr*>(e)->base.get()); f(static_cast<IndexExpr*>(e)->index.get()); break;
+            case Expr::Kind::Index:
+                if (static_cast<IndexExpr*>(e)->lowered) {
+                    f(static_cast<IndexExpr*>(e)->lowered.get());
+                    break;
+                }
+                f(static_cast<IndexExpr*>(e)->base.get());
+                f(static_cast<IndexExpr*>(e)->index.get());
+                break;
             case Expr::Kind::InitList:
                 for (auto& el : static_cast<InitListExpr*>(e)->elements) f(el.value.get());
                 break;

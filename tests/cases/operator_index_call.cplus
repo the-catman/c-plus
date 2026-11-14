@@ -1,0 +1,71 @@
+// `operator[]` and `operator()` that give a value, as in C++: methods of the type, chosen as overloads are.
+struct Grid {
+    int w = 3;
+    vector<int> cells = {1, 2, 3, 4, 5, 6};
+    int operator[](long i) const { return cells[i]; }
+    int operator[](long x, long y) const { return cells[y * w + x]; }  // two indexes, as C++23 has them
+};
+class Names {
+public:
+    vector<string> items = {"ada", "bob"};
+    string operator[](long i) const { return items[i]; }
+    string operator[](string prefix) const {
+        for (string s : items)
+            if (s.starts_with(prefix)) return s;
+        return "";
+    }
+};
+struct Safe {
+    vector<int> v = {7};
+    int operator[](long i) const throws {
+        if (i < 0 || i >= v.size()) throw Error("no element " + to_string(i));
+        return v[i];
+    }
+};
+// `operator()` may change the object, as a method may, and can take default values, as in C++.
+struct Adder {
+    int base = 10;
+    int operator()(int x) const { return base + x; }
+    int operator()(int x, int y) const { return base + x * y; }
+};
+struct Counter {
+    int n = 0;
+    int operator()(int step = 1) {
+        n += step;
+        return n;
+    }
+};
+struct Panel {
+    Adder add;
+    Counter clicks;
+    int press() { return clicks(); }
+};
+int main() throws {
+    Grid g = Grid{};
+    println("{} {} {}", g[0], g[2, 1], g[g[0]]);   // expect: 1 6 2
+    long x = 1;
+    long y = 1;
+    println("{}", g[x, y]);                         // expect: 5
+    vector<Grid> grids = {g};
+    println("{} {}", grids[0][1], Grid{}[5]);       // expect: 2 6
+    Names names = Names();
+    println("{} {}", names[1], names["a"]);         // expect: bob ada
+    println("{}", names[0].size());                 // expect: 3
+    Safe s = Safe{};
+    println("{}", try s[0]);                        // expect: 7
+    try {
+        println("{}", try s[3]);
+    } catch (Error e) {
+        println("{}", e.what());                    // expect: no element 3
+    }
+    Adder add = Adder{};
+    println("{} {}", add(5), add(2, 3));            // expect: 15 16
+    Counter c = Counter{};
+    c();
+    c(5);
+    println("{}", c());                             // expect: 7
+    Panel p = Panel{};
+    p.press();
+    println("{} {}", p.add(1, 1), p.clicks(2));     // expect: 11 3
+    return 0;
+}

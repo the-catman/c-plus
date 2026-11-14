@@ -15,6 +15,10 @@ struct Money {
     long cents = 0;
     bool operator==(const Money& other) const { return cents == other.cents; }
 };
+struct Table {
+    int operator[](long i) const { return int(i) * 2; }
+    int operator()(int x) { return x + 1; }
+};
 template<typename T, int N, typename K, typename V> struct Shapes {
     vector<T> items;
     array<T, N> fixed;
@@ -269,6 +273,9 @@ void numberForms() {
     a += b;
     println("{} {} {}", a + b, 2 * a, contains(vector<Money>{Money{1}}, Money{1}));
     // expect: {x: 5} {x: 6} true
+    Table table = Table{};
+    println("{} {}", table[3], table(3));
+    // expect: 6 4
     println("{:.2f} {:e} {:g} {:.3}", 1.5, 1.5, 1.5, 1.5);
     // expect: 1.50 1.500000e+00 1.5 1.5
     println("[{:>8}] [{:<8}] [{:^8}] [{:*^8}]", 1, 2, 3, "x");

@@ -1,0 +1,37 @@
+// What `operator[]` and `operator()` cannot do yet, or at all.
+struct Grid {
+    vector<int> cells = {1};
+    int operator[](long i) const { return cells[i]; }
+};
+struct Point {
+    int x = 0;
+};
+struct Adder {
+    int base = 1;
+    int operator()(int k) const { return base + k; }
+};
+int operator[](Point p, long i) { return 1; }
+struct Odd { int x = 0; int operator[](long i = 0) const { return x; } };
+Adder make() { return Adder{}; }
+int main() {
+    Grid g = Grid{};
+    g[0] = 5;
+    Point p = Point{};
+    println("{}", p[0]);
+    println("{}", g["a"]);
+    vector<int> v = {1};
+    println("{}", v[0, 0]);
+    println("{}", make()(1));
+    return 0;
+}
+// error: `g[0]` gives a copy, as the `operator[]` it runs returns a value, so it cannot be assigned to
+// error: write a method that changes it, such as `void set(long i, int value)`, and call that
+// error: 'Point' cannot be indexed, as it has no `operator[]`
+// error: write `int operator[](long i) const { ... }` in 'Point', or call one of its methods
+// error: no `operator[]` takes 'Grid' and 'string'
+// error: an element is picked with one index
+// error: this compiler does not support calling the `operator()` of what is not a variable or a field yet
+// error: store it in a variable first, `auto f = ...;`, and call that: `f(...)`
+// error: `operator[]` is written in the type it indexes, as in C++
+// error: move it into the struct or class, where `this` is what is indexed
+// error: the parameters of `operator[]` cannot have default values

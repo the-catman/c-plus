@@ -586,6 +586,7 @@ ConstValue ConstEval::eval(const Expr& e) {
         case Expr::Kind::MethodCall: return evalMethodCall(static_cast<const MethodCallExpr&>(e));
         case Expr::Kind::Index: {
             auto& ix = static_cast<const IndexExpr&>(e);
+            if (ix.lowered) throw ConstError{e.loc, "an operator of the program cannot run while compiling"};
             ConstValue base = eval(*ix.base);
             ConstValue index = eval(*ix.index);
             if (base.kind != VK::String || !isIntegerLike(index)) throw ConstError{e.loc, "only a string can be indexed while compiling"};

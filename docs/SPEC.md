@@ -2567,7 +2567,8 @@ Vec b = a + a * 2;    // {x: 3, y: 6}
 a += b;               // a = a + b
 ```
 
-- **What can be written:** `+ - * / %`, `& | ^ << >>`, the unary `-`, `+` and `~`, `==`, and `<`, `>`, `<=` and `>=`.
+- **What can be written:** `+ - * / %`, `& | ^ << >>`, the unary `-`, `+` and `~`, `==`, and `<`, `>`, `<=` and `>=`;
+  and, in a type only, `operator[]` and `operator()`.
 - **An operator only reads its sides.** A member operator is `const`, and a parameter is a value or a `const T&`, with no
   default value. Operators are chosen as [overloads](#overloading) are, member and free ones together. A member and a free
   operator that take the same sides are an error where they are declared.
@@ -2594,10 +2595,15 @@ a += b;               // a = a + b
 - **`a += b`** runs `a = a + b`, for every operator that has a compound assignment, with the place of `a` found once,
   after `b`, as for numbers. C++ needs `operator+=` written as well.
 - **In a class**, an operator is a method: it is inherited and can be `virtual`.
+- **`operator[]`** gives a value, as `int operator[](long i) const { ... }` does, and is `const`. It can take more than one
+  index, as in C++23, `g[x, y]`, and be overloaded on what it takes. What it gives is a copy, so `g[i] = x` is an error,
+  whose help is a method that changes it; one that gives a `T&` is not supported yet.
+- **`operator()`** makes a value callable, `add(5)`, as a function is, and can change the object, as a method can, and
+  have default values. It is called through a variable or a field; `make()(1)` is not supported yet.
 - The sides are worked out left to right, as for the language's own operators, even when `100 == m` runs `m == 100`.
-- **Not supported yet:** `operator<=>`, writing a compound assignment such as `operator+=`, `operator[]`, `operator()`,
-  `operator++`, `operator--`, a unary `*`, `operator->`, explicit conversion operators, operators on enums, and generic
-  operators outside a type.
+- **Not supported yet:** `operator<=>`, writing a compound assignment such as `operator+=`, a `T& operator[]`, calling the
+  `operator()` of what is not a variable or a field, `operator++`, `operator--`, a unary `*`, `operator->`, explicit
+  conversion operators, operators on enums, and generic operators outside a type.
 - **Never:** `operator=`, as a struct is copied field by field and a class object is shared; `operator!=`; `operator&&`,
   `operator||` and `operator,`, which decide what runs; `operator!` and `operator bool`, as a struct or a class is never a
   condition; other conversions, as nothing converts to or from a struct or a class by itself; a unary `&`, which always
@@ -3912,8 +3918,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |
 | `final`, covariant return types, private and protected base classes | planned |
-| Operator overloading: `+ - * / % & \| ^ << >>`, unary `-` `+` `~`, `==` of structs and classes, `<` `>` `<=` `>=`, members and free operators, `a += b` from `+`, `same_object(a, b)` | implemented |
-| `operator<=>`, written compound assignments, `operator[]`, `operator()`, `operator++`, a unary `*`, `operator->`, conversion operators, operators on enums, generic operators outside a type | planned |
+| Operator overloading: `+ - * / % & \| ^ << >>`, unary `-` `+` `~`, `==` of structs and classes, `<` `>` `<=` `>=`, `operator[]` and `operator()` that give a value, members and free operators, `a += b` from `+`, `same_object(a, b)` | implemented |
+| `operator<=>`, written compound assignments, a `T& operator[]`, calling the `operator()` of what is not a variable or a field, `operator++`, a unary `*`, `operator->`, conversion operators, operators on enums, generic operators outside a type | planned |
 | Destructors for structs, static members | planned |
 | `weak<T>` references: `lock`, `expired`, `reset` | implemented |
 | Errors: `throws`, `throw`, `try f()`, `try { } catch (E e) { }`, `catch (...)`, `throw;`, `Error`, `int main() throws` | implemented |

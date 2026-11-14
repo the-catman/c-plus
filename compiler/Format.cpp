@@ -518,7 +518,7 @@ private:
         if (ak == Tok::Comma) return true;
         if (ak == Tok::Semi) return bk != Tok::RParen;
         if (ak == Tok::LParen || ak == Tok::LBracket || bk == Tok::RParen || bk == Tok::RBracket) return false;
-        if (ak == Tok::KwOperator && br == Role::OperatorName) return false;           // `operator+`
+        if (ak == Tok::KwOperator) return false;                                        // `operator+`, `operator[]`
         if (ar == Role::OperatorName && bk == Tok::LParen) return false;              // `operator+(`
         if ((ak == Tok::LBrace && ar == Role::Init) || (bk == Tok::RBrace && br == Role::Init)) return false;
         if ((ak == Tok::Arrow && lambdaArrow_[a]) || (bk == Tok::Arrow && lambdaArrow_[b])) return true;  // `[](int x) -> int {`
