@@ -3,8 +3,8 @@ struct P { int x = 0; void set() { x = 1; } };
 class User {
 public:
     string name = "n";
-    bool operator==(User o) const { return name == o.name; }
-    // error: `==` of two class references tells whether they are the same object. To compare what is in them, write a method, such as `bool equals(const User& other) const`
+    bool operator==(User o) const { return this == o; }
+    // error: write `same_object(this, o)` to ask whether they are the same object, or compare their fields
 };
 void fill(int a[3]) { a[0] = 9; }
 // error: write `vector<int> a`, or, to change the caller's array, `int* a`, called with `x.data()`

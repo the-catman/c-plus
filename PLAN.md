@@ -421,7 +421,7 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
   out, with the `using` line as its help, and so does `using namespace`. Aliases inside a function or a
   type wait for types inside them.
 - Operator overloading uses C++ syntax, `Point operator+(Point other) const` (built 2026-11-14, see §2.38). `&&`, `||`
-  and the comma operator cannot be overloaded. A class's own `==`, which will replace identity for it, comes in a later slice.
+  and the comma operator cannot be overloaded. A class's own `==` replaces identity for it, and `same_object(a, b)` asks that (§2.38).
 - Printing follows C++23: `println("x = {}", x)`. The format string must be a literal and
   the compiler checks that placeholders match arguments, and that their options suit them (§2.37).
 - Source files use `.cplus`.
@@ -844,8 +844,11 @@ algorithm uses.
 - Never: `=`, as a struct copies its fields and a class is shared; `!=`; `&&`, `||` and `,`; `!` and every implicit conversion
   operator, as a struct or a class is never a condition; unary `&`; `->*`; `new` and `delete`; `co_await`; `operator""`; `<<`
   and `>>` that take a stream, where printing has its help.
-- Later slices, each a "not yet" error until it comes: 2, a class's own `==` (with `same_object(a, b)` for identity, and
-  `= default` comparing fields) and written compound assignments; 3, `<=>` with `strong_ordering`, `weak_ordering` and
+- A class's own `==` (slice 2, built 2026-11-14) replaces identity in the same way, for the class and those that derive
+  from it, which inherit it. It can be `virtual`. `= default` on a class compares the fields, the base classes' first, as
+  C++20 does. `same_object(a, b)` is identity, for references of related classes and optionals of them, and is what an
+  `operator==` writes in place of `this == other`, which would run it again and is an error there.
+- Later slices, each a "not yet" error until it comes: 2, written compound assignments; 3, `<=>` with `strong_ordering`, `weak_ordering` and
   `partial_ordering`, `= default`, and the four comparisons made from it; 4, `[]` and `()` that give a value; 5, with `T&`
   returns, `T& operator[]` and a `const` and a non-const pair; 6, with iterators, `++`, `--`, unary `*` and `->`. Explicit
   conversion operators, operators on enums, generic free operators, `a.operator+(b)` and `constexpr` operators wait too.
@@ -936,6 +939,31 @@ what holds real programs back most:
 Each is designed when it is reached, as before. Exit criterion: two or three programs of a few hundred lines each, one of
 them in several files, written by a model given only the cheat sheet, with nothing in them that works around a missing
 feature.
+
+What remains, and how the exit check runs (decided 2026-11-14):
+- Built in this order: a class's own `operator==` (§2.38, slice 2); `operator[]` and `operator()` that give a value (slice
+  4); `T&` returns, with the places §2.31 still lists (`v.back()`, `v.front()`, `m.at(k)` and `?:` of two places, and `for
+  (auto& e : m)`); `T& operator[]` (slice 5); and written compound assignments (the rest of slice 2), last, so that a `T&
+  operator+=` can return `*this` as in C++. `<=>` (slice 3), slice 6 and iterators wait for a later phase: `operator<` is
+  C++'s own spelling and all that `sort` uses, and iterators are a design of their own, which range `for` and the index
+  algorithms stand in for.
+- The programs are written by Sonnet, one fresh agent for each, given only `docs/CHEATSHEET.md` and `build/cplus` (`check`,
+  `run` and `explain`, at most 30 times), and briefed by what the program does, never by the features to use: `ledger`, in
+  several files, reads transactions from a file named in its arguments, reports bad lines by number, prints aligned monthly
+  totals by category and writes a report file; `calc` interprets a small language with variables, functions, `if` and `while`
+  from standard input, with errors that give a position; `routes` finds shortest paths on a grid map, with a generic grid and
+  priority queue, a 2D point type with arithmetic, and several searches run on threads. Each is 300 to 500 lines, comes with
+  sample input and output, and with notes of each first choice that was refused or is planned: what was wanted, what was
+  written instead, and the diagnostic.
+- Each finding is one of three. A decision: C+ differs on purpose (the cheat sheet's "Different" table, §2.38's "Never"), and
+  only the cheat sheet may need fixing. A respelling: one line of the same shape that the help names, recorded as planned,
+  which does not fail the check. A workaround: what was written changes the program's shape or gives up safety, as a raw
+  pointer, `hashmap<T, bool>` as a set, or a get and a set method do; it fails the check, and is built in Phase 7 when the
+  decisions cover it or one more decides it, or else is an exception for the owner to accept.
+- At most two rounds. After the first round is built, each program gets its first choices back and must print the same. A
+  second round, with fresh writers and the same briefs, runs only if the first found workarounds. The check is a sample, not
+  a proof. The final report gives each program's lines, files and compiler runs, every finding with its class and outcome,
+  the cheat sheet's fixes, the tests on both builds, and the programs, which go to `examples/` with tests.
 
 **Phase 8 — Servers.** Added 2026-11-11. HTTP and WebSocket servers, on libuv as `net` in §2.15, with handlers
 written as the lambdas of Phase 7. Before them, what reads data another machine sends is fuzz tested: WebSocket frames,

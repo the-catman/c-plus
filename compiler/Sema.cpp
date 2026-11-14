@@ -1604,6 +1604,15 @@ void Sema::checkNewStructs() {
     for (size_t i = first; i < end; ++i)  // before anything asks whether a type can be a key
         for (auto& m : program_->structs[i]->methods)
             if (m->role == FuncDecl::Role::Method && m->isOperator()) noteOwnEquals(*m);
+    // A class without an `==` of its own compares as the base class it inherits one from does.
+    std::function<const FuncDecl*(const StructDecl&)> inherited = [&](const StructDecl& d) -> const FuncDecl* {
+        if (d.ownEquals) return d.ownEquals;
+        for (const StructDecl* base : d.bases)
+            if (const FuncDecl* e = inherited(*base)) return e;
+        return nullptr;
+    };
+    for (size_t i = first; i < end; ++i)
+        if (StructDecl& sd = *program_->structs[i]; sd.isClass && !sd.ownEquals) sd.ownEquals = inherited(sd);
     for (size_t i = first; i < end; ++i)
         if (StructDecl& sd = *program_->structs[i]; sd.defined && sd.templateOf)
             sd.constraintFailed = !checkConstraints(const_cast<TemplateDecl&>(*sd.templateOf), sd.templateArgs, sd.usedAt);
@@ -2651,7 +2660,7 @@ void Sema::checkFunction(FuncDecl& fn) {
         markAssigned(flow, p.get(), "");
     }
     checkDefaults(fn);
-    if (fn.isPure) {  // no body to check
+    if (fn.isPure || fn.isDefaulted) {  // no body to check
         scopes_.pop_back();
         fn_ = nullptr;
         return;
@@ -6425,6 +6434,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
     if (call.vectorType) return checkVectorConstruction(call, flow);
     if (call.callee == "println" || call.callee == "print" || call.callee == "format") return checkPrint(call, flow);
     if (call.callee == "to_string") return checkToString(call, flow);
+    if (call.callee == "same_object" && !funcs_.count("same_object") && !lookup("same_object")) return checkSameObject(call, flow);
     if (call.callee == "string") return checkStringFill(call, flow);
     Loc nameLoc = call.loc;
     nameLoc.len = (uint32_t)call.callee.size();
@@ -6940,7 +6950,7 @@ void Sema::noteOwnEquals(FuncDecl& f) {
     else if (f.role == FuncDecl::Role::Free && f.params.size() == 2 && f.params[0]->declType == f.params[1]->declType &&
              takesOperators(f.params[0]->declType))
         type = const_cast<StructDecl*>(f.params[0]->declType->decl);
-    if (!type || type->isClass || type->ownEquals) return;
+    if (!type || type->ownEquals) return;
     type->ownEquals = &f;
     if (f.role == FuncDecl::Role::Method) requestMethod(&f);
 }
@@ -7026,17 +7036,13 @@ void Sema::checkOperatorDecl(FuncDecl& f) {
             return;
         }
     }
-    if (op == "==") {
-        const StructDecl* cls = member && f.owner->isClass ? f.owner : nullptr;
-        for (auto& p : f.params)
-            if (!cls && p->declType->isClass() && takesOperators(p->declType)) cls = p->declType->decl;
-        if (cls) {
-            fail(f.nameLoc, "this compiler does not support `operator==` for a class yet",
-                 "`==` of two class references tells whether they are the same object. To compare what is in them, write a method, such as `bool equals(const " +
-                     cls->name + "& other) const`");
-            return;
-        }
-    }
+    if (f.isDefaulted)  // `= default` on a class compares its fields, so each must be one that `==` can compare
+        for (const FieldDecl* field : allFields(*f.owner))
+            if (holdsFunction(field->type)) {
+                fail(f.nameLoc, "`= default` cannot compare the fields of " + q(f.owner->name) + ", as " + q(field->name) + " holds a function, which cannot be compared",
+                     "write the body, comparing the fields that can be compared: `bool operator==(const " + f.owner->name + "& other) const { return ...; }`");
+                return;
+            }
     // A member and a free operator that take the same would fit every use as well as each other.
     if (!member && takesOperators(f.params[0]->declType)) {
         for (FuncDecl* m : methodsNamed(*f.params[0]->declType->decl, f.name)) {
@@ -7220,6 +7226,13 @@ bool Sema::checkOperatorUse(BinaryExpr& b, const Type* l, const Type* r, Flow& f
                      help, spec::OperatorOverloading);
         return true;
     }
+    if (f == fn_ && equality && (b.lhs->kind == Expr::Kind::This || b.rhs->kind == Expr::Kind::This)) {
+        const std::string other = asBase(spelled(b.lhs->kind == Expr::Kind::This ? *b.rhs : *b.lhs, "other"));
+        diags_.error(b.loc, "`" + left + " " + sym + " " + right + "` here runs this `operator==` again, which would never end",
+                     "write `same_object(this, " + other + ")` to ask whether they are the same object, or compare their fields", spec::OperatorOverloading);
+        result = Type::boolTy();
+        return true;
+    }
     b.overload = f;
     b.negated = b.op == BinOp::Ne;
     b.operandType = l;
@@ -7282,6 +7295,39 @@ bool Sema::checkOperatorAssign(AssignExpr& a, const Type* t, Flow& flow) {
     a.overload = f;
     useOperator(*f, operands, a.loc, flow, a.path, target + " " + sym + "= " + value);
     return true;
+}
+
+// `same_object(a, b)`: whether two class references refer to one object, which `==` says only of a class without an
+// `operator==` of its own. As `===` in JavaScript, and `==` of two `shared_ptr` in C++.
+const Type* Sema::checkSameObject(CallExpr& call, Flow& flow) {
+    call.builtin = Builtin::SameObject;
+    for (auto& a : call.args) checkExpr(*a, flow);
+    if (call.args.size() != 2) {
+        diags_.error(call.loc, "same_object() takes two class references, but " + std::to_string(call.args.size()) + (call.args.size() == 1 ? " was" : " were") + " given",
+                     "write `same_object(a, b)`", spec::Classes);
+        return Type::boolTy();
+    }
+    const Type* l = call.args[0]->type;
+    const Type* r = call.args[1]->type;
+    bool ok = true;
+    for (const Expr* side : {call.args[0].get(), call.args[1].get()}) {
+        const Type* t = side->type;
+        const Type* object = t->isOptional() ? t->elem : t;
+        if (t->isError() || object->isClass()) continue;
+        ok = false;
+        diags_.error(side->loc, "same_object() takes references to class objects, but this is " + q(t),
+                     object->isStruct() ? std::string("compare it with `==`: a struct is a value, which is never the same object as another")
+                     : object->isUnique() || object->isLocal() || object->isWeak() ? std::string("compare it with `==`, which tells whether it is the same object")
+                                                                                   : std::string("pass a class object, or compare with `==`"),
+                     spec::Classes);
+        break;  // once is enough
+    }
+    if (!ok || l->isError() || r->isError()) return Type::boolTy();
+    call.compared = l == r ? l : commonReference(l, r);
+    if (!call.compared)
+        diags_.error(call.loc, "same_object() compares references to related classes, but " + q(l) + " and " + q(r) + " are not",
+                     "remove the test: an object of one of them is never one of the other", spec::Classes);
+    return Type::boolTy();
 }
 
 // Whether two values of the type can be ordered with `<`: the language's own, or an `operator<` of the program that gives a

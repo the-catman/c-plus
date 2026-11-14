@@ -2949,7 +2949,12 @@ struct Codegen::Impl {
     // A number for a word, which depends on the seed each run of the program starts with: see cplus_start.
     llvm::Value* genEquals(llvm::Value* l, llvm::Value* r, const Type* t) {
         switch (t->kind) {
-            case K::Bool: case K::Int: case K::Long: case K::Char: case K::Class: case K::Pointer: case K::Unique: case K::Local:
+            case K::Class:
+                if (const FuncDecl* own = t->decl->ownEquals)  // the class's own `==`, or one it inherits
+                    return genOperatorCall(*own, {&given(l, t, own->nameLoc), &given(r, t, own->nameLoc)}, false,
+                                           own->role == FuncDecl::Role::Method ? t->decl->pathTo(own->owner) : BasePath{}, own->nameLoc);
+                return b.CreateICmpEQ(l, r);  // the same object
+            case K::Bool: case K::Int: case K::Long: case K::Char: case K::Pointer: case K::Unique: case K::Local:
             case K::UInt8: case K::UInt16: case K::UInt32: case K::UInt64: case K::CFunction:
                 return b.CreateICmpEQ(l, r);
             case K::Float: case K::Double: return b.CreateFCmpOEQ(l, r);
@@ -2976,6 +2981,24 @@ struct Codegen::Impl {
             case K::Optional: {
                 // Both null, or both holding equal values. An empty optional holds zero
                 // bytes, which compare safely.
+                if (t->elem->isClass() && t->elem->decl->ownEquals) {  // both null, or both there and equal by the class's `==`
+                    llvm::Value* hl = b.CreateIsNotNull(l);
+                    llvm::Value* hr = b.CreateIsNotNull(r);
+                    llvm::Value* sameEmptiness = b.CreateICmpEQ(hl, hr);
+                    llvm::BasicBlock* from = b.GetInsertBlock();
+                    auto* bothBB = llvm::BasicBlock::Create(ctx, "equals.both", fn);
+                    auto* endBB = llvm::BasicBlock::Create(ctx, "equals.end", fn);
+                    b.CreateCondBr(b.CreateAnd(hl, hr), bothBB, endBB);
+                    b.SetInsertPoint(bothBB);
+                    llvm::Value* same = genEquals(l, r, t->elem);
+                    llvm::BasicBlock* bothEnd = b.GetInsertBlock();
+                    b.CreateBr(endBB);
+                    b.SetInsertPoint(endBB);
+                    llvm::PHINode* phi = b.CreatePHI(b.getInt1Ty(), 2);
+                    phi->addIncoming(sameEmptiness, from);
+                    phi->addIncoming(same, bothEnd);
+                    return phi;
+                }
                 if (t->elem->isObjectRef()) return b.CreateICmpEQ(l, r);
                 llvm::Value* hl = hasValue(l, t);
                 llvm::Value* same = genEquals(valueOf(l, t), valueOf(r, t), t->elem);
@@ -3586,6 +3609,11 @@ struct Codegen::Impl {
             b.CreateStore(y, l);
             b.CreateStore(x, r);
             return nullptr;
+        }
+        if (call.builtin == Builtin::SameObject) {  // `same_object(a, b)`: the same address, once both are seen as one class
+            llvm::Value* l = genConverted(*call.args[0], call.compared);
+            llvm::Value* r = genConverted(*call.args[1], call.compared);
+            return b.CreateICmpEQ(l, r, "same");
         }
         if (call.builtin == Builtin::SameBuffer) {  // whether two vectors or strings share their buffer: see Builtins.h
             const Expr& x = *call.args[0];
@@ -4401,8 +4429,8 @@ struct Codegen::Impl {
         std::vector<size_t> into;  // the argument each of `specs` gives
         if (member) {
             const Expr& self = *sides[0];
-            if (self.type->isClass()) {
-                args[0] = atOffset(gen(self), pathOffset(path));
+            if (self.type->isClass()) {  // a value that was given is held by whoever gave it, as in the helpers that compare
+                args[0] = atOffset(isGiven(self) ? optValues.at(static_cast<const OptValueExpr*>(&self)) : gen(self), pathOffset(path));
             } else if (isGiven(self)) {
                 args[0] = givenAddress(self);
             } else if (isPlace(self)) {  // found after the other side, as for a method (see genMethodCall)
@@ -5466,6 +5494,24 @@ struct Codegen::Impl {
                 storeVtables(thisPtr, *f.owner);
             }
             genFieldInits(f);
+        }
+        if (f.isDefaulted) {  // `bool operator==(const C&) const = default;`: the fields in order, those of the base classes first
+            std::function<llvm::Value*(const StructDecl&, llvm::Value*, llvm::Value*)> fieldsEqual = [&](const StructDecl& sd, llvm::Value* l, llvm::Value* r) {
+                llvm::Value* all = b.getTrue();
+                for (const StructDecl* base : sd.bases) {
+                    const uint64_t at = baseOffset(sd, *base);
+                    all = b.CreateAnd(all, fieldsEqual(*base, atOffset(l, at), atOffset(r, at)));
+                }
+                for (size_t i = 0; i < sd.fields.size(); ++i)
+                    all = b.CreateAnd(all, genEquals(loadField(sd, l, i), loadField(sd, r, i), sd.fields[i].type));
+                return all;
+            };
+            llvm::Value* same = fieldsEqual(*f.owner, thisPtr, fn->getArg(first));
+            releaseScopes(0);
+            b.CreateRet(same);
+            scopes.clear();
+            endLineTable();
+            return;
         }
         genStmt(*f.body);
         if (!b.GetInsertBlock()->getTerminator()) {

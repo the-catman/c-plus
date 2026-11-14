@@ -1,0 +1,85 @@
+// A class's own `==` replaces "the same object" wherever two of them are compared, and same_object(a, b) still asks that.
+class User {
+public:
+    string name;
+    int age = 0;
+    User(string n, int a) : name(n), age(a) {}
+    bool operator==(const User& other) const { return name == other.name; }
+};
+// It is inherited, and can be virtual.
+class Animal {
+public:
+    string name;
+    Animal(string n) : name(n) {}
+    virtual bool operator==(const Animal& other) const { return name == other.name; }
+};
+class Dog : public Animal {
+public:
+    int tricks = 0;
+    Dog(string n, int t) : Animal(n), tricks(t) {}
+    bool operator==(const Animal& other) const override {
+        if (auto d = dynamic_cast<Dog?>(other)) return name == d.name && tricks == d.tricks;
+        return false;
+    }
+};
+class Cat : public Animal {
+public:
+    Cat(string n) : Animal(n) {}
+};
+// `= default` compares the fields, those of the base classes first, as in C++20.
+class Shape {
+public:
+    string kind;
+    Shape(string k) : kind(k) {}
+};
+class Box : public Shape {
+public:
+    int w = 0;
+    int h = 0;
+    Box(int a, int b) : Shape("box"), w(a), h(b) {}
+    bool operator==(const Box&) const = default;
+};
+struct Team {
+    string title;
+    User lead;
+};
+// One outside the class, which also does.
+class Key {
+public:
+    string text;
+    Key(string t) : text(t) {}
+};
+bool operator==(const Key& a, const Key& b) { return a.text.size() == b.text.size(); }
+// A class without one is still the same object or not.
+class Plain {
+public:
+    int x = 0;
+};
+int main() {
+    User a = User("Ada", 36);
+    User b = User("Ada", 99);
+    User c = a;
+    println("{} {} {} {}", a == b, a != b, same_object(a, b), same_object(a, c));  // expect: true false false true
+    vector<User> users = {a};
+    println("{} {} {}", contains(users, b), vector<User>{b} == users, index_of(users, User("Ada", 1)) ?? -1);  // expect: true true 0
+    User? maybe = b;
+    User? none = null;
+    println("{} {} {} {}", maybe == a, none == a, none == null, same_object(maybe, a));  // expect: true false true false
+    println("{}", Team{"t", a} == Team{"t", b});  // expect: true
+
+    Animal rex = Dog("rex", 2);
+    Animal rex2 = Dog("rex", 3);
+    Animal tom = Cat("rex");
+    println("{} {} {} {}", rex == rex2, tom == Animal("rex"), rex == tom, rex == Dog("rex", 2));  // expect: false true false true
+    vector<Cat> cats = {Cat("x")};
+    println("{}", contains(cats, Cat("x")));  // expect: true
+    Dog fido = Dog("fido", 1);
+    Animal same = fido;
+    println("{} {}", same_object(fido, same), same_object(tom, same));  // expect: true false
+
+    println("{} {} {}", Box(1, 2) == Box(1, 2), Box(1, 2) != Box(2, 1), vector<Box>{Box(3, 4)} == vector<Box>{Box(3, 4)});  // expect: true true true
+    println("{} {}", Key("ab") == Key("cd"), contains(vector<Key>{Key("x")}, Key("y")));  // expect: true true
+    Plain p = Plain();
+    println("{} {}", p == Plain(), p == p);  // expect: false true
+    return 0;
+}

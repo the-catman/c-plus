@@ -59,8 +59,8 @@ void stdAsync() {
 class S { public: void f() {}; };
 // error: remove this ';': the `}` of a method needs none
 class Point { public: int x = 0; };
-bool operator==(Point a, Point b) { return true; }
-// error: this compiler does not support `operator==` for a class yet
+bool operator!=(Point a, Point b) { return true; }
+// error: C+ makes `!=` from `==`, so `operator!=` cannot be written
 extern "C" { struct WithShort { unsigned short d; }; }
 // error: write `uint16_t`, which has the same size
 void pointersOfSmallTypes() {

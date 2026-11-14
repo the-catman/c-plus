@@ -615,8 +615,11 @@ println("{}", a);              // User {name: "Alice", age: 31}
   error.
 - `a == b` is true when `a` and `b` refer to the same object, like `===` on objects in
   JavaScript or `==` on `shared_ptr` in C++. Two objects with equal fields are still two
-  objects, so `User("Ann") == User("Ann")` is false. To compare contents, compare the
-  fields. A class's own `operator==` is not supported yet (see [Operator overloading](#operator-overloading)).
+  objects, so `User("Ann") == User("Ann")` is false. A class can say otherwise with an
+  `operator==` of its own, which every comparison of two of them then uses (see
+  [Operator overloading](#operator-overloading)). `same_object(a, b)` always tells whether
+  two references are to one object; it takes references of related classes, or optionals
+  of them.
 
 ### Inheritance
 
@@ -2577,6 +2580,11 @@ a += b;               // a = a + b
   takes the number on the left. `bool operator==(const Vec&) const = default;` is allowed, and does what C+ does anyway. A
   struct with its own `==` cannot be a [hashmap](#hash-maps) key, as a hash made from its fields could tell apart two
   values that its `==` calls equal.
+- **A class's own `==`** replaces "the same object" in the same way, for the class and those that derive from it, and so
+  is not a key either. It can be `virtual`, and `bool operator==(const Box&) const = default;` compares the fields, those
+  of the base classes first, as in C++20. `same_object(a, b)` still says whether two references are to one object, and is
+  what an `operator==` writes for that, as `this == other` there would run it again. `unique`, `local` and `weak`
+  references compare as the same object.
 - **Orderings.** `<`, `>`, `<=` and `>=` are each only themselves: as in C++, `a > b` with only an `operator<` is an error,
   whose help writes it the other way round. `sort`, `min`, `max` and `binary_search` use `<`, and a type with an `operator<`
   is `Comparable` (see [Constraints](#constraints)).
@@ -2585,12 +2593,11 @@ a += b;               // a = a + b
   `try (f / f)`. As in Swift, `try f / f` puts `try` on its left side alone.
 - **`a += b`** runs `a = a + b`, for every operator that has a compound assignment, with the place of `a` found once,
   after `b`, as for numbers. C++ needs `operator+=` written as well.
-- **In a class**, an operator is a method: it is inherited and can be `virtual`. `==` of two class references tells whether
-  they are the same object, as before.
+- **In a class**, an operator is a method: it is inherited and can be `virtual`.
 - The sides are worked out left to right, as for the language's own operators, even when `100 == m` runs `m == 100`.
 - **Not supported yet:** `operator<=>`, writing a compound assignment such as `operator+=`, `operator[]`, `operator()`,
-  `operator++`, `operator--`, a unary `*`, `operator->`, explicit conversion operators, operators on enums, a class's own
-  `operator==`, and generic operators outside a type.
+  `operator++`, `operator--`, a unary `*`, `operator->`, explicit conversion operators, operators on enums, and generic
+  operators outside a type.
 - **Never:** `operator=`, as a struct is copied field by field and a class object is shared; `operator!=`; `operator&&`,
   `operator||` and `operator,`, which decide what runs; `operator!` and `operator bool`, as a struct or a class is never a
   condition; other conversions, as nothing converts to or from a struct or a class by itself; a unary `&`, which always
@@ -3905,8 +3912,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |
 | `final`, covariant return types, private and protected base classes | planned |
-| Operator overloading: `+ - * / % & \| ^ << >>`, unary `-` `+` `~`, `==`, `<` `>` `<=` `>=`, members and free operators, `a += b` from `+` | implemented |
-| `operator<=>`, written compound assignments, `operator[]`, `operator()`, `operator++`, a unary `*`, `operator->`, conversion operators, operators on enums, a class's own `operator==`, generic operators outside a type | planned |
+| Operator overloading: `+ - * / % & \| ^ << >>`, unary `-` `+` `~`, `==` of structs and classes, `<` `>` `<=` `>=`, members and free operators, `a += b` from `+`, `same_object(a, b)` | implemented |
+| `operator<=>`, written compound assignments, `operator[]`, `operator()`, `operator++`, a unary `*`, `operator->`, conversion operators, operators on enums, generic operators outside a type | planned |
 | Destructors for structs, static members | planned |
 | `weak<T>` references: `lock`, `expired`, `reset` | implemented |
 | Errors: `throws`, `throw`, `try f()`, `try { } catch (E e) { }`, `catch (...)`, `throw;`, `Error`, `int main() throws` | implemented |

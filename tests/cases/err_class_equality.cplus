@@ -1,0 +1,42 @@
+// Mistakes with a class's own `==` and with same_object.
+class User {
+public:
+    string name;
+    User(string n) : name(n) {}
+    bool operator==(const User& other) const { return this == other; }
+};
+class Account {
+public:
+    string id;
+    Account(string i) : id(i) {}
+};
+class Button {
+public:
+    function<void()> onClick;
+    Button(function<void()> f) : onClick(f) {}
+    bool operator==(const Button&) const = default;
+};
+struct Point {
+    int x = 0;
+};
+int main() {
+    User u = User("a");
+    Account a = Account("b");
+    Point p = Point{};
+    println("{}", same_object(u));
+    println("{}", same_object(p, p));
+    println("{}", same_object(u, a));
+    hashmap<User, int> seen;
+    return 0;
+}
+// error: `this == other` here runs this `operator==` again, which would never end
+// error: write `same_object(this, other)` to ask whether they are the same object, or compare their fields
+// error: `= default` cannot compare the fields of 'Button', as 'onClick' holds a function, which cannot be compared
+// error: write the body, comparing the fields that can be compared
+// error: same_object() takes two class references, but 1 was given
+// error: write `same_object(a, b)`
+// error: same_object() takes references to class objects, but this is 'Point'
+// error: compare it with `==`: a struct is a value, which is never the same object as another
+// error: same_object() compares references to related classes, but 'User' and 'Account' are not
+// error: remove the test: an object of one of them is never one of the other
+// error: use another type for the key: 'User' has its own `==`

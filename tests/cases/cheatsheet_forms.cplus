@@ -284,6 +284,17 @@ void numberForms() {
     // expect: no line, one line
 }
 
+class Same {
+public:
+    int x = 0;
+};
+void sameObjectForms() {
+    Same a = Same();
+    Same b = a;
+    println("{} {}", same_object(a, b), same_object(a, Same()));
+    // expect: true false
+}
+
 void optionalForms() {
     int? number = 1;
     int x = 2;
@@ -328,6 +339,7 @@ int main() throws {
     try jsonForms();
     reflectForms();
     numberForms();
+    sameObjectForms();
     optionalForms();
     pointerForms();
     memoryForms();

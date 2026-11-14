@@ -17,7 +17,7 @@ M operator/(M a, M b, M c) { return a; }
 enum class Color { Red, Green };
 Color operator+(Color a, int b) { return a; }
 class Animal { public: string name = "a"; };
-bool operator==(const Animal& a, const Animal& b) { return true; }
+Animal operator+(Animal a, Animal b, Animal c) { return a; }
 int main() {
     return 0;
 }
@@ -46,4 +46,5 @@ int main() {
 // error: give it the left and the right side: `M operator/(const M& a, const M& b)`
 // error: this compiler does not support operators on enums yet
 // error: write a function with a name, such as `Color next(Color c)`
-// error: this compiler does not support `operator==` for a class yet
+// error: `operator+` takes two sides, but this one takes 3
+// error: give it the left and the right side: `Animal operator+(const Animal& a, const Animal& b)`

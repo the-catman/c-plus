@@ -495,7 +495,7 @@ struct IncDecExpr : Expr {
         : Expr(Kind::IncDec, l), increment(inc), prefix(pre), target(std::move(t)) {}
 };
 
-enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill, StringBytes, Move, Hash, SameBuffer, Swap };
+enum class Builtin { None, Print, Println, Format, ToString, Math, CharFn, StringFill, StringBytes, Move, Hash, SameBuffer, Swap, SameObject };
 
 // The math functions of C++'s <cmath>, and abs, min and max.
 enum class MathFn {
@@ -586,6 +586,7 @@ struct CallExpr : Expr {
     const Type* uniqueType = nullptr;        // `unique<Node>(args)`, which builds a new Node
     Builtin builtin = Builtin::None;       // set by Sema for built-ins
     const Type* vectorType = nullptr;      // `vector<int>(n)` or `vector<int>(n, value)`
+    const Type* compared = nullptr;        // `same_object(a, b)`: the class reference both are converted to
     std::vector<std::string> formatPieces;  // print, println, format, to_string: literal text around each {}
     std::vector<FormatSpec> formatSpecs;    // one for each {}
     MathFn math{};                          // for Builtin::Math
@@ -934,6 +935,7 @@ struct FuncDecl {
     bool isVirtual = false;       // marked `virtual`, or overriding a virtual method
     bool isOverride = false;      // marked `override`
     bool isPure = false;          // `virtual int f() = 0;`, which has no body
+    bool isDefaulted = false;     // a class's `bool operator==(const C&) const = default;`, whose body Codegen makes
     bool isThrows = false;        // `int f() throws`
     bool isConstexpr = false;     // `constexpr int f()`, which can run while compiling
     bool isAsync = false;         // `async int f()`: a call gives a `Task<int>`, and the body returns an int

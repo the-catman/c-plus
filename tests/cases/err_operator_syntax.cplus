@@ -12,7 +12,7 @@ struct J { int x = 0; explicit operator int() const { return x; } };
 struct K { int x = 0; friend K operator*(int k, K v) { return v; } };
 struct L { int x = 0; operator+(const L& o) const { return o; } };
 struct M { int x = 0; bool operator<(const M& o) const = default; };
-class N { public: int x = 0; bool operator==(const N&) const = default; };
+class N { public: int x = 0; bool operator==(int k) const = default; };
 struct O { int x = 0; bool operator==(int k) const = default; };
 struct P { int x = 0; };
 ostream& operator<<(ostream& os, const P& p) { return os; }
@@ -50,7 +50,7 @@ int main() {
 // error: write it first, as in `L operator+(...) const`
 // error: only `operator==` can be `= default` in C+
 // error: write the body of the method, or remove it
-// error: this compiler does not support `operator==` for a class yet
+// error: `= default` compares two values of the type field by field, so this `operator==` takes another 'N'
 // error: `= default` compares two values of the type field by field, so this `operator==` takes another 'O'
 // error: make its parameter `const O& other`
 // error: C+ has no streams, so this `operator<<` has nothing to write to

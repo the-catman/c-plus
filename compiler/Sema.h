@@ -229,6 +229,7 @@ private:
     void reportOperatorChoice(const std::string& name, const std::vector<FuncDecl*>& candidates, const std::vector<FuncDecl*>& tied,
                               const std::vector<const Type*>& sides, Loc loc);
     bool hasOrdering(const Type* t);
+    const Type* checkSameObject(CallExpr& call, Flow& flow);
     // One value given when building a struct or class: `Type(args)` or a `{ }` list.
     struct ConstructArg {
         std::string designator;  // field name for `.x = value`, empty for positional

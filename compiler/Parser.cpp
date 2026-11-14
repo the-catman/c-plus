@@ -4064,17 +4064,16 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         if (check(Tok::Assign) && peek(1).kind == Tok::KwDefault) {  // `bool operator==(const P&) const = default;`, as C++20 has it
             if (method->name != "operator==")
                 fail(peek(1).loc, "only `operator==` can be `= default` in C+", "write the body of the method, or remove it", spec::OperatorOverloading);
-            if (sd.isClass)
-                notYet(method->nameLoc, "`operator==` for a class",
-                       "`==` of two class references tells whether they are the same object. To compare what is in them, write a method, such as `bool equals(const " +
-                           sd.name + "& other) const`");
             if (method->params.size() != 1 || method->params[0]->declType != &sd.type)
                 fail(method->nameLoc, "`= default` compares two values of the type field by field, so this `operator==` takes another " + std::string("'") + sd.name + "'",
                      "make its parameter `const " + sd.name + "& other`", spec::OperatorOverloading);
             advance();
             advance();
             expect(Tok::Semi, "after `= default`");
-            return;  // nothing to add: a struct compares field by field already
+            if (!sd.isClass) return;  // nothing to add: a struct compares field by field already
+            method->isDefaulted = true;  // a class then compares its fields, as C++20 does, where `==` was the same object
+            sd.methods.push_back(std::move(method));
+            return;
         }
         if (match(Tok::Assign)) {  // `= 0`: no body, and a class that derives must write one
             if (peek().kind != Tok::IntLit || peek().intValue != 0)
