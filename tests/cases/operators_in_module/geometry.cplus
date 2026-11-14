@@ -1,0 +1,11 @@
+export struct Vec {
+    double x = 0;
+    double y = 0;
+    Vec operator+(const Vec& o) const { return Vec{x + o.x, y + o.y}; }
+};
+
+// An operator goes with the types it takes, and works wherever they are used, with or without `export`.
+Vec operator*(double k, const Vec& v) { return Vec{k * v.x, k * v.y}; }
+export bool operator<(const Vec& a, const Vec& b) { return a.x < b.x; }
+
+export Vec twice(Vec v) { return 2 * v; }

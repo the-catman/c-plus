@@ -79,6 +79,7 @@ long square(long n) { return n * n; }
 | Enums | `enum class Color { Red, Green, Blue };`, `enum class Big : long { Far = 5000000000 };`, then `Color c = Color::Green;`. Nothing converts by itself: `int(c)` is its number, and `Color(n)` **stops the program** unless `n` is the value of one. `==` and `<` on one enum. `println("{}", c)` prints `Green`. A hashmap key; JSON writes the name |
 | Switch | `switch (n) { case 1: println("one"); break; case 2: case 3: n++; break; default: n = 0; }` on an integer, `char`, enum or `string`, as in C++. A case that would run into the next is an error: end it with `break;`, or with `[[fallthrough]];` when that is meant. Without `default:`, a switch on an enum needs a case for each enumerator |
 | Operators | all C++ arithmetic, comparison and bit operators, `&&` `\|\|` `!`, compound assignment, `++`/`--`. `%` and bit operators take integers only |
+| Operator overloading | as in C++: `Vec operator+(const Vec& other) const { ... }` in the type, with `this` on the left, and `Vec operator*(double k, const Vec& v) { ... }` outside it, in the same file. `+ - * / % & \| ^ << >>`, unary `- + ~`, `==`, `< > <= >=`. A struct's own `bool operator==(const Money& other) const` is what vectors, `contains` and the rest use. `!=` comes from `==`, and `a += b` from `+` |
 | Equality | `==` `!=` on any two values of one type: strings by contents, structs field by field (automatic), vectors and arrays element by element, objects by identity. `opt == 3`, `opt == null` |
 | Variables | `const`, `auto`, `int a = 1, b = 2;`, block scope, shadowing in inner blocks |
 | Overflow | integers **wrap**, as two's complement: `2147483647 + 1` is `-2147483648`, and a shift uses the lowest 5 bits of its amount (6 for a `long`). `checked(a * b)` **stops the program** on overflow instead, as does all of a function marked `[[checked]]`, or a file starting with `[[checked]];`. `unchecked(...)` wraps inside them. `/0` always stops |
@@ -206,7 +207,8 @@ long square(long n) { return n * n; }
 | `struct Node { Node next; }`, `Node? next` in a struct | a struct cannot hold itself, not even as an optional. Use `class Node { Node? next; };`, or a pointer, `Node* next = null;` |
 | `const User u` freezes the object | `const` only stops `u` from referring to another object |
 | `u1 == u2` compares two objects' fields | it is true only for the same object, like `===` in JS. Compare fields instead |
-| `bool operator==(...) = default` | not needed: every struct already has `==` |
+| `bool operator==(...) = default` | allowed, and not needed: every struct already has `==` |
+| `bool operator!=(...)`, `T& operator=(...)`, `friend T operator*(...)` | error: `!=` comes from `==`, a struct copies field by field, and an operator outside the type takes both sides |
 | several constructors | as in C++, chosen as overloads are, and one can hand its work to another in its list, as in C++. There are no copy constructors: a struct copies field by field, and a class object is shared |
 | `auto p = {1, 2};` | `auto p = Point{1, 2};`, since a bare `{ }` needs a known type |
 | `int n = v.size();`, `size_t n = v.size();` | error: `size()` is a `long`, as every size is in C+. Write `long n` or `auto n`; `i < v.size()` with an `int i` is fine |
@@ -259,7 +261,7 @@ long square(long n) { return n * n; }
 | Feature | C+ form |
 |---------|---------|
 | Classes | `final`, covariant return types, private and protected base classes |
-| Operators | operator overloading with C++ syntax, after function overloading |
+| Operators | `operator<=>`, `operator[]`, `operator()`, writing `operator+=`, `operator++`, conversion operators, operators on enums, a class's own `operator==` |
 | Generics | default template arguments, `requires` clauses, generic methods, `Stack(1)` working out its arguments, type aliases inside a function or a type |
 | Modules | `export { ... }` around several declarations, `export import`, `export extern "C"`, aliases such as `namespace srv = net::server;` |
 | HTTP | a body in pieces instead of all at once; keeping cookies; async WebSockets |

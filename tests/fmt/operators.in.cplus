@@ -1,0 +1,19 @@
+struct Vec {
+    double x = 0;
+    double y = 0;
+    Vec operator + (const Vec& o) const { return Vec{x + o.x}; }
+    bool operator<(const Vec& o) const { return x < o.x; }
+    bool operator <= (const Vec& o) const { return x <= o.x; }
+    Vec operator-() const { return Vec{-x}; }
+    Vec operator*(double k) const { return Vec{x*k}; }
+    Vec scaled(double k) const { return Vec{x * k, x * k}; }
+    bool operator==(const Vec&) const = default;
+    Vec operator>>(int n) const { return this; }
+};
+Vec operator*(double k,const Vec& v) { return Vec{k*v.x}; }
+int main() {
+    Vec a=Vec{1};
+    a+=a;
+    println("{}", a<a);
+    return 0;
+}

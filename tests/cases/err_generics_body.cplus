@@ -58,7 +58,7 @@ int main() {
     Contains<int>* c = null;
     return 0;
 }
-// error: '<' cannot be used with 'Point'
+// error: 'Point' has no `<`
 // error: in 'largest<Point>', which is used here
 // error: 'int' has no methods, so '.size()' cannot be used
 // error: in 'Box<int>', which is used here

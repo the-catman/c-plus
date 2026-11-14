@@ -436,8 +436,15 @@ static bool hasFailingCall(const Expr& e) {
         }
         case Expr::Kind::Member: return hasFailingCall(*static_cast<const MemberExpr&>(e).base);
         case Expr::Kind::Index: return hasFailingCall(*static_cast<const IndexExpr&>(e).base) || hasFailingCall(*static_cast<const IndexExpr&>(e).index);
-        case Expr::Kind::Unary: return hasFailingCall(*static_cast<const UnaryExpr&>(e).operand);
-        case Expr::Kind::Binary: return hasFailingCall(*static_cast<const BinaryExpr&>(e).lhs) || hasFailingCall(*static_cast<const BinaryExpr&>(e).rhs);
+        case Expr::Kind::Unary: {
+            auto& u = static_cast<const UnaryExpr&>(e);
+            return (u.overload && u.overload->callFails()) || hasFailingCall(*u.operand);
+        }
+        case Expr::Kind::Binary: {
+            auto& b = static_cast<const BinaryExpr&>(e);
+            return (b.overload && b.overload->callFails()) || hasFailingCall(*b.lhs) || hasFailingCall(*b.rhs);
+        }
+        case Expr::Kind::Assign: return static_cast<const AssignExpr&>(e).overload && static_cast<const AssignExpr&>(e).overload->callFails();
         case Expr::Kind::OptChain: return hasFailingCall(*static_cast<const OptChainExpr&>(e).base) || hasFailingCall(*static_cast<const OptChainExpr&>(e).body);
         case Expr::Kind::OptValue: return false;  // the chain's base, already looked at
         case Expr::Kind::Ternary: {
@@ -1458,7 +1465,10 @@ void Sema::check(Program& program) {
 #endif
     adoptTypes();
 
+    for (auto& fn : program.funcs)
+        if (fn->isOperator()) noteOwnEquals(*fn);
     for (auto& fn : program.funcs) {
+        if (fn->isOperator()) checkOperatorDecl(*fn);
         if (isBuiltinFunction(fn->name)) {
             diags_.error(fn->nameLoc, q(fn->name) + " is a built-in function and cannot be redefined",
                          "give your function a different name", spec::Printing);
@@ -1591,6 +1601,9 @@ void Sema::checkNewStructs() {
     size_t first = structsChecked_;
     structsChecked_ = program_->structs.size();
     size_t end = structsChecked_;
+    for (size_t i = first; i < end; ++i)  // before anything asks whether a type can be a key
+        for (auto& m : program_->structs[i]->methods)
+            if (m->role == FuncDecl::Role::Method && m->isOperator()) noteOwnEquals(*m);
     for (size_t i = first; i < end; ++i)
         if (StructDecl& sd = *program_->structs[i]; sd.defined && sd.templateOf)
             sd.constraintFailed = !checkConstraints(const_cast<TemplateDecl&>(*sd.templateOf), sd.templateArgs, sd.usedAt);
@@ -1668,10 +1681,11 @@ static const Expr* notConstant(const Expr& e) {
         }
         case Expr::Kind::Unary: {
             auto& u = static_cast<const UnaryExpr&>(e);
-            return u.op == UnOp::Deref || u.op == UnOp::AddrOf ? &e : notConstant(*u.operand);
+            return u.op == UnOp::Deref || u.op == UnOp::AddrOf || u.overload ? &e : notConstant(*u.operand);
         }
         case Expr::Kind::Binary: {
             auto& b = static_cast<const BinaryExpr&>(e);
+            if (b.overload) return &e;  // an operator of the program, which runs while the program does
             const Expr* bad = notConstant(*b.lhs);
             return bad ? bad : notConstant(*b.rhs);
         }
@@ -1859,6 +1873,7 @@ void Sema::checkMembers(StructDecl& sd) {
     std::unordered_map<std::string, FuncDecl*> seen;
     for (auto& m : sd.methods) {
         if (m->role != FuncDecl::Role::Method) continue;
+        if (m->isOperator()) checkOperatorDecl(*m);
         if (m->name == sd.name || m->name == sd.templateName) {
             diags_.error(m->nameLoc, q(m->name) + " is the name of its type, which only a constructor can have",
                          "for a constructor, leave out the return type: `" + m->name + "() { ... }`. For a method, give it another name", spec::Classes);
@@ -2513,10 +2528,10 @@ void Sema::putLiteral(VarDecl& v, const ConstValue& value) {
 static bool callsFunction(const Expr& e) {
     switch (e.kind) {
         case Expr::Kind::Call: return true;
-        case Expr::Kind::Unary: return callsFunction(*static_cast<const UnaryExpr&>(e).operand);
+        case Expr::Kind::Unary: return static_cast<const UnaryExpr&>(e).overload || callsFunction(*static_cast<const UnaryExpr&>(e).operand);
         case Expr::Kind::Binary: {
             auto& b = static_cast<const BinaryExpr&>(e);
-            return callsFunction(*b.lhs) || callsFunction(*b.rhs);
+            return b.overload || callsFunction(*b.lhs) || callsFunction(*b.rhs);
         }
         case Expr::Kind::Ternary: {
             auto& t = static_cast<const TernaryExpr&>(e);
@@ -5416,6 +5431,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 result = Type::boolTy();
             } else {
                 const char* sym = u.op == UnOp::Neg ? "-" : u.op == UnOp::Plus ? "+" : "~";
+                if (checkUnaryOperator(u, t, flow, result)) break;
                 t = promoted(t);  // `-c` and `+c` are ints, as in C++
                 if (u.op == UnOp::BitNot ? !t->isInteger() : !t->isNumber()) {
                     diags_.error(u.operand->loc,
@@ -5455,6 +5471,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 if (comparison) result = Type::boolTy();
                 break;
             }
+            if (checkOperatorUse(b, l, r, flow, result)) break;  // an operator of the program, for a struct or a class
             bool equality = b.op == BinOp::Eq || b.op == BinOp::Ne;
             auto isFn = [](const Type* t) { return t->isFunction() || (t->isOptional() && t->elem->isFunction()); };
             if ((l->isCFunction() && isFn(r)) || (r->isCFunction() && isFn(l))) {  // `old == onSignal`: the function's code, as C has it
@@ -5661,7 +5678,9 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 checkLooseValue(*a.value, flow);
                 std::string opName = std::string("'") + binOpSpelling(*a.op) + "='";
                 const Type* vt = a.value->type;
-                if (t->is(K::String) && *a.op == BinOp::Add) {
+                if (checkOperatorAssign(a, t, flow)) {
+                    // `p += q`, with the `operator+` of the program
+                } else if (t->is(K::String) && *a.op == BinOp::Add) {
                     if (!vt->isError() && !vt->is(K::String) && !vt->is(K::Char))
                         diags_.error(a.value->loc, "'+=' on a string adds a string or a char, but this is " + q(vt),
                                      fromCharArithmetic(*a.value) && !spelled(*a.value, "").empty()
@@ -6738,6 +6757,33 @@ void Sema::checkOverloadPair(const FuncDecl& first, const FuncDecl& second, bool
     diags_.note(first.nameLoc, "the other one is here");
 }
 
+// How well an argument fits a parameter, as the rank and the depth of a Fit.
+std::optional<std::pair<int, int>> Sema::argumentFit(const Expr& arg, const VarDecl& param) {
+    const Type* to = param.declType;
+    const bool changes = param.isRef && !param.isConst;
+    if (typelessList(arg)) {  // `{1, 2}`, which builds what the parameter is
+        const Type* t = to->isOptional() ? to->elem : to;
+        if (changes || !(t->hasFields() || t->isVector() || t->isArray())) return std::nullopt;
+        return std::pair{2, 0};
+    }
+    const Type* from = arg.type;
+    if (changes) {
+        if (from != to || !isPlaceKind(arg) || isReadOnlyPlace(arg)) return std::nullopt;
+        return std::pair{0, 0};
+    }
+    if (from == to) return std::pair{0, 1};
+    // Widening, which loses nothing: a `char` fits an `int` better than a `long`, as in C++.
+    if ((from->is(K::Int) && to->is(K::Long)) || (from->is(K::Char) && to->is(K::Int)) || (from->is(K::Float) && to->is(K::Double)))
+        return std::pair{1, 0};
+    if (from->is(K::Char) && to->is(K::Long)) return std::pair{1, 1};
+    if (to->is(K::Float) && isDoubleConstant(arg)) return std::pair{2, 0};  // `f(1.5)`, as `float f = 1.5;`
+    if (!canConvert(from, to) && !fitsUnsigned(arg, to->isOptional() ? to->elem : to)) return std::nullopt;  // `f(5)` fits a uint32_t
+    const Type* target = to->isOptional() ? to->elem : to;
+    const Type* source = from->isOptional() ? from->elem : from;
+    int depth = source->isClass() && target->isClass() ? std::max(0, baseDistance(source->decl, target->decl)) : 0;
+    return std::pair{2, depth};
+}
+
 // The function of a name that a call's arguments fit best (see Fit), or null after an error that says why there is none.
 // `calledAs` is the call as written up to its arguments, as `describe` or `p.scale`, and `owner` the type of a method's.
 FuncDecl* Sema::chooseOverload(const std::string& name, const std::string& calledAs, const StructDecl* owner, const std::vector<FuncDecl*>& candidates,
@@ -6748,29 +6794,9 @@ FuncDecl* Sema::chooseOverload(const std::string& name, const std::string& calle
     const bool ctor = !candidates.empty() && candidates[0]->role == FuncDecl::Role::Constructor;
     auto sig = [&](const FuncDecl& f) { return ctor ? signature(f).substr(f.owner->name.size() + 1) : signature(f); };  // `Point(int x)`
     auto fitOf = [&](const Expr& arg, const VarDecl& param) -> std::optional<Fit> {
-        const Type* to = param.declType;
-        const bool changes = param.isRef && !param.isConst;
-        if (typelessList(arg)) {  // `{1, 2}`, which builds what the parameter is
-            const Type* t = to->isOptional() ? to->elem : to;
-            if (changes || !(t->hasFields() || t->isVector() || t->isArray())) return std::nullopt;
-            return Fit{2, 0};
-        }
-        const Type* from = arg.type;
-        if (changes) {
-            if (from != to || !isPlaceKind(arg) || isReadOnlyPlace(arg)) return std::nullopt;
-            return Fit{0, 0};
-        }
-        if (from == to) return Fit{0, 1};
-        // Widening, which loses nothing: a `char` fits an `int` better than a `long`, as in C++.
-        if ((from->is(K::Int) && to->is(K::Long)) || (from->is(K::Char) && to->is(K::Int)) || (from->is(K::Float) && to->is(K::Double)))
-            return Fit{1, 0};
-        if (from->is(K::Char) && to->is(K::Long)) return Fit{1, 1};
-        if (to->is(K::Float) && isDoubleConstant(arg)) return Fit{2, 0};  // `f(1.5)`, as `float f = 1.5;`
-        if (!canConvert(from, to) && !fitsUnsigned(arg, to->isOptional() ? to->elem : to)) return std::nullopt;  // `f(5)` fits a uint32_t
-        const Type* target = to->isOptional() ? to->elem : to;
-        const Type* source = from->isOptional() ? from->elem : from;
-        int depth = source->isClass() && target->isClass() ? std::max(0, baseDistance(source->decl, target->decl)) : 0;
-        return Fit{2, depth};
+        auto fit = argumentFit(arg, param);
+        if (!fit) return std::nullopt;
+        return Fit{fit->first, fit->second};
     };
     std::vector<std::pair<FuncDecl*, std::vector<Fit>>> fitting;
     for (FuncDecl* f : candidates) {
@@ -6863,6 +6889,412 @@ void Sema::checkChosenArgs(const std::vector<Expr*>& args, const FuncDecl& fn, F
         boundByRef_ = bound;
         if (p.isRef && !p.isConst) checkRefBinding(a, p.declType, "parameter " + q(p.name) + " of " + of);
     }
+}
+
+// ---- Operator overloading --------------------------------------------------
+//
+// `a + b` where a side is a struct or a class runs an operator of the program: a member of the left side's type, which is
+// then `this`, or a free operator, which takes both sides, chosen among them as overloads are. See "Operator overloading"
+// in docs/SPEC.md.
+
+namespace {
+// Whether the operators of the program apply to a value of this type: a struct or a class, and not one of the language's own.
+bool takesOperators(const Type* t) { return t && (t->isStruct() || t->isClass()) && t->decl && !isHashmap(t) && t->decl->nameLoc.line != 0; }
+// `operator+` for `+`, and `operator==` for `!=`, which runs it.
+std::string operatorName(BinOp op) { return std::string("operator") + (op == BinOp::Ne ? "==" : binOpSpelling(op)); }
+const char* unarySpelling(UnOp op) { return op == UnOp::Neg ? "-" : op == UnOp::Plus ? "+" : "~"; }
+bool isComparisonOperator(const std::string& op) { return op == "==" || op == "<" || op == ">" || op == "<=" || op == ">="; }
+// From a class to one of its bases, by the first way there.
+bool pathTo(const StructDecl* from, const StructDecl* to, BasePath& path) {
+    path.push_back(from);
+    if (from == to) return true;
+    for (const StructDecl* base : from->bases)
+        if (pathTo(base, to, path)) return true;
+    path.pop_back();
+    return false;
+}
+bool beats(const std::vector<Fit>& a, const std::vector<Fit>& b) {
+    bool strictly = false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (fitsBetter(b[i], a[i])) return false;
+        strictly = strictly || fitsBetter(a[i], b[i]);
+    }
+    return strictly;
+}
+// How an operator is declared, for the help: `Point operator+(const Point& other) const`, or with both sides outside a type.
+std::string operatorExample(const std::string& op, const std::string& self, const std::string& right, bool member) {
+    const std::string ret = isComparisonOperator(op) ? "bool" : self;
+    const std::string rightParam = right == "int" || right == "long" || right == "double" || right == "float" || right == "char" || right == "bool"
+                                       ? right + " other" : "const " + right + "& other";
+    if (member) return ret + " operator" + op + "(" + rightParam + ") const";
+    return ret + " operator" + op + "(const " + self + "& a, " + (rightParam == "const " + right + "& other" ? "const " + right + "& b" : right + " b") + ")";
+}
+}  // namespace
+
+// The type's own `==`, which compares two values of it: kept in StructDecl::ownEquals, since sorting out what `==` means
+// for it, here and in vectors, optionals and other structs, starts there. Noted before anything else is checked.
+void Sema::noteOwnEquals(FuncDecl& f) {
+    if (f.name != "operator==") return;
+    StructDecl* type = nullptr;
+    if (f.role == FuncDecl::Role::Method && f.params.size() == 1 && f.params[0]->declType == &f.owner->type) type = f.owner;
+    else if (f.role == FuncDecl::Role::Free && f.params.size() == 2 && f.params[0]->declType == f.params[1]->declType &&
+             takesOperators(f.params[0]->declType))
+        type = const_cast<StructDecl*>(f.params[0]->declType->decl);
+    if (!type || type->isClass || type->ownEquals) return;
+    type->ownEquals = &f;
+    if (f.role == FuncDecl::Role::Method) requestMethod(&f);
+}
+
+// What an operator must be, where it is declared.
+void Sema::checkOperatorDecl(FuncDecl& f) {
+    const bool member = f.role == FuncDecl::Role::Method;
+    const std::string op = f.name.substr(8);
+    const size_t operands = f.params.size() + (member ? 1 : 0);
+    const std::string self = member ? f.owner->name : !f.params.empty() ? std::string(f.params[0]->declType->name) : "Point";
+    const bool unaryToo = op == "-" || op == "+" || op == "~" || op == "*" || op == "&";
+    auto fail = [&](Loc loc, const std::string& message, const std::string& help) { diags_.error(loc, message, help, spec::OperatorOverloading); };
+    if (operands == 1 && (op == "*" || op == "&")) {
+        if (op == "*") fail(f.nameLoc, "this compiler does not support a unary `operator*` yet", "write a method that gives what it leads to, such as `int get() const`");
+        else fail(f.nameLoc, "a unary `operator&` cannot be written, as `&x` always gives the address of x", "remove it");
+        return;
+    }
+    if (member && f.params.size() >= 2) {
+        fail(f.nameLoc, "a member `" + f.name + "` takes the right side alone, as `this` is the left side",
+             "remove the first parameter, and write `" + operatorExample(op, self, self, true) + "`, or write it outside the type, where it takes both sides");
+        return;
+    }
+    if (op == "~" && operands == 2) {
+        fail(f.nameLoc, "`operator~` takes one side", member ? "remove its parameter: `this` is what `~` applies to" : "give it one parameter, the value `~` applies to");
+        return;
+    }
+    if (operands != 2 && !(operands == 1 && unaryToo)) {
+        fail(f.nameLoc, "`" + f.name + "` takes two sides, but this one takes " + std::to_string(operands),
+             member ? "give it the right side as its parameter: `" + operatorExample(op, self, self, true) + "`"
+                    : "give it the left and the right side: `" + operatorExample(op, self, self, false) + "`");
+        return;
+    }
+    if (member && !f.isConst) {
+        fail(f.nameLoc, "an operator only reads its sides, so a member `" + f.name + "` is `const`", "write `const` after its parameters: `" + f.name + "(...) const`");
+        return;
+    }
+    for (auto& p : f.params) {
+        if (p->isRef && !p->isConst) {
+            fail(p->loc, "an operator only reads its sides, so it cannot take a `" + std::string(p->declType->name) + "&`",
+                 "take it by value, or as `const " + std::string(p->declType->name) + "&`");
+            return;
+        }
+        if (p->defaultArg) {
+            fail(p->loc, "the parameters of an operator cannot have default values", "remove the `= ...`");
+            return;
+        }
+    }
+    if (isComparisonOperator(op) && !f.retType->is(K::Bool) && !f.retType->isError()) {
+        fail(f.retTypeLoc, "`" + f.name + "` gives a bool, as it compares", "make its return type `bool`");
+        return;
+    }
+    if (isComparisonOperator(op) && f.isThrows) {
+        fail(f.nameLoc, "`" + f.name + "` cannot be marked `throws`, as sorting and comparing vectors run it where an error has nowhere to go",
+             "remove `throws`, and give an answer for every pair of values");
+        return;
+    }
+    if (f.isAsync) {
+        fail(f.asyncLoc, "an operator cannot be async", "remove `async`");
+        return;
+    }
+    // A free operator takes a struct or a class of the program, and is written in the file of one of them, so that `a + b`
+    // means the same in every file.
+    if (!member) {
+        const Type* typeOfFile = nullptr;
+        const Type* takes = nullptr;
+        bool enumSide = false;
+        for (auto& p : f.params) {
+            const Type* t = p->declType;
+            enumSide = enumSide || t->isEnum();
+            if (!takesOperators(t)) continue;
+            if (!takes) takes = t;
+            if (t->decl->nameLoc.file == f.nameLoc.file) typeOfFile = t;
+        }
+        if (!takes) {
+            if (enumSide) fail(f.nameLoc, "this compiler does not support operators on enums yet", "write a function with a name, such as `Color next(Color c)`");
+            else fail(f.nameLoc, "an operator of the program takes a struct or a class, on at least one side",
+                      "write a function with a name for this, such as `int twice(int x)`: what `" + op + "` does on the language's own types stays as it is");
+            return;
+        }
+        if (!typeOfFile) {
+            fail(f.nameLoc, "`" + f.name + "` is written in the file that declares one of the types it takes, such as " + q(takes),
+                 "move it to the file of " + q(takes) + ", so that `" + op + "` means the same in every file");
+            return;
+        }
+    }
+    if (op == "==") {
+        const StructDecl* cls = member && f.owner->isClass ? f.owner : nullptr;
+        for (auto& p : f.params)
+            if (!cls && p->declType->isClass() && takesOperators(p->declType)) cls = p->declType->decl;
+        if (cls) {
+            fail(f.nameLoc, "this compiler does not support `operator==` for a class yet",
+                 "`==` of two class references tells whether they are the same object. To compare what is in them, write a method, such as `bool equals(const " +
+                     cls->name + "& other) const`");
+            return;
+        }
+    }
+    // A member and a free operator that take the same would fit every use as well as each other.
+    if (!member && takesOperators(f.params[0]->declType)) {
+        for (FuncDecl* m : methodsNamed(*f.params[0]->declType->decl, f.name)) {
+            bool same = m->params.size() + 1 == f.params.size();
+            for (size_t i = 0; same && i < m->params.size(); ++i) same = m->params[i]->declType == f.params[i + 1]->declType;
+            if (!same) continue;
+            fail(f.nameLoc, "`" + signature(f) + "` takes what `" + signature(*m) + "` takes, so `" + op + "` on them could run either", "keep one of them");
+            diags_.note(m->nameLoc, "the member one is here");
+            return;
+        }
+    }
+}
+
+// The member operators of the type of the left side, `self`, its own and those it inherits, and the free operators of the
+// program, that take `operands` sides.
+std::vector<FuncDecl*> Sema::operatorCandidates(const std::string& name, const Type* self, const Type* other, size_t operands) {
+    std::vector<FuncDecl*> out;
+    if (takesOperators(self))
+        for (FuncDecl* m : methodsNamed(*self->decl, name))
+            if (m->params.size() + 1 == operands) out.push_back(m);
+    // A free one is of the types it takes, so it is one of these if it takes the type of a side, or a base class of it.
+    auto ofSides = [&](const FuncDecl& f) {
+        for (auto& p : f.params) {
+            const Type* t = p->declType;
+            if (!takesOperators(t)) continue;
+            for (const Type* side : {self, other})
+                if (takesOperators(side) && (side->decl == t->decl || (side->isClass() && t->isClass() && side->decl->derivesFrom(t->decl)))) return true;
+        }
+        return false;
+    };
+    auto add = [&](FuncDecl* f) {
+        if (f->role == FuncDecl::Role::Free && f->params.size() == operands && ofSides(*f)) out.push_back(f);
+    };
+    if (auto many = overloads_.find(name); many != overloads_.end()) {
+        for (FuncDecl* f : many->second) add(f);
+    } else if (auto one = funcs_.find(name); one != funcs_.end()) {
+        add(one->second);
+    }
+    return out;
+}
+
+// The operator that the sides fit best, `this` first for a member, or null. When none fits, `tied` stays empty; when two
+// or more fit as well as each other, it holds them.
+FuncDecl* Sema::bestOperator(const std::vector<FuncDecl*>& candidates, const std::vector<Expr*>& operands, std::vector<FuncDecl*>& tied) {
+    tied.clear();
+    std::vector<std::pair<FuncDecl*, std::vector<Fit>>> fitting;
+    for (FuncDecl* f : candidates) {
+        const bool member = f->role == FuncDecl::Role::Method;
+        std::vector<Fit> fits;
+        bool ok = true;
+        for (size_t i = 0; i < operands.size() && ok; ++i) {
+            if (typelessList(*operands[i])) {
+                ok = false;
+            } else if (member && i == 0) {  // `this`: its own type, or a class that derives from it, and nothing converted
+                const Type* t = operands[0]->type;
+                const int depth = !takesOperators(t) ? -1 : t->decl == f->owner ? 0 : t->isClass() ? baseDistance(t->decl, f->owner) : -1;
+                ok = depth >= 0;
+                fits.push_back(depth == 0 ? Fit{0, 1} : Fit{2, depth});
+            } else if (auto fit = argumentFit(*operands[i], *f->params[member ? i - 1 : i])) {
+                fits.push_back(Fit{fit->first, fit->second});
+            } else {
+                ok = false;
+            }
+        }
+        if (ok) fitting.push_back({f, std::move(fits)});
+    }
+    for (auto& [f, fits] : fitting) {
+        bool best = true;
+        for (auto& [g, other] : fitting) best = best && (g == f || beats(fits, other));
+        if (best) return f;
+    }
+    for (auto& one : fitting) {
+        bool beaten = false;
+        for (auto& other : fitting) beaten = beaten || (&other != &one && beats(other.second, one.second));
+        if (!beaten) tied.push_back(one.first);
+    }
+    return nullptr;
+}
+
+// No operator of `name` fits the sides, of those that there are, or two fit as well as each other.
+void Sema::reportOperatorChoice(const std::string& name, const std::vector<FuncDecl*>& candidates, const std::vector<FuncDecl*>& tied,
+                                const std::vector<const Type*>& sides, Loc loc) {
+    std::string given;
+    for (size_t i = 0; i < sides.size(); ++i) given += (i ? " and " : "") + q(sides[i]);
+    if (!tied.empty()) {
+        diags_.error(loc, "`" + name.substr(8) + "` on " + given + " fits `" + signature(*tied[0]) + "` and `" + signature(*tied[1]) + "` as well as each other",
+                     "convert a side so that one of them fits better, or remove one of them", spec::OperatorOverloading);
+        for (FuncDecl* f : tied) diags_.note(f->nameLoc, "`" + signature(*f) + "` is here");
+        return;
+    }
+    std::string list;
+    for (size_t i = 0; i < candidates.size(); ++i)
+        list += (i == 0 ? "" : i + 1 == candidates.size() ? " and " : ", ") + std::string("`") + signature(*candidates[i]) + "`";
+    diags_.error(loc, "no `" + name + "` takes " + given,
+                 "there " + std::string(candidates.size() == 1 ? "is " : "are ") + std::to_string(candidates.size()) + ": " + list +
+                     ". Give one of them what it takes, or write one that takes these",
+                 spec::OperatorOverloading);
+    for (FuncDecl* f : candidates) diags_.note(f->nameLoc, "`" + signature(*f) + "` is here");
+}
+
+// What a chosen operator needs, as a call of it does: the sides as it takes them, `this` first for a member. `written` is
+// how the use reads, for an error.
+void Sema::useOperator(FuncDecl& f, const std::vector<Expr*>& operands, Loc loc, Flow& flow, BasePath& path, const std::string& written, bool tryOnLeft) {
+    path.clear();
+    std::vector<Expr*> args = operands;
+    if (f.role == FuncDecl::Role::Method) {
+        const StructDecl* self = operands[0]->type->decl;
+        requestMethod(&f);
+        if (!canAccess(*f.owner, f.access, self)) reportAccess(*f.owner, f.name, true, f.access, loc);
+        pathTo(self, f.owner, path);
+        args.erase(args.begin());
+    }
+    if (f.callFails()) {
+        if (tryBlocks_ == 0 && tryPrefixes_ == 0 && !defaultOf_ && !globalOf_) {
+            ++failPoints_;
+            if (tryOnLeft)  // `try a / b`, which is `(try a) / b`, as in Swift
+                diags_.error(loc, "`try " + written + "` puts `try` on its left side alone, and " + q(f.name) + " can fail",
+                             "write `try (" + written + ")`, which passes the error of the whole on", spec::Errors);
+            else
+                diags_.error(loc, "`" + written + "` runs " + q(f.name) + ", which can fail, so it must say what happens then",
+                             "write `try (" + written + ")`, which passes the error on, or put it in `try { ... } catch (Error e) { ... }`", spec::Errors);
+        } else {
+            checkCanFailNamed(f.name, loc);
+        }
+    }
+    checkChosenArgs(args, f, flow);
+}
+
+// `a + b` and the other binary operators, where a side is a struct or a class: true when an operator of the program runs,
+// which is then set in `b`, or when an error has been reported; false leaves it to the language, as for `==` of two
+// structs, which compares their fields.
+bool Sema::checkOperatorUse(BinaryExpr& b, const Type* l, const Type* r, Flow& flow, const Type*& result) {
+    if ((!takesOperators(l) && !takesOperators(r)) || b.op == BinOp::LogAnd || b.op == BinOp::LogOr) return false;
+    const bool equality = b.op == BinOp::Eq || b.op == BinOp::Ne;
+    const bool comparison = b.op >= BinOp::Eq && b.op <= BinOp::Ge;
+    const std::string name = operatorName(b.op);
+    const std::string sym = binOpSpelling(b.op);
+    std::vector<Expr*> operands{b.lhs.get(), b.rhs.get()};
+    std::vector<FuncDecl*> direct = operatorCandidates(name, l, r, 2), reverse, tied;
+    FuncDecl* f = bestOperator(direct, operands, tied);
+    if (!f && tied.empty() && equality && l != r) {  // `5 == p` runs `p == 5`, as in C++20
+        reverse = operatorCandidates(name, r, l, 2);
+        f = bestOperator(reverse, {b.rhs.get(), b.lhs.get()}, tied);
+        b.reversed = f != nullptr;
+    }
+    const bool tryOnLeft = b.lhs->kind == Expr::Kind::Try;
+    const std::string left = asBase(spelled(tryOnLeft ? *static_cast<const TryExpr&>(*b.lhs).operand : *b.lhs, "a")), right = asBase(spelled(*b.rhs, "b"));
+    if (!f && !tied.empty()) {
+        reportOperatorChoice(name, {}, tied, {l, r}, b.loc);
+        result = comparison ? Type::boolTy() : Type::error();
+        return true;
+    }
+    if (!f) {
+        if (equality) return false;  // field by field, the same object, or an error the language reports
+        if (!takesOperators(l) && !takesOperators(r)) return false;
+        if (direct.empty() && (l->is(K::String) || r->is(K::String))) return false;  // `s + p`, which the language says more about
+        result = comparison ? Type::boolTy() : Type::error();
+        if (!direct.empty()) {
+            reportOperatorChoice(name, direct, {}, {l, r}, b.loc);
+            return true;
+        }
+        // None at all: what to write. `a > b` is not made from `<`, as in C++.
+        auto has = [&](const char* op, const Type* self) { return !operatorCandidates(op, self, self == l ? r : l, 2).empty(); };
+        std::string instead;
+        if (b.op == BinOp::Gt && has("operator<", r)) instead = right + " < " + left;
+        else if (b.op == BinOp::Lt && has("operator>", r)) instead = right + " > " + left;
+        else if (b.op == BinOp::Ge && has("operator<", l)) instead = "!(" + left + " < " + right + ")";
+        else if (b.op == BinOp::Le && has("operator<", r)) instead = "!(" + right + " < " + left + ")";
+        const Type* owner = takesOperators(l) ? l : r;
+        const std::string field = !owner->decl->fields.empty() ? owner->decl->fields[0].name : "";
+        std::string help;
+        if (!instead.empty()) help = "write `" + instead + "`, as `" + sym + "` is not made from the others, or write `" + name + "` too";
+        else if (takesOperators(l))
+            help = "write `" + operatorExample(sym, l->name, r->name, true) + " { ... }` in " + q(l) +
+                   (field.empty() ? std::string("") : comparison ? ", or compare a field of each: `" + left + "." + field + " " + sym + " " + right + "." + field + "`"
+                                                                 : ", or use one of its fields, such as `" + left + "." + field + "`");
+        else
+            help = "write `" + std::string(comparison ? "bool" : r->name) + " operator" + sym + "(" + (l->isNumber() || l->is(K::Char) || l->is(K::Bool) ? std::string(l->name) + " a" : "const " + std::string(l->name) + "& a") +
+                   ", const " + r->name + "& b) { ... }` outside " + q(r) + ", in its file";
+        diags_.error(b.loc, takesOperators(l) ? q(l) + " has no `" + sym + "`" + (l == r ? std::string("") : " that takes " + q(r)) : "no `" + name + "` takes " + q(l) + " and " + q(r),
+                     help, spec::OperatorOverloading);
+        return true;
+    }
+    b.overload = f;
+    b.negated = b.op == BinOp::Ne;
+    b.operandType = l;
+    useOperator(*f, b.reversed ? std::vector<Expr*>{b.rhs.get(), b.lhs.get()} : operands, b.loc, flow, b.path, left + " " + sym + " " + right, tryOnLeft);
+    result = b.negated ? Type::boolTy() : f->retType;
+    return true;
+}
+
+// `-a`, `+a` and `~a` of a struct or a class.
+bool Sema::checkUnaryOperator(UnaryExpr& u, const Type* t, Flow& flow, const Type*& result) {
+    if (!takesOperators(t)) return false;
+    const char* sym = unarySpelling(u.op);
+    const std::string name = std::string("operator") + sym;
+    std::vector<Expr*> operands{u.operand.get()};
+    std::vector<FuncDecl*> candidates = operatorCandidates(name, t, nullptr, 1), tied;
+    FuncDecl* f = bestOperator(candidates, operands, tied);
+    if (!f) {
+        result = Type::error();
+        if (!tied.empty() || !candidates.empty()) reportOperatorChoice(name, candidates, tied, {t}, u.loc);
+        else
+            diags_.error(u.loc, q(t) + " has no `" + sym + "` of one side", "write `" + std::string(t->name) + " operator" + sym + "() const { ... }` in " + q(t),
+                         spec::OperatorOverloading);
+        return true;
+    }
+    u.overload = f;
+    useOperator(*f, operands, u.loc, flow, u.path, sym + asBase(spelled(*u.operand, "a")));
+    result = f->retType;
+    return true;
+}
+
+// `a += b` where a side is a struct or a class: `a = a + b`, with the `operator+` of the program, and the place of `a` found
+// once. False leaves it to the language.
+bool Sema::checkOperatorAssign(AssignExpr& a, const Type* t, Flow& flow) {
+    const Type* vt = a.value->type;
+    if (!takesOperators(t) && !takesOperators(vt)) return false;
+    if (t->isError() || vt->isError()) return true;  // already said
+    const std::string name = operatorName(*a.op), sym = binOpSpelling(*a.op);
+    std::vector<Expr*> operands{a.target.get(), a.value.get()};
+    std::vector<FuncDecl*> candidates = operatorCandidates(name, t, vt, 2), tied;
+    FuncDecl* f = bestOperator(candidates, operands, tied);
+    const std::string target = asBase(spelled(*a.target, "a")), value = asBase(spelled(*a.value, "b"));
+    if (!f) {
+        if (!tied.empty() || !candidates.empty()) {
+            reportOperatorChoice(name, candidates, tied, {t, vt}, a.loc);
+        } else {
+            const Type* owner = takesOperators(t) ? t : vt;
+            diags_.error(a.loc, q(owner) + " has no `" + sym + "`, which `" + sym + "=` runs",
+                         takesOperators(t) ? "write `" + operatorExample(sym, t->name, vt->name, true) + " { ... }` in " + q(t) + ": `" + target + " " + sym + "= " + value +
+                                                 "` then runs `" + target + " = " + target + " " + sym + " " + value + "`"
+                                           : "write `" + std::string(t->name) + " operator" + sym + "(" + t->name + " a, const " + vt->name + "& b) { ... }` outside " + q(vt) + ", in its file",
+                         spec::OperatorOverloading);
+        }
+        return true;
+    }
+    if (f->retType != t && !canConvert(f->retType, t)) {
+        diags_.error(a.loc, "`" + target + " " + sym + "= " + value + "` stores what " + q(f->name) + " gives in " + q(target) + ", but it gives " + q(f->retType) + ", not " + q(t),
+                     "store it somewhere else: `auto c = " + target + " " + sym + " " + value + ";`", spec::OperatorOverloading);
+        return true;
+    }
+    a.overload = f;
+    useOperator(*f, operands, a.loc, flow, a.path, target + " " + sym + "= " + value);
+    return true;
+}
+
+// Whether two values of the type can be ordered with `<`: the language's own, or an `operator<` of the program that gives a
+// bool and takes two of them.
+bool Sema::hasOrdering(const Type* t) {
+    if (t->isArithmetic() || t->is(K::String) || t->isPointer() || t->isEnum()) return true;
+    if (!takesOperators(t)) return false;
+    auto takes = [&](const VarDecl& p) { return p.declType == t || canConvert(t, p.declType); };
+    for (FuncDecl* f : operatorCandidates("operator<", t, t, 2)) {
+        if (!f->retType->is(K::Bool)) continue;
+        if (f->role == FuncDecl::Role::Method ? takes(*f->params[0]) : takes(*f->params[0]) && takes(*f->params[1])) return true;
+    }
+    return false;
 }
 
 // ---- Default arguments -----------------------------------------------------
@@ -7295,9 +7727,10 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
         return problem;
     }
     if (constraint == "Comparable")
-        return t->isArithmetic() || t->is(K::String) || t->isPointer() || t->isEnum()
-                   ? ""
-                   : q(t) + " has no `<`. Only numbers, chars, strings, enums and pointers do, until operators can be overloaded. Compare a field instead: `a.x < b.x`";
+        return hasOrdering(t) ? ""
+               : (t->isStruct() || t->isClass()) && t->decl->nameLoc.line != 0 && !isHashmap(t)
+                   ? q(t) + " has no `<`. Write `bool operator<(const " + t->name + "& other) const { ... }` in it, or compare a field: `a.x < b.x`"
+                   : q(t) + " has no `<`. Numbers, chars, strings, enums and pointers do, and the structs and classes that have an `operator<`";
     if (constraint == "Number") return t->isNumber() ? "" : q(t) + " is not a number: an integer type, float or double. Pass one of those, or change the constraint";
     if (constraint == "Integer") return t->isInteger() ? "" : q(t) + " is not an integer type, such as int, long or uint32_t. Use one of those, or convert it with `long(x)`";
     if (constraint == "Floating") return t->isFloating() ? "" : q(t) + " is not float or double. Use one of those, or convert it with `double(x)`";
@@ -7305,10 +7738,23 @@ std::string Sema::constraintProblem(const std::string& constraint, const Type* t
         std::vector<const StructDecl*> seen;
         return jsonProblem(*program_, t, constraint == "__JsonReadable", "", seen);
     }
-    if (constraint == "Hashable" || constraint == "__Hashable")
+    if (constraint == "Hashable" || constraint == "__Hashable") {
+        std::function<const StructDecl*(const Type*, int)> ownEquals = [&](const Type* x, int depth) -> const StructDecl* {
+            if (depth > 16) return nullptr;
+            if (x->isOptional() || x->isVector() || x->isArray()) return ownEquals(x->elem, depth + 1);
+            if ((x->isStruct() || x->isClass()) && x->decl->ownEquals) return x->decl;
+            if (x->isStruct() && !isHashmap(x))
+                for (auto& field : x->decl->fields)
+                    if (const StructDecl* d = ownEquals(field.type, depth + 1)) return d;
+            return nullptr;
+        };
+        if (const StructDecl* d = ownEquals(t, 0))
+            return "use another type for the key: " + q(d->name) + " has its own `==`, and a hash made from its fields could tell apart two values that it calls "
+                   "equal. A key is made of the language's own types, or of structs that compare field by field";
         return isHashable(t) ? ""
                              : "use another type for the key, as " + q(t) + " cannot be one. Numbers, chars, bools, strings, enums, pointers and class references can, and so can "
                                       "optionals, vectors, arrays and structs of those. A unique or weak reference or a hashmap cannot";
+    }
     return "";  // unknown, which was reported at the generic
 }
 

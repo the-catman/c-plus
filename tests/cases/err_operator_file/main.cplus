@@ -1,0 +1,10 @@
+// An operator is written in the file of a type it takes, so that what it does is the same in every file that has the type.
+import shapes;
+
+bool operator<(const shapes::Size& a, const shapes::Size& b) { return a.w < b.w; }
+
+int main() {
+    return 0;
+}
+// error: `operator<` is written in the file that declares one of the types it takes, such as 'shapes::Size'
+// error: move it to the file of 'shapes::Size', so that `<` means the same in every file

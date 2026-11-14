@@ -1,0 +1,67 @@
+// Operators that C+ cannot overload, or not yet, and C++'s ways of writing them that C+ reads otherwise.
+struct A { int x = 0; A operator+=(const A& o) const { return o; } };
+struct B { int x = 0; B operator++() const { return this; } };
+struct C { int x = 0; int operator()(int k) const { return k; } };
+struct D { int x = 0; int operator->() const { return x; } };
+struct E { int x = 0; bool operator&&(const E& o) const { return true; } };
+struct F { int x = 0; bool operator!() const { return false; } };
+struct G { int x = 0; void operator delete(int p) {} };
+struct H { int x = 0; operator bool() const { return x != 0; } };
+struct I { int x = 0; operator int() const { return x; } };
+struct J { int x = 0; explicit operator int() const { return x; } };
+struct K { int x = 0; friend K operator*(int k, K v) { return v; } };
+struct L { int x = 0; operator+(const L& o) const { return o; } };
+struct M { int x = 0; bool operator<(const M& o) const = default; };
+class N { public: int x = 0; bool operator==(const N&) const = default; };
+struct O { int x = 0; bool operator==(int k) const = default; };
+struct P { int x = 0; };
+ostream& operator<<(ostream& os, const P& p) { return os; }
+template<typename T> T operator+(T a, T b) { return a; }
+struct Q { int x = 0; int operator.() const { return x; } };
+struct S { int x = 0; S operator""(int k) const { return this; } };
+istream& operator>>(istream& in, P& p) { return in; }
+int main() {
+    int operator = 1;
+    return 0;
+}
+// error: this compiler does not support writing `operator+=` yet
+// error: remove it: once `operator+` is written, `a += b` works as `a = a + b`
+// error: err_operator_syntax.cplus:2:25
+// error: this compiler does not support `operator++` yet
+// error: write a method, such as `void next()`, or `p = p + 1` with an `operator+`
+// error: this compiler does not support `operator()` yet
+// error: use a lambda, as in `auto twice = [](int x) { return x * 2; };`, or write a method
+// error: this compiler does not support `operator->` yet
+// error: write a method that gives what it leads to
+// error: `operator&&` cannot be written, as `&&`, `||` and `,` decide what runs
+// error: write a method, such as `bool both(const E& other) const`
+// error: `operator!` cannot be written, as a struct or a class is never a condition
+// error: write a method that says what it tests, such as `bool empty() const`
+// error: `operator delete` cannot be written
+// error: remove it: C+ gets and frees the memory of what it makes itself
+// error: `operator bool` cannot be written, as nothing converts to or from a struct or a class by itself
+// error: write a method that says what it tests, such as `bool ok() const`
+// error: `operator int` cannot be written, as nothing converts to or from a struct or a class by itself
+// error: write a method that gives the value, such as `int value() const`
+// error: this compiler does not support explicit conversion operators yet
+// error: C+ has no 'friend'
+// error: write the operator outside the type, as a function of the file, such as `Point operator*(int k, Point p) { ... }`, using what the type makes public
+// error: an operator needs its return type, before `operator`
+// error: write it first, as in `L operator+(...) const`
+// error: only `operator==` can be `= default` in C+
+// error: write the body of the method, or remove it
+// error: this compiler does not support `operator==` for a class yet
+// error: `= default` compares two values of the type field by field, so this `operator==` takes another 'O'
+// error: make its parameter `const O& other`
+// error: C+ has no streams, so this `operator<<` has nothing to write to
+// error: for printing, remove it: `println("{}", p)` already prints a struct's fields
+// error: this compiler does not support generic operators outside a type yet
+// error: write the operator inside the generic type, `Vec<T> operator+(const Vec<T>& other) const { ... }`, or once for each type it is needed for
+// error: expected an operator after `operator`, found '.'
+// error: write one of + - * / % & | ^ << >> ~ == < > <= >=, as in `Q operator+(Q other) const`
+// error: 'operator' is a keyword, which starts the name of an operator, as in `Point operator+(Point other) const`
+// error: give it another name
+// error: C+ has no literals of a program's own, such as `operator""`
+// error: write a function: `Meters meters(double x) { ... }`
+// error: C+ has no streams, so this `operator>>` has nothing to read from
+// error: read a line with `readLine()`, and the parts of it with `stoi` and the like

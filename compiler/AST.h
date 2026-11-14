@@ -2,6 +2,7 @@
 // Codegen lowers it to LLVM IR.
 #pragma once
 
+#include <cctype>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -367,6 +368,8 @@ struct UnaryExpr : Expr {
     UnOp op;
     ExprPtr operand;
     std::string arrowMember;  // for a Deref written as `p->name`: the name after the arrow
+    FuncDecl* overload = nullptr;  // set by Sema for `-p` of a struct or a class: the `operator-` of the program that runs
+    BasePath path;                 // with a member operator of a class: from the operand's class to the one declaring it
     UnaryExpr(Loc l, UnOp o, ExprPtr e) : Expr(Kind::Unary, l), op(o), operand(std::move(e)) {}
     bool isArrow() const { return op == UnOp::Deref && !arrowMember.empty(); }
 };
@@ -453,6 +456,12 @@ struct BinaryExpr : Expr {
     BinOp op;
     ExprPtr lhs, rhs;
     const Type* operandType = nullptr;  // type both sides are converted to (lhs type for shifts)
+    // Set by Sema for `a + b` where a side is a struct or a class: the operator of the program that runs, with the left
+    // side as `this` when it is a member. `5 == p` runs `p == 5`, and `a != b` runs `!(a == b)`.
+    FuncDecl* overload = nullptr;
+    bool reversed = false;
+    bool negated = false;
+    BasePath path;  // with a member operator of a class: from the left side's class to the one declaring it
     BinaryExpr(Loc opLoc, BinOp o, ExprPtr l, ExprPtr r)
         : Expr(Kind::Binary, opLoc), op(o), lhs(std::move(l)), rhs(std::move(r)) {}
 };
@@ -464,6 +473,10 @@ struct AssignExpr : Expr {
     // For `b += n` on a uint8_t or a uint16_t, set by Sema: the type the arithmetic happens in, an int or wider, before
     // the result wraps back into the target's type.
     const Type* opType = nullptr;
+    // For `a += b` where a side is a struct or a class, set by Sema: the `operator+` that runs, as `a = a + b` with the place
+    // of `a` found once.
+    FuncDecl* overload = nullptr;
+    BasePath path;
     AssignExpr(Loc opLoc, std::optional<BinOp> o, ExprPtr t, ExprPtr v)
         : Expr(Kind::Assign, opLoc), op(o), target(std::move(t)), value(std::move(v)) {}
 };
@@ -933,6 +946,8 @@ struct FuncDecl {
     const FuncDecl* taskBind = nullptr;
     const FuncDecl* taskWait = nullptr;
     bool overloaded = false;      // set by Sema: another function, or another method of its type, has its name
+    // `operator+`, `operator==` and the others, whose name is `operator` and the operator.
+    bool isOperator() const { return name.size() > 8 && name.compare(0, 8, "operator") == 0 && !std::isalnum((unsigned char)name[8]) && name[8] != '_'; }
     bool defaultsChecked = false; // set by Sema once the default values of its parameters have been checked
     bool checked = false;         // set by Sema once its body has been checked
     bool requested = false;       // it will be checked and generated; a generic class's methods wait for their first use
@@ -1057,6 +1072,8 @@ struct StructDecl {
     // Set by Sema: by slot, the version of each virtual method this class uses, from its first
     // base class and its own. Those of its other base classes have vtables of their own.
     std::vector<FuncDecl*> vtable;
+    // Set by Sema: the program's own `==` that takes two of this type, which then replaces comparing field by field everywhere.
+    const FuncDecl* ownEquals = nullptr;
     std::vector<FieldDecl> fields;
     std::vector<std::unique_ptr<FuncDecl>> methods;
     FuncDecl* constructor = nullptr;         // the first of its constructors, if it has any
@@ -1321,7 +1338,9 @@ inline bool isJsonValue(const Type* t) { return t->isStruct() && t->decl->role =
 // be hashed, and it can be copied. `seen` stops at a struct already looked at.
 inline bool isHashable(const Type* t, std::vector<const StructDecl*>& seen) {
     if (t->isOptional() || t->isVector() || t->isArray()) return isHashable(t->elem, seen);
-    if (t->isNumber() || t->is(Type::Kind::Bool) || t->is(Type::Kind::Char) || t->is(Type::Kind::String) || t->isPointer() || t->isClass()) return true;
+    if (t->isNumber() || t->is(Type::Kind::Bool) || t->is(Type::Kind::Char) || t->is(Type::Kind::String) || t->isPointer()) return true;
+    if (t->isClass()) return !t->decl->ownEquals;  // a hash made from its fields could tell apart what its own `==` calls equal
+    if (t->isStruct() && t->decl->ownEquals) return false;
     if (t->isEnum()) return true;
     if (!t->isStruct() || isHashmap(t)) return false;
     for (const StructDecl* d : seen)

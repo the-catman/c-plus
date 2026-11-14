@@ -294,6 +294,7 @@ const Type* ConstEval::staticType(const Expr& e) {
 }
 
 ConstValue ConstEval::evalUnary(const UnaryExpr& u) {
+    if (u.overload) throw ConstError{u.loc, "an operator of the program cannot run while compiling"};
     if (u.op == UnOp::Deref || u.op == UnOp::AddrOf) throw ConstError{u.loc, "pointers cannot be followed while compiling"};
     ConstValue v = eval(*u.operand);
     switch (u.op) {
@@ -444,6 +445,7 @@ ConstValue ConstEval::arith(BinOp op, const ConstValue& l, const ConstValue& r, 
 }
 
 ConstValue ConstEval::evalBinary(const BinaryExpr& b) {
+    if (b.overload) throw ConstError{b.loc, "an operator of the program cannot run while compiling"};
     if (b.op == BinOp::LogAnd || b.op == BinOp::LogOr) {
         bool left = isTrue(eval(*b.lhs), b.lhs->loc);
         if (b.op == BinOp::LogAnd && !left) return boolValue(false);

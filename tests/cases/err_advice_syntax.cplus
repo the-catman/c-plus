@@ -60,17 +60,17 @@ Foo<int> topLevelUnknown() { return null; }
 int const constAfter = 1;
 // error: write `const int x`, or `const char* s`
 int operator+(int a, int b) { return a; }
-// error: write a method for now, such as `Point add(Point other)`
+// error: an operator of the program takes a struct or a class, on at least one side
 struct WithEquals {
     int x = 0;
-    bool operator==(WithEquals other) const { return true; }
-    // error: remove it: every struct already has `==` and `!=`, field by field
+    bool operator!=(WithEquals other) const { return true; }
+    // error: remove it: `a != b` is always `!(a == b)`
 };
 class WithAssign {
 public:
     int x = 0;
     WithAssign& operator=(WithAssign o) { return this; }
-    // error: this compiler does not support operator overloading yet
+    // error: remove it: a struct is copied field by field, and a class object is shared, never copied
 };
 class ConstructorDefault {
 public:

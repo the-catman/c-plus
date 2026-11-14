@@ -4,7 +4,7 @@ class User {
 public:
     string name = "n";
     bool operator==(User o) const { return name == o.name; }
-    // error: For a class, `==` means the same object, so write a method: `bool same(User other) const { ... }`
+    // error: `==` of two class references tells whether they are the same object. To compare what is in them, write a method, such as `bool equals(const User& other) const`
 };
 void fill(int a[3]) { a[0] = 9; }
 // error: write `vector<int> a`, or, to change the caller's array, `int* a`, called with `x.data()`

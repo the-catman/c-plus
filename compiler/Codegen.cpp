@@ -1885,7 +1885,7 @@ struct Codegen::Impl {
 
     // Evaluates an expression whose value is not used.
     void genDiscarded(const Expr& e) {
-        if (e.kind == Expr::Kind::Assign && inMemory(e.type)) {  // no copy of the value is made to return it
+        if (e.kind == Expr::Kind::Assign && inMemory(e.type) && !static_cast<const AssignExpr&>(e).overload) {  // no copy of the value is made to return it
             genMemoryAssign(static_cast<const AssignExpr&>(e));
             flushTemps();
             return;
@@ -2183,10 +2183,10 @@ struct Codegen::Impl {
                 auto& ix = static_cast<const IndexExpr&>(e);
                 return ix.mapSlot || mayRunCode(*ix.base) || mayRunCode(*ix.index);  // a map may have to add the key
             }
-            case Expr::Kind::Unary: return mayRunCode(*static_cast<const UnaryExpr&>(e).operand);
+            case Expr::Kind::Unary: return static_cast<const UnaryExpr&>(e).overload || mayRunCode(*static_cast<const UnaryExpr&>(e).operand);
             case Expr::Kind::Binary: {
                 auto& bin = static_cast<const BinaryExpr&>(e);
-                return mayRunCode(*bin.lhs) || mayRunCode(*bin.rhs);
+                return bin.overload || mayRunCode(*bin.lhs) || mayRunCode(*bin.rhs);
             }
             case Expr::Kind::Ternary: {
                 auto& t = static_cast<const TernaryExpr&>(e);
@@ -2580,6 +2580,10 @@ struct Codegen::Impl {
             }
             case Expr::Kind::Unary: {
                 auto& u = static_cast<const UnaryExpr&>(e);
+                if (u.overload) {  // `-p`, with an operator of the program
+                    owned = true;
+                    return genOperatorCall(*u.overload, {u.operand.get()}, false, u.path, u.loc);
+                }
                 if (u.op == UnOp::Deref && u.operand->type && u.operand->type->isCFunction()) return gen(*u.operand);  // `(*compare)(a, b)`
                 if (u.op == UnOp::Deref) return loadPlace(e, "deref");
                 if (u.op == UnOp::AddrOf) return addressOf(*u.operand);
@@ -2600,6 +2604,14 @@ struct Codegen::Impl {
             }
             case Expr::Kind::Binary: {
                 auto& bin = static_cast<const BinaryExpr&>(e);
+                if (bin.overload) {  // `a + b`, with an operator of the program
+                    std::vector<const Expr*> sides{bin.lhs.get(), bin.rhs.get()};
+                    if (bin.reversed) std::swap(sides[0], sides[1]);
+                    llvm::Value* v = genOperatorCall(*bin.overload, sides, bin.reversed, bin.path, bin.loc);
+                    if (bin.negated) return b.CreateNot(v);
+                    owned = true;
+                    return v;
+                }
                 if (bin.op == BinOp::LogAnd || bin.op == BinOp::LogOr) return genLogical(bin);
                 if (bin.operandType->isPointer()) return genPointerBinary(bin);
                 bool equality = bin.op == BinOp::Eq || bin.op == BinOp::Ne;
@@ -2630,6 +2642,7 @@ struct Codegen::Impl {
             case Expr::Kind::Assign: {
                 auto& a = static_cast<const AssignExpr&>(e);
                 const Type* ty = a.target->type;
+                if (a.overload) return genOperatorAssign(a);
                 // As in C++17, the right side is evaluated before the left.
                 if (a.op && ty->is(K::String)) {
                     // `s += x` appends in place when nothing else holds the string's buffer.
@@ -2948,7 +2961,10 @@ struct Codegen::Impl {
             }
             // The same object while it is there; once gone, it is the same as an empty one.
             case K::Weak: return b.CreateICmpEQ(b.CreateCall(rtWeakAlive, {l}), b.CreateCall(rtWeakAlive, {r}));
-            case K::Struct: return b.CreateCall(types.at(t->decl).equals, {l, r});
+            case K::Struct:
+                if (const FuncDecl* own = t->decl->ownEquals)  // the program's own `==`, wherever two of them are compared
+                    return genOperatorCall(*own, {&given(l, t, own->nameLoc), &given(r, t, own->nameLoc)}, false, {}, own->nameLoc);
+                return b.CreateCall(types.at(t->decl).equals, {l, r});
             case K::Vector: return b.CreateCall(vecInfo(t).equals, {l, r});
             case K::Array: return b.CreateCall(arrayInfo(t).equals, {l, r});
             case K::Null: return b.getInt1(true);
@@ -4351,6 +4367,102 @@ struct Codegen::Impl {
         return f.retType->is(K::Void) ? nullptr : inst;
     }
 
+    // An expression for a value already worked out, which a call can take as an argument as it takes any other: see genOperatorCall.
+    std::vector<std::unique_ptr<OptValueExpr>> givenValues;
+    const Expr& given(llvm::Value* v, const Type* t, Loc loc) {
+        auto node = std::make_unique<OptValueExpr>(loc, nullptr);
+        node->type = t;
+        optValues[node.get()] = v;
+        givenValues.push_back(std::move(node));
+        return *givenValues.back();
+    }
+    static bool isGiven(const Expr& e) { return e.kind == Expr::Kind::OptValue && !static_cast<const OptValueExpr&>(e).chain; }
+    // Where a value that was given lies, for a `const T&` or for `this`, which only read it.
+    llvm::Value* givenAddress(const Expr& e) {
+        llvm::Value* v = optValues.at(static_cast<const OptValueExpr*>(&e));
+        if (inMemory(e.type)) return v;
+        llvm::AllocaInst* slot = entryAlloca(llvmType(e.type), "given");
+        b.CreateStore(v, slot);
+        return slot;
+    }
+
+    // A call of an operator of the program, with the sides as it takes them: `this` first for a member, through `path` for a
+    // class. `backwards` is set for `5 == p`, which runs `p == 5`: the side written first is worked out first all the same.
+    llvm::Value* genOperatorCall(const FuncDecl& f, std::vector<const Expr*> sides, bool backwards, const BasePath& path, Loc loc) {
+        if (backwards && mayRunCode(*sides[1])) {
+            const Type* t = sides[1]->type;
+            llvm::Value* v = genOwned(*sides[1], t);
+            if (isManaged(t)) temps.push_back({v, t, inMemory(t)});
+            sides[1] = &given(v, t, sides[1]->loc);
+        }
+        const bool member = f.role == FuncDecl::Role::Method;
+        std::vector<llvm::Value*> args(sides.size(), nullptr);
+        std::vector<ArgSpec> specs;
+        std::vector<size_t> into;  // the argument each of `specs` gives
+        if (member) {
+            const Expr& self = *sides[0];
+            if (self.type->isClass()) {
+                args[0] = atOffset(gen(self), pathOffset(path));
+            } else if (isGiven(self)) {
+                args[0] = givenAddress(self);
+            } else if (isPlace(self)) {  // found after the other side, as for a method (see genMethodCall)
+                specs.push_back({&self, nullptr, false});
+                into.push_back(0);
+            } else {  // a struct that is not stored anywhere, such as `make() + p`
+                llvm::Value* v = genOwned(self, self.type);
+                llvm::Value* slot = v;
+                if (!inMemory(self.type)) {
+                    slot = entryAlloca(llvmType(self.type), "tmp");
+                    b.CreateStore(v, slot);
+                }
+                if (isManaged(self.type)) temps.push_back({slot, self.type, true});
+                args[0] = slot;
+            }
+        }
+        for (size_t i = member ? 1 : 0; i < sides.size(); ++i) {
+            const Expr& side = *sides[i];
+            const VarDecl& p = *f.params[member ? i - 1 : i];
+            if (isGiven(side) && side.type == p.type) {  // as it lies for a `const T&`, and a copy of its own for a value
+                if (passedByRef(p)) {
+                    args[i] = givenAddress(side);
+                } else {
+                    llvm::Value* v = optValues.at(static_cast<const OptValueExpr*>(&side));
+                    if (inMemory(p.type)) v = loadValue(p.type, v);
+                    retainValue(v, p.type);
+                    args[i] = v;
+                }
+                continue;
+            }
+            specs.push_back(argSpec(side, p));
+            into.push_back(i);
+        }
+        std::vector<Hold> held;
+        std::vector<llvm::Value*> values = genArguments(specs, held);
+        for (size_t k = 0; k < values.size(); ++k) args[into[k]] = values[k];
+        llvm::Value* result = callFunction(f, std::move(args), member);
+        checkHeld(held, specs, f.name, loc);
+        return result;
+    }
+
+    // `a += b` with an `operator+` of the program: `a = a + b`, with the right side worked out first and the place of `a` found
+    // once, after it, as for numbers.
+    llvm::Value* genOperatorAssign(const AssignExpr& a) {
+        const Type* ty = a.target->type;
+        const Type* vt = a.value->type;
+        llvm::Value* rhs = genOwned(*a.value, vt);
+        if (isManaged(vt)) temps.push_back({rhs, vt, inMemory(vt)});
+        llvm::Value* slot = addressOf(*a.target, false, true);
+        const Expr& left = given(peekValue(ty, slot), ty, a.target->loc);
+        const Expr& right = given(rhs, vt, a.value->loc);
+        llvm::Value* result = genOperatorCall(*a.overload, {&left, &right}, false, a.path, a.loc);
+        const Type* made = a.overload->retType;
+        if (made != ty) result = convert(result, made, ty);
+        llvm::Value* old = isManaged(ty) ? loadValue(ty, slot, "old") : nullptr;
+        storeValue(result, ty, slot);
+        if (old) releaseValue(old, ty);  // after the store, in case a destructor looks at the place
+        return loadValue(ty, slot);
+    }
+
     llvm::Value* genMethodCall(const MethodCallExpr& call) {
         const Expr& recv = *call.receiver;
         if (recv.type->isOptional()) return genOptionalMethod(call);
@@ -4995,7 +5107,7 @@ struct Codegen::Impl {
             case FuncDecl::Role::Constructor: name += f.owner->name + "#init"; break;
             case FuncDecl::Role::Destructor: name += f.owner->name + "#deinit"; break;
         }
-        if (f.overloaded) {  // `cplus.f(int,long)`: what it takes tells it from the others of its name
+        if (f.overloaded || f.isOperator()) {  // `cplus.f(int,long)`: what it takes tells it from the others of its name
             name += "(";
             for (size_t i = 0; i < f.params.size(); ++i) name += (i ? "," : "") + std::string(f.params[i]->type->name);
             name += ")";

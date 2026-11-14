@@ -25,6 +25,7 @@ inline constexpr const char* Constants = "constants";
 inline constexpr const char* DefiniteAssignment = "definite-assignment";
 inline constexpr const char* Functions = "functions";
 inline constexpr const char* Overloading = "overloading";
+inline constexpr const char* OperatorOverloading = "operator-overloading";
 inline constexpr const char* DefaultArguments = "default-arguments";
 inline constexpr const char* Lambdas = "lambdas";
 inline constexpr const char* Algorithms = "algorithms";

@@ -303,15 +303,22 @@ private:
             expr(m->base.get());
             break;
         }
-        case Expr::Kind::Unary: expr(static_cast<const UnaryExpr*>(e)->operand.get()); break;
+        case Expr::Kind::Unary: {
+            auto* u = static_cast<const UnaryExpr*>(e);
+            if (u->overload) add(u->loc, describe(*u->overload), u->overload->nameLoc);  // the operator of the program that `-p` runs
+            expr(u->operand.get());
+            break;
+        }
         case Expr::Kind::Binary: {
             auto* b = static_cast<const BinaryExpr*>(e);
+            if (b->overload) add(b->loc, describe(*b->overload), b->overload->nameLoc);  // `a + b`, and `a != b`, which runs `==`
             expr(b->lhs.get());
             expr(b->rhs.get());
             break;
         }
         case Expr::Kind::Assign: {
             auto* a = static_cast<const AssignExpr*>(e);
+            if (a->overload) add(a->loc, describe(*a->overload), a->overload->nameLoc);  // `a += b`, which runs `+`
             expr(a->target.get());
             expr(a->value.get());
             break;

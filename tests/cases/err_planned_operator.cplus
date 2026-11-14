@@ -1,6 +1,7 @@
-struct P { int x = 0; P operator+(P o) { return o; } };
+struct P { int x = 0; bool operator<=>(const P& o) const { return true; } };
 int main() {
 
     return 0;
 }
-// error: this compiler does not support operator overloading yet
+// error: this compiler does not support `operator<=>` yet
+// error: write `operator<` and the other comparisons you need, comparing the fields: `bool operator<(const P& other) const { return x < other.x; }`

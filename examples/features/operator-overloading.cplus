@@ -1,0 +1,39 @@
+// A struct or a class says what the operators do with it, as in C++. A member operator takes the right side, with `this` on
+// the left, and one outside the type takes both sides.
+struct Vec {
+    double x = 0;
+    double y = 0;
+    Vec operator+(const Vec& other) const { return Vec{x + other.x, y + other.y}; }
+    Vec operator*(double k) const { return Vec{x * k, y * k}; }
+    Vec operator-() const { return Vec{-x, -y}; }
+    bool operator<(const Vec& other) const { return x * x + y * y < other.x * other.x + other.y * other.y; }
+    bool operator==(const Vec&) const = default;
+};
+Vec operator*(double k, const Vec& v) { return v * k; }
+
+// Its own `==` is what every comparison of two of them uses.
+struct Money {
+    long cents = 0;
+    string note;
+    bool operator==(const Money& other) const { return cents == other.cents; }
+};
+
+int main() {
+    Vec a = Vec{1, 2};
+    Vec b = a + a * 2;
+    println("{} {} {}", b, 2 * a, -a);
+    // expect: {x: 3, y: 6} {x: 2, y: 4} {x: -1, y: -2}
+    a += b;
+    println("{} {} {}", a, a < b, !(a == b));
+    // expect: {x: 4, y: 8} false true
+    vector<Vec> v = {b, Vec{0, 1}, a};
+    sort(v);
+    println("{}", v);
+    // expect: [{x: 0, y: 1}, {x: 3, y: 6}, {x: 4, y: 8}]
+    Money rent = Money{500, "rent"};
+    Money food = Money{500, "food"};
+    vector<Money> paid = {rent};
+    println("{} {} {}", rent == food, rent != food, contains(paid, food));
+    // expect: true false true
+    return 0;
+}

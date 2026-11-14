@@ -64,5 +64,5 @@ void noSize() {
 }
 class Point { public: int x = 0; };
 Point& operator=(Point a) { return a; }
-// error: this compiler does not support operator overloading yet
+// error: `operator=` cannot be written in C+
 int main() { return 0; }

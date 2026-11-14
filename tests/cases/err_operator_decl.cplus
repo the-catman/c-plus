@@ -1,0 +1,49 @@
+// What an operator must be where it is declared.
+struct A { int x = 0; int operator*() const { return x; } };
+struct B { int x = 0; int operator&() const { return x; } };
+struct C { int x = 0; C operator+(const C& a, const C& b) const { return a; } };
+struct D { int x = 0; D operator~(const D& o) const { return o; } };
+struct E { int x = 0; bool operator==() const { return true; } };
+struct F { int x = 0; F operator-(F o) { return o; } };
+struct G { int x = 0; G operator+(G& o) const { return o; } };
+struct H { int x = 0; H operator+(int k = 1) const { return this; } };
+struct I { int x = 0; int operator<(const I& o) const { return 1; } };
+struct J { int x = 0; bool operator<(const J& o) const throws { return true; } };
+struct K { int x = 0; async K operator+(K o) const { return o; } };
+struct L { int x = 0; L operator+(const L& o) const { return o; } };
+L operator+(const L& a, const L& b) { return a; }
+struct M { int x = 0; };
+M operator/(M a, M b, M c) { return a; }
+enum class Color { Red, Green };
+Color operator+(Color a, int b) { return a; }
+class Animal { public: string name = "a"; };
+bool operator==(const Animal& a, const Animal& b) { return true; }
+int main() {
+    return 0;
+}
+// error: this compiler does not support a unary `operator*` yet
+// error: write a method that gives what it leads to, such as `int get() const`
+// error: a unary `operator&` cannot be written, as `&x` always gives the address of x
+// error: a member `operator+` takes the right side alone, as `this` is the left side
+// error: remove the first parameter, and write `C operator+(const C& other) const`, or write it outside the type, where it takes both sides
+// error: `operator~` takes one side
+// error: remove its parameter: `this` is what `~` applies to
+// error: `operator==` takes two sides, but this one takes 1
+// error: give it the right side as its parameter: `bool operator==(const E& other) const`
+// error: an operator only reads its sides, so a member `operator-` is `const`
+// error: write `const` after its parameters: `operator-(...) const`
+// error: an operator only reads its sides, so it cannot take a `G&`
+// error: take it by value, or as `const G&`
+// error: the parameters of an operator cannot have default values
+// error: `operator<` gives a bool, as it compares
+// error: make its return type `bool`
+// error: `operator<` cannot be marked `throws`, as sorting and comparing vectors run it where an error has nowhere to go
+// error: remove `throws`, and give an answer for every pair of values
+// error: an operator cannot be async
+// error: `operator+(const L& a, const L& b)` takes what `L.operator+(const L& o)` takes, so `+` on them could run either
+// error: keep one of them
+// error: `operator/` takes two sides, but this one takes 3
+// error: give it the left and the right side: `M operator/(const M& a, const M& b)`
+// error: this compiler does not support operators on enums yet
+// error: write a function with a name, such as `Color next(Color c)`
+// error: this compiler does not support `operator==` for a class yet

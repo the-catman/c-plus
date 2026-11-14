@@ -1,0 +1,203 @@
+// Operators of the program, as in C++: members, where the left side is `this`, and free operators, which take both sides.
+struct Vec {
+    double x = 0;
+    double y = 0;
+    Vec operator+(const Vec& o) const { return Vec{x + o.x, y + o.y}; }
+    Vec operator-(const Vec& o) const { return Vec{x - o.x, y - o.y}; }
+    Vec operator*(double k) const { return Vec{x * k, y * k}; }
+    double operator*(const Vec& o) const { return x * o.x + y * o.y; }
+    Vec operator-() const { return Vec{-x, -y}; }
+    Vec operator+() const { return this; }
+    bool operator<(const Vec& o) const { return x * x + y * y < o.x * o.x + o.y * o.y; }
+    bool operator>(const Vec& o) const { return o < this; }
+    bool operator<=(const Vec& o) const { return !(o < this); }
+    bool operator>=(const Vec& o) const { return !(this < o); }
+};
+Vec operator*(double k, const Vec& v) { return v * k; }
+Vec operator/(Vec v, double k) { return Vec{v.x / k, v.y / k}; }
+
+// Bits, with every operator that integers have.
+struct Bits {
+    uint32_t value = 0;
+    Bits operator&(Bits o) const { return Bits{value & o.value}; }
+    Bits operator|(Bits o) const { return Bits{value | o.value}; }
+    Bits operator^(Bits o) const { return Bits{value ^ o.value}; }
+    Bits operator~() const { return Bits{~value}; }
+    Bits operator<<(int n) const { return Bits{value << n}; }
+    Bits operator>>(int n) const { return Bits{value >> n}; }
+    long operator%(long m) const { return long(value) % m; }
+};
+
+// A struct with its own `==` compares with it everywhere: in vectors, optionals and other structs, and in the algorithms.
+struct Money {
+    long cents = 0;
+    string note = "";
+    bool operator==(const Money& o) const { return cents == o.cents; }  // the note does not count
+    bool operator==(long c) const { return cents == c; }
+    Money operator+(const Money& o) const { return Money{cents + o.cents, note + o.note}; }
+};
+struct Wallet {
+    string owner;
+    Money money;
+};
+struct Plain {
+    int a = 0;
+    string b = "";
+    bool operator==(const Plain&) const = default;  // as C++20 writes it: what C+ does anyway
+    bool operator==(int n) const { return a == n; }  // which adds to it, and does not replace it
+};
+
+// One outside the type does the same, and a generic sees it too.
+struct Tag {
+    string text;
+};
+bool operator==(const Tag& a, const Tag& b) { return a.text.size() == b.text.size(); }
+template<typename T> bool same(T a, T b) { return a == b; }
+
+// Strings in a struct, which the operators copy, keep and release.
+struct Name {
+    string text;
+    Name operator+(const Name& o) const { return Name{text + " " + o.text}; }
+    Name operator+(string s) const { return Name{text + s}; }
+};
+Name operator+(string s, Name n) { return Name{s + n.text}; }
+
+// Classes: operators are methods, so they are inherited, and can be virtual.
+class Shape {
+public:
+    string name;
+    Shape(string n) : name(n) {}
+    virtual double area() const { return 0; }
+    virtual bool operator<(const Shape& o) const { return area() < o.area(); }
+};
+class Square : public Shape {
+public:
+    double side;
+    Square(double s) : Shape("square"), side(s) {}
+    double area() const override { return side * side; }
+};
+class Counter {
+public:
+    int n;
+    Counter(int start) : n(start) {}
+    Counter operator+(const Counter& o) const { return Counter(n + o.n); }
+    Counter operator-() const { return Counter(-n); }
+};
+
+// A generic type's operators are made for each of its arguments, and a concept sees them.
+template<typename T> struct Pair {
+    T first;
+    T second;
+    Pair<T> operator+(const Pair<T>& o) const { return Pair<T>{first + o.first, second + o.second}; }
+};
+template<typename T> concept Addable = requires(T a, T b) { a + b; };
+template<Addable T> T total(vector<T> items, T start) {
+    T sum = start;
+    for (T item : items) sum = sum + item;
+    return sum;
+}
+
+// One that can fail, which a use of it says, as a call does.
+struct Fraction {
+    long top = 0;
+    long bottom = 1;
+    Fraction operator/(const Fraction& o) const throws {
+        if (o.top == 0) throw Error("division by zero");
+        return Fraction{top * o.bottom, bottom * o.top};
+    }
+};
+Fraction halve(Fraction f) throws { return try (f / Fraction{2, 1}); }
+
+int calls = 0;
+int nextIndex() {
+    calls += 1;
+    println("index");
+    return 0;
+}
+Money tip() {
+    println("tip");
+    return Money{5, "tip"};
+}
+int main() {
+    Vec a = Vec{1, 2};
+    Vec b = Vec{3, 4};
+    println("{} {} {}", a + b, a - b, -a);          // expect: {x: 4, y: 6} {x: -2, y: -2} {x: -1, y: -2}
+    println("{} {} {} {}", a * 2, 2 * a, a * b, b / 2);  // expect: {x: 2, y: 4} {x: 2, y: 4} 11 {x: 1.5, y: 2}
+    println("{}", +a);                              // expect: {x: 1, y: 2}
+    println("{} {} {} {}", a < b, a > b, a <= a, b >= a);  // expect: true false true true
+    println("{}", a + b * 2 - -a);                  // expect: {x: 8, y: 12}
+    a += b;
+    a -= Vec{1, 1};
+    a *= 0.5;
+    println("{}", a);                               // expect: {x: 1.5, y: 2.5}
+
+    Bits bits = Bits{0b1100};
+    Bits mask = Bits{0b1010};
+    println("{} {} {}", (bits & mask).value, (bits | mask).value, (bits ^ mask).value);  // expect: 8 14 6
+    println("{} {} {} {}", (~bits).value, (bits << 2).value, (bits >> 2).value, bits % 5);  // expect: 4294967283 48 3 2
+    bits |= Bits{1};
+    bits <<= 1;
+    println("{}", bits.value);                      // expect: 26
+
+    Money m = Money{100, "rent"};
+    Money n = Money{100, "food"};
+    println("{} {} {} {} {}", m == n, m != n, m == 100, 100 == m, 200 != m);  // expect: true false true true true
+    vector<Money> ms = {m, Money{7, ""}};
+    println("{} {} {}", contains(ms, n), count(ms, n), index_of(ms, Money{7, "x"}) ?? -1);  // expect: true 1 1
+    println("{}", vector<Money>{n, Money{7, "y"}} == ms);  // expect: true
+    Money? maybe = n;
+    println("{} {}", maybe == m, Wallet{"ann", m} == Wallet{"ann", n});  // expect: true true
+    println("{}", erase(ms, Money{100, ""}));        // expect: 1
+    Money sum = m + n;
+    println("{} {}", sum.cents, sum.note);          // expect: 200 rentfood
+    println("{} {} {}", Tag{"ab"} == Tag{"cd"}, vector<Tag>{Tag{"x"}} == vector<Tag>{Tag{"y"}}, same(Money{3, "a"}, Money{3, "b"}));  // expect: true true true
+    Plain p = Plain{1, "x"};
+    println("{} {} {}", p == Plain{1, "x"}, p == Plain{1, "y"}, p == 1);  // expect: true false true
+
+    Name first = Name{"Ada"};
+    Name whole = first + Name{"Lovelace"};
+    println("{} {} {}", whole.text, (first + "!").text, ("Lady " + first).text);  // expect: Ada Lovelace Ada! Lady Ada
+    vector<Name> names = {first};
+    names[0] += Name{"King"};
+    names[0] += ", Countess";
+    println("{}", names[0].text);                   // expect: Ada King, Countess
+
+    // The place of `a += b` is found once, after the right side, as for numbers.
+    vector<Money> purse = {Money{1, "a"}};
+    purse[nextIndex()] += tip();
+    // expect: tip
+    // expect: index
+    println("{} {} {}", purse[0].cents, purse[0].note, calls);  // expect: 6 atip 1
+
+    vector<Shape> shapes = {Square(3), Shape("dot"), Square(2)};
+    sort(shapes);
+    println("{} {} {}", shapes[0].area(), shapes[1].area(), shapes[2].area());  // expect: 0 4 9
+    Square big = Square(5);
+    println("{} {}", shapes[0] < big, big < shapes[0]);  // expect: true false
+    Counter c = Counter(2);
+    Counter d = c;
+    c += Counter(3);
+    println("{} {} {}", c.n, d.n, (-c).n);          // expect: 5 2 -5
+
+    vector<Vec> vs = {Vec{3, 3}, Vec{1, 1}, Vec{2, 0}};
+    sort(vs);
+    println("{} {} {}", vs, min(vs), max(vs));      // expect: [{x: 1, y: 1}, {x: 2, y: 0}, {x: 3, y: 3}] {x: 1, y: 1} {x: 3, y: 3}
+    println("{}", binary_search(vs, Vec{2, 0}));    // expect: true
+
+    Pair<int> two = Pair<int>{1, 2} + Pair<int>{10, 20};
+    println("{}", two);                             // expect: {first: 11, second: 22}
+    println("{}", total(vector<Vec>{Vec{1, 1}, Vec{2, 2}}, Vec{}));  // expect: {x: 3, y: 3}
+    println("{}", total(vector<int>{1, 2, 3}, 0));  // expect: 6
+
+    try {
+        Fraction f = try halve(Fraction{3, 4});
+        println("{}/{}", f.top, f.bottom);          // expect: 3/8
+        Fraction one = try (f / f);
+        println("{}/{}", one.top, one.bottom);      // expect: 24/24
+        Fraction g = try (f / Fraction{0, 1});
+        println("{}", g.top);
+    } catch (Error e) {
+        println("{}", e.what());                    // expect: division by zero
+    }
+    return 0;
+}

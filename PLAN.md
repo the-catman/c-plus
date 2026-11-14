@@ -420,8 +420,8 @@ Rule: where C+ and C++ mean the same thing, the syntax is identical.
   `template<...> using`, and `export using`. An alias is the same type, not a new one. `typedef` stays
   out, with the `using` line as its help, and so does `using namespace`. Aliases inside a function or a
   type wait for types inside them.
-- Operator overloading uses C++ syntax, `Point operator+(Point other) const`, and arrives
-  after function overloading. `&&`, `||` and the comma operator cannot be overloaded.
+- Operator overloading uses C++ syntax, `Point operator+(Point other) const` (built 2026-11-14, see §2.38). `&&`, `||`
+  and the comma operator cannot be overloaded. A class's own `==`, which will replace identity for it, comes in a later slice.
 - Printing follows C++23: `println("x = {}", x)`. The format string must be a literal and
   the compiler checks that placeholders match arguments, and that their options suit them (§2.37).
 - Source files use `.cplus`.
@@ -582,8 +582,9 @@ Decided 2026-11-05.
   no default value, where C++ gives a compile error, a missing key stops the program, since `users[id].name` is
   how a map of class references is used. `m[key] = value` always works, with any type.
 - No iterators yet. `m.contains(k)` and `m.get(k)`, which gives a `V?`, take the place of `m.find(k)`.
-- Any type with `==` can be a key, if that `==` looks at what can be hashed, with no hash to write. A hash function of
-  your own waits for function overloading.
+- Any type with `==` can be a key, if that `==` looks at what can be hashed, with no hash to write. A type with its own
+  `operator==`, or holding one, cannot be a key until it can have its own hash, as one made from its fields could tell
+  apart two values that its `==` calls equal (§2.38).
 - `m.at(k)` and `m.get(k)` give copies too, so changing what they give is an error for the same reason, and `m[k]` is the place.
   So are `?:` when both of what it chooses from are what C++ would refer to (then C++ would change the one it chose), and `=`.
   `??`, `value_or()`, `values()`, `items()`, and `?:` with only one such, give copies in C++ too, so they are errors only when nothing
@@ -674,7 +675,8 @@ program and never dangles, but when its container is resized, replaced or was sh
 - Being a reference belongs to a declaration, not to a type. A parameter of a function, method or constructor, the variable of a
   range-based `for` loop, and a local variable can be references. A field, a constant, an element of a container, a template
   argument and an optional cannot. `T&&` and `auto&&` are errors. `catch (const Error& e)` means `catch (Error e)`.
-- `const T&` returns the value, as a copy. `T& f()` comes with operator overloading, through a stack of what the callee holds.
+- `const T&` returns the value, as a copy. `T& f()` comes after the first slices of operator overloading (§2.38), through a
+  stack of what the callee holds.
 - A function that is `async`, or run with `spawn`, cannot take a reference, and no reference is alive at an `await`.
 - Elements of containers, as built 2026-11-11 in place of the pins first planned, which needed every copy in Codegen to be able
   to give a new buffer, as a copy of a pinned buffer would have to:
@@ -814,6 +816,40 @@ meanings, checked against each value's type while compiling, since the format st
 - `{:a}`, `#` with a float, a precision with `{:?}`, and the options of C++23 for the elements of a range, `{::x}` and `{:n}`,
   are not supported yet. `to_string` takes no options, as in C++26.
 
+### 2.38 Operator overloading — DECIDED
+Decided 2026-11-14: C++'s operators and meanings, in slices that each only turn errors into working programs, so that no slice
+changes what an accepted program means. One equality per type: whatever `a == b` means for a type is what every container and
+algorithm uses.
+- Slice 1, built 2026-11-14: `+ - * / %`, `& | ^ << >>`, unary `-` `+` `~`, `==`, and `<` `>` `<=` `>=`, as members, where the
+  left side is `this`, or free, taking both sides. A free operator takes a struct or a class of the program, and is written in
+  the file that declares one of its types, which stands in for C++'s argument-dependent lookup and makes `a + b` mean the same
+  in every file. It needs no `export`, as the module of a file checks names and an operator is never named: it goes with its
+  types. A member and a free operator that take the same sides are an error where declared.
+- An operator only reads its sides: a member one is `const`, and a parameter is a value or a `const T&`, with no default. It is
+  chosen by §2.33's ranking among members and free operators together. `this` takes its own type or a derived class, and never
+  another conversion. Lookup runs only when a side is a struct or a class: `P?`, `vector<P>` and `unique<P>` stay built in.
+- `==` and the orderings give `bool` and cannot be `throws`. The others may be, and a use of one is then `try (a * b)`, as a call
+  is; `try a * b` is `(try a) * b`, and its error says so.
+- A struct's own `operator==` that takes another of it replaces comparing field by field everywhere: vectors, arrays, optionals,
+  structs that hold it, `contains`, `count`, `index_of` and `erase(v, x)`. A mixed one, `==(int)`, only adds. `!=` is always
+  `!(a == b)`, so `operator!=` cannot be written, and `5 == p` runs `p == 5` only when nothing takes `5` on the left, as C++20
+  does. `bool operator==(const P&) const = default;` is accepted and changes nothing. A type with its own `==` is not
+  `Hashable` until it can have its own hash (§2.24). `unique`, `local` and `weak` `==` stay identity.
+- Each of `<`, `>`, `<=`, `>=` is only itself, as in C++: `a > b` with only `<` is an error whose help writes `b < a`.
+  `Comparable` is `a < b` giving a `bool`, built in or the program's, and `sort`, `min`, `max` and `binary_search` use only `<`.
+- `a += b` runs a written `operator+=` when one fits, which waits for slice 2; until then it is `a = a + b`, with the place found
+  once, after `b`, as for numbers. `++` and `--` are never made from `+`.
+- A member operator is a method: `virtual`, `override`, interfaces and inheritance apply unchanged. Its LLVM name always carries
+  what it takes: `cplus.Point.operator+(Point)`. The sides are worked out left to right, as for the language's operators.
+- Never: `=`, as a struct copies its fields and a class is shared; `!=`; `&&`, `||` and `,`; `!` and every implicit conversion
+  operator, as a struct or a class is never a condition; unary `&`; `->*`; `new` and `delete`; `co_await`; `operator""`; `<<`
+  and `>>` that take a stream, where printing has its help.
+- Later slices, each a "not yet" error until it comes: 2, a class's own `==` (with `same_object(a, b)` for identity, and
+  `= default` comparing fields) and written compound assignments; 3, `<=>` with `strong_ordering`, `weak_ordering` and
+  `partial_ordering`, `= default`, and the four comparisons made from it; 4, `[]` and `()` that give a value; 5, with `T&`
+  returns, `T& operator[]` and a `const` and a non-const pair; 6, with iterators, `++`, `--`, unary `*` and `->`. Explicit
+  conversion operators, operators on enums, generic free operators, `a.operator+(b)` and `constexpr` operators wait too.
+
 ## 3. Compiler architecture
 
 ```
@@ -882,7 +918,8 @@ what holds real programs back most:
    §2.7 is tested hardest. `return &x;` of a local, which compiles today, is caught first.
 5. Lambdas, and a type for a function (built 2026-11-12, see §2.34), then `sort` and the other functions that take one
    (built 2026-11-14, §2.35), `spawn` with a lambda (built 2026-11-14, §2.9), and C callbacks (built 2026-11-14, §2.36).
-6. Function overloading, more than one constructor and default arguments, then operator overloading. Overloading also
+6. Function overloading, more than one constructor and default arguments, then operator overloading (its first slice built
+   2026-11-14, §2.38). Overloading also
    ends the pairs that stand in for it, such as `http::fetch` and `http::fetchWith`, before more of them are made.
 7. The rest of what everyday programs need: writing files and the rest of `fs` (§2.15), `split`, `trim`, `join` and
    `replace` on strings, `insert` and `erase` on vectors, width, alignment and hex in `format` (built 2026-11-14, §2.37),

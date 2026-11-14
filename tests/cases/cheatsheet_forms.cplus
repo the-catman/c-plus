@@ -6,6 +6,15 @@ import reflect;
 
 struct P { int x; int y = 0; };
 struct Point { int x = 0; int y = 0; };
+struct Vec {
+    double x = 0;
+    Vec operator+(const Vec& other) const { return Vec{x + other.x}; }
+};
+Vec operator*(double k, const Vec& v) { return Vec{k * v.x}; }
+struct Money {
+    long cents = 0;
+    bool operator==(const Money& other) const { return cents == other.cents; }
+};
 template<typename T, int N, typename K, typename V> struct Shapes {
     vector<T> items;
     array<T, N> fixed;
@@ -255,6 +264,11 @@ void reflectForms() {
 }
 
 void numberForms() {
+    Vec a = Vec{1};
+    Vec b = Vec{2};
+    a += b;
+    println("{} {} {}", a + b, 2 * a, contains(vector<Money>{Money{1}}, Money{1}));
+    // expect: {x: 5} {x: 6} true
     println("{:.2f} {:e} {:g} {:.3}", 1.5, 1.5, 1.5, 1.5);
     // expect: 1.50 1.500000e+00 1.5 1.5
     println("[{:>8}] [{:<8}] [{:^8}] [{:*^8}]", 1, 2, 3, "x");

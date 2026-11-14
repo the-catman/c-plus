@@ -306,16 +306,22 @@ void Modules::scanMembers(ModuleFile& file, std::vector<size_t>& declaring) {
         } else {
             // A function, when a `(` comes before any `=`; otherwise constants, each named just before its `=`.
             int angles = 0;
+            bool isOperator = false;  // `bool operator<(...)`, which is no name of the module: it goes with the types it takes
             size_t at = i;
             for (; at < n; ++at) {
                 const Tok a = t[at].kind;
+                if (a == Tok::KwOperator && angles == 0) {
+                    isOperator = true;
+                    ++at;  // the operator, which is no angle bracket
+                    continue;
+                }
                 if (a == Tok::Less) ++angles;
                 else if (a == Tok::Greater && angles > 0) --angles;
                 else if (a == Tok::Shr) angles = angles > 1 ? angles - 2 : 0;
                 else if (angles == 0 && (a == Tok::LParen || a == Tok::Assign || a == Tok::Semi || a == Tok::LBrace || a == Tok::RBrace)) break;
             }
             if (at < n && t[at].kind == Tok::LParen) {
-                add(at - 1, exported, false, true);
+                if (!isOperator) add(at - 1, exported, false, true);
                 i = endOf(at, true);
             } else if (at < n && t[at].kind == Tok::Assign) {
                 int depth = 0;

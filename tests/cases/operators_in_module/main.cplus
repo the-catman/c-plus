@@ -1,0 +1,14 @@
+// The operators of a module's types work in the files that import it.
+import geometry;
+
+int main() {
+    geometry::Vec a = geometry::Vec{1, 2};
+    geometry::Vec b = geometry::Vec{3, 0};
+    println("{} {} {}", a + b, 2 * a, geometry::twice(b));
+    // expect: {x: 4, y: 2} {x: 2, y: 4} {x: 6, y: 0}
+    vector<geometry::Vec> vs = {b, a};
+    sort(vs);
+    println("{} {}", vs, a < b);
+    // expect: [{x: 1, y: 2}, {x: 3, y: 0}] true
+    return 0;
+}

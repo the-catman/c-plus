@@ -558,8 +558,10 @@ Point f = a;                    // a copy: changing f leaves a alone
   copies share that object.
 - `==` and `!=` work on every struct with no code to write: two structs are equal when
   each pair of fields is equal, compared in order. C++20 needs
-  `bool operator==(const Point&) const = default;` for this; C+ does it for you. Strings
+  `bool operator==(const Vec&) const = default;` for this; C+ does it for you. Strings
   inside compare by contents and class references by identity (see [Classes](#classes)).
+  A struct can define its own `==` instead, which is then what every comparison of two of
+  them uses (see [Operator overloading](#operator-overloading)).
 - Not yet: destructors for structs.
 
 ### Classes
@@ -614,7 +616,7 @@ println("{}", a);              // User {name: "Alice", age: 31}
 - `a == b` is true when `a` and `b` refer to the same object, like `===` on objects in
   JavaScript or `==` on `shared_ptr` in C++. Two objects with equal fields are still two
   objects, so `User("Ann") == User("Ann")` is false. To compare contents, compare the
-  fields. Classes will be able to define their own `==` with operator overloading.
+  fields. A class's own `operator==` is not supported yet (see [Operator overloading](#operator-overloading)).
 
 ### Inheritance
 
@@ -2539,8 +2541,61 @@ identity, and pointers by address. They also compare an optional with a value or
 to right; in `v[i]`, `v` is evaluated before `i`, as in C++17. In `v[i].f(x)`, `i` is
 evaluated before `x`, and the element is found after `x`, so `x` can change `v`.
 
-Operator overloading is planned with C++ syntax, `Point operator+(Point other) const`,
-after function overloading. `&&`, `||` and the comma operator will not be overloadable.
+A struct or a class can say what the operators do with it: see [Operator overloading](#operator-overloading).
+
+### Operator overloading
+
+A struct or a class says what the operators do with it, as in C++. A member operator takes the right side, and `this` is
+the left side. One outside the type takes both sides, so `2 * a` runs the free `operator*(double k, const Vec& v)`:
+
+```cpp
+struct Vec {
+    double x = 0;
+    double y = 0;
+    Vec operator+(const Vec& other) const { return Vec{x + other.x, y + other.y}; }
+    Vec operator*(double k) const { return Vec{x * k, y * k}; }
+    Vec operator-() const { return Vec{-x, -y}; }
+    bool operator<(const Vec& other) const { return x * x + y * y < other.x * other.x + other.y * other.y; }
+};
+Vec operator*(double k, const Vec& v) { return v * k; }
+
+Vec a = Vec{1, 2};
+Vec b = a + a * 2;    // {x: 3, y: 6}
+a += b;               // a = a + b
+```
+
+- **What can be written:** `+ - * / %`, `& | ^ << >>`, the unary `-`, `+` and `~`, `==`, and `<`, `>`, `<=` and `>=`.
+- **An operator only reads its sides.** A member operator is `const`, and a parameter is a value or a `const T&`, with no
+  default value. Operators are chosen as [overloads](#overloading) are, member and free ones together. A member and a free
+  operator that take the same sides are an error where they are declared.
+- **A free operator takes a struct or a class**, on at least one side, and is written in the file that declares one of the
+  types it takes, so that `a + b` means the same in every file. It needs no `export`: an operator goes with its types, and
+  works wherever they are used.
+- **`==`.** A struct's own `operator==`, taking another of it, replaces comparing field by field everywhere: in vectors,
+  arrays and optionals of it and in the structs that hold it, and in `contains`, `count`, `index_of` and `erase`. As in
+  C++20, `!=` is always the opposite of `==`, so `operator!=` cannot be written, and `100 == m` runs `m == 100` when nothing
+  takes the number on the left. `bool operator==(const Vec&) const = default;` is allowed, and does what C+ does anyway. A
+  struct with its own `==` cannot be a [hashmap](#hash-maps) key, as a hash made from its fields could tell apart two
+  values that its `==` calls equal.
+- **Orderings.** `<`, `>`, `<=` and `>=` are each only themselves: as in C++, `a > b` with only an `operator<` is an error,
+  whose help writes it the other way round. `sort`, `min`, `max` and `binary_search` use `<`, and a type with an `operator<`
+  is `Comparable` (see [Constraints](#constraints)).
+- **Errors.** `==` and the orderings give a `bool` and cannot be marked `throws`, as sorting and comparing run them where an
+  error has nowhere to go. The other operators can be, and a use of one then says what happens, as a call does:
+  `try (f / f)`. As in Swift, `try f / f` puts `try` on its left side alone.
+- **`a += b`** runs `a = a + b`, for every operator that has a compound assignment, with the place of `a` found once,
+  after `b`, as for numbers. C++ needs `operator+=` written as well.
+- **In a class**, an operator is a method: it is inherited and can be `virtual`. `==` of two class references tells whether
+  they are the same object, as before.
+- The sides are worked out left to right, as for the language's own operators, even when `100 == m` runs `m == 100`.
+- **Not supported yet:** `operator<=>`, writing a compound assignment such as `operator+=`, `operator[]`, `operator()`,
+  `operator++`, `operator--`, a unary `*`, `operator->`, explicit conversion operators, operators on enums, a class's own
+  `operator==`, and generic operators outside a type.
+- **Never:** `operator=`, as a struct is copied field by field and a class object is shared; `operator!=`; `operator&&`,
+  `operator||` and `operator,`, which decide what runs; `operator!` and `operator bool`, as a struct or a class is never a
+  condition; other conversions, as nothing converts to or from a struct or a class by itself; a unary `&`, which always
+  gives the address; `operator new` and `operator delete`; and literals of a program's own. `ostream& operator<<` has nothing
+  to write to, as `println` prints any value.
 
 ### Integer overflow
 
@@ -3319,12 +3374,13 @@ largest(Point{1}, Point{2});
 
 ```
 error: 'Point' cannot be used for 'T' of 'largest', which must be 'Comparable'
-  = help: 'Point' has no `<`. Only numbers, chars, strings, enums and pointers do, until operators can be overloaded
+  = help: 'Point' has no `<`. Write `bool operator<(const Point& other) const { ... }` in it, or compare a field: `a.x < b.x`
 ```
 
 The name is one of:
 
-- **Built in.** `Comparable` has `<`: numbers, `char`, strings, enums and pointers. `Number` is an integer type, `float` or
+- **Built in.** `Comparable` has `<`: numbers, `char`, strings, enums, pointers, and the structs and classes with an
+  `operator<`. `Number` is an integer type, `float` or
   `double`. `Integer` is `int`, `long`, `uint8_t`, `uint16_t`, `uint32_t` or `uint64_t`, and `Floating` is `float` or `double`. `Hashable` can be a key of a
   [hashmap](#hash-maps).
 - **An interface or a class.** The type must derive from it, holding it once:
@@ -3849,7 +3905,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |
 | `final`, covariant return types, private and protected base classes | planned |
-| Operator overloading | planned |
+| Operator overloading: `+ - * / % & \| ^ << >>`, unary `-` `+` `~`, `==`, `<` `>` `<=` `>=`, members and free operators, `a += b` from `+` | implemented |
+| `operator<=>`, written compound assignments, `operator[]`, `operator()`, `operator++`, a unary `*`, `operator->`, conversion operators, operators on enums, a class's own `operator==`, generic operators outside a type | planned |
 | Destructors for structs, static members | planned |
 | `weak<T>` references: `lock`, `expired`, `reset` | implemented |
 | Errors: `throws`, `throw`, `try f()`, `try { } catch (E e) { }`, `catch (...)`, `throw;`, `Error`, `int main() throws` | implemented |

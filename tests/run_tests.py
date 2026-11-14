@@ -180,7 +180,7 @@ SPEC_SKETCHES = (
 
 def spec_code_problems(cplus, text, workdir):
     declaration = re.compile(r"^\s*(import\b|struct\b|class\b|interface\b|enum\b|template\b|extern\b|constexpr\b|\[\[allow\(new_delete\)\]\];|\[\[checked\]\]|const\s+\w+\s+[A-Z_]+\s*=)")
-    function = re.compile(r"^\s*(?:[\w:<>,\s\*\?]+?)\s+\**\w+\s*\([^;]*\)\s*(const\s*)?(throws\s*)?\{")
+    function = re.compile(r"^\s*(?:[\w:<>,\s\*\?]+?)\s+\**(?:\w+|operator[^\w\s(]+)\s*\([^;]*\)\s*(const\s*)?(throws\s*)?\{")
     needs_context = re.compile(r"is not declared|unknown type|there is no function named|there is no class named|has no field named|has no method named")
     source = workdir / "spec_block.cplus"
     problems = []
@@ -594,7 +594,17 @@ PLANNED_FEATURES = [
     ("covariant return types", 'class A { public: virtual A f() { return A(); } };\nclass B : public A { public: B f() override { return B(); } };\n' + M % ""),
     ("private base classes", 'class A { public: int x = 0; };\nclass B : private A {};\n' + M % ""),
     ("protected base classes", 'class A { public: int x = 0; };\nclass B : protected A {};\n' + M % ""),
-    ("operator overloading", 'struct P { int x = 0; P operator+(P o) { return o; } };\n' + M % ""),
+    ("operator<=>", 'struct P { int x = 0; bool operator<=>(const P& o) const { return true; } };\n' + M % ""),
+    ("written compound assignments", 'struct P { int x = 0; P operator+=(const P& o) const { return o; } };\n' + M % ""),
+    ("operator[]", 'struct P { int x = 0; int operator[](long i) const { return x; } };\n' + M % ""),
+    ("operator()", 'struct P { int x = 0; int operator()(int k) const { return k; } };\n' + M % ""),
+    ("operator++", 'struct P { int x = 0; P operator++() const { return this; } };\n' + M % ""),
+    ("a unary operator*", 'struct P { int x = 0; int operator*() const { return x; } };\n' + M % ""),
+    ("operator->", 'struct P { int x = 0; int operator->() const { return x; } };\n' + M % ""),
+    ("explicit conversion operators", 'struct P { int x = 0; explicit operator int() const { return x; } };\n' + M % ""),
+    ("operators on enums", 'enum class Color { Red };\nColor operator+(Color a, int b) { return a; }\n' + M % ""),
+    ("a class's own operator==", 'class P { public: int x = 0; bool operator==(const P& o) const { return true; } };\n' + M % ""),
+    ("generic operators outside a type", 'template<typename T> T operator+(T a, T b) { return a; }\n' + M % ""),
     ("struct destructors", 'struct P { int x = 0; ~P() {} };\n' + M % ""),
     ("static members", 'struct P { static int count; };\n' + M % ""),
     ("constructors that can fail", 'class A { public: A() throws {} };\n' + M % ""),
@@ -829,7 +839,7 @@ SPEC_REJECTED = {
     "auto x = null;": "auto x = null;", "found?.age = 3": 'User? found = null; found?.age = 3;',
     "found.name": 'User? found = null; println("{}", found.name);', "list[i]": 'vector<int>? list = null; int i = 0; println("{}", list[i]);',
     "for (auto x : list)": "vector<int>? list = null; for (auto x : list) {}", "auto p = {1, 2};": "auto p = {1, 2};",
-    "bool operator==(const Point&) const = default;": "^struct Q { bool operator==(const Q&) const = default; };", "new User(...)": 'auto u = new User("a");',
+    "new User(...)": 'auto u = new User("a");',
     "u->age": 'User u = User("a"); println("{}", u->age);', "class Dog : Animal": "^class Dog2 : Animal {};", "dynamic_cast<Dog*>": "Animal a = Dog(); auto d = dynamic_cast<Dog*>(a);",
     "dynamic_cast<Dog&>": "Animal a = Dog(); auto d = dynamic_cast<Dog&>(a);", "static_cast<Dog>(a)": "Animal a = Dog(); Dog d = static_cast<Dog>(a);", "(Dog)a": "Animal a = Dog(); Dog d = (Dog)a;",
     "b.Base::id": 'Twice b = Twice(); println("{}", b.Base::id);', "int Rect::area() { ... }": "^struct Rect { int w = 0; };\nint Rect::area() { return 1; }",
@@ -850,7 +860,17 @@ SPEC_REJECTED = {
     "typedef struct _IO_FILE FILE;": "^typedef struct _IO_FILE FILE;", "#define SQLITE_OK 0": "^#define SQLITE_OK 0",
     "f[i]": "FILE* f = null; int i = 0; auto x = f[i];", "f + 1": "FILE* f = null; auto x = f + 1;", "sizeof(FILE)": "long x = sizeof(FILE);", "typedef struct x x;": "^typedef struct x x;",
     "class X;": "^class X;", "json::Mine": "^struct json::Mine {};",
-    "Point operator+(Point other) const": "^struct P2 { int x = 0; P2 operator+(P2 other) const { return other; } };", "sizeof(void)": "long x = sizeof(void);",
+    "sizeof(void)": "long x = sizeof(void);",
+    "operator!=": "^struct R1 { int x = 0; bool operator!=(const R1& o) const { return true; } };", "operator=": "^struct R2 { int x = 0; R2 operator=(R2 o) { return o; } };",
+    "operator&&": "^struct R3 { int x = 0; bool operator&&(R3 o) const { return true; } };", "operator||": "^struct R4 { int x = 0; bool operator||(R4 o) const { return true; } };",
+    "operator,": "^struct R5 { int x = 0; bool operator,(R5 o) const { return true; } };", "operator!": "^struct R6 { int x = 0; bool operator!() const { return true; } };",
+    "operator bool": "^struct R7 { int x = 0; operator bool() const { return true; } };", "operator new": "^struct R8 { int x = 0; void operator new(long n) {} };",
+    "operator delete": "^struct R9 { int x = 0; void operator delete(int p) {} };", "ostream& operator<<": "^ostream& operator<<(ostream& os, int x) { return os; }",
+    "operator<=>": "^struct R10 { int x = 0; bool operator<=>(R10 o) const { return true; } };", "operator+=": "^struct R11 { int x = 0; R11 operator+=(R11 o) const { return o; } };",
+    "operator[]": "^struct R12 { int x = 0; int operator[](long i) const { return x; } };", "operator()": "^struct R13 { int x = 0; int operator()(int k) const { return k; } };",
+    "operator++": "^struct R14 { int x = 0; R14 operator++() const { return this; } };", "operator--": "^struct R15 { int x = 0; R15 operator--() const { return this; } };",
+    "operator->": "^struct R16 { int x = 0; int operator->() const { return x; } };", "operator==": "^class R17 { public: int x = 0; bool operator==(const R17& o) const { return true; } };",
+    "try f / f": "^struct R18 { int x = 0; R18 operator/(R18 o) const throws { return o; } };\nvoid f2() throws { R18 f = R18{}; R18 g = try f / f; }",
     "{:#o}": 'println("{:#o}", 15);', "{:a}": 'println("{:a}", 1.5);', "{::x}": 'vector<int> v = {1}; println("{::x}", v);',
     "{:n}": 'vector<int> v = {1}; println("{:n}", v);', 'throw "text"': '^void f2() throws { throw "text"; }', "try f() + g()": "int x = try f() + g();",
     "Node n = a;": 'local<Node> a = local<Node>("x"); Node n = a;', "local<Node> a = n;": 'Node n = Node("x"); local<Node> a = n;', "weak<Node>?": "weak<Node>? w = null;",
@@ -1430,6 +1450,28 @@ int main() {
         lsp.send("exit", request=False)
         code, _ = lsp.finish()
         expect("the server ends as it should after an enum", code == 0, code)
+
+        # An operator of the program has a meaning where it is used: the one that runs, which for `!=` is `==`, and for `+=` is `+`.
+        ops_uri = "file:///work/ops.cplus"
+        text = ("struct Vec {\n    int x = 0;\n    Vec operator+(const Vec& o) const { return Vec{x + o.x}; }\n"
+                "    bool operator==(const Vec& o) const { return x == o.x; }\n};\nint main() {\n    Vec a = Vec{1};\n    Vec b = a + a;\n"
+                "    b += a;\n    return a != b ? 1 : 0;\n}\n")
+        lsp = LspClient(cplus)
+        lsp.request("initialize", {"capabilities": {}})
+        lsp.send("textDocument/didOpen", {"textDocument": {"uri": ops_uri, "languageId": "cplus", "version": 1, "text": text}}, request=False)
+        found = lsp.diagnostics(ops_uri)
+        expect("a program with operators is checked without errors", found and found.get("diagnostics") == [], found)
+        place = lambda line, character: {"textDocument": {"uri": ops_uri}, "position": {"line": line, "character": character}}
+        for (line, character), start, what in [((7, 14), {"line": 2, "character": 8}, "`+`"), ((8, 6), {"line": 2, "character": 8}, "`+=`"),
+                                               ((9, 13), {"line": 3, "character": 9}, "`!=`")]:
+            answer = lsp.request("textDocument/definition", place(line, character))
+            expect(f"the definition of {what} is the operator it runs", ((answer or {}).get("result") or {}).get("range", {}).get("start") == start, answer)
+        answer = lsp.request("textDocument/hover", place(7, 14))
+        expect("hovering over `+` shows the operator", "operator+" in (hover(answer) or ""), answer)
+        lsp.request("shutdown")
+        lsp.send("exit", request=False)
+        code, _ = lsp.finish()
+        expect("the server ends as it should after operators", code == 0, code)
 
         # Every example, with a hover and a definition asked for at each word: no check crashes, and the names have meanings.
         lsp = LspClient(cplus)

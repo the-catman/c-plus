@@ -70,7 +70,9 @@ private:
     bool match(Tok k);
     const Token& expect(Tok k, const std::string& context);
     const Token& expectNewName(const std::string& context);
-    std::string operatorHelp(size_t ahead = 0) const;
+    std::string operatorNameAt(size_t at, size_t& tokens, const StructDecl* owner);
+    std::string parseOperatorName(Loc& loc, const StructDecl* owner);
+    void rejectOperatorAhead(size_t at, const StructDecl* owner = nullptr);
     [[noreturn]] void failUnknownGeneric(size_t at);
     bool isValueArgument(const Token& k);
     [[noreturn]] void failMakePointer(const Token& t);

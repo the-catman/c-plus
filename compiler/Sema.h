@@ -215,6 +215,20 @@ private:
     void addDefaults(std::vector<ExprPtr>& args, const FuncDecl& fn);
     void addDefaults(std::vector<InitListExpr::Element>& elements, const FuncDecl& fn);
     void checkOverloadPair(const FuncDecl& first, const FuncDecl& second, bool& sameParams);
+    // How well one argument fits a parameter, as a rank and a depth, lower being better: see Fit in Sema.cpp.
+    std::optional<std::pair<int, int>> argumentFit(const Expr& arg, const VarDecl& param);
+    // Operator overloading: what `a + b`, `-a` and `a += b` run where a side is a struct or a class.
+    void checkOperatorDecl(FuncDecl& f);
+    void noteOwnEquals(FuncDecl& f);
+    std::vector<FuncDecl*> operatorCandidates(const std::string& name, const Type* self, const Type* other, size_t operands);
+    FuncDecl* bestOperator(const std::vector<FuncDecl*>& candidates, const std::vector<Expr*>& operands, std::vector<FuncDecl*>& tied);
+    bool checkOperatorUse(BinaryExpr& b, const Type* l, const Type* r, Flow& flow, const Type*& result);
+    bool checkUnaryOperator(UnaryExpr& u, const Type* t, Flow& flow, const Type*& result);
+    bool checkOperatorAssign(AssignExpr& a, const Type* t, Flow& flow);
+    void useOperator(FuncDecl& f, const std::vector<Expr*>& operands, Loc loc, Flow& flow, BasePath& path, const std::string& written, bool tryOnLeft = false);
+    void reportOperatorChoice(const std::string& name, const std::vector<FuncDecl*>& candidates, const std::vector<FuncDecl*>& tied,
+                              const std::vector<const Type*>& sides, Loc loc);
+    bool hasOrdering(const Type* t);
     // One value given when building a struct or class: `Type(args)` or a `{ }` list.
     struct ConstructArg {
         std::string designator;  // field name for `.x = value`, empty for positional

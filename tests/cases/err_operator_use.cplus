@@ -1,0 +1,74 @@
+// Using an operator that is not there, that does not fit, or that can fail.
+struct Point {
+    int x = 0;
+    int y = 0;
+    bool operator<(const Point& o) const { return x < o.x; }
+    Point operator*(double k) const { return Point{x, y}; }
+    int operator-(const Point& o) const { return x - o.x; }
+};
+struct Secret {
+    int x = 0;
+private:
+    Secret operator+(const Secret& o) const { return o; }
+};
+class Animal { public: string name = "a"; };
+class Dog : public Animal {};
+Animal operator+(const Dog& a, const Animal& b) { return a; }
+Animal operator+(const Animal& a, const Dog& b) { return b; }
+struct Fraction {
+    long top = 0;
+    long bottom = 1;
+    Fraction operator/(const Fraction& o) const throws { return Fraction{top * o.bottom, bottom * o.top}; }
+};
+struct Money {
+    long cents = 0;
+    bool operator==(const Money& o) const { return cents == o.cents; }
+};
+int main() {
+    Point a = Point{1, 2};
+    Point b = Point{3, 4};
+    println("{}", a + b);
+    println("{}", a > b);
+    println("{}", a >= b);
+    println("{}", a * "two");
+    println("{}", 2 * a);
+    println("{}", -a);
+    a -= b;
+    a /= 2;
+    Secret s = Secret{};
+    println("{}", s + s);
+    Dog d = Dog();
+    println("{}", d + d);
+    Fraction f = Fraction{1, 2};
+    Fraction g = f / f;
+    Fraction h = try f / f;
+    Fraction i = try (f / f);
+    hashmap<Money, int> wallets;
+    return 0;
+}
+// error: 'Point' has no `+`
+// error: write `Point operator+(const Point& other) const { ... }` in 'Point', or use one of its fields, such as `a.x`
+// error: err_operator_use.cplus:30:21
+// error: 'Point' has no `>`
+// error: write `b < a`, as `>` is not made from the others, or write `operator>` too
+// error: 'Point' has no `>=`
+// error: write `!(a < b)`, as `>=` is not made from the others, or write `operator>=` too
+// error: no `operator*` takes 'Point' and 'string'
+// error: there is 1: `Point.operator*(double k)`. Give one of them what it takes, or write one that takes these
+// error: no `operator*` takes 'int' and 'Point'
+// error: write `Point operator*(int a, const Point& b) { ... }` outside 'Point', in its file
+// error: 'Point' has no `-` of one side
+// error: write `Point operator-() const { ... }` in 'Point'
+// error: `a -= b` stores what 'operator-' gives in 'a', but it gives 'int', not 'Point'
+// error: store it somewhere else: `auto c = a - b;`
+// error: 'Point' has no `/`, which `/=` runs
+// error: write `Point operator/(int other) const { ... }` in 'Point': `a /= 2` then runs `a = a / 2`
+// error: 'operator+' is private in 'Secret'
+// error: `+` on 'Dog' and 'Dog' fits `operator+(const Dog& a, const Animal& b)` and `operator+(const Animal& a, const Dog& b)` as well as each other
+// error: convert a side so that one of them fits better, or remove one of them
+// error: `f / f` runs 'operator/', which can fail, so it must say what happens then
+// error: write `try (f / f)`, which passes the error on, or put it in `try { ... } catch (Error e) { ... }`
+// error: `try f / f` puts `try` on its left side alone, and 'operator/' can fail
+// error: write `try (f / f)`, which passes the error of the whole on
+// error: an error from 'operator/' has nowhere to go, since 'main' is not marked `throws`
+// error: use another type for the key: 'Money' has its own `==`

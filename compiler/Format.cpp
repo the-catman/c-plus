@@ -36,6 +36,7 @@ enum class Role : uint8_t {
     CastClose,      // `)` of `(int)x`
     AccessColon,    // `:` of `public:`
     CaseColon,      // `:` of `case 1:` or `default:`
+    OperatorName,   // `+` of `operator+`, which is a name
 };
 
 const std::set<std::string> kTemplates = {"vector", "array", "hashmap", "Task", "unique", "local", "function", "static_cast", "reinterpret_cast", "dynamic_cast",
@@ -203,7 +204,12 @@ private:
             if (after != Tok::Ident || !(end == Tok::Assign || end == Tok::Semi || end == Tok::Comma || end == Tok::RParen || end == Tok::Colon ||
                                          end == Tok::LBracket))
                 continue;
-            const bool startsStatement = i == 0 || before == Tok::Semi || before == Tok::LBrace || before == Tok::RBrace || before == Tok::Colon ||
+            // The `{` of a list, as in `Vec{x * k, y * k}`, starts no statement: it comes after a type, `=`, `return`, `(` or `,`.
+            const Tok beforeBrace = i >= 2 ? kind(i - 2) : Tok::Eof;
+            const bool listBrace = before == Tok::LBrace && !braces.back() &&
+                                   (beforeBrace == Tok::Ident || beforeBrace == Tok::Greater || beforeBrace == Tok::Shr || beforeBrace == Tok::Assign ||
+                                    beforeBrace == Tok::KwReturn || beforeBrace == Tok::LParen || beforeBrace == Tok::Comma);
+            const bool startsStatement = i == 0 || before == Tok::Semi || (before == Tok::LBrace && !listBrace) || before == Tok::RBrace || before == Tok::Colon ||
                                          (before == Tok::LParen && i >= 2 && kind(i - 2) == Tok::KwFor);
             const bool amongDeclarations = braces.empty() || braces.back();
             if (!stars || startsStatement || ((before == Tok::LParen || before == Tok::Comma) && amongDeclarations && inParameters(i)))
@@ -362,6 +368,10 @@ private:
             const Tok k = kind(i);
             const size_t p = i == 0 ? kNone : i - 1;
             const Tok pk = p == kNone ? Tok::Eof : kind(p);
+            if (pk == Tok::KwOperator && k != Tok::LParen && k != Tok::LBracket) {
+                role_[i] = Role::OperatorName;
+                continue;
+            }
             switch (k) {
             case Tok::LParen:
             case Tok::LBracket:
@@ -508,6 +518,8 @@ private:
         if (ak == Tok::Comma) return true;
         if (ak == Tok::Semi) return bk != Tok::RParen;
         if (ak == Tok::LParen || ak == Tok::LBracket || bk == Tok::RParen || bk == Tok::RBracket) return false;
+        if (ak == Tok::KwOperator && br == Role::OperatorName) return false;           // `operator+`
+        if (ar == Role::OperatorName && bk == Tok::LParen) return false;              // `operator+(`
         if ((ak == Tok::LBrace && ar == Role::Init) || (bk == Tok::RBrace && br == Role::Init)) return false;
         if ((ak == Tok::Arrow && lambdaArrow_[a]) || (bk == Tok::Arrow && lambdaArrow_[b])) return true;  // `[](int x) -> int {`
         if (ak == Tok::Dot || ak == Tok::Arrow || ak == Tok::QuestionDot || ak == Tok::ColonColon) return false;

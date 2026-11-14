@@ -106,7 +106,9 @@ bool Parser::parseReturnReference(const Type* ret, bool isConst, bool member) {
 
 // A name being declared. What a module has is only read, by the name that joinModuleNames makes.
 const Token& Parser::expectNewName(const std::string& context) {
-    if (check(Tok::KwOperator)) notYet(peek().loc, "operator overloading", operatorHelp());
+    if (check(Tok::KwOperator))
+        fail(peek().loc, "'operator' is a keyword, which starts the name of an operator, as in `Point operator+(Point other) const`",
+             "give it another name", spec::OperatorOverloading);
     if (check(Tok::KwConst)) fail(peek().loc, "C+ writes `const` before the type", "write `const int x`, or `const char* s`", spec::Variables);
     if (check(Tok::Ident) && peek().loc.line && peek().text.find("::") != std::string::npos && !peek().moduleName) {
         std::string module = peek().text.substr(0, peek().text.find("::"));
@@ -126,14 +128,96 @@ const Token& Parser::expectNewName(const std::string& context) {
     return expect(Tok::Ident, context);
 }
 
-// What to do instead of writing an operator, which the token after `operator` decides.
-std::string Parser::operatorHelp(size_t ahead) const {
-    Tok op = peek(ahead + 1).kind;
-    if (op == Tok::Shl)  // `ostream& operator<<(ostream& os, P p)`
-        return "for printing, remove it: `println(\"{}\", p)` already prints a struct's fields. For text of your own, write a method, `string str() const { ... }`, and print `p.str()`";
-    if (op == Tok::EqEq || op == Tok::NotEq)
-        return "for a struct, remove it: every struct already has `==` and `!=`, field by field. For a class, `==` means the same object, so write a method: `bool same(User other) const { ... }`";
-    return "write a method for now, such as `Point add(Point other)`";
+// The operator after the `operator` at peek(at), as in `Point operator+(Point other) const`: its name, such as `operator+`, and
+// in `tokens` how many tokens it takes after `operator`. What C+ cannot overload, or not yet, is reported here, before the
+// rest of the declaration is read. `owner` is the type it is declared in, if any, for the help.
+std::string Parser::operatorNameAt(size_t at, size_t& tokens, const StructDecl* owner) {
+    const Token& kw = peek(at);
+    const Token& op = peek(at + 1);
+    Loc loc = kw.loc;
+    if (op.loc.line == kw.loc.line) loc.len = op.loc.col + op.loc.len - kw.loc.col;
+    tokens = 1;
+    const std::string self = owner ? owner->name : "Point";
+    switch (op.kind) {
+        case Tok::Plus: case Tok::Minus: case Tok::Star: case Tok::Slash: case Tok::Percent: case Tok::Amp: case Tok::Pipe: case Tok::Caret:
+        case Tok::Shl: case Tok::Shr: case Tok::Tilde: case Tok::EqEq: case Tok::Less: case Tok::Greater: case Tok::GreaterEq:
+            return std::string("operator") + tokSpelling(op.kind);
+        case Tok::LessEq:
+            if (peek(at + 2).kind == Tok::Greater && peek(at + 2).begin == op.end) {
+                const std::string field = owner && !owner->fields.empty() ? owner->fields[0].name : "x";
+                notYet(loc, "`operator<=>`",
+                       "write `operator<` and the other comparisons you need, comparing the fields: `bool operator<(const " + self + "& other) const { return " +
+                           field + " < other." + field + "; }`");
+            }
+            return "operator<=";
+        case Tok::NotEq:
+            fail(loc, "C+ makes `!=` from `==`, so `operator!=` cannot be written", "remove it: `a != b` is always `!(a == b)`", spec::OperatorOverloading);
+        case Tok::Assign:
+            fail(loc, "`operator=` cannot be written in C+",
+                 "remove it: a struct is copied field by field, and a class object is shared, never copied. For a separate copy, write a method such "
+                 "as `" + self + " clone() const`, and for a value that cannot be copied, use `unique<" + self + ">`",
+                 spec::OperatorOverloading);
+        case Tok::PlusAssign: case Tok::MinusAssign: case Tok::StarAssign: case Tok::SlashAssign: case Tok::PercentAssign: case Tok::AmpAssign:
+        case Tok::PipeAssign: case Tok::CaretAssign: case Tok::ShlAssign: case Tok::ShrAssign: {
+            std::string arith = tokSpelling(op.kind);
+            arith.pop_back();
+            notYet(loc, std::string("writing `operator") + tokSpelling(op.kind) + "`",
+                   "remove it: once `operator" + arith + "` is written, `a " + tokSpelling(op.kind) + " b` works as `a = a " + arith + " b`");
+        }
+        case Tok::PlusPlus: case Tok::MinusMinus:
+            notYet(loc, std::string("`operator") + tokSpelling(op.kind) + "`", "write a method, such as `void next()`, or `p = p + 1` with an `operator+`");
+        case Tok::LBracket: notYet(loc, "`operator[]`", "write a method that gives the element, such as `int at(long i) const`");
+        case Tok::LParen: notYet(loc, "`operator()`", "use a lambda, as in `auto twice = [](int x) { return x * 2; };`, or write a method");
+        case Tok::Arrow: notYet(loc, "`operator->`", "write a method that gives what it leads to");
+        case Tok::AmpAmp: case Tok::PipePipe: case Tok::Comma:
+            fail(loc, std::string("`operator") + tokSpelling(op.kind) + "` cannot be written, as `&&`, `||` and `,` decide what runs",
+                 "write a method, such as `bool both(const " + self + "& other) const`", spec::OperatorOverloading);
+        case Tok::Bang:
+            fail(loc, "`operator!` cannot be written, as a struct or a class is never a condition",
+                 "write a method that says what it tests, such as `bool empty() const`", spec::OperatorOverloading);
+        case Tok::KwNew: case Tok::KwDelete:
+            fail(loc, std::string("`operator ") + tokSpelling(op.kind) + "` cannot be written", "remove it: C+ gets and frees the memory of what it makes itself",
+                 spec::OperatorOverloading);
+        case Tok::StringLit:
+            fail(loc, "C+ has no literals of a program's own, such as `operator\"\"`", "write a function: `Meters meters(double x) { ... }`", spec::OperatorOverloading);
+        default: break;
+    }
+    if (isTypeStart(at + 1)) {
+        const std::string type = op.text.empty() ? tokSpelling(op.kind) : op.text;
+        fail(loc, "`operator " + type + "` cannot be written, as nothing converts to or from a struct or a class by itself",
+             op.kind == Tok::KwBool ? std::string("write a method that says what it tests, such as `bool ok() const`")
+                                    : "write a method that gives the value, such as `" + type + " value() const`",
+             spec::OperatorOverloading);
+    }
+    fail(op.loc, "expected an operator after `operator`, found " + describeToken(op),
+         "write one of + - * / % & | ^ << >> ~ == < > <= >=, as in `" + self + " operator+(" + self + " other) const`", spec::OperatorOverloading);
+}
+
+// `operator+` or another operator, as the name of the function or method being declared.
+std::string Parser::parseOperatorName(Loc& loc, const StructDecl* owner) {
+    size_t tokens = 0;
+    std::string name = operatorNameAt(0, tokens, owner);
+    loc = peek().loc;
+    const Token& last = peek(tokens);
+    if (last.loc.line == loc.line) loc.len = last.loc.col + last.loc.len - loc.col;
+    for (size_t i = 0; i <= tokens; ++i) advance();
+    return name;
+}
+
+// Before the return type of a declaration, which may not be read yet: an `operator` at peek(at) that cannot be written is
+// reported first, and so is `ostream& operator<<`, a C++ habit for printing.
+void Parser::rejectOperatorAhead(size_t at, const StructDecl* owner) {
+    if (peek(at).kind != Tok::KwOperator) return;
+    if (at == 1 && check(Tok::Ident) && peek().text == "explicit")
+        notYet(peek().loc, "explicit conversion operators", "write a method that gives the value, such as `int value() const`");
+    const Tok op = peek(at + 1).kind;
+    if ((op == Tok::Shl || op == Tok::Shr) && check(Tok::Ident) && (peek().text == "ostream" || peek().text == "istream"))
+        fail(peek(at).loc, std::string("C+ has no streams, so this `operator") + tokSpelling(op) + "` has nothing to " + (op == Tok::Shl ? "write to" : "read from"),
+             op == Tok::Shl ? "for printing, remove it: `println(\"{}\", p)` already prints a struct's fields. For text of your own, write a method, `string str() const { ... }`, and print `p.str()`"
+                            : "read a line with `readLine()`, and the parts of it with `stoi` and the like",
+             spec::OperatorOverloading);
+    size_t tokens = 0;
+    operatorNameAt(at, tokens, owner);
 }
 
 const Token& Parser::expect(Tok k, const std::string& givenContext) {
@@ -1290,6 +1374,9 @@ void Parser::readTemplate(TemplateDecl& t) {
             const Type* ret = parseType(retLoc, &isConst);
             if (isConst) fail(retLoc, "a function cannot return a const value", "remove `const`", spec::Functions);
             if (ret->is(Type::Kind::Auto)) notYet(retLoc, "'auto' return types", "write the return type, e.g. `T`");
+            if (check(Tok::KwOperator) || (check(Tok::Amp) && peek(1).kind == Tok::KwOperator))
+                notYet(peek().loc, "generic operators outside a type",
+                       "write the operator inside the generic type, `Vec<T> operator+(const Vec<T>& other) const { ... }`, or once for each type it is needed for");
             t.pattern = parseFunction(ret, retLoc);
             t.pattern->isAsync = isAsync;
             t.pattern->asyncLoc = asyncLoc;
@@ -1981,8 +2068,18 @@ void Parser::rejectOtherLanguages() {
     if (w == "register") fail(t.loc, "C+ has no 'register'", "remove it: the compiler decides", spec::Variables);
     if (w == "volatile") fail(t.loc, "C+ has no 'volatile'", "remove it. For what threads share, use a field of a class and a `Mutex`", spec::Mutex);
     if (w == "mutable") fail(t.loc, "C+ has no 'mutable'", "remove `mutable`, and take `const` off the method that changes it", spec::Methods);
+    if (w == "explicit" && peek(1).kind == Tok::KwOperator)
+        notYet(t.loc, "explicit conversion operators", "write a method that gives the value, such as `int value() const`");
     if (w == "explicit") fail(t.loc, "C+ has no 'explicit'", "remove it: a plain value never converts to a class by itself", spec::Classes);
-    if (w == "friend") fail(t.loc, "C+ has no 'friend'", "make what it needs public, or give the class a method for it", spec::Classes);
+    if (w == "friend") {
+        bool isOperator = false;
+        for (size_t i = 1; i < 32 && !isOperator && peek(i).kind != Tok::LParen && peek(i).kind != Tok::Semi && peek(i).kind != Tok::Eof; ++i)
+            isOperator = peek(i).kind == Tok::KwOperator;
+        fail(t.loc, "C+ has no 'friend'",
+             isOperator ? "write the operator outside the type, as a function of the file, such as `Point operator*(int k, Point p) { ... }`, using what the type makes public"
+                        : "make what it needs public, or give the class a method for it",
+             spec::Classes);
+    }
     if (w == "union") notYet(t.loc, "unions", "use a struct with a field for each, or classes that derive from one");
     if (w == "thread_local")
         notYet(t.loc, "thread_local", "remove it, which makes one variable that every thread shares, and protect it with a `Mutex`. "
@@ -2171,8 +2268,7 @@ void Parser::parseTopLevel(Program& prog) {
             break;
         default: break;
     }
-    if (check(Tok::Ident) && peek(1).kind == Tok::KwOperator) notYet(peek(1).loc, "operator overloading", operatorHelp(1));
-    if (check(Tok::Ident) && peek(1).kind == Tok::Amp && peek(2).kind == Tok::KwOperator) notYet(peek(2).loc, "operator overloading", operatorHelp(2));
+    if (check(Tok::Ident)) rejectOperatorAhead(peek(1).kind == Tok::Amp ? 2 : 1);
     if (!isTypeStart()) {
         checkUnknownType();
         fail(t.loc, "expected a function or an import, found " + describeToken(t),
@@ -2639,7 +2735,7 @@ bool Parser::isTypeStart(size_t ahead) const {
             if (peek(ahead + 1).kind == Tok::LParen && peek(ahead + 2).kind == Tok::Star && peek(ahead + 3).kind == Tok::Ident &&
                 peek(ahead + 4).kind == Tok::RParen && peek(ahead + 5).kind == Tok::LParen)
                 return true;  // `sqlite3* (*open)(const char*)`, a function pointer
-            return peek(ahead + 1).kind == Tok::Ident;
+            return peek(ahead + 1).kind == Tok::Ident || peek(ahead + 1).kind == Tok::KwOperator;  // `Point operator+(...)`
         case Tok::KwString: return peek(ahead + 1).kind != Tok::ColonColon;  // not `string::npos`
         case Tok::KwInt: case Tok::KwLong: case Tok::KwBool:
         case Tok::KwVoid: case Tok::KwAuto: case Tok::KwConst: case Tok::KwWeak:
@@ -3460,6 +3556,15 @@ void Parser::parseParams(FuncDecl& fn) {
             if (ty->is(Type::Kind::Auto) && !lambdaParams_)
                 notYet(typeLoc, "`auto` parameters of a function", "write the parameter type. A function for any type is a generic: `template<typename T> void f(T x)`");
             bool isRef = (check(Tok::Amp) || check(Tok::AmpAmp)) && parseReferenceMark(ty, ReferencePlace::Parameter);
+            if (check(Tok::RParen) && fn.name == "operator==" && peek(1).kind == Tok::KwConst && peek(2).kind == Tok::Assign && peek(3).kind == Tok::KwDefault) {
+                // `bool operator==(const Point&) const = default;`, as C++20 writes it, with no body to name the parameter in
+                auto param = std::make_unique<VarDecl>(typeLoc, "other", ty, typeLoc);
+                param->isParam = true;
+                param->isConst = isConst;
+                param->isRef = isRef;
+                fn.params.push_back(std::move(param));
+                break;
+            }
             const Token& pname = declaredName(ty, typeLoc, "for the parameter name");
             rejectTemplateParamName(pname);
             if (check(Tok::LBracket) && fn.name == "main" && fn.role == FuncDecl::Role::Free) {
@@ -3525,10 +3630,14 @@ std::unique_ptr<FuncDecl> Parser::parseFunction(const Type* retType, Loc retLoc)
     auto fn = std::make_unique<FuncDecl>();
     fn->retType = retType;
     fn->retTypeLoc = retLoc;
-    rejectCheckedName(peek());
-    const Token& name = expectNewName("for the function name after the return type");
-    fn->name = name.text;
-    fn->nameLoc = name.loc;
+    if (check(Tok::KwOperator)) {
+        fn->name = parseOperatorName(fn->nameLoc, nullptr);
+    } else {
+        rejectCheckedName(peek());
+        const Token& name = expectNewName("for the function name after the return type");
+        fn->name = name.text;
+        fn->nameLoc = name.loc;
+    }
     parseParams(*fn);
     parseThrowsMark(*fn);
     if (check(Tok::Semi))
@@ -3794,7 +3903,14 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         case Tok::KwStatic: notYet(t.loc, "static members", "use a constant or a function outside the type");
         case Tok::KwConstexpr:
             notYet(t.loc, "constexpr methods and fields", "write a `constexpr` function or constant outside the type");
-        case Tok::KwOperator: notYet(t.loc, "operator overloading", operatorHelp());
+        case Tok::KwOperator: {  // `operator bool()`, which has no return type, or one that was left out
+            Loc at;
+            const std::string op = parseOperatorName(at, &sd);
+            fail(at, "an operator needs its return type, before `operator`",
+                 "write it first, as in `" + std::string(op == "operator==" || op == "operator<" || op == "operator>" || op == "operator<=" || op == "operator>=" ? "bool " : sd.name + " ") +
+                     op + "(...) const`",
+                 spec::OperatorOverloading);
+        }
         case Tok::KwTemplate:
             notYet(t.loc, "generic methods", "make the whole type generic, or write a generic function outside it");
         default: break;
@@ -3884,8 +4000,7 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
         return;
     }
 
-    if (peek(1).kind == Tok::KwOperator) notYet(peek(1).loc, "operator overloading", operatorHelp(1));
-    if (peek(1).kind == Tok::Amp && peek(2).kind == Tok::KwOperator) notYet(peek(2).loc, "operator overloading", operatorHelp(2));
+    rejectOperatorAhead(peek(1).kind == Tok::Amp ? 2 : 1, &sd);
     if (!isTypeStart()) {
         checkUnknownType();
         fail(t.loc, "expected a field or method, found " + describeToken(t),
@@ -3898,19 +4013,22 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
     if (isConst) notYet(t.loc, "const fields", "leave out `const`, keep it private, and give the type a method that returns it");
     if (ty->is(Type::Kind::Auto))
         fail(typeLoc, "fields and methods need a written type", "write the type, e.g. `int x = 0;`. `auto` is only for local variables", spec::Structs);
-    if (check(Tok::KwOperator)) notYet(peek().loc, "operator overloading", operatorHelp());
-    if (isAsync && !(check(Tok::Ident) && peek(1).kind == Tok::LParen))
+    if (isAsync && !((check(Tok::Ident) && peek(1).kind == Tok::LParen) || check(Tok::KwOperator)))
         fail(asyncLoc, "only a function or a method can be async", "remove `async`", spec::Async);
 
-    // Method: type name(params) [const] { ... }
-    if (check(Tok::Ident) && peek(1).kind == Tok::LParen) {
+    // Method: type name(params) [const] { ... }, or an operator: type operator+(params) const { ... }
+    if ((check(Tok::Ident) && peek(1).kind == Tok::LParen) || check(Tok::KwOperator)) {
         auto method = std::make_unique<FuncDecl>();
         method->retType = ty;
         method->retTypeLoc = typeLoc;
-        rejectCheckedName(peek());
-        const Token& name = expectNewName("for the method name");
-        method->name = name.text;
-        method->nameLoc = name.loc;
+        if (check(Tok::KwOperator)) {
+            method->name = parseOperatorName(method->nameLoc, &sd);
+        } else {
+            rejectCheckedName(peek());
+            const Token& name = expectNewName("for the method name");
+            method->name = name.text;
+            method->nameLoc = name.loc;
+        }
         method->role = FuncDecl::Role::Method;
         method->owner = &sd;
         method->access = access;
@@ -3942,6 +4060,21 @@ void Parser::parseMember(StructDecl& sd, Access& access) {
             expect(Tok::Semi, "after the method of an interface");
             sd.methods.push_back(std::move(method));
             return;
+        }
+        if (check(Tok::Assign) && peek(1).kind == Tok::KwDefault) {  // `bool operator==(const P&) const = default;`, as C++20 has it
+            if (method->name != "operator==")
+                fail(peek(1).loc, "only `operator==` can be `= default` in C+", "write the body of the method, or remove it", spec::OperatorOverloading);
+            if (sd.isClass)
+                notYet(method->nameLoc, "`operator==` for a class",
+                       "`==` of two class references tells whether they are the same object. To compare what is in them, write a method, such as `bool equals(const " +
+                           sd.name + "& other) const`");
+            if (method->params.size() != 1 || method->params[0]->declType != &sd.type)
+                fail(method->nameLoc, "`= default` compares two values of the type field by field, so this `operator==` takes another " + std::string("'") + sd.name + "'",
+                     "make its parameter `const " + sd.name + "& other`", spec::OperatorOverloading);
+            advance();
+            advance();
+            expect(Tok::Semi, "after `= default`");
+            return;  // nothing to add: a struct compares field by field already
         }
         if (match(Tok::Assign)) {  // `= 0`: no body, and a class that derives must write one
             if (peek().kind != Tok::IntLit || peek().intValue != 0)
