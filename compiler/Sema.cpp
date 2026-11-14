@@ -3300,11 +3300,15 @@ void Sema::checkVarDecl(VarDecl& v, Flow& flow) {
         v.type = v.declType->is(K::Auto) ? Type::error() : v.declType;
     }
     boundByRef_ = bound;
-    if (v.isRef && v.init && refCallee(*v.init))
-        diags_.error(v.init->loc, "this compiler does not support binding a reference to what a function returns yet",
-                     "use the call where the reference would be, as in `" + spelled(*v.init, "f()") + " = ...;`, or keep a copy: `auto " + v.name + " = ...;`",
-                     spec::References);
-    else if (v.isRef && !v.isConst && v.init) checkRefBinding(*v.init, v.type, "reference " + q(v.name));
+    // `auto& acct = bank.find(0);`, where `find` returns a class object by `C&`: the object, which it names, as `auto& a = acct;` does.
+    const FuncDecl* object = v.init ? objectCallee(*v.init) : nullptr;
+    if (!object && v.init && v.init->kind == Expr::Kind::Name && static_cast<const NameExpr&>(*v.init).decl)
+        object = static_cast<const NameExpr&>(*v.init).decl->objectOf;
+    if (v.isRef && !v.isConst && object) {
+        v.objectOf = object;
+        v.isRef = false;
+    }
+    if (v.isRef && !v.isConst && v.init) checkRefBinding(*v.init, v.type, "reference " + q(v.name));
     if (v.isConstexpr) foldConstexpr(v);
     declare(v);  // after the initializer: `int x = x;` refers to an outer x, as in C++
     if (v.init) {
@@ -5394,6 +5398,11 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
         if (t->isError()) return false;
         if (placeCall(target)) return checkChangeable(target, action, nullptr, "", change, before);
         if (refCallee(target)) return true;  // the place `T& f()` returned
+        if (const FuncDecl* f = objectCallee(target)) {
+            diags_.error(target.loc, q(f->name) + " returns the object itself, not the variable or element that holds it, so it cannot be " + action,
+                         objectHelp(*f), spec::References);
+            return false;
+        }
     }
     if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index &&
         !isDeref(target)) {
@@ -5405,6 +5414,14 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
     }
     const Type* t = resolvePlace(target, flow, var, path);
     if (t->isError()) return false;
+    if (var && var->objectOf && path.empty() && target.kind == Expr::Kind::Name) {
+        diags_.error(target.loc, q(var->name) + " refers to the object that " + q(var->objectOf->name) + " returned, not to the variable or element that holds it, so it cannot be " + action,
+                     objectHelp(*var->objectOf) + ". For a name that can later refer to another object, declare it `" + std::string(var->type->name) + " " + var->name + " = " +
+                         (var->init ? spelled(*var->init, "...") : std::string("...")) + ";`",
+                     spec::References);
+        var = nullptr;
+        return false;
+    }
     if (const Expr* call = indexCall(target)) {  // `g[i] = x`, where `operator[]` gives a value
         const std::string written = spelled(target, "g[i]");
         diags_.error(target.loc, "`" + written + "` gives a copy, as the `operator[]` it runs returns a value, so it cannot be " + action,
@@ -5941,6 +5958,13 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
 void Sema::checkRefBinding(const Expr& e, const Type* type, const std::string& what) {
     if (!e.type || e.type->isError() || type->isError()) return;
     const std::string name = type->name;
+    if (e.kind == Expr::Kind::Name && static_cast<const NameExpr&>(e).decl && static_cast<const NameExpr&>(e).decl->objectOf) {
+        const VarDecl& v = *static_cast<const NameExpr&>(e).decl;
+        diags_.error(e.loc, what + " can change what it refers to, so it needs a variable, a field or an element of an array, but " + q(v.name) + " refers to an object that a call returned",
+                     "declare it `" + name + " " + v.name + " = ...;` and give it that, or make the parameter `" + name + "`, which can still change the object's fields",
+                     spec::References);
+        return;
+    }
     if (!isPlaceKind(e)) {
         diags_.error(e.loc, what + " can change what it refers to, so it needs a variable, a field or an element of an array, but this is a value",
                      "store it in a variable first, and give it that. If it only reads it, make it `const " + name + "&`, which takes any value",
@@ -7488,6 +7512,7 @@ void Sema::noteRefReturn(FuncDecl& f) {
     if (!f.returnsRef) return;
     if (f.retType->isClass()) {
         f.returnsRef = false;
+        f.returnsObject = true;
         return;
     }
     if (f.isAsync) {
@@ -7495,6 +7520,27 @@ void Sema::noteRefReturn(FuncDecl& f) {
                      "return the value: write `" + std::string(f.retType->name) + "`", spec::References);
         f.returnsRef = false;
     }
+}
+
+// The function a call runs, when it returns a class object by `C&`, which is the object itself.
+const FuncDecl* Sema::objectCallee(const Expr& e) {
+    if (e.kind == Expr::Kind::Call) {
+        auto& c = static_cast<const CallExpr&>(e);
+        if (c.lowered) return objectCallee(*c.lowered);
+        const FuncDecl* f = c.target ? c.target : c.method;
+        return f && f->returnsObject ? f : nullptr;
+    }
+    if (e.kind == Expr::Kind::MethodCall) {
+        auto& m = static_cast<const MethodCallExpr&>(e);
+        return !m.lowered && m.method && m.method->returnsObject ? m.method : nullptr;
+    }
+    return nullptr;
+}
+
+std::string Sema::objectHelp(const FuncDecl& f) {
+    const std::string c = f.retType->name;
+    return "`" + c + "` is a class, so `" + c + "& " + f.name + "` returns the object itself. To change the object, set its fields or call its methods. "
+           "To put another object in its place, assign to the element or field that holds it";
 }
 
 // Why the place `e`, returned by reference, would be gone when the function returns; nothing when it outlives the call.

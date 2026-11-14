@@ -1557,17 +1557,15 @@ static int held_alone(const void* buf) {
 // The count comes first: a container that was freed let go of its buffer, so its place is never read then.
 int32_t cplus_still_held(void** slot, void* buf) { return held_alone(buf) && (!slot || *slot == buf); }
 
-// Stops the program unless each place held since `mark` is still in its container: the container keeps the buffer, and no
-// copy shares it, as a write through the place would be lost or seen by the copy. `what` names the function that gave it.
-void cplus_holds_check(int64_t mark, const char* what, const char* file, int32_t line, int32_t column) {
-    for (int64_t i = mark; i < holds_used; ++i) {
+// Stops the program with `message` unless each place held from `mark` to `end`, or to the last when `end` is -1, is still in
+// its container: the container keeps the buffer, and no copy shares it, as a write through the place would be lost or seen
+// by the copy. For a place that is only read, `reading`, a copy may share it. Where the container keeps the buffer is in a
+// buffer or an object that is held, or in a variable that outlives the place, so it can be read.
+void cplus_holds_check(int64_t mark, int64_t end, int32_t reading, const char* message, const char* file, int32_t line, int32_t column) {
+    if (end < 0 || end > holds_used) end = holds_used;
+    for (int64_t i = mark; i < end; ++i) {
         const hold h = holds[i];
-        if (!h.slot || (held_alone(h.buf) && *h.slot == h.buf)) continue;
-        char message[320];
-        snprintf(message, sizeof message,
-                 "%s returned a place in a vector, string or hashmap that was grown, shrunk, copied, replaced or freed while "
-                 "the place was in use, which would lose what was written through it",
-                 what);
+        if (!h.slot || ((reading || held_alone(h.buf)) && *h.slot == h.buf)) continue;
         cplus_trap(message, file, line, column);
     }
 }

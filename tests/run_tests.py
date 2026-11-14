@@ -821,7 +821,6 @@ SPEC_NOT_CODE = {
 }
 # What the spec's text says is an error, with a program that does it where the text only gives a part. "^" means outside any function.
 SPEC_REJECTED = {
-    "auto& e = grid.at(1);": "^struct G { vector<int> cells = {1, 2}; int& at(int i) { return cells[i]; } };\nvoid f() { G grid = G(); auto& e = grid.at(1); }",
     "using namespace": "^using namespace std;", "using Tree = vector<Tree>;": "^using Tree = vector<Tree>;",
     "using Map = std::unordered_map<std::string, int>;": "^using Map = std::unordered_map<std::string, int>;", "typedef long UserId;": "^typedef long UserId;",
     "move(count)": "^int count = 0;\nint f() { return move(count); }",

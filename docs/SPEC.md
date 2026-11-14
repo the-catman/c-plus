@@ -1635,17 +1635,26 @@ void doubleAll(vector<int>& v) {
   replaced or freed before then, by the statement itself, the program stops when the statement
   ends, since what was written through the place would be lost or seen by a copy, where C++
   would leave it dangling. A class object it lies in is kept for the statement.
+- **A reference bound to one**, `auto& e = grid.at(1);`, refers to that place until its scope
+  ends, as in C++, and keeps what it lies in. Each use checks that the place is still in its
+  container: once the container has grown, shrunk, been replaced or freed, using `e` stops the
+  program, but not using it again is fine, as in C++. Writing through `e` also stops it if a
+  copy shares the container, which would see the write; reading through it does not.
 - **More about `T&` returns.** `try find(v, x) = y;` puts the `try` on the call that can fail,
   and `y` is not covered by it. A function value made of one, `function<int()> f = first;`,
-  gives a copy. An `operator()` can return a `T&`, so that `table(1) = 5` writes. A class
-  returned by reference is the object itself, as a class variable already refers to it.
+  gives a copy. An `operator()` can return a `T&`, so that `table(1) = 5` writes.
+- **A class returned by reference** is the object itself, as a class variable already refers to
+  it: `Account& open()` returns the object, and `auto& opened = bank.open();` names it, as
+  `Account opened = bank.open();` would. Since neither refers to where the object is kept,
+  assigning to one, or to the call, is an error, and so is giving one to an `Account&`
+  parameter; changing the object's fields, or calling its methods, is what they are for.
 - **Not allowed.** An `async` function, or one run with `spawn`, cannot take a reference,
   since it goes on after its caller has moved on, and no reference may be alive at an `await`.
   For the same reason neither can return one, and `spawn` cannot run a function that does.
   A reference cannot be a field, a constant, an element of a container, or a template
   argument. There is no `T&&` or `auto&&`.
-- **Planned.** Binding a local reference to what a function returns, `auto& e = grid.at(1);`,
-  a `T& operator[]`, and `for (auto& e : m)` over a hashmap, whose entries it would change.
+- **Planned.** A `T& operator[]`, and `for (auto& e : m)` over a hashmap, whose entries it
+  would change.
 
 ---
 
@@ -3936,8 +3945,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Vector `insert(i, x)` and `erase(i)` | implemented |
 | Vector iterators and erasing a range; `find` on a hashmap, sorted maps, sets | planned |
 | References: `T&` and `const T&` parameters and local variables, to elements of vectors, strings and hashmaps too, `for (auto& x : v)` | implemented |
-| Returning `T&` from functions, methods and `operator()`, checked when the statement ends | implemented |
-| Binding a local reference to what a function returns, `for (auto& e : m)` over a hashmap | planned |
+| Returning `T&` from functions, methods and `operator()`, checked when the statement ends; references bound to what they return, checked at each use | implemented |
+| `for (auto& e : m)` over a hashmap | planned |
 | Structured bindings, `for (auto [k, v] : m)` | planned |
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |

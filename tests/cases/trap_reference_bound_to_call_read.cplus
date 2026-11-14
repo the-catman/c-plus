@@ -1,0 +1,18 @@
+// Reading through a reference bound to what a `T&` function returned stops the program once its place has left the
+// container, which a copy sharing the container does not do.
+struct Grid {
+    vector<vector<int>> rows = {{1, 2}, {3, 4}};
+    vector<int>& row(int r) { return rows[r]; }
+};
+int main() {
+    Grid grid = Grid();
+    auto& top = grid.row(0);
+    auto& corner = top[1];
+    Grid copy = grid;
+    println("{} {}", top, corner);  // expect: [1, 2] 2
+    grid.rows = {{9}};
+    println("{}", corner);
+    return 0;
+}
+// trap: the reference 'top' refers into what 'row' returned, in a vector, string or hashmap that has been grown, shrunk, replaced or freed since, so the place is no longer in it
+// trap: trap_reference_bound_to_call_read.cplus:14:19

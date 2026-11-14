@@ -11,3 +11,25 @@ int main() {
     println("{}", grid.cells);  // expect: [0, 6, 0]
     return 0;
 }
+class Account {
+public:
+    long balance = 0;
+    Account() {}
+};
+class Bank {
+public:
+    vector<Account> accounts = {Account()};
+    Bank() {}
+    Account& find(int x) { return accounts[x]; }
+};
+int bound() {
+    Grid grid = Grid();
+    int i = 2;
+    auto& e = grid.at(i);
+    e = 3;
+    Bank bank = Bank();
+    int x = 0;
+    auto& a = bank.find(x);
+    a.balance += 1;
+    return e + int(bank.accounts[0].balance);
+}

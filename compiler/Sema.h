@@ -233,6 +233,8 @@ private:
     const Type* checkIndexOperator(IndexExpr& ix, const Type* t, Flow& flow);
     // Functions that return a reference, `T& f()`.
     void noteRefReturn(FuncDecl& f);
+    static const FuncDecl* objectCallee(const Expr& e);
+    static std::string objectHelp(const FuncDecl& f);
     void checkRefReturn(Expr& e, Flow& flow, const Type* ret);
     std::string refReturnRoot(const Expr& e, int depth = 0);
     std::unordered_map<const VarDecl*, const Expr*> refSources_;  // what a reference local, or `for (auto& x : ...)`, refers into

@@ -685,7 +685,11 @@ program and never dangles, but when its container is resized, replaced or was sh
   ends and then checks that the place is still in its container, or stops the program. A read copies and lets go of them at
   once. A class `C&` return means the object. `spawn` of one is an error, as the holds are the thread's, an override must
   return `T&` if what it replaces does, a function value of one gives a copy, and `try find(k) = v` puts the `try` on the
-  target alone. Not yet: binding a local reference to what one returns, and `T& operator[]` (§2.38).
+  target alone. A local reference bound to one, `auto& e = g();`, keeps those holds until its scope ends and checks them at
+  each use, so growing the container is fine while it is not used again, as in C++; a write through it also needs no copy to
+  share the container, and a read does not. A reference bound to a class's `C& f()` names the object, as `C x = f()` does, and
+  assigning to it, or giving it to a `C&` parameter, is an error, since it does not refer to where the object is kept
+  (decided 2026-11-14). Not yet: `T& operator[]` (§2.38).
 - A function that is `async`, or run with `spawn`, cannot take a reference, and no reference is alive at an `await`.
 - Elements of containers, as built 2026-11-11 in place of the pins first planned, which needed every copy in Codegen to be able
   to give a new buffer, as a copy of a pinned buffer would have to:
@@ -892,7 +896,7 @@ Open implementation questions are listed in §6.
 ## 4. Phases
 
 Status: Phases 0 to 6 are done, the last with the formatter, the language server and C header import. Phase 7, the core
-language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references except binding one to what a function returns, overloading of functions, methods and constructors, and the library parts of item 7. `examples/books.cplus`, a reading list stored in SQLite through its C API,
+language, is under way, then servers, then platforms. Of Phase 7, items 1 to 3 are done, and so are references except `for (auto& e : m)` over a hashmap, overloading of functions, methods and constructors, and the library parts of item 7. `examples/books.cplus`, a reading list stored in SQLite through its C API,
 met the exit criterion of Phase 1. What each feature does is in `docs/SPEC.md`, whose last section lists what is implemented and what is planned.
 
 **Phase 0 — Spec v0.1.** Grammar, type system, memory model, ownership forms, error

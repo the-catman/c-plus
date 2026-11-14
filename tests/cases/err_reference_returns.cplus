@@ -34,10 +34,28 @@ struct Box {
 };
 vector<int> g = {1, 2};
 int& first() { return g[0]; }
+class Account {
+public:
+    long balance = 0;
+    Account() {}
+};
+class Bank {
+public:
+    vector<Account> accounts;
+    Bank() {}
+    Account& find(int i) { return accounts[i]; }
+};
+void adopt(Account& a) {}
 int main() {
-    int& r = first();
     auto t = spawn first();
     t.wait();
+    Bank bank = Bank();
+    auto& acct = bank.find(0);
+    auto& alias = acct;
+    acct = Account();
+    alias = Account();
+    adopt(acct);
+    bank.find(0) = Account();
     return 0;
 }
 // error: 'local' returns a reference to its local variable 'x', which is gone when 'local' returns
@@ -53,6 +71,11 @@ int main() {
 // error: the method in 'Base' is `int& slot()`
 // error: this compiler does not support an `operator[]` that returns a reference, `int&`, yet
 // error: give the value with `int operator[](...) const`, and write a method for the place: `int& at(long i) { ... }`
-// error: this compiler does not support binding a reference to what a function returns yet
 // error: `spawn` cannot run 'first', which returns a reference, `int&`, to a place that this thread uses
 // error: give the thread a copy of the value at the place: `auto value = first();`, then `spawn [=] { ... }()` with it, or spawn a function that returns `int`
+// error: 'acct' refers to the object that 'find' returned, not to the variable or element that holds it, so it cannot be assigned to
+// error: `Account` is a class, so `Account& find` returns the object itself. To change the object, set its fields or call its methods. To put another object in its place, assign to the element or field that holds it. For a name that can later refer to another object, declare it `Account acct = bank.find(0);`
+// error: 'alias' refers to the object that 'find' returned, not to the variable or element that holds it, so it cannot be assigned to
+// error: parameter 'a' of 'adopt' can change what it refers to, so it needs a variable, a field or an element of an array, but 'acct' refers to an object that a call returned
+// error: declare it `Account acct = ...;` and give it that, or make the parameter `Account`, which can still change the object's fields
+// error: 'find' returns the object itself, not the variable or element that holds it, so it cannot be assigned to

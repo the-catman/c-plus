@@ -1,0 +1,17 @@
+// A reference bound to what a `T&` function returned is good until its scope ends, as in C++, while its place stays where it
+// is: here the vector grew, and the reference was used after, so the program stops there.
+vector<int> g = {1, 2};
+int& first() { return g[0]; }
+int main() {
+    auto& e = first();
+    e = 5;
+    vector<int> snapshot = g;
+    println("{} {}", e, snapshot);  // expect: 5 [5, 2]
+    g.push_back(3);  // fine while `e` is not used again
+    println("{}", g);               // expect: [5, 2, 3]
+    e = 6;
+    println("{}", g);
+    return 0;
+}
+// trap: the reference 'e' refers into what 'first' returned, in a vector, string or hashmap that has been grown, shrunk, copied, replaced or freed since, so what is written through it would be lost or seen by a copy
+// trap: trap_reference_bound_to_call.cplus:12:5

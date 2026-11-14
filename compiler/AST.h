@@ -774,6 +774,9 @@ struct VarDecl : Stmt {
     // `T& x` or `const T& x`: it names another place instead of holding a value of its own. Set for a parameter, a local and
     // the variable of a range-based for loop. Codegen passes a `const C&` of a class type as the object itself.
     bool isRef = false;
+    // `auto& acct = bank.find(0);`, where `find` returns a class object by `C&`: set by Sema, which makes it a variable that
+    // holds the object, and cannot be assigned to, as it does not refer to where the object is kept.
+    const FuncDecl* objectOf = nullptr;
     // Set by the capture check: a lambda that may outlive this function shares it, so it lives in a counted box of its own,
     // made where it is declared, which the lambda holds too. For a loop's own variable, each round has a new one.
     bool boxed = false;
@@ -972,6 +975,7 @@ struct FuncDecl {
     bool isPure = false;          // `virtual int f() = 0;`, which has no body
     bool isDefaulted = false;     // a class's `bool operator==(const C&) const = default;`, whose body Codegen makes
     bool returnsRef = false;      // `T& f()`: a call is the place it returns, as in C++ (see "References" in docs/SPEC.md)
+    bool returnsObject = false;   // `C& f()` of a class C, which returns the object, as `C f()` does: see Sema::noteRefReturn
     bool isThrows = false;        // `int f() throws`
     bool isConstexpr = false;     // `constexpr int f()`, which can run while compiling
     bool isAsync = false;         // `async int f()`: a call gives a `Task<int>`, and the body returns an int

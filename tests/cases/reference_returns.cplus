@@ -57,6 +57,36 @@ struct Table {
     vector<int> cells = {0, 0, 0};
     int& operator()(int i) { return cells[i]; }
 };
+// A reference bound to what one returns, which a `T&` function can return in turn.
+struct Ledger {
+    string owner;
+    long balance = 0;
+    vector<long> history;
+};
+struct Book {
+    vector<Ledger> ledgers;
+    Ledger& find(string owner) {
+        for (auto& l : ledgers) {
+            if (l.owner == owner) return l;
+        }
+        ledgers.push_back(Ledger{owner});
+        return ledgers[ledgers.size() - 1];
+    }
+};
+int& bumped() {
+    auto& r = first();
+    r += 100;
+    return r;
+}
+class Bank {
+public:
+    vector<Account> accounts;
+    Bank() {}
+    Account& open() {
+        accounts.push_back(Account());
+        return accounts[accounts.size() - 1];
+    }
+};
 int calls = 0;
 int index() {
     calls += 1;
@@ -150,5 +180,47 @@ int main() {
     function<int()> f = first;
     function<string(int)> g = name;
     println("{} {}", f(), g(0));                   // expect: 4 ann
+
+    Book book = Book();
+    auto& ann = book.find("ann");
+    ann.balance += 5;
+    ann.history.push_back(5);
+    Ledger& bob = book.find("bob");  // which may move ann's ledger: fine while `ann` is not used again
+    bob.balance = 7;
+    auto& again = book.find("ann");
+    again.balance += 1;
+    const auto& seen = book.find("ann");
+    println("{} {} {}", seen.balance, again.history, book.ledgers.size());  // expect: 6 [5] 2
+    auto& c = first();
+    c = 10;
+    int& d = bumped();
+    d += 1;
+    println("{} {}", counter, c);                  // expect: 111 111
+    for (int i = 0; i < 3; i += 1) {
+        auto& each = first();
+        each += i;
+    }
+    auto& e = grid.at(1);
+    e += 1;
+    auto& top = grid.row(0);
+    auto& corner = top[1];
+    corner = 2;
+    vector<vector<int>> copied = grid.rows;  // a copy that shares the rows, which reading through them allows
+    println("{} {} {}", counter, top, corner);     // expect: 114 [1, 2, 5] 2
+
+    // A class that `Account&` returns is the object, which a reference to the call names.
+    Bank bank = Bank();
+    auto& opened = bank.open();
+    opened.balance = 50;
+    Account& second = bank.open();
+    second.money() += 1;
+    auto& alias = opened;
+    alias.balance += 1;
+    println("{} {}", bank.accounts[0].balance, bank.accounts[1].balance);  // expect: 51 1
+    {
+        Account opened = bank.open();
+        opened.balance = 2;
+    }
+    println("{} {}", bank.accounts[2].balance, grid.cells);  // expect: 2 [0, 1, 0]
     return 0;
 }

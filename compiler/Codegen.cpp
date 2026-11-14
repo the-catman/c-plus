@@ -246,6 +246,17 @@ struct Codegen::Impl {
         const Type* range = nullptr;  // the loop's vector or string
     };
     std::unordered_map<const VarDecl*, Rederived> rederived;
+    // A reference bound to a place that a call of `T& g()` returned, `auto& e = g();`: the holds that came with it, from `from`
+    // to `to` on this thread's holds, which stay until the scope ends and are checked at each use, as C++'s reference is good
+    // until then if its place stays.
+    struct KeptHolds {
+        llvm::Value* from;
+        llvm::Value* to;
+        std::string message;  // for a write, which a copy that shares the buffer would see
+        std::string readMessage;
+    };
+    std::unordered_map<const VarDecl*, KeptHolds> keptHolds;
+    std::unordered_map<const VarDecl*, llvm::Value*> scopeHolds;  // a scope's entry for kept holds, which it lets go of
     const NameExpr* rederiving = nullptr;  // the use of a reference whose element is being found, for the message if it is gone
 
     // Lambdas. A value of a function type is { ptr code, ptr env }: the code takes the env first, then what the function
@@ -456,7 +467,7 @@ struct Codegen::Impl {
         rtHoldsMark = decl("cplus_holds_mark", i64, {});
         rtHold = decl("cplus_hold", voidTy, {ptrTy, ptrTy, i64, ptrTy, ptrTy});
         rtHoldsRelease = decl("cplus_holds_release", voidTy, {i64});
-        rtHoldsCheck = decl("cplus_holds_check", voidTy, {i64, ptrTy, ptrTy, i32, i32});
+        rtHoldsCheck = decl("cplus_holds_check", voidTy, {i64, i64, i32, ptrTy, ptrTy, i32, i32});
         rtHoldsSetAside = decl("cplus_holds_set_aside", i64, {i64});
         rtHoldsRestore = decl("cplus_holds_restore", voidTy, {i64});
         rtStillHeld = decl("cplus_still_held", i32, {ptrTy, ptrTy});
@@ -1659,7 +1670,7 @@ struct Codegen::Impl {
             temps.pop_back();
             if (!t.type) {
                 if (!t.check.empty())  // what was written through the place `T& f()` returned is still where it was
-                    b.CreateCall(rtHoldsCheck, {t.value, cstring(t.check), fileName, b.getInt32(t.loc.line), b.getInt32(t.loc.col)});
+                    b.CreateCall(rtHoldsCheck, {t.value, b.getInt64(-1), b.getInt32(0), cstring(t.check), fileName, b.getInt32(t.loc.line), b.getInt32(t.loc.col)});
                 b.CreateCall(rtHoldsRelease, {t.value});
             } else {
                 releaseValue(t.inMemory ? peekValue(t.type, t.value) : t.value, t.type);
@@ -1671,6 +1682,10 @@ struct Codegen::Impl {
     void releaseScopes(size_t depth) {
         for (size_t i = scopes.size(); i-- > depth;)
             for (auto it = scopes[i].rbegin(); it != scopes[i].rend(); ++it) {
+                if (auto holds = scopeHolds.find(*it); holds != scopeHolds.end()) {
+                    b.CreateCall(rtHoldsRelease, {holds->second});
+                    continue;
+                }
                 if (auto box = boxSlots.find(*it); box != boxSlots.end()) {  // what lambdas share lives on in its box while they do
                     b.CreateCall(countedReleaseFunction(), {b.CreateLoad(b.getPtrTy(), box->second, (*it)->name + ".box")});
                     continue;
@@ -2490,6 +2505,8 @@ struct Codegen::Impl {
                 auto& n = static_cast<const NameExpr&>(e);
                 if (n.implicitField >= 0)
                     return fieldAddress(&n.path.back()->type, atOffset(thisPtr, pathOffset(n.path)), n.implicitField, n.name);
+                if (auto kept = keptHolds.find(n.decl); kept != keptHolds.end())  // where it is used, or a reference found through it
+                    checkKeptHolds(kept->second, rederiving ? rederiving->loc : n.loc, write);
                 if (auto it = boxSlots.find(n.decl); it != boxSlots.end()) return boxedValue(*n.decl, it->second);
                 if (auto it = rederived.find(n.decl); it != rederived.end()) return rederive(it->second, &n, hold, write);
                 if (n.decl->isGlobal) return globalAddress(*n.decl);
@@ -4139,7 +4156,8 @@ struct Codegen::Impl {
     }
 
     // Where a variable is, for a lambda that captures it, as addressOf finds it for its name.
-    llvm::Value* varAddress(const VarDecl& v) {
+    llvm::Value* varAddress(const VarDecl& v, Loc at = {}) {
+        if (auto kept = keptHolds.find(&v); kept != keptHolds.end()) checkKeptHolds(kept->second, at.line ? at : v.loc, /*write=*/false);
         if (auto it = boxSlots.find(&v); it != boxSlots.end()) return boxedValue(v, it->second);
         if (auto it = rederived.find(&v); it != rederived.end()) return rederive(it->second, nullptr, /*hold=*/false, /*write=*/false);
         if (v.isGlobal) return globalAddress(v);
@@ -4575,26 +4593,72 @@ struct Codegen::Impl {
         return out;
     }
 
-    // The call of `T& g()` that the place `e` lies in, as `g()[i].x` does, unless a class object comes first, which holds it.
-    static const Expr* refRoot(const Expr& e) {
+    // Where the holds that the place `e` needs begin on this thread's holds, when it lies in what a call of `T& g()` returned,
+    // as `g()[i].x` does, unless a class object comes first, which holds it: those of a call in this statement, whose temporary
+    // is at `from` or after, or with `kept`, those a reference variable it lies in kept.
+    llvm::Value* callHoldsMark(const Expr& e, size_t from, bool kept) {
         for (const Expr* x = &e; x;) {
             if (x->kind == Expr::Kind::Call && static_cast<const CallExpr&>(*x).lowered) {
                 x = static_cast<const CallExpr&>(*x).lowered.get();
             } else if (const Expr* place = placeCall(*x)) {
                 x = place;
             } else if (refCallee(*x)) {
-                return x;
+                for (size_t i = from; i < temps.size(); ++i) {
+                    if (temps[i].from != x) continue;
+                    temps[i].check.clear();  // what they are for is checked where they go
+                    return temps[i].value;
+                }
+                return nullptr;
             } else if (x->kind == Expr::Kind::Member) {
                 auto& m = static_cast<const MemberExpr&>(*x);
                 if (m.base->type && m.base->type->isClass()) return nullptr;
                 x = m.base.get();
             } else if (x->kind == Expr::Kind::Index && !static_cast<const IndexExpr&>(*x).lowered) {
                 x = static_cast<const IndexExpr&>(*x).base.get();
+            } else if (x->kind == Expr::Kind::Name) {
+                const VarDecl* v = static_cast<const NameExpr&>(*x).decl;
+                if (auto it = keptHolds.find(v); it != keptHolds.end()) return kept ? it->second.from : nullptr;
+                auto r = rederived.find(v);
+                if (r == rederived.end() || r->second.counter) return nullptr;
+                x = r->second.place;
             } else {
                 return nullptr;
             }
         }
         return nullptr;
+    }
+
+    // Takes the holds that the place `e` needs off this thread's holds, still held, for cplus_holds_restore once the statement or
+    // the function lets go of its own.
+    llvm::Value* setAsideCallHolds(const Expr& e, size_t from, bool kept = false) {
+        llvm::Value* mark = callHoldsMark(e, from, kept);
+        return mark ? b.CreateCall(rtHoldsSetAside, {mark}, "aside") : nullptr;
+    }
+
+    // Gives the reference `v` the holds set aside for its place, `aside`, until its scope ends.
+    void keepCallHolds(const VarDecl& v, const Expr& place, llvm::Value* aside) {
+        llvm::Value* from = b.CreateCall(rtHoldsMark, {}, "holds");
+        b.CreateCall(rtHoldsRestore, {aside});
+        llvm::Value* to = b.CreateCall(rtHoldsMark, {}, "holds");
+        VarDecl& entry = heldForScope.emplace_back(Loc{}, "holds", nullptr, Loc{});
+        scopeHolds[&entry] = from;
+        scopes.back().push_back(&entry);
+        const FuncDecl* f = nullptr;
+        for (const Expr* x = &place; x && !f;) {  // the function that gave it, for the message
+            f = refCallee(*x);
+            if (const Expr* p = placeCall(*x)) x = p;
+            else if (x->kind == Expr::Kind::Member) x = static_cast<const MemberExpr&>(*x).base.get();
+            else if (x->kind == Expr::Kind::Index) x = static_cast<const IndexExpr&>(*x).base.get();
+            else break;
+        }
+        const std::string what = "the reference '" + v.name + "' refers into what " + (f ? "'" + f->name + "'" : std::string("a call")) +
+                                 " returned, in a vector, string or hashmap that has been ";
+        keptHolds[&v] = {from, to, what + "grown, shrunk, copied, replaced or freed since, so what is written through it would be lost or seen by a copy",
+                         what + "grown, shrunk, replaced or freed since, so the place is no longer in it"};
+    }
+
+    void checkKeptHolds(const KeptHolds& k, Loc at, bool write) {
+        b.CreateCall(rtHoldsCheck, {k.from, k.to, b.getInt32(!write), cstring(write ? k.message : k.readMessage), fileName, b.getInt32(at.line), b.getInt32(at.col)});
     }
 
     // `f()` of `T& f()`, read: a copy of what is at the place it returned, after which the holds it came with go at once.
@@ -4616,7 +4680,8 @@ struct Codegen::Impl {
         llvm::Value* mark = b.CreateCall(rtHoldsMark, {}, "holds");
         llvm::Value* address = e.kind == Expr::Kind::Call ? genCall(static_cast<const CallExpr&>(e)) : genMethodCall(static_cast<const MethodCallExpr&>(e));
         Temp t{mark, nullptr, false};
-        t.check = "'" + refCallee(e)->name + "'";
+        t.check = "'" + refCallee(e)->name + "' returned a place in a vector, string or hashmap that was grown, shrunk, copied, replaced or freed "
+                  "while the place was in use, which would lose what was written through it";
         t.loc = e.loc;
         t.from = &e;
         temps.push_back(t);
@@ -5017,17 +5082,23 @@ struct Codegen::Impl {
                 // a string or a hashmap finds it again at each use (see Rederived), and is found once now too, so that an index out of
                 // range stops here, and a key that `m[k]` adds is added here. A `const T&` to any other value is a temporary that
                 // lives as long as the reference, as in C++.
+                // One to a place that `T& g()` returned keeps the holds that came with it until the scope ends.
                 if (passedByRef(v) && isPlace(*v.init) && v.init->type == v.type && inContainerElement(*v.init)) {
+                    size_t mark = temps.size();
                     bindRederived(v, *v.init);
                     rederive(rederived.at(&v), nullptr, /*hold=*/false, /*write=*/!v.isConst);
+                    llvm::Value* aside = setAsideCallHolds(*v.init, mark);
                     flushTemps();
+                    if (aside) keepCallHolds(v, *v.init, aside);
                     return;
                 }
                 if (passedByRef(v) && isPlace(*v.init) && v.init->type == v.type && !inContainerElement(*v.init)) {
                     size_t mark = temps.size();
                     locals[&v] = addressOf(*v.init, /*hold=*/true, /*write=*/!v.isConst);
+                    llvm::Value* aside = setAsideCallHolds(*v.init, mark);
                     keepTempsForScope(mark);
                     flushTemps();
+                    if (aside) keepCallHolds(v, *v.init, aside);
                     return;
                 }
                 llvm::Value* init = v.init ? genOwned(*v.init, v.type)
@@ -5179,15 +5250,9 @@ struct Codegen::Impl {
                     deferredHolds = outer;
                     for (const Hold& h : forCaller) retainValue(h.value, h.type);  // kept while the function lets go of its own
                     std::vector<llvm::Value*> objects = objectsOnTheWay(*st.value);
-                    llvm::Value* aside = nullptr;  // for `return g()[i]`: the holds that came with `g()`, which the caller gets too
-                    if (const Expr* root = refRoot(*st.value)) {
-                        for (Temp& t : temps) {
-                            if (t.from != root) continue;
-                            aside = b.CreateCall(rtHoldsSetAside, {t.value}, "aside");
-                            t.check.clear();
-                            break;
-                        }
-                    }
+                    // For `return g()[i]`, or a reference bound to what `g()` returned: the holds that came with it, which the
+                    // caller gets too.
+                    llvm::Value* aside = setAsideCallHolds(*st.value, 0, /*kept=*/true);
                     for (const Expr* part : made) frozen.erase(part);
                     flushTemps();
                     releaseScopes(0);
