@@ -2233,6 +2233,7 @@ struct Codegen::Impl {
             }
             case Expr::Kind::MethodCall: return placeCall(e) ? isPlace(*placeCall(e)) : refCallee(e) != nullptr;  // `v.back()`, the element
             case Expr::Kind::Call: return refCallee(e) != nullptr;  // `f()` of `T& f()`
+            case Expr::Kind::Ternary: return static_cast<const TernaryExpr&>(e).place;  // `c ? a : b` of two places
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
                 if (ix.lowered) return false;  // `g[i]`, a call of `operator[]`
@@ -2301,6 +2302,9 @@ struct Codegen::Impl {
                 return;
             case Expr::Kind::Call:
                 if (refCallee(e)) freeze(e, refCallPlace(e));
+                return;
+            case Expr::Kind::Ternary:  // `c ? a : b` of two places: the one it chooses, found now, ready to change
+                if (static_cast<const TernaryExpr&>(e).place) freeze(e, ternaryPlace(static_cast<const TernaryExpr&>(e), /*write=*/true));
                 return;
             case Expr::Kind::Index: {
                 auto& ix = static_cast<const IndexExpr&>(e);
@@ -2520,6 +2524,7 @@ struct Codegen::Impl {
                 if (const Expr* place = placeCall(e)) return addressOf(*place, hold, write);  // `v.back()`, the element
                 return refCallPlace(e);
             case Expr::Kind::Call: return refCallPlace(e);
+            case Expr::Kind::Ternary: return ternaryPlace(static_cast<const TernaryExpr&>(e), write);
             case Expr::Kind::Member: {
                 auto& m = static_cast<const MemberExpr&>(e);
                 const Type* baseType = m.base->type;
@@ -4605,7 +4610,7 @@ struct Codegen::Impl {
                 x = static_cast<const CallExpr&>(*x).lowered.get();
             } else if (const Expr* place = placeCall(*x)) {
                 x = place;
-            } else if (refCallee(*x)) {
+            } else if (refCallee(*x) || (x->kind == Expr::Kind::Ternary && static_cast<const TernaryExpr&>(*x).place)) {
                 for (size_t i = from; i < temps.size(); ++i) {
                     if (temps[i].from != x) continue;
                     temps[i].check.clear();  // what they are for is checked where they go
@@ -4654,14 +4659,61 @@ struct Codegen::Impl {
             else if (x->kind == Expr::Kind::Index) x = static_cast<const IndexExpr&>(*x).base.get();
             else break;
         }
-        const std::string what = "the reference '" + v.name + "' refers into what " + (f ? "'" + f->name + "'" : std::string("a call")) +
-                                 " returned, in a vector, string or hashmap that has been ";
+        const std::string what = "the reference '" + v.name + "' refers into " + (f ? "what '" + f->name + "' returned" : std::string("the place the `?:` chose")) +
+                                 ", in a vector, string or hashmap that has been ";
         keptHolds[&v] = {from, to, what + "grown, shrunk, copied, replaced or freed since, so what is written through it would be lost or seen by a copy",
                          what + "grown, shrunk, replaced or freed since, so the place is no longer in it"};
     }
 
     void checkKeptHolds(const KeptHolds& k, Loc at, bool write) {
         b.CreateCall(rtHoldsCheck, {k.from, k.to, b.getInt32(!write), cstring(write ? k.message : k.readMessage), fileName, b.getInt32(at.line), b.getInt32(at.col)});
+    }
+
+    // `c ? a : b` of two places, as a place: the one it chooses, found once, whose holds stay until the statement ends and are
+    // checked then, as for `T& f()`. Each branch lets go of its own temporaries, as only one runs.
+    llvm::Value* ternaryPlace(const TernaryExpr& t, bool write) {
+        if (llvm::Value* frozenAddress = frozenValue(t)) return frozenAddress;
+        llvm::Value* mark = b.CreateCall(rtHoldsMark, {}, "holds");
+        llvm::Value* cond = genCond(*t.cond);
+        auto* thenBB = llvm::BasicBlock::Create(ctx, "tern.then", fn);
+        auto* elseBB = llvm::BasicBlock::Create(ctx, "tern.else", fn);
+        auto* endBB = llvm::BasicBlock::Create(ctx, "tern.end", fn);
+        b.CreateCondBr(cond, thenBB, elseBB);
+        auto branch = [&](const Expr& x, llvm::BasicBlock* bb) {
+            b.SetInsertPoint(bb);
+            size_t from = temps.size();
+            std::vector<const Expr*> made;
+            freezePlace(x, made);
+            std::vector<Hold> holds;
+            auto* outer = deferredHolds;
+            deferredHolds = &holds;
+            llvm::Value* place = addressOf(x, /*hold=*/true, write);
+            deferredHolds = outer;
+            for (const Hold& h : holds) retainValue(h.value, h.type);  // kept while the branch lets go of its own
+            std::vector<llvm::Value*> objects = objectsOnTheWay(x);
+            for (const Expr* part : made) frozen.erase(part);
+            llvm::Value* aside = setAsideCallHolds(x, from);
+            flushTemps(from);
+            if (aside) b.CreateCall(rtHoldsRestore, {aside});
+            for (const Hold& h : holds) pushHold(h, /*retained=*/true);
+            for (llvm::Value* object : objects)
+                b.CreateCall(rtHold, {llvm::ConstantPointerNull::get(b.getPtrTy()), object, b.getInt64(0), llvm::ConstantPointerNull::get(b.getPtrTy()), objectRelease});
+            b.CreateBr(endBB);
+            return std::make_pair(place, b.GetInsertBlock());
+        };
+        auto [x, thenEnd] = branch(*t.thenExpr, thenBB);
+        auto [y, elseEnd] = branch(*t.elseExpr, elseBB);
+        b.SetInsertPoint(endBB);
+        llvm::PHINode* place = b.CreatePHI(b.getPtrTy(), 2, "place");
+        place->addIncoming(x, thenEnd);
+        place->addIncoming(y, elseEnd);
+        Temp temp{mark, nullptr, false};
+        temp.check = "the `?:` chose a place in a vector, string or hashmap that was grown, shrunk, copied, replaced or freed while the place was in "
+                     "use, which would lose what was written through it";
+        temp.loc = t.loc;
+        temp.from = &t;
+        temps.push_back(temp);
+        return place;
     }
 
     // `f()` of `T& f()`, read: a copy of what is at the place it returned, after which the holds it came with go at once.

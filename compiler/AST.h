@@ -484,6 +484,7 @@ struct AssignExpr : Expr {
 
 struct TernaryExpr : Expr {
     ExprPtr cond, thenExpr, elseExpr;
+    bool place = false;  // set by Sema: both branches are places of one type, so it is the place it chooses, as in C++
     TernaryExpr(Loc l, ExprPtr c, ExprPtr t, ExprPtr e)
         : Expr(Kind::Ternary, l), cond(std::move(c)), thenExpr(std::move(t)), elseExpr(std::move(e)) {}
 };

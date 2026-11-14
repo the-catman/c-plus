@@ -942,10 +942,11 @@ Building a vector:
 - `front()` and `back()` are the element itself, as C++'s references are: `v.back() = x`, `v.back().x = 1` and
   `v.back().set()` change the last element. Of an empty vector, they **stop the program**. A reference bound to one,
   `auto& last = v.back();`, goes on meaning that element, found by its index, as `auto& e = v[i];` does. Of a temporary,
-  such as `list().back()`, they are a copy. Changing what `?:` gives is an error when both of what it chooses from are
-  what C++ would refer to, such as variables, fields or elements, as `(f ? a : b).set()` would change `a` in C++, and so
-  is changing what `=` gives. What `??`, `value_or()`, `values()` and `items()` give,
-  and `?:` with only one such, is a copy in C++ too, so changing it is an error only when nothing receives the result. What a function gave changes nothing the program has, so `(f ? make(1) : make(2)).with(5)`
+  such as `list().back()`, they are a copy. `?:` of two places of one type, such as variables, fields or elements, is
+  the place it chooses, as in C++: `(f ? a : b).set()` changes `a` when `f` holds, and `(f ? a : b) = x` assigns to it.
+  Changing what `?:` gives is an error when its two places differ in type, which makes it a copy in C++ too, and so is
+  changing what `=` gives. What `??`, `value_or()`, `values()` and `items()` give,
+  and `?:` with only one place, is a copy in C++ too, so changing it is an error only when nothing receives the result. What a function gave changes nothing the program has, so `(f ? make(1) : make(2)).with(5)`
   and `list().back().with(5)` are allowed, and so is any method under `spawn`, which runs on a copy.
 - `==` and `!=` compare the sizes and then each pair of elements, in order. Ordering with
   `<` is planned.
@@ -1601,7 +1602,7 @@ void doubleAll(vector<int>& v) {
   given to a `const long&`, goes into a temporary that lives as long as the reference, as in C++.
 - **What a `T&` is given** is a place that can be changed, of exactly its type: a variable, a
   field, or an element of an array, a vector, a string or a hashmap, `m["a"]` adding the key
-  if it is missing. A value, something `const`, or a variable of another type is an error,
+  if it is missing, or a `?:` of two of those of one type, `bump(f ? a : b)`. A value, something `const`, or a variable of another type is an error,
   even a class derived from it, since any value of its type can be stored through it. Writing
   to a `T&`, `n = 5`, writes to the place.
 - **Changes show through it**, as in C++, when they are made to the place it refers to.
@@ -1640,6 +1641,8 @@ void doubleAll(vector<int>& v) {
   replaced or freed before then, by the statement itself, the program stops when the statement
   ends, since what was written through the place would be lost or seen by a copy, where C++
   would leave it dangling. A class object it lies in is kept for the statement.
+- **`?:` of two places** works as a call of a `T&` function does: the place it chooses is found once, and a reference
+  bound to it, `auto& r = f ? v[0] : v[1];`, is checked at each use.
 - **A reference bound to one**, `auto& e = grid.at(1);`, refers to that place until its scope
   ends, as in C++, and keeps what it lies in. Each use checks that the place is still in its
   container: once the container has grown, shrunk, been replaced or freed, using `e` stops the
@@ -3948,7 +3951,7 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | `hashmap<K, V>` | implemented |
 | Vector `insert(i, x)` and `erase(i)` | implemented |
 | Vector iterators and erasing a range; `find` on a hashmap, sorted maps, sets | planned |
-| References: `T&` and `const T&` parameters and local variables, to elements of vectors, strings and hashmaps too, `for (auto& x : v)`, `for (auto& e : m)` over a hashmap | implemented |
+| References: `T&` and `const T&` parameters and local variables, to elements of vectors, strings and hashmaps too, `for (auto& x : v)`, `for (auto& e : m)` over a hashmap, `?:` of two places | implemented |
 | Returning `T&` from functions, methods and `operator()`, checked when the statement ends; references bound to what they return, checked at each use | implemented |
 | Structured bindings, `for (auto [k, v] : m)` | planned |
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |

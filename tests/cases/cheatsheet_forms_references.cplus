@@ -38,3 +38,14 @@ int counted() {
     for (auto& e : m) e.second += 1;
     return m["a"];
 }
+struct Settable {
+    int x = 0;
+    void set() { x = 1; }
+};
+int chosen() {
+    Settable a = {};
+    Settable b = {};
+    bool first = true;
+    (first ? a : b).set();
+    return a.x;
+}

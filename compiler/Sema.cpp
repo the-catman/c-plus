@@ -826,6 +826,7 @@ static std::string copyOnTheWay(const Expr& e, bool resultUsed) {
         // too, and only a change that nothing receives is a mistake.
         case Expr::Kind::Ternary: {
             auto& t = *static_cast<const TernaryExpr*>(x);
+            if (t.place) return "";  // the place it chose, as in C++
             return isReferenceInCpp(*x) || (!resultUsed && (holdsAPlace(*t.thenExpr) || holdsAPlace(*t.elseExpr))) ? "?:" : "";
         }
         case Expr::Kind::Assign: return reachesAPlace(*x) ? "=" : "";
@@ -1081,7 +1082,8 @@ static const Type* typeAtPath(const VarDecl* v, const std::string& path) {
 // pointer points to.
 static bool isPlaceKind(const Expr& e) {
     return e.kind == Expr::Kind::Name || e.kind == Expr::Kind::Member || e.kind == Expr::Kind::This ||
-           (e.kind == Expr::Kind::Index && !indexCall(e)) || isDeref(e) || placeCall(e) || refCallee(e);
+           (e.kind == Expr::Kind::Index && !indexCall(e)) || isDeref(e) || placeCall(e) || refCallee(e) ||
+           (e.kind == Expr::Kind::Ternary && static_cast<const TernaryExpr&>(e).place);
 }
 
 // ---- Definite assignment ---------------------------------------------------
@@ -3860,6 +3862,19 @@ static bool changesEntryKey(const Expr& target) {
     return x == &target || (onEntry && onEntry->base.get() == x && onEntry->field == "first");
 }
 
+// `c ? a : b` of two places that the place `e` is, or lies in, as `(c ? a : b).x` does, unless a class object comes between.
+static const TernaryExpr* ternaryPlaceIn(const Expr& e) {
+    for (const Expr* x = &e; x;) {
+        if (x->kind == Expr::Kind::Ternary) return static_cast<const TernaryExpr*>(x)->place ? static_cast<const TernaryExpr*>(x) : nullptr;
+        if (const Expr* place = placeCall(*x)) x = place;
+        else if (x->kind == Expr::Kind::Member && !(static_cast<const MemberExpr*>(x)->base->type && static_cast<const MemberExpr*>(x)->base->type->isClass()))
+            x = static_cast<const MemberExpr*>(x)->base.get();
+        else if (x->kind == Expr::Kind::Index && !indexCall(*x)) x = static_cast<const IndexExpr*>(x)->base.get();
+        else return nullptr;
+    }
+    return nullptr;
+}
+
 // `for (T x : range)`: the body runs once for each element, possibly never.
 void Sema::checkForEach(ForEachStmt& st, Flow& flow) {
     const Type* rangeType = checkExpr(*st.range, flow);
@@ -4024,9 +4039,13 @@ std::string Sema::copyHelp(const Expr& target, const std::string& change, bool g
             return from.isInside || !from.map.empty() ? std::string() : from.place;
         };
         const std::string c = spelled(*t.cond, ""), a = placeOf(*t.thenExpr), b = placeOf(*t.elseExpr);
+        // Two places of different types, which C++ would convert into a temporary too.
+        const bool typesDiffer = isPlaceKind(*t.thenExpr) && isPlaceKind(*t.elseExpr) && t.thenExpr->type && t.elseExpr->type && t.thenExpr->type != t.elseExpr->type;
+        const std::string copy = typesDiffer ? "`?:` of " + q(t.thenExpr->type) + " and " + q(t.elseExpr->type) + " gives a copy, as the places it chooses from must be of one type"
+                                             : "`?:` gives a copy of what it chose";
         if (!c.empty() && !a.empty() && !b.empty())
-            return givesValue ? "`?:` gives a copy of what it chose. Call it on each in place: `(" + c + " ? " + before + a + path + " : " + before + b + path + ")`"
-                              : "`?:` gives a copy of what it chose. Change each in place: `if (" + c + ") " + before + a + path + "; else " + before + b + path + ";`";
+            return givesValue ? copy + ". Call it on each in place: `(" + c + " ? " + before + a + path + " : " + before + b + path + ")`"
+                              : copy + ". Change each in place: `if (" + c + ") " + before + a + path + "; else " + before + b + path + ";`";
         const bool otherIsMadeHere = a.empty() ? !holdsAPlace(*t.thenExpr) : b.empty() ? !holdsAPlace(*t.elseExpr) : false;
         if (!c.empty() && !givesValue && (!a.empty() || !b.empty()) && otherIsMadeHere)  // the other is a value made here, which nothing keeps
             return "`?:` gives a copy of what it chose, so this changes nothing. Change " + q(!a.empty() ? a : b) + " itself when it is chosen: `if (" +
@@ -4941,6 +4960,10 @@ const Type* Sema::checkMapIndex(IndexExpr& ix, Flow& flow, const Type* map) {
 }
 
 bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl* var, const std::string& path, const std::string& change, const std::string& before) {
+    if (const TernaryExpr* t = ternaryPlaceIn(target)) {  // each place it can choose
+        const bool first = checkChangeable(*t->thenExpr, action, nullptr, "", change, before);
+        return checkChangeable(*t->elseExpr, action, nullptr, "", change, before) && first;
+    }
     const Expr* root = nullptr;
     switch (storageOf(target, root)) {
         // A field of a class object can always be changed: the object lives on its
@@ -5478,9 +5501,14 @@ bool Sema::checkAssignable(Expr& target, Flow& flow, const char* action, const V
             return false;
         }
     }
+    if (target.kind == Expr::Kind::Ternary) {  // `(c ? a : b) = x`, when both are places
+        const Type* t = checkExpr(target, flow);
+        if (t->isError()) return false;
+        if (static_cast<const TernaryExpr&>(target).place) return checkChangeable(target, action, nullptr, "", change, before);
+    }
     if (target.kind != Expr::Kind::Name && target.kind != Expr::Kind::Member && target.kind != Expr::Kind::Index &&
         !isDeref(target)) {
-        if (target.kind != Expr::Kind::MethodCall && target.kind != Expr::Kind::Call) checkExpr(target, flow);
+        if (target.kind != Expr::Kind::MethodCall && target.kind != Expr::Kind::Call && target.kind != Expr::Kind::Ternary) checkExpr(target, flow);
         std::string help = target.kind == Expr::Kind::This ? "assign to its fields, or to a variable: 'this' always refers to the current object" : copyHelp(target, change, false, before);
         diags_.error(target.loc, std::string("only a variable or one of its fields can be ") + action, help,
                      spec::Variables);
@@ -5956,8 +5984,12 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
             rejectCopy(*t.elseExpr);
             flow = merge(a, b);
             if (x->isError() || y->isError()) break;
-            if (x == y) result = x;
-            else if (x->isArithmetic() && y->isArithmetic()) result = arithmeticType(*t.thenExpr, x, *t.elseExpr, y, "'?:'", t.loc);
+            if (x == y) {
+                result = x;
+                t.place = isPlaceKind(*t.thenExpr) && isPlaceKind(*t.elseExpr);  // `(c ? a : b) = 5`
+            } else if (x->isArithmetic() && y->isArithmetic()) {
+                result = arithmeticType(*t.thenExpr, x, *t.elseExpr, y, "'?:'", t.loc);
+            }
             else if (const Type* ptr = commonPointer(x, y)) result = ptr;  // `c ? p : null` is a pointer
             else if (const Type* ref = commonReference(x, y)) result = ref;  // `c ? dog : animal` is an Animal
             else if (x->isWeak() && y->isNull()) result = x;  // `c ? w : null` is an empty weak reference or `w`
@@ -7658,6 +7690,12 @@ std::string Sema::refReturnRoot(const Expr& e, int depth) {
             case Expr::Kind::Unary: return isDeref(*x) ? "" : value;  // behind a pointer, which is not checked
             case Expr::Kind::This: return "";
             case Expr::Kind::Borrow: x = static_cast<const BorrowExpr*>(x)->operand.get(); continue;
+            case Expr::Kind::Ternary: {  // `return c ? a : b;`, where both must outlive the call
+                auto& t = static_cast<const TernaryExpr&>(*x);
+                if (std::string why = refReturnRoot(*t.thenExpr, depth + 1); !why.empty()) return why;
+                x = t.elseExpr.get();
+                continue;
+            }
             case Expr::Kind::Name: {
                 auto& n = static_cast<const NameExpr&>(*x);
                 const VarDecl* v = n.decl;
@@ -8289,7 +8327,7 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
     }
     bool isPlace = isPlaceKind(recv);
     const Type* t = isPlace ? resolvePlace(recv, flow, var, path) : checkExpr(recv, flow);
-    isPlace = isPlace || placeCall(recv);  // `v.back().set()`, which is a place once checked
+    isPlace = isPlace || placeCall(recv) || isPlaceKind(recv);  // `v.back().set()` and `(c ? a : b).set()`, which are places once checked
     if (var && !t->isError()) requireAssigned(flow, var, path, t, recv.loc);
     if (t->isError()) {
         for (auto& a : call.args) checkLooseValue(*a, flow);
@@ -8545,26 +8583,36 @@ const Type* Sema::checkMethodCall(MethodCallExpr& call, Flow& flow) {
                      copyHelp(recv, "." + m->name + (call.args.empty() ? "()" : "(...)"), givesValue, tryFirst) + (comesWithTheLanguage(*m->owner) ? "" : ", or mark " + q(m->name) + " `const` if it does not change any field"), spec::Structs);
     } else if (!m->isConst) {
         // A method that may change fields changes the struct value it is called on,
-        // wherever that value is stored.
-        const VarDecl* holder = nullptr;
-        const Expr* root = nullptr;
-        Storage storage = isPlace ? storageOf(recv, root) : Storage::Temporary;
-        if (t->isStruct() && storage == Storage::Variable) holder = rootVariable(*root);
-        else if (var && var == thisVar() && path.empty()) holder = var;  // `this` of a class
+        // wherever that value is stored: for `(c ? a : b).set()`, each place it can choose.
         std::string markConst = isHashmap(t) ? "use a method that does not change it, such as `size`, `empty`, `contains`, `count`, `get`, "
                                                             "`at`, `items`, `keys` or `values`"
                                              : "mark " + q(m->name) + " `const` if it does not change any field";
-        if (t->isStruct() && storage == Storage::Pointer && followedPointer(*root).type->constElem)
-            diags_.error(call.loc, "cannot call " + q(m->name) + " through a " + q(followedPointer(*root).type) +
-                                       ", because it may change fields",
-                         markConst + ", or use a pointer that is not const",
-                         spec::Pointers);
-        else if (holder && holder == thisVar() && fn_->isConst)
-            diags_.error(call.loc, "const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
-                         "remove `const` from " + q(fn_->name) + ", or " + markConst, spec::Methods);
-        else if (t->isStruct() && holder && holder->isConst)
-            diags_.error(call.loc, "cannot call " + q(m->name) + " on const " + q(holder->name) + ", because it may change fields",
-                         "declare " + q(holder->name) + " without `const`, or " + markConst, spec::Methods);
+        std::set<std::string> said;
+        auto report = [&](const std::string& message, const std::string& help, const char* anchor) {
+            if (said.insert(message).second) diags_.error(call.loc, message, help, anchor);
+        };
+        auto check = [&](const Expr& place, const VarDecl* named, bool whole) {
+            const VarDecl* holder = nullptr;
+            const Expr* root = nullptr;
+            Storage storage = isPlace ? storageOf(place, root) : Storage::Temporary;
+            if (t->isStruct() && storage == Storage::Variable) holder = rootVariable(*root);
+            else if (named && named == thisVar() && whole) holder = named;  // `this` of a class
+            if (t->isStruct() && storage == Storage::Pointer && followedPointer(*root).type->constElem)
+                report("cannot call " + q(m->name) + " through a " + q(followedPointer(*root).type) + ", because it may change fields",
+                       markConst + ", or use a pointer that is not const", spec::Pointers);
+            else if (holder && holder == thisVar() && fn_->isConst)
+                report("const method " + q(fn_->name) + " cannot call " + q(m->name) + ", which may change fields",
+                       "remove `const` from " + q(fn_->name) + ", or " + markConst, spec::Methods);
+            else if (t->isStruct() && holder && holder->isConst)
+                report("cannot call " + q(m->name) + " on const " + q(holder->name) + ", because it may change fields",
+                       "declare " + q(holder->name) + " without `const`, or " + markConst, spec::Methods);
+        };
+        if (const TernaryExpr* chosen = isPlace ? ternaryPlaceIn(recv) : nullptr) {
+            check(*chosen->thenExpr, nullptr, false);
+            check(*chosen->elseExpr, nullptr, false);
+        } else {
+            check(recv, var, path.empty());
+        }
     }
     if (chosen) checkChosenArgs(exprsOf(call.args), *m, flow);
     else checkArgs(call.args, *m, flow, call.loc, q(m->name));

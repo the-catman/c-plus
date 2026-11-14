@@ -15,9 +15,12 @@ void whatOperatorsGive() {
     S a = {};
     S b = {};
     bool f = true;
-    (f ? a : b).set();
-    // error: 'set' may change the struct, but '?:' gives a copy of it
-    // error: `?:` gives a copy of what it chose. Change each in place: `if (f) a.set(); else b.set();`
+    (f ? a : b).set();  // the one it chose, as in C++
+    int i = 1;
+    long l = 2;
+    (f ? i : l) = 5;
+    // error: only a variable or one of its fields can be assigned to
+    // error: `?:` of 'int' and 'long' gives a copy, as the places it chooses from must be of one type. Change each in place: `if (f) i = ...; else l = ...;`
     S? o;
     (o ?? a).set();
     // error: 'set' may change the struct, but '??' gives a copy of it

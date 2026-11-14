@@ -1,0 +1,16 @@
+// The place `?:` chose lasts until the statement ends: here the vector it lies in grew before then, so the program stops.
+vector<int> g = {1, 2};
+void set(int& e, int n) { e = n; }
+int grow() {
+    g.push_back(3);
+    return 9;
+}
+int main() {
+    bool left = true;
+    set(left ? g[0] : g[1], 5);
+    println("{}", g);  // expect: [5, 2]
+    set(left ? g[0] : g[1], grow());
+    return 0;
+}
+// trap: the `?:` chose a place in a vector, string or hashmap that was grown, shrunk, copied, replaced or freed while the place was in use, which would lose what was written through it
+// trap: trap_ternary_place.cplus:12:14

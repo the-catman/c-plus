@@ -1,0 +1,64 @@
+// `?:` of two places of one type is the place it chooses, as in C++: it can be assigned to, changed, given to a `T&`
+// parameter, or have a method that changes it called on it, and a reference can be bound to it.
+struct S {
+    int x = 0;
+    vector<int> items;
+    void set() { x = 7; }
+    int bump() {
+        x += 1;
+        return x;
+    }
+};
+void bump(int& n) { n += 1; }
+int& pick(int& a, int& b, bool left) { return left ? a : b; }
+int calls = 0;
+bool which() {
+    calls += 1;
+    return calls % 2 == 1;
+}
+int main() {
+    int a = 1;
+    int b = 2;
+    int x = 10;
+    bool f = true;
+    (f ? a : b) = x;
+    (!f ? a : b) += 5;
+    bump(f ? a : b);
+    println("{} {}", a, b);                  // expect: 11 7
+    pick(a, b, false) = 3;
+    println("{}", b);                        // expect: 3
+
+    vector<int> v = {1, 2, 3};
+    (v.size() > 2 ? v[0] : v[1]) = 7;
+    auto& r = f ? v[0] : v[1];
+    r += 1;
+    println("{} {}", v, r);                  // expect: [8, 2, 3] 8
+    vector<int> evens;
+    vector<int> odds;
+    for (int i = 0; i < 5; i += 1) (i % 2 == 0 ? evens : odds).push_back(i);
+    println("{} {}", evens, odds);           // expect: [0, 2, 4] [1, 3]
+
+    S p = S();
+    S q = S();
+    (f ? p : q).set();
+    (!f ? p : q).x = 4;
+    (!f ? p : q).items.push_back(9);
+    int got = (f ? p : q).bump();
+    println("{} {} {}", p, q, got);          // expect: {x: 8, items: []} {x: 4, items: [9]} 8
+    {
+        S a = S();
+        S b = S();
+        (f ? a : b).set();
+        println("{} {}", a.x, b.x);          // expect: 7 0
+    }
+    vector<S> ws = {S{}, S{}};
+    (f ? ws.back() : ws.front()).set();
+    hashmap<string, int> m;
+    (f ? m["x"] : m["y"]) += 1;
+    println("{} {}", ws[1].x, m);            // expect: 7 {"x": 1}
+
+    // The place is found once, with its condition worked out once.
+    (which() ? a : b) += 100;
+    println("{} {} {}", a, b, calls);        // expect: 111 3 1
+    return 0;
+}

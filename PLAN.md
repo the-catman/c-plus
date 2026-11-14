@@ -705,7 +705,8 @@ program and never dangles, but when its container is resized, replaced or was sh
     write in place counts them as its own, so writing another element through a `vector<int>&` parameter works, as in C++,
     where the trap stopped it before; and a copy that took the container's place, which the count alone missed, stops it.
   - `v.back()`, `v.front()` and `m.at(k)` of a place are places (built 2026-11-14), changing §2.17 and §2.24. Still to
-    come: `?:` of two places as a place.
+    come: `?:` of two places as a place, built 2026-11-15: of one type, it is the place it chooses, found once with its holds,
+    as a `T&` call's place is, so `(f ? a : b).set()` and `(f ? a : b) = x` work as in C++.
   - `for (auto& e : m)` over a hashmap (built 2026-11-15) goes over the keys the map has when it starts, passing by one
     erased before its round, and `e` is the entry of each, found again by its key at each use, as `m.at(k)` of a place is,
     so the map may grow meanwhile. `e.first` cannot be changed, and using `e` once its entry is erased stops the program.

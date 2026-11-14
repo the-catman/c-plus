@@ -15,8 +15,7 @@ void usedResults() {
     S a = {};
     S b = {};
     bool f = true;
-    int r = (f ? a : b).bump();
-    // error: `?:` gives a copy of what it chose. Call it on each in place: `(f ? a.bump() : b.bump())`
+    int r = (f ? a : b).bump();  // the one it chose, as in C++
     (a = b).set();
     // error: 'set' may change the struct, but '=' gives a copy of it
     // error: `=` gives a copy of what was assigned. Assign first, then change it in place: `a = ...; a.set();`
