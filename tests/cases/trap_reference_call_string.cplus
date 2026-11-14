@@ -8,4 +8,4 @@ int main() {
     shout(s[0], s);
     return 0;
 }
-// trap: a string was changed, copied or freed while 'shout' had a reference to one of its chars
+// trap: a string was grown, shrunk, copied, replaced or freed while 'shout' had a reference to one of its chars

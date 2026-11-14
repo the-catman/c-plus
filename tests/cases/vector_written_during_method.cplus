@@ -1,0 +1,24 @@
+// A method of an element can write another element of the same vector in place, here through an object holding it, as in
+// C++: the vector keeps its buffer, which only the call's hold shares.
+struct C {
+    int n = 0;
+    void touch(Box b) {
+        b.items[1].n = 5;
+        n += 1;
+    }
+};
+
+class Box {
+public:
+    vector<C> items = {C{}, C{}};
+};
+
+int main() {
+    Box box = Box();
+    println("before");
+    box.items[0].touch(box);
+    println("{}", box.items);
+    return 0;
+}
+// expect: before
+// expect: [{n: 1}, {n: 5}]

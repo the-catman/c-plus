@@ -9,4 +9,4 @@ int main() {
     grow(v[0], v);
     return 0;
 }
-// trap: a vector or hashmap was changed, copied or freed while 'grow' had a reference to one of its elements
+// trap: a vector or hashmap was grown, shrunk, copied, replaced or freed while 'grow' had a reference to one of its elements

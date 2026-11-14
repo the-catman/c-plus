@@ -20,4 +20,4 @@ int main() {
     println("not reached");
     return 0;
 }
-// trap: a vector was changed, copied or freed while a method of one of its elements was running
+// trap: a vector was grown, shrunk, copied, replaced or freed while a method of one of its elements was running

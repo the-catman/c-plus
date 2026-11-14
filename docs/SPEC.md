@@ -956,11 +956,11 @@ Building a vector:
   `makeList().push_back(1)`, because the change would be lost.
 - A vector is not a [condition](#conditions); write `!v.empty()`.
 - A method that changes a struct in a vector, `v[0].move(1)`, works on that element in place,
-  and an argument that holds a copy of `v` keeps seeing `v` as it was. If the method's body
-  writes to `v`, keeps a copy of it, or frees what holds it, through a pointer or an object
-  holding it, the program stops when the method returns, since what the method did to the
-  element would be lost. C++ leaves this undefined if `v` moves. Call the method on a copy of
-  the element and store it back.
+  and an argument that holds a copy of `v` keeps seeing `v` as it was. The method's body can
+  write other elements of `v` in place, through a pointer or an object holding it, as in C++.
+  If it grows, shrinks, copies or replaces `v`, or frees what holds it, the program stops when
+  the method returns, since what the method did to the element would be lost. C++ leaves this
+  undefined if `v` moves. Call the method on a copy of the element and store it back.
 - Not yet: `resize`, `reserve`, erasing a range, and iterators (`begin()`, `end()`).
 
 **Copies are cheap.** The copies of a vector share one buffer of elements until one of them
@@ -1606,11 +1606,12 @@ void doubleAll(vector<int>& v) {
   `e` is always `v[i]`, wherever the elements of `v` are, so a copy of `v` never sees what is
   written through it. Using it once `v` is too short to have that element stops the program.
   `for (auto& x : v)` goes as far as `v` went when the loop started.
-  A reference to an element given to a function is the element's address, as in C++, and the
-  function must change the container only through that reference while it runs: if it
-  changes, copies or frees the container in some other way, the program stops when it
-  returns, as it does for a [method of an element](#vectors). `swap(v[0], v[1])` is two
-  references into one vector, which is fine.
+  A reference to an element given to a function is the element's address, as in C++. While
+  the function runs, it can change the element through the reference, and the other elements
+  of the container in place, as C++ allows; if it grows, shrinks, copies, replaces or frees
+  the container, the program stops when it returns, as it does for a [method of an
+  element](#vectors), since what was written through the reference would be lost or seen by
+  a copy. `swap(v[0], v[1])` is two references into one vector, which is fine.
 - **What a `const T&` to an element shows.** It follows the element as a `T&` does, except that
   a parameter given `v[i]`, and `for (const auto& x : v)`, keep `v`'s buffer while they run,
   so a change made to `v` meanwhile gives it a buffer of its own, as for a

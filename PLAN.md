@@ -689,9 +689,11 @@ program and never dangles, but when its container is resized, replaced or was sh
     using one whose element is gone stops the program. `for (auto& x : v)` goes as far as `v` went when it started.
   - A reference to an element given to a call, and the place a struct method is called on, are addresses. All the arguments'
     code runs first, then the places are found, then their buffers are held, so `swap(v[0], v[1])` and `swap(m[a], m[b])` work.
-    After the call, the program stops if the container was changed, copied or freed in any other way, as the trap of §6 does
-    for methods, which this extends. That stop also covers a change C++ allows, such as writing another element through a
-    `vector<int>&` parameter; pins would remove it, at the cost above.
+    After the call, the program stops if the container was grown, shrunk, copied, replaced or freed, as the trap of §6 does
+    for methods, which this extends: the container must still keep the buffer, and share it with nothing but this thread's
+    holds. Changed 2026-11-14: the holds are kept by the runtime for each thread (§2.31's `T&` returns use them too), and a
+    write in place counts them as its own, so writing another element through a `vector<int>&` parameter works, as in C++,
+    where the trap stopped it before; and a copy that took the container's place, which the count alone missed, stops it.
   - `v.back()`, `v.front()` and `m.at(k)` of a place are places (built 2026-11-14), changing §2.17 and §2.24. Still to
     come: `?:` of two places as a place, and `for (auto& e : m)` over a hashmap.
 - Aliasing follows C++: `swap(v[0], v[1])` and `f(x, x)` are allowed.

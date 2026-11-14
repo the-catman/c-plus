@@ -1,0 +1,21 @@
+// A call that gives a vector's element to a function by reference stops the program when a copy took the vector's place
+// meanwhile: what was written through the reference went to the copy, where C++ would have written the vector.
+class Box {
+public:
+    vector<int> v;
+    vector<int> c;
+};
+void f(Box b, int& e) {
+    b.c = b.v;
+    b.v[1] = 7;
+    e = 99;
+}
+int main() {
+    Box b = Box();
+    b.v = {1, 2};
+    f(b, b.v[0]);
+    println("{} {}", b.v, b.c);
+    return 0;
+}
+// trap: a vector or hashmap was grown, shrunk, copied, replaced or freed while 'f' had a reference to one of its elements
+// trap: trap_reference_call_copy_replaces.cplus:16:5

@@ -1,4 +1,5 @@
-// The same through a pointer to the vector, and for a vector lying inside another one.
+// The same through a pointer to the vector, for a vector lying inside another one: `push_back` on another inner vector writes
+// the outer one in place.
 struct C {
     int n = 0;
     void touch(vector<vector<C>>* rows) {
@@ -13,5 +14,4 @@ int main() {
     println("{}", rows);
     return 0;
 }
-// trap: a vector was changed, copied or freed while a method of one of its elements was running
-// trap: trap_vector_changed_in_method_pointer.cplus:12:
+// expect: [[{n: 1}], [{n: 0}]]

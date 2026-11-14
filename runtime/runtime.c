@@ -914,9 +914,11 @@ void cplus_str_substr(cplus_string* out, const cplus_string* s, int64_t pos, int
 // `s[i] = c` changes a byte of the string at `s`. Strings share their bytes, so the
 // string first gets a buffer that it alone holds: its own when nothing else holds it,
 // and otherwise a copy. Returns where its bytes are now.
+static int held_alone(const void* buf);  // see Holds
+
 char* cplus_str_mutable(cplus_string* s) {
     cplus_str_buf* old = s->owner;
-    if (old && __atomic_load_n(&old->count, __ATOMIC_ACQUIRE) == 1) return (char*)s->data;
+    if (old && held_alone(old)) return (char*)s->data;  // a char of it held for a call, or returned, stays where it is
     cplus_str_buf* b = str_buf_new(s->length);
     if (s->length > 0) memcpy(buf_bytes(b), s->data, (size_t)s->length);
     *s = (cplus_string){buf_bytes(b), s->length, b};
@@ -1467,6 +1469,81 @@ void cplus_print_bool(cplus_string* out, int32_t value) {
 
 void cplus_print_newline(void) { fputc('\n', stdout); }
 
+// ---- Holds -------------------------------------------------------------------
+//
+// What a place in a container needs while a call uses it or a function has returned it: the buffer or the class object it
+// lies in, held, so its memory stays, and where the container keeps that buffer. A place is still good while the container
+// keeps the buffer and nothing but this thread's holds shares it; a write in place counts those holds as its own (see
+// cplus_vec_own). Each thread has its own holds, which a statement releases when it ends. See "References" in docs/SPEC.md.
+
+typedef struct {
+    void** slot;          // where the container keeps `buf`, or null for a class object or a temporary
+    void* buf;            // a vector's or a string's buffer, or a class object: a count first, as in every heap object
+    int64_t elem_size;    // for a vector, how it is released; -1 for a string's buffer
+    cplus_elem_fn release_elem;
+    void (*release_object)(void*);  // for a class object
+} hold;
+
+static _Thread_local hold* holds;
+static _Thread_local int64_t holds_used, holds_room;
+
+int64_t cplus_holds_mark(void) { return holds_used; }
+
+void cplus_vec_release(void* vec, int64_t elem_size, cplus_elem_fn release_elem);
+
+// Holds `buf`, which the caller has retained for the hold: a vector's buffer when `elem_size` is 0 or more, a string's when
+// it is -1, and otherwise a class object, which `release_object` lets go of.
+void cplus_hold(void** slot, void* buf, int64_t elem_size, cplus_elem_fn release_elem, void (*release_object)(void*)) {
+    if (holds_used == holds_room) {
+        holds_room = holds_room ? holds_room * 2 : 16;
+        holds = realloc(holds, (size_t)holds_room * sizeof(hold));
+        if (!holds) out_of_memory();
+    }
+    holds[holds_used++] = (hold){slot, buf, elem_size, release_elem, release_object};
+}
+
+// Lets go of the holds taken since `mark`, the last first.
+void cplus_holds_release(int64_t mark) {
+    while (holds_used > mark) {
+        hold h = holds[--holds_used];
+        if (h.release_object) h.release_object(h.buf);
+        else if (h.elem_size >= 0) cplus_vec_release(h.buf, h.elem_size, h.release_elem);
+        else cplus_str_release(h.buf);
+    }
+}
+
+// How many of this thread's holds are on `buf`.
+static int64_t holds_on(const void* buf) {
+    int64_t n = 0;
+    for (int64_t i = 0; i < holds_used; ++i) n += holds[i].buf == buf;
+    return n;
+}
+
+// Whether a buffer is shared with nothing but this thread's holds: what a write in place may treat as its own.
+static int held_alone(const void* buf) {
+    return buf && __atomic_load_n((const int64_t*)buf, __ATOMIC_ACQUIRE) == 1 + holds_on(buf);
+}
+
+// For a place that a call was given: whether the container still keeps `buf` at `slot`, and shares it with nothing but this
+// thread's holds.
+// The count comes first: a container that was freed let go of its buffer, so its place is never read then.
+int32_t cplus_still_held(void** slot, void* buf) { return held_alone(buf) && (!slot || *slot == buf); }
+
+// Stops the program unless each place held since `mark` is still in its container: the container keeps the buffer, and no
+// copy shares it, as a write through the place would be lost or seen by the copy. `what` says what gave the place.
+void cplus_holds_check(int64_t mark, const char* what, const char* file, int32_t line, int32_t column) {
+    for (int64_t i = mark; i < holds_used; ++i) {
+        const hold h = holds[i];
+        if (!h.slot || (held_alone(h.buf) && *h.slot == h.buf)) continue;
+        char message[320];
+        snprintf(message, sizeof message,
+                 "the vector, string or hashmap that %s refers into was grown, shrunk, copied, replaced or freed while it was in use, "
+                 "which would lose what was written through it",
+                 what);
+        cplus_trap(message, file, line, column);
+    }
+}
+
 // ---- Vectors ---------------------------------------------------------------
 //
 // A vector is a pointer to a buffer, or null when it is empty and has never held
@@ -1504,6 +1581,13 @@ void cplus_vec_release(void* vec, int64_t elem_size, cplus_elem_fn release_elem)
 // elements and the same elements as `vec`. The caller's reference to `vec` moves to
 // the result: a vector that is not shared is grown in place, and one that is shared
 // is copied.
+// A buffer of its own for a write in place, which keeps the size: the same one when nothing but this thread's holds shares it.
+void* cplus_vec_own(void* vec, int64_t elem_size, cplus_elem_fn retain_elem, cplus_elem_fn release_elem) {
+    cplus_vec* v = vec;
+    if (!v || held_alone(v)) return v;
+    return cplus_vec_reserve(vec, elem_size, v->size, retain_elem, release_elem);
+}
+
 void* cplus_vec_reserve(void* vec, int64_t elem_size, int64_t min_capacity, cplus_elem_fn retain_elem,
                         cplus_elem_fn release_elem) {
     cplus_vec* v = vec;

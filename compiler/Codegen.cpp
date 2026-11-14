@@ -61,6 +61,7 @@ struct Codegen::Impl {
     llvm::FunctionCallee rtStrStartsWith, rtStrEndsWith, rtCString, rtCFree, rtStrFromC, rtStrFromChars, rtStrFromBytes;
     llvm::FunctionCallee rtPrintF32, rtPrintF64, rtPrintFloatSpec, rtTrapNarrow, rtTrapFloatCast;
     llvm::FunctionCallee rtPrintIntSpec, rtPrintPadded, rtPrintStrPrefix, rtTrapFormatCount;
+    llvm::FunctionCallee rtHoldsMark, rtHold, rtHoldsRelease, rtHoldsCheck, rtStillHeld, rtVecOwn;
     llvm::FunctionCallee rtPrintCharQuoted, rtTrapChar, rtTrapStringIndex, rtStrMutable, rtStrRepeat, rtPrintPtr;
     llvm::FunctionCallee rtNew, rtDeleteCheck, rtDeleteFree, rtStart, rtArgs, rtGlobalsStart, rtGlobalsDone, rtDynamicCast, rtRetainObject, rtObjectStart;
     llvm::FunctionCallee rtRetainClass, rtReleaseClass, rtFreeClass, rtDestructorHold, rtReferences;
@@ -192,7 +193,7 @@ struct Codegen::Impl {
     std::deque<VarDecl> heldForScope;  // what a reference variable's place lies in, kept alive until its scope ends
     struct Temp {
         llvm::Value* value;
-        const Type* type;
+        const Type* type;  // null for the holds of the runtime taken since `value`, a mark (see Holds in runtime.c)
         bool inMemory;  // `value` is the address of the value
     };
     std::vector<Temp> temps;
@@ -226,6 +227,7 @@ struct Codegen::Impl {
         llvm::Value* buf;
         bool write;     // a place in it can change: a `T&`, or `this` of a method that is not const
         size_t from;    // the argument it is for
+        llvm::Value* slot = nullptr;  // where the container keeps `buf`: the vector's place, or the owner of the string's
     };
     // While the places of a call are found, the holds they need, which are taken once all of them are found.
     std::vector<Hold>* deferredHolds = nullptr;
@@ -448,6 +450,12 @@ struct Codegen::Impl {
         rtStrFromBytes = decl("cplus_str_from_bytes", voidTy, {ptrTy, ptrTy, i64, ptrTy, i32, i32});
         rtVecNew = decl("cplus_vec_new", ptrTy, {i64, i64});
         rtVecRelease = decl("cplus_vec_release", voidTy, {ptrTy, i64, ptrTy});
+        rtHoldsMark = decl("cplus_holds_mark", i64, {});
+        rtHold = decl("cplus_hold", voidTy, {ptrTy, ptrTy, i64, ptrTy, ptrTy});
+        rtHoldsRelease = decl("cplus_holds_release", voidTy, {i64});
+        rtHoldsCheck = decl("cplus_holds_check", voidTy, {i64, ptrTy, ptrTy, i32, i32});
+        rtStillHeld = decl("cplus_still_held", i32, {ptrTy, ptrTy});
+        rtVecOwn = decl("cplus_vec_own", ptrTy, {ptrTy, i64, ptrTy, ptrTy});
         rtVecReserve = decl("cplus_vec_reserve", ptrTy, {ptrTy, i64, i64, ptrTy, ptrTy});
         rtTrapEnum = decl("cplus_trap_enum", voidTy, {i64, ptrTy, ptrTy, i32, i32});
         if (auto* f = llvm::dyn_cast<llvm::Function>(rtTrapEnum.getCallee())) {
@@ -1213,6 +1221,35 @@ struct Codegen::Impl {
         return own;
     }
 
+    // The buffer of the vector at `slot` for a write in place, which keeps its size: its own, unless something but this
+    // thread's holds shares it (see cplus_vec_own).
+    llvm::Value* ownInPlace(llvm::Value* slot, llvm::Value* buf, const Type* vecType) {
+        VecInfo& info = vecInfo(vecType);
+        auto* fastBB = llvm::BasicBlock::Create(ctx, "own.fast", fn);
+        auto* slowBB = llvm::BasicBlock::Create(ctx, "own.slow", fn);
+        auto* endBB = llvm::BasicBlock::Create(ctx, "own.end", fn);
+        llvm::BasicBlock* from = b.GetInsertBlock();
+        auto* checkBB = llvm::BasicBlock::Create(ctx, "own.check", fn);
+        b.CreateCondBr(b.CreateIsNull(buf), endBB, checkBB);
+        b.SetInsertPoint(checkBB);
+        llvm::LoadInst* count = b.CreateLoad(b.getInt64Ty(), buf, "count");
+        count->setAtomic(llvm::AtomicOrdering::Acquire);
+        count->setAlignment(llvm::Align(8));
+        b.CreateCondBr(b.CreateICmpEQ(count, b.getInt64(1)), fastBB, slowBB);
+        b.SetInsertPoint(fastBB);
+        b.CreateBr(endBB);
+        b.SetInsertPoint(slowBB);
+        llvm::Value* own = b.CreateCall(rtVecOwn, {buf, b.getInt64(info.elemSize), info.retainElem, info.releaseElem}, "vec");
+        b.CreateStore(own, slot);
+        b.CreateBr(endBB);
+        b.SetInsertPoint(endBB);
+        llvm::PHINode* phi = b.CreatePHI(b.getPtrTy(), 3, "vec");
+        phi->addIncoming(buf, from);
+        phi->addIncoming(buf, fastBB);
+        phi->addIncoming(own, slowBB);
+        return phi;
+    }
+
     // Emits `for (i = 0; i < count; i++) body(i)`, with `count` an i64.
     void countedLoop(llvm::Value* count, const std::function<void(llvm::Value*)>& body) {
         llvm::AllocaInst* counter = entryAlloca(b.getInt64Ty(), "i");
@@ -1615,7 +1652,8 @@ struct Codegen::Impl {
         while (temps.size() > mark) {
             Temp t = temps.back();
             temps.pop_back();
-            releaseValue(t.inMemory ? peekValue(t.type, t.value) : t.value, t.type);
+            if (!t.type) b.CreateCall(rtHoldsRelease, {t.value});
+            else releaseValue(t.inMemory ? peekValue(t.type, t.value) : t.value, t.type);
         }
     }
 
@@ -1827,10 +1865,13 @@ struct Codegen::Impl {
         }
         deferredHolds = outerHolds;
         holdFrom = outerFrom;
-        for (const Hold& h : holds) {
-            retainValue(h.value, h.type);
-            temps.push_back({h.value, h.type, false});
-            held.push_back(h);
+        if (!holds.empty()) {
+            llvm::Value* mark = b.CreateCall(rtHoldsMark, {}, "holds");
+            for (const Hold& h : holds) {
+                pushHold(h);
+                held.push_back(h);
+            }
+            temps.push_back({mark, nullptr, false});
         }
         for (const Expr* part : made) frozen.erase(part);
         pending.resize(mark);
@@ -1845,18 +1886,17 @@ struct Codegen::Impl {
         for (const Hold& h : held) {
             if (!h.write) continue;
             const std::string name = "'" + callee + "'";
-            llvm::Value* expected = b.getInt64(1);
-            for (const Hold& other : held) expected = b.CreateAdd(expected, b.CreateZExt(b.CreateICmpEQ(other.buf, h.buf), b.getInt64Ty()));
-            auto* count = b.CreateAlignedLoad(b.getInt64Ty(), h.buf, llvm::MaybeAlign(8), "count");
-            count->setAtomic(llvm::AtomicOrdering::Monotonic);
+            // The container must still keep the buffer, which nothing but this thread's holds may share.
+            llvm::Value* slot = h.slot ? h.slot : llvm::ConstantPointerNull::get(b.getPtrTy());
+            llvm::Value* still = b.CreateCall(rtStillHeld, {slot, h.buf}, "still");
             std::string container = h.type->is(K::String) ? "a string" : "a vector or hashmap";
-            trapIf(b.CreateICmpNE(count, expected),
+            trapIf(b.CreateICmpEQ(still, b.getInt32(0)),
                    specs[h.from].param
-                       ? container + " was changed, copied or freed while " + name + " had a reference to " +
+                       ? container + " was grown, shrunk, copied, replaced or freed while " + name + " had a reference to " +
                              (h.type->is(K::String) ? "one of its chars" : "one of its elements") + ", which would lose what " + name +
-                             " did through the reference; while the call runs, change the " + (h.type->is(K::String) ? "char" : "element") +
-                             " only through the reference, or pass the container and an index instead"
-                       : "a vector was changed, copied or freed while a method of one of its elements was running, which would lose "
+                             " did through the reference; while the call runs, do not grow, shrink, replace or copy the " +
+                             (h.type->is(K::String) ? "string" : "container") + ", or pass the container and an index instead"
+                       : "a vector was grown, shrunk, copied, replaced or freed while a method of one of its elements was running, which would lose "
                          "what the method did to the element; call the method on a copy of the element, then store it back",
                    loc);
         }
@@ -1864,8 +1904,13 @@ struct Codegen::Impl {
 
     // Keeps the temporaries made since `mark` until the current scope ends, instead of the statement.
     void keepTempsForScope(size_t mark) {
+        std::vector<Temp> holdsMarks;  // the holds of a call stay the statement's
         for (size_t i = mark; i < temps.size(); ++i) {
             const Temp& t = temps[i];
+            if (!t.type) {
+                holdsMarks.push_back(t);
+                continue;
+            }
             VarDecl& held = heldForScope.emplace_back(Loc{}, "held", t.type, Loc{});
             held.type = t.type;
             if (t.inMemory) {
@@ -1878,6 +1923,7 @@ struct Codegen::Impl {
             scopes.back().push_back(&held);
         }
         temps.resize(mark);
+        temps.insert(temps.end(), holdsMarks.begin(), holdsMarks.end());
     }
 
     // The same, for a value that waits while more of the expression is worked out: an error there
@@ -2307,8 +2353,8 @@ struct Codegen::Impl {
         const Type* entries = mapType->decl->fields[entriesField].type;
         llvm::Value* slot = fieldAddress(mapType, self, entriesField, "entries");
         llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "entries");
-        if (write) buf = reserve(slot, buf, entries, b.getInt64(0));
-        if (hold) takeHold({buf, entries, buf, write, holdFrom});
+        if (write) buf = ownInPlace(slot, buf, entries);
+        if (hold) takeHold({buf, entries, buf, write, holdFrom, slot});
         return fieldAddress(entries->elem, elementAt(buf, position, entries), 1, "value");
     }
 
@@ -2342,8 +2388,21 @@ struct Codegen::Impl {
             deferredHolds->push_back(h);
             return;
         }
+        llvm::Value* mark = b.CreateCall(rtHoldsMark, {}, "holds");
+        pushHold(h);
+        temps.push_back({mark, nullptr, false});
+    }
+
+    // Puts `h` on this thread's holds (see Holds in runtime.c), which let go of it when the statement releases the mark.
+    void pushHold(const Hold& h) {
         retainValue(h.value, h.type);
-        temps.push_back({h.value, h.type, false});
+        llvm::Value* slot = h.slot ? h.slot : llvm::ConstantPointerNull::get(b.getPtrTy());
+        if (h.type->is(K::String)) {
+            b.CreateCall(rtHold, {slot, h.buf, b.getInt64(-1), llvm::ConstantPointerNull::get(b.getPtrTy()), llvm::ConstantPointerNull::get(b.getPtrTy())});
+        } else {
+            VecInfo& info = vecInfo(h.type);
+            b.CreateCall(rtHold, {slot, h.buf, b.getInt64(info.elemSize), info.releaseElem, llvm::ConstantPointerNull::get(b.getPtrTy())});
+        }
     }
 
     // The address of the element a reference to an element refers to, found again (see Rederived).
@@ -2370,14 +2429,14 @@ struct Codegen::Impl {
                 llvm::Value* data = write ? b.CreateCall(rtStrMutable, {slot}, "data") : strData(str);
                 if (hold) {
                     llvm::Value* held = b.CreateLoad(stringTy, slot, "str");
-                    takeHold({held, Type::stringTy(), b.CreateExtractValue(held, 2, "owner"), write, holdFrom});
+                    takeHold({held, Type::stringTy(), b.CreateExtractValue(held, 2, "owner"), write, holdFrom, b.CreateStructGEP(stringTy, slot, 2)});
                 }
                 address = b.CreateInBoundsGEP(b.getInt8Ty(), data, index, "char.addr");
             } else {
                 llvm::Value* buf = b.CreateLoad(b.getPtrTy(), slot, "vec");
                 checkIndex(index, vecSize(buf), at, rtTrapIndex);
-                if (write) buf = reserve(slot, buf, r.range, b.getInt64(0));
-                if (hold) takeHold({buf, r.range, buf, write, holdFrom});
+                if (write) buf = ownInPlace(slot, buf, r.range);
+                if (hold) takeHold({buf, r.range, buf, write, holdFrom, slot});
                 address = elementAt(buf, index, r.range);
             }
         }
@@ -2482,9 +2541,9 @@ struct Codegen::Impl {
                 checkIndex(index, vecSize(buf), ix.loc, rtTrapIndex);
                 if (write) {
                     if (!slot) llvm_unreachable("Sema allowed changing an element of a temporary vector");
-                    buf = reserve(slot, buf, vt, b.getInt64(0));
+                    buf = ownInPlace(slot, buf, vt);
                 }
-                if (hold) takeHold({buf, vt, buf, write, holdFrom});
+                if (hold) takeHold({buf, vt, buf, write, holdFrom, slot});
                 return elementAt(buf, index, vt);
             }
             default: llvm_unreachable("not a place");
@@ -2523,7 +2582,7 @@ struct Codegen::Impl {
         }
         if (hold) {
             llvm::Value* held = slot ? b.CreateLoad(stringTy, slot, "str") : s;
-            takeHold({held, Type::stringTy(), b.CreateExtractValue(held, 2, "owner"), write && slot, holdFrom});
+            takeHold({held, Type::stringTy(), b.CreateExtractValue(held, 2, "owner"), write && slot, holdFrom, slot ? b.CreateStructGEP(stringTy, slot, 2) : nullptr});
         }
         return b.CreateInBoundsGEP(b.getInt8Ty(), data, index, "char.addr");
     }
@@ -4746,7 +4805,10 @@ struct Codegen::Impl {
         llvm::Value* error = b.CreateLoad(b.getPtrTy(), errorPlace(), "error");
         b.CreateCondBr(b.CreateIsNotNull(error), failedBB, okBB, llvm::MDBuilder(ctx).createBranchWeights(1, 1u << 20));
         b.SetInsertPoint(failedBB);
-        auto release = [&](const Temp& t) { releaseValue(t.inMemory ? peekValue(t.type, t.value) : t.value, t.type); };
+        auto release = [&](const Temp& t) {
+            if (!t.type) b.CreateCall(rtHoldsRelease, {t.value});
+            else releaseValue(t.inMemory ? peekValue(t.type, t.value) : t.value, t.type);
+        };
         for (size_t i = pending.size(); i-- > 0;) release(pending[i]);
         for (size_t i = temps.size(); i-- > 0;) release(temps[i]);
         leaveWithError();

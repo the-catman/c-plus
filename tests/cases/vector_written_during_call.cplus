@@ -1,0 +1,32 @@
+// While a function has a reference to an element, it can write the other elements in place, as in C++.
+void f(vector<int>& v, int& e) {
+    v[1] = 5;
+    e = 2;
+}
+void both(string& s, char& c) {
+    s[1] = 'y';
+    c = 'x';
+}
+struct Pair {
+    int a = 0;
+    int b = 0;
+};
+void fill(vector<Pair>& ps, Pair& p) {
+    ps[1].b = 4;
+    p.a = 3;
+}
+int main() {
+    vector<int> w = {1, 2};
+    f(w, w[0]);
+    println("{}", w);                // expect: [2, 5]
+    string s = "ab";
+    both(s, s[0]);
+    println("{}", s);                // expect: xy
+    vector<Pair> ps = {Pair{}, Pair{}};
+    fill(ps, ps[0]);
+    println("{}", ps);               // expect: [{a: 3, b: 0}, {a: 0, b: 4}]
+    hashmap<string, int> m = {{"a", 1}, {"b", 2}};
+    f(w, m["a"]);
+    println("{} {}", w, m["a"]);     // expect: [2, 5] 2
+    return 0;
+}
