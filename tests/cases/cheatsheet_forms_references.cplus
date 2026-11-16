@@ -68,3 +68,10 @@ double added() {
     a += Vec{2};
     return a.x;
 }
+int readOnly() {
+    Grid grid = Grid();
+    int i = 1;
+    int n = grid.at(i);
+    if (grid.at(i) == 0) n += 1;
+    return n + int(grid.at(1) == 0);
+}

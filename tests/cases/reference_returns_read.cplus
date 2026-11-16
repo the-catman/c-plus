@@ -1,0 +1,77 @@
+// A call of a `T&` function that is only read finds the place as a read of it would: it makes no buffer its own, so threads
+// that only read a class object through one need no lock, and a copy that shares the vector stays as it is.
+struct Size {
+    int w = 0;
+    int h = 0;
+    int area() const { return w * h; }
+};
+class Grid {
+public:
+    vector<char> cells;
+    vector<Size> sizes;
+    vector<vector<int>> rows = {{1, 2}, {3, 4}};
+    Grid() {
+        for (int i = 0; i < 100; i += 1) {
+            cells.push_back(i % 3 == 0 ? '#' : '.');
+            sizes.push_back(Size{i, 2});
+        }
+    }
+    char& at(long i) { return cells[i]; }
+    char& operator[](long i) { return cells[i]; }
+    char operator[](long i) const { return cells[i]; }
+    Size& size(long i) { return sizes[i]; }
+    vector<int>& row(long r) { return rows[r]; }
+    int& cell(long r, long c) { return row(r)[c]; }  // passes on its own form
+    virtual char& first() { return cells[0]; }
+};
+int widthOf(const Size& s) { return s.w; }
+
+int count(const Grid& g) {
+    int n = 0;
+    for (int k = 0; k < 50; k += 1) {
+        for (long i = 0; i < 100; i += 1) {
+            if (g.at(i) == '#') n += 1;  // an operand
+            char c = g[i];               // a pair, which on a class chooses `char&`, here in its reading form
+            if (c == '#') n += 1;
+            n += g.size(i).w % 2;        // a field
+            n += g.size(i).area() % 2;   // a const method
+            n += widthOf(g.size(i)) % 2;  // a `const T&` parameter
+            const auto& s = g.size(i);    // a `const auto&`
+            n += s.h - 2;
+            n += g.cell(1, 1) - 4;
+            if (g.first() == '#') n += 0;
+        }
+    }
+    return n;
+}
+
+int walls(Grid g) { return count(g); }
+
+int& tally(hashmap<string, int>& m, string k) { return m[k]; }
+
+int main() {
+    Grid g = Grid();
+    vector<Task<int>> tasks;
+    for (int t = 0; t < 4; t += 1) tasks.push_back(spawn walls(g));
+    vector<int> found;
+    for (auto& t : tasks) found.push_back(t.wait());
+    println("{}", found);  // expect: [8400, 8400, 8400, 8400]
+
+    // A read leaves a copy that shares the vector as it is; a write gives the grid a buffer of its own.
+    vector<char> copy = g.cells;
+    char c = g.at(1);
+    g.at(1) = 'x';
+    println("{} {} {}", c, copy[1], g.cells[1]);  // expect: . . x
+    const auto& kept = g.size(5);
+    g.size(5).w = 50;  // which may make the grid's vector its own, while `kept` still holds the one it found
+    println("{}", kept.w == 5 || kept.w == 50);   // expect: true
+
+    function<char(long)> read = [&](long i) { return g.at(i); };
+    println("{}", read(0));                        // expect: #
+
+    // `m[k]` in what is returned adds a missing key when read, as a read of `m[k]` does.
+    hashmap<string, int> m;
+    int n = tally(m, "a");
+    println("{} {}", n, m);                        // expect: 0 {"a": 0}
+    return 0;
+}

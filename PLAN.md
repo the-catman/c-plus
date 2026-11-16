@@ -689,7 +689,12 @@ program and never dangles, but when its container is resized, replaced or was sh
   each use, so growing the container is fine while it is not used again, as in C++; a write through it also needs no copy to
   share the container, and a read does not. A reference bound to a class's `C& f()` names the object, as `C x = f()` does, and
   assigning to it, or giving it to a `C&` parameter, is an error, since it does not refer to where the object is kept
-  (decided 2026-11-14). `T& operator[]` came with §2.38's slice 5.
+  (decided 2026-11-14). `T& operator[]` came with §2.38's slice 5. Changed 2026-11-16, after the exit check's first round, in
+  which threads that only read a shared class object through `T& at(i)` broke it: a call that is only read, copied at once, given
+  to a `const T&`, bound to a `const auto&`, or a field or `const` method of it, runs the function's reading form, told by a
+  hidden argument, which finds the place as a read of it would, making no buffer its own, and is not checked when the statement
+  ends. `return row(r)[c];` passes its form on, and so does `?:`. A `const auto&` bound to one keeps the holds but is not
+  checked at its uses, and may show the element as it was. The const one of a `T&`/`T` pair is still not chosen on a class.
 - A function that is `async`, or run with `spawn`, cannot take a reference, and no reference is alive at an `await`.
 - Elements of containers, as built 2026-11-11 in place of the pins first planned, which needed every copy in Codegen to be able
   to give a new buffer, as a copy of a pinned buffer would have to:

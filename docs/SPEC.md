@@ -1641,6 +1641,11 @@ void doubleAll(vector<int>& v) {
   replaced or freed before then, by the statement itself, the program stops when the statement
   ends, since what was written through the place would be lost or seen by a copy, where C++
   would leave it dangling. A class object it lies in is kept for the statement.
+- **A call that only reads**, `int n = grid.at(1);`, `grid.at(1) == 0`, a field or a `const` method of what it returns, or
+  one given to a `const T&` or bound to a `const auto&`, finds the place as reading it there would: it makes no vector,
+  string or hashmap its own, and nothing is checked when the statement ends. So threads that only read a class object
+  through one need no [lock](#mutex). A `const auto&` bound to one keeps what the place lies in, and may show the element as
+  it was when it was bound. `m[k]` in what the function returns still adds a missing key, as a read of `m[k]` does.
 - **`?:` of two places** works as a call of a `T&` function does: the place it chooses is found once, and a reference
   bound to it, `auto& r = f ? v[0] : v[1];`, is checked at each use.
 - **A reference bound to one**, `auto& e = grid.at(1);`, refers to that place until its scope
@@ -3540,7 +3545,8 @@ println("{} {}", t.wait(), u.wait());
   an error that says to copy it with `[=]`, and to give back what the thread works out through its task. A `const` variable is
   copied anyway, so it can be shared.
 - **What threads share is a class object.** `[=]` copies a class reference, so both threads reach one object, and a
-  [Mutex](#mutex) guards what changes in it. In a method of a class, the lambda shares `this` too, as `spawn this.method()` does. In a
+  [Mutex](#mutex) guards what changes in it. What they only read needs nothing, through a method that returns a `T&` too,
+  `if (grid.at(i) == 0)`, as such a call [only reads](#references). In a method of a class, the lambda shares `this` too, as `spawn this.method()` does. In a
   method of a struct, it copies `this` in a `const` method, and is an error in any other, as for any lambda that is
   [kept](#lambdas).
 - A lambda marked `throws` gives a `Task<T, throws>`, as a function marked `throws` does.
