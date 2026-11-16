@@ -1,0 +1,10 @@
+// The other file, which uses them too.
+import fs;
+
+export int number(string s) {
+    try {
+        return try stoi(s) + int(fs::exists("words.txt"));
+    } catch (Error e) {
+        return -1;
+    }
+}

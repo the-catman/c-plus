@@ -6727,7 +6727,7 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
             diags_.error(nameLoc, q(call.callee) + " is a function of the main file, which other files cannot use",
                          "move it into a module, with `export` before it, and import that module in each file that calls it", spec::Modules);
             return Type::error();
-        } else if (f != funcs_.end() && f->second->isExtern && parser_.modules()->hasModules() && call.loc.file < parser_.modules()->files.size()) {
+        } else if (f != funcs_.end() && f->second->isExtern && call.loc.line && parser_.modules()->hasModules() && call.loc.file < parser_.modules()->files.size()) {  // line 0: what comes with the language
             const ModuleFile& here = parser_.modules()->files[call.loc.file];
             if (!here.cFunctions.count(call.callee) && !here.importsHeader) {
                 const FuncDecl& c = *f->second;

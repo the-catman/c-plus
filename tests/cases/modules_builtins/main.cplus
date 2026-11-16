@@ -1,0 +1,17 @@
+// What comes with the language works in a program of several files: `fs`, `stoi` and the rest call C functions of the
+// runtime, which no file of the program declares.
+import fs;
+import words;
+
+int main() {
+    try {
+        try fs::write("words.txt", "// The words\n");
+        string text = try fs::read("words.txt");
+        int n = try stoi("42");
+        println("{} {} {}", text.starts_with("// The"), n + 1, words::number("7"));
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    return 0;
+}
+// expect: true 43 8
