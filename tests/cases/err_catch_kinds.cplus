@@ -1,0 +1,20 @@
+// `throws` names no kinds, so catches of some kinds of error leave the others where the function is not marked `throws`.
+import fs;
+import json;
+struct User {
+    string name;
+};
+int main() {
+    try {
+        string text = try fs::read("user.json");
+        User u = try json::parse<User>(text);
+        println("{}", u.name);
+    } catch (fs::Error e) {
+        println("{}", e.kind);
+    } catch (json::Error e) {
+        println("{}", e.line);
+    }
+    return 0;
+}
+// error: these catches take only `fs::Error` and `json::Error`, and `throws` does not say which errors a call throws, so another kind would have nowhere to go: 'main' is not marked `throws`
+// error: add `catch (Error e) { ... }` after them, which takes every error, `fs::Error` and `json::Error` included, or mark 'main' `throws`

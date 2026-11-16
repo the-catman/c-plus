@@ -1,0 +1,36 @@
+// The forms the cheat sheet gives for constructors, default arguments, widths from values, a class taken by `const User&`,
+// and reading a file by lines.
+import fs;
+struct P {
+    int w = 0;
+    int h = 0;
+    P(int w, int h = 1) : w(w), h(h) {}
+};
+class User {
+public:
+    string name;
+    User(string n) : name(n) {}
+};
+void log(string m, int level = 1) { println("{} {}", m, level); }
+string greet(const User& u) { return "hi " + u.name; }
+int main() {
+    P p = P(3);
+    log("a");
+    int width = 6;
+    println("[{:>{}.{}f}]", 3.14159, width, 2);
+    println("{} {} {}", p.w, p.h, greet(User("ann")));
+    try {
+        try fs::write("in.txt", "one\ntwo\n");
+        string path = "in.txt";
+        fs::File f = try fs::open(path, "r");
+        while (auto line = try f.readLine()) { println("{}", line); }
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    return 0;
+}
+// expect: a 1
+// expect: [  3.14]
+// expect: 3 1 hi ann
+// expect: one
+// expect: two

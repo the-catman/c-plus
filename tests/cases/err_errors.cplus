@@ -136,7 +136,8 @@ int main() {
 // error: only an object of `Error`, or of a class deriving from it, can be thrown, but this is 'int'
 // error: wrap the string in `Error(...)`: `throw Error(s);`
 // error: it may be null. Write `throw e.value();`
-// error: an error none of these catches takes has nowhere to go, since 'incomplete' is not marked `throws`
+// error: this catch takes only `NotFound`, and `throws` does not say which errors a call throws, so another kind would have nowhere to go: 'incomplete' is not marked `throws`
+// error: add `catch (Error e) { ... }` after it, which takes every error, `NotFound` included, or mark 'incomplete' `throws`
 // error: only `Error` and classes deriving from it are thrown, so a catch cannot take 'int'
 // error: only `Error` and classes deriving from it are thrown, so a catch cannot take 'Value'
 // error: this catch never runs, since the one before it takes every error

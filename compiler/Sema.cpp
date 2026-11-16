@@ -3251,11 +3251,23 @@ void Sema::checkTry(TryStmt& st, Flow& flow) {
         result = merge(result, branch);
     }
     if (takesEverything) failPoints_ -= failsInBody;  // nothing from the body gets past here
-    if (bodyCanFail && !takesEverything && tryBlocks_ == 0 && !fn_->isThrows)
-        diags_.error(st.loc, "an error none of these catches takes has nowhere to go, since " + q(fn_->name) + " is not marked `throws`",
-                     fn_->role == FuncDecl::Role::Free || fn_->role == FuncDecl::Role::Method
-                         ? "add `catch (Error e) { ... }` at the end, or mark " + q(fn_->name) + " `throws`"
-                         : "add `catch (Error e) { ... }` at the end", spec::Errors);
+    if (bodyCanFail && !takesEverything && tryBlocks_ == 0 && !fn_->isThrows) {
+        // `throws` names no kinds, so catching `fs::Error` alone leaves the others, even where only `fs` can fail.
+        std::vector<std::string> kinds;
+        for (auto& c : st.catches)
+            if (c.type && std::find(kinds.begin(), kinds.end(), "`" + std::string(c.type->name) + "`") == kinds.end())
+                kinds.push_back("`" + std::string(c.type->name) + "`");
+        std::string named;
+        for (size_t i = 0; i < kinds.size(); ++i) named += (i == 0 ? "" : i + 1 == kinds.size() ? " and " : ", ") + kinds[i];
+        const bool one = st.catches.size() == 1;
+        diags_.error(st.loc,
+                     (one ? "this catch takes only " : "these catches take only ") + named +
+                         ", and `throws` does not say which errors a call throws, so another kind would have nowhere to go: " + q(fn_->name) +
+                         " is not marked `throws`",
+                     "add `catch (Error e) { ... }` after " + std::string(one ? "it" : "them") + ", which takes every error, " + named + " included" +
+                         (fn_->role == FuncDecl::Role::Free || fn_->role == FuncDecl::Role::Method ? ", or mark " + q(fn_->name) + " `throws`" : ""),
+                     spec::Errors);
+    }
     flow = result;
 }
 
