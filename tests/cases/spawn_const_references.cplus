@@ -1,0 +1,49 @@
+// A `const T&` parameter of what `spawn` runs, or of an async function, is given a copy of its own, made where the thread
+// or the task starts, as `std::thread` does: what the caller changes after that does not show in it.
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+class Grid {
+public:
+    vector<char> cells = {'#', '.'};
+    Grid() {}
+    int count(const vector<int>& v, const string& s) const { return int(v.size() + s.size() + cells.size()); }
+};
+
+int total(const vector<int>& v, const Grid& g, const Point& p, const int& k) {
+    int n = 0;
+    for (int x : v) n += x;
+    return n + int(g.cells.size()) + p.x + k;
+}
+
+int count(const vector<int>& v) { return int(v.size()); }
+
+async int later(const vector<int>& v, const string& name) {
+    await delay(5);
+    return int(v.size() + name.size());
+}
+
+int main() {
+    vector<int> v = {1, 2, 3};
+    Grid g = Grid();
+    auto t = spawn total(v, g, Point{10, 0}, 100);
+    auto u = spawn g.count(v, "abc");
+    auto w = spawn [](const vector<int>& xs, const string& s) { return int(xs.size() + s.size()); }(v, "xy");
+    function<int(const vector<int>&)> twice = [](const vector<int>& xs) { return int(xs.size()) * 2; };
+    auto z = spawn twice(v);
+    Task<int> c = spawn count(v);
+    v.push_back(4);
+    println("{} {} {} {} {}", t.wait(), u.wait(), w.wait(), z.wait(), c.wait());  // expect: 118 8 5 6 3
+
+    // A class object is shared, as a `const Grid&` always is.
+    auto seen = spawn total({}, g, Point{}, 0);
+    println("{}", seen.wait());                     // expect: 2
+
+    string name = "ab";
+    auto a = later(v, name);
+    v.clear();
+    name += "cdef";
+    println("{} {} {}", a.wait(), v.size(), name);  // expect: 6 0 abcdef
+    return 0;
+}

@@ -2970,24 +2970,25 @@ const Type* Sema::checkSpawn(SpawnExpr& s, Flow& flow) {
     if (through) {
         const auto& params = *ft->params;
         const auto* lambda = through->callee->kind == Expr::Kind::Lambda ? static_cast<const LambdaExpr*>(through->callee.get()) : nullptr;
+        // A `const T&` is given the thread's own copy, made now, as `std::thread` does.
         for (size_t i = 0; i < args.size() && i < params.size(); ++i)
-            if (params[i].isRef) {
+            if (params[i].isRef && !params[i].isConst) {
                 const std::string name = lambda && i < lambda->fn->params.size() ? lambda->fn->params[i]->name : "";
-                diags_.error(args[i]->loc, "`spawn` cannot pass this to a parameter that is a reference, `" + std::string(params[i].type->name) + "&" +
-                                               (name.empty() ? "" : " " + name) + "`, since the thread runs on after this line",
+                diags_.error(args[i]->loc, "`spawn` cannot pass this to a parameter that is a `T&`, `" + std::string(params[i].type->name) + "&" +
+                                               (name.empty() ? "" : " " + name) + "`, which would change a variable that the thread may outlive",
                              "take the value, `" + std::string(params[i].type->name) + (name.empty() ? "" : " " + name) +
-                                 "`: a copy of a vector or a string shares its buffer, so it costs little",
+                                 "`, and give back what the thread works out through its task, or share a class object",
                              spec::References);
                 refused = true;
             }
         if (lambda) refused = refuseShared(*lambda) || refused;
     } else {
         for (size_t i = 0; i < args.size() && i < target->params.size(); ++i)
-            if (target->params[i]->isRef) {
+            if (target->params[i]->isRef && !target->params[i]->isConst) {
                 diags_.error(args[i]->loc, "`spawn` cannot pass this to " + q(target->name) + ", whose parameter " + q(target->params[i]->name) +
-                                               " is a reference, since the thread runs on after this line",
+                                               " is a `T&`, which would change a variable that the thread may outlive",
                              "have " + q(target->name) + " take the value, `" + std::string(target->params[i]->type->name) + " " + target->params[i]->name +
-                                 "`: a copy of a vector or a string shares its buffer, so it costs little",
+                                 "`, and give back what the thread works out through its task, or share a class object",
                              spec::References);
                 refused = true;
             }
@@ -3042,12 +3043,15 @@ void Sema::prepareAsync(FuncDecl& fn) {
         return;
     }
     for (auto& p : fn.params)
-        if (p->isRef) {
-            diags_.error(p->typeLoc, "an async function cannot take a reference, since it runs on after its caller has moved on",
-                         "take the value, `" + std::string(p->declType->name) + " " + p->name + "`: a copy of a vector or a string shares its buffer, so it costs little",
+        if (p->isRef && !p->isConst) {
+            diags_.error(p->typeLoc, "an async function cannot take a `T&`, which would change a variable after its caller has moved on",
+                         "take the value, `" + std::string(p->declType->name) + " " + p->name +
+                             "`, and give back what it works out through its task, or share a class object",
                          spec::References);
             return;
         }
+    for (auto& p : fn.params)  // a `const T&` is a copy made at the call, which the function keeps while it runs
+        if (p->isRef) p->isRef = false;
     for (auto& p : fn.params)
         if (holdsLocal(p->declType)) {
             diags_.error(p->typeLoc, "an async function cannot take a local reference, since it may go on on another thread after it waits",

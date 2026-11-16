@@ -237,6 +237,9 @@ C++20 coroutines are a library-author toolkit with no standard loop or task type
 - ThreadSanitizer is `--race`, as it cannot go with AddressSanitizer in `--debug`. It has a runtime of its own, as it must see the runtime's atomic steps and locks. The tests build every program with `spawn` this way too.
 - ThreadSanitizer's own stack holds 64K calls and is not checked, and going past it writes over what the loader uses, so a crash report can no longer be trusted. So `--race` stops a program at 60000 calls, with a message, by putting a count in the way of what it calls for each function (`runtime/race_stack.c`). A smaller thread stack would have done it too, but only for threads, and at a cost to a program with large frames that never gets near the limit.
 - A fatal error is reported by one thread. Any other that stops as well waits for the first to end the program, so there is one message. The report does not wait long for a thread stuck in the output.
+- A `const T&` parameter of what `spawn` runs is given the thread's own copy, made before it starts, as `std::thread` does, and
+  one of an `async` function a copy made at the call (changed 2026-11-16, after the exit check's first round, where both were
+  errors; §2.31). A `T&` stays an error.
 
 `spawn` with a lambda decided 2026-11-14 by the owner:
 - `spawn` still takes a call: `spawn [=] { return work(n); }()`, as Go writes `go func() { ... }()`, and `spawn job()` for a
@@ -695,7 +698,9 @@ program and never dangles, but when its container is resized, replaced or was sh
   hidden argument, which finds the place as a read of it would, making no buffer its own, and is not checked when the statement
   ends. `return row(r)[c];` passes its form on, and so does `?:`. A `const auto&` bound to one keeps the holds but is not
   checked at its uses, and may show the element as it was. The const one of a `T&`/`T` pair is still not chosen on a class.
-- A function that is `async`, or run with `spawn`, cannot take a reference, and no reference is alive at an `await`.
+- A function that is `async`, or run with `spawn`, cannot take a `T&`, and no reference is alive at an `await`. Changed 2026-11-16,
+  after the exit check's first round: a `const T&` of one is given a copy of its own, made where the task or the thread starts, as
+  `std::thread` does (§2.9), where it was an error.
 - Elements of containers, as built 2026-11-11 in place of the pins first planned, which needed every copy in Codegen to be able
   to give a new buffer, as a copy of a pinned buffer would have to:
   - A local reference to an element, `auto& e = v[i];`, and the variable of `for (auto& x : v)`, find the element again at each

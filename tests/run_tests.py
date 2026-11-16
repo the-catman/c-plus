@@ -803,7 +803,7 @@ def check_cheat_sheet(cplus, workdir):
 SPEC_NOT_CODE = {
     "[[fill]align][sign][#][0][width][.precision][type]", "\\x{HH}",
     "using Name = type;",
-    "compiler/SpecRefs.h", "cplus explain <topic>", ".cplus", "\\n \\t \\r \\0 \\\\ \\\" \\'", "\\xHH", "\\012", "<cctype>", "<cmath>", "std::format", "std::string", "std::",
+    "compiler/SpecRefs.h", "cplus explain <topic>", ".cplus", "\\n \\t \\r \\0 \\\\ \\\" \\'", "\\xHH", "\\012", "<cctype>", "<cmath>", "std::format", "std::string", "std::", "std::thread",
     "std::optional<T>", "std::optional", "std::vector", "std::array", "std::unordered_map", "std::numbers::pi", "std::println", "std::weak_ptr", "std::make_shared",
     "std::unique_ptr", "std::async", "int + long", "long + float", "float + double", "Transfer-Encoding", "wss://", "libcurl4-openssl-dev", "CPLUS_CHECK_LEAKS=1",
     "-ftrapv", "CPLUS_CHECK_LEAKS=0", "-Wno-new-delete", "cplus check", "cplus run", "cplus run greet.cplus -- Ada", "cplus build app.cplus -lsqlite3", "-L <directory>", ".hplus",

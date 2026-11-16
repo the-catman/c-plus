@@ -3880,9 +3880,10 @@ struct Codegen::Impl {
                 // A class is called through the reference, and a struct in its place.
                 callArgs.push_back(selfType->isClass() ? atOffset(b.CreateLoad(b.getPtrTy(), selfSlot, "self"), pathOffset(path)) : selfSlot);
             }
-            for (auto& p : target.params) {
+            const unsigned firstParam = next;
+            for (auto& p : target.params) {  // a `const T&` is given the thread's own copy, by its address
                 llvm::Value* slot = b.CreateStructGEP(closureTy, closure, next++);
-                callArgs.push_back(inMemory(p->type) ? slot : b.CreateLoad(llvmType(p->type), slot, p->name));
+                callArgs.push_back(inMemory(p->type) || passedByRef(*p) ? slot : b.CreateLoad(llvmType(p->type), slot, p->name));
             }
             llvm::Value* errorSlot = nullptr;
             if (target.isThrows) {
@@ -3896,6 +3897,9 @@ struct Codegen::Impl {
                 result = emitCall(*target.taskWait, {inner}, false, target.isThrows ? errorSlot : nullptr);
                 releaseValue(inner, target.retType);
             }
+            for (size_t i = 0; i < target.params.size(); ++i)  // what the function borrowed; it took the others
+                if (passedByRef(*target.params[i]))
+                    releaseValue(peekValue(target.params[i]->type, b.CreateStructGEP(closureTy, closure, firstParam + (unsigned)i)), target.params[i]->type);
             if (selfType) releaseValue(selfType->isClass() ? b.CreateLoad(b.getPtrTy(), selfSlot, "self") : peekValue(selfType, selfSlot), selfType);
             b.CreateCall(rtFree, {closure});
             auto finish = [&] {

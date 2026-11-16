@@ -1661,9 +1661,12 @@ void doubleAll(vector<int>& v) {
   `Account opened = bank.open();` would. Since neither refers to where the object is kept,
   assigning to one, or to the call, is an error, and so is giving one to an `Account&`
   parameter; changing the object's fields, or calling its methods, is what they are for.
-- **Not allowed.** An `async` function, or one run with `spawn`, cannot take a reference,
-  since it goes on after its caller has moved on, and no reference may be alive at an `await`.
-  For the same reason neither can return one, and `spawn` cannot run a function that does.
+- **A `const T&` of an `async` function, or of one run with `spawn`,** is given a copy of its own, made where the task or
+  the thread starts, as `std::thread` does: `spawn count(v)` with `int count(const vector<int>& v)`, after which a change to `v`
+  does not show in it. A class object is shared, as it always is.
+- **Not allowed.** An `async` function, or one run with `spawn`, cannot take a `T&`, since it goes on after its caller has
+  moved on and would change a variable it may outlive, and no reference may be alive at an `await`. For the same reason
+  neither can return one, and `spawn` cannot run a function that does.
   A reference cannot be a field, a constant, an element of a container, or a template
   argument. There is no `T&&` or `auto&&`.
 

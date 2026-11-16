@@ -34,8 +34,8 @@ void sharesCallersVariable(int& k) {
 void takesReference() {
     int k = 0;
     spawn [](int& x) { x++; }(k);
-    // error: `spawn` cannot pass this to a parameter that is a reference, `int& x`, since the thread runs on after this line
-    // error: take the value, `int x`
+    // error: `spawn` cannot pass this to a parameter that is a `T&`, `int& x`, which would change a variable that the thread may outlive
+    // error: take the value, `int x`, and give back what the thread works out through its task, or share a class object
 }
 void notCalled() {
     spawn [=] { println("x"); };

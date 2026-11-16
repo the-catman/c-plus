@@ -15,11 +15,11 @@ struct Counter {
     void peek() const { bump(n); }
 };
 int moved(vector<int>&& v) { return 0; }
-async int later(const string& s) {
+async int later(string& s) {
     await delay(1);
     return 1;
 }
-int count(const vector<int>& v) { return 0; }
+int count(vector<int>& v) { return 0; }
 void handles() {
     try {
         throw Error("x");
@@ -60,7 +60,8 @@ int main() {
 // error: return the value: write `string`
 // error: C+ has no rvalue references, `&&`
 // error: take the value, `vector<int> x`: a copy of a vector or a string shares its buffer, so it costs little
-// error: an async function cannot take a reference, since it runs on after its caller has moved on
+// error: an async function cannot take a `T&`, which would change a variable after its caller has moved on
+// error: take the value, `string s`, and give back what it works out through its task, or share a class object
 // error: this `await` comes while the reference 'first' is alive
 // error: copy the value before the `await`: `auto first = ...;`
 // error: parameter 'n' of 'bump' can change what it refers to, so it needs a variable, a field or an element of an array, but this is a value
@@ -72,5 +73,5 @@ int main() {
 // error: a reference cannot refer to a reference
 // error: write `const auto&` to read the elements without copying them
 // error: take the value, `Error x`
-// error: `spawn` cannot pass this to 'count', whose parameter 'v' is a reference, since the thread runs on after this line
-// error: have 'count' take the value, `vector<int> v`
+// error: `spawn` cannot pass this to 'count', whose parameter 'v' is a `T&`, which would change a variable that the thread may outlive
+// error: have 'count' take the value, `vector<int> v`, and give back what the thread works out through its task, or share a class object
