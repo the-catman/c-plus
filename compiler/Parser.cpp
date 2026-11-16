@@ -156,12 +156,8 @@ std::string Parser::operatorNameAt(size_t at, size_t& tokens, const StructDecl* 
                  "as `" + self + " clone() const`, and for a value that cannot be copied, use `unique<" + self + ">`",
                  spec::OperatorOverloading);
         case Tok::PlusAssign: case Tok::MinusAssign: case Tok::StarAssign: case Tok::SlashAssign: case Tok::PercentAssign: case Tok::AmpAssign:
-        case Tok::PipeAssign: case Tok::CaretAssign: case Tok::ShlAssign: case Tok::ShrAssign: {
-            std::string arith = tokSpelling(op.kind);
-            arith.pop_back();
-            notYet(loc, std::string("writing `operator") + tokSpelling(op.kind) + "`",
-                   "remove it: once `operator" + arith + "` is written, `a " + tokSpelling(op.kind) + " b` works as `a = a " + arith + " b`");
-        }
+        case Tok::PipeAssign: case Tok::CaretAssign: case Tok::ShlAssign: case Tok::ShrAssign:
+            return std::string("operator") + tokSpelling(op.kind);  // `operator+=`, which changes `this`
         case Tok::PlusPlus: case Tok::MinusMinus:
             notYet(loc, std::string("`operator") + tokSpelling(op.kind) + "`", "write a method, such as `void next()`, or `p = p + 1` with an `operator+`");
         case Tok::LBracket: case Tok::LParen:  // `operator[]` and `operator()`

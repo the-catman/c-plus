@@ -592,7 +592,6 @@ PLANNED_FEATURES = [
     ("private base classes", 'class A { public: int x = 0; };\nclass B : private A {};\n' + M % ""),
     ("protected base classes", 'class A { public: int x = 0; };\nclass B : protected A {};\n' + M % ""),
     ("operator<=>", 'struct P { int x = 0; bool operator<=>(const P& o) const { return true; } };\n' + M % ""),
-    ("written compound assignments", 'struct P { int x = 0; P operator+=(const P& o) const { return o; } };\n' + M % ""),
     ("operator++", 'struct P { int x = 0; P operator++() const { return this; } };\n' + M % ""),
     ("a unary operator*", 'struct P { int x = 0; int operator*() const { return x; } };\n' + M % ""),
     ("operator->", 'struct P { int x = 0; int operator->() const { return x; } };\n' + M % ""),

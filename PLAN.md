@@ -858,7 +858,9 @@ algorithm uses.
   `Hashable` until it can have its own hash (§2.24). `unique`, `local` and `weak` `==` stay identity.
 - Each of `<`, `>`, `<=`, `>=` is only itself, as in C++: `a > b` with only `<` is an error whose help writes `b < a`.
   `Comparable` is `a < b` giving a `bool`, built in or the program's, and `sort`, `min`, `max` and `binary_search` use only `<`.
-- `a += b` runs a written `operator+=` when one fits, which waits for slice 2; until then it is `a = a + b`, with the place found
+- `a += b` runs a written `operator+=` (slice 2, built 2026-11-15) once the left side's type has one, as in C++, and nothing is made
+  from `+` for it then: a non-const member returning `T&`, with `return this;`, or `void`, called on the place after `b`. Without
+  one, it is `a = a + b`, with the place found
   once, after `b`, as for numbers. `++` and `--` are never made from `+`.
 - A member operator is a method: `virtual`, `override`, interfaces and inheritance apply unchanged. Its LLVM name always carries
   what it takes: `cplus.Point.operator+(Point)`. The sides are worked out left to right, as for the language's operators.
@@ -869,7 +871,7 @@ algorithm uses.
   from it, which inherit it. It can be `virtual`. `= default` on a class compares the fields, the base classes' first, as
   C++20 does. `same_object(a, b)` is identity, for references of related classes and optionals of them, and is what an
   `operator==` writes in place of `this == other`, which would run it again and is an error there.
-- Later slices, each a "not yet" error until it comes: 2, written compound assignments; 3, `<=>` with `strong_ordering`, `weak_ordering` and
+- Later slices, each a "not yet" error until it comes: 2, written compound assignments (built 2026-11-15); 3, `<=>` with `strong_ordering`, `weak_ordering` and
   `partial_ordering`, `= default`, and the four comparisons made from it; 4, `[]` and `()` that give a value (built 2026-11-14:
   members only, as in C++; `[]` is `const`, can take more than one index as C++23's does, and gives a copy, so `g[i] = x`
   is an error; `()` may change the object and take default values, as in C++, and is called through a variable or a

@@ -1,5 +1,5 @@
 // Operators that C+ cannot overload, or not yet, and C++'s ways of writing them that C+ reads otherwise.
-struct A { int x = 0; A operator+=(const A& o) const { return o; } };
+struct A { int x = 0; };  // `operator+=` can be written: see err_operator_assign
 struct B { int x = 0; B operator++() const { return this; } };
 struct C { int x = 0; int operator[]() const { return x; } };
 struct D { int x = 0; int operator->() const { return x; } };
@@ -24,9 +24,6 @@ int main() {
     int operator = 1;
     return 0;
 }
-// error: this compiler does not support writing `operator+=` yet
-// error: remove it: once `operator+` is written, `a += b` works as `a = a + b`
-// error: err_operator_syntax.cplus:2:25
 // error: this compiler does not support `operator++` yet
 // error: write a method, such as `void next()`, or `p = p + 1` with an `operator+`
 // error: this compiler does not support `operator->` yet

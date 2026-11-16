@@ -478,6 +478,7 @@ struct AssignExpr : Expr {
     FuncDecl* overload = nullptr;
     BasePath path;
     bool tryTarget = false;  // `try find(k) = v`: the `try` was on the target, which has a call that can fail, and not on `v`
+    bool written = false;    // set by Sema: `overload` is a written `operator+=`, a method called on the target, as in C++
     AssignExpr(Loc opLoc, std::optional<BinOp> o, ExprPtr t, ExprPtr v)
         : Expr(Kind::Assign, opLoc), op(o), target(std::move(t)), value(std::move(v)) {}
 };

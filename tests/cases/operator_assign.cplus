@@ -1,0 +1,105 @@
+// A written compound assignment, as in C++: `a += b` calls the left side's `operator+=` on it, in place, once one is written.
+// Without one, `a += b` is `a = a + b`.
+struct Vec {
+    double x = 0;
+    double y = 0;
+    Vec operator+(const Vec& o) const { return Vec{x + o.x + 1000, y + o.y + 1000}; }  // which `+=` does not run here
+    Vec& operator+=(const Vec& other) {
+        x += other.x;
+        y += other.y;
+        return this;
+    }
+    Vec& operator*=(double k) {
+        x *= k;
+        y *= k;
+        return this;
+    }
+    void operator-=(const Vec& o) {
+        x -= o.x;
+        y -= o.y;
+    }
+};
+template<typename T> struct Total {
+    T sum = T();
+    long count = 0;
+    Total<T>& operator+=(T value) {
+        sum = sum + value;
+        count += 1;
+        return this;
+    }
+};
+// A class: the object itself changes, as every reference to it sees.
+class Counter {
+public:
+    int n = 0;
+    Counter(int k) : n(k) {}
+    virtual Counter& operator+=(int k) {
+        n += k;
+        return this;
+    }
+};
+class Double : public Counter {
+public:
+    Double() : Counter(0) {}
+    Counter& operator+=(int k) override {
+        n += 2 * k;
+        return this;
+    }
+};
+struct Grid {
+    vector<Vec> cells = {Vec{}, Vec{}};
+    Vec& at(long i) { return cells[i]; }
+};
+int calls = 0;
+int index() {
+    calls += 1;
+    println("index");
+    return 0;
+}
+Vec tip() {
+    println("tip");
+    return Vec{1, 1};
+}
+int main() {
+    Vec a = Vec{1, 2};
+    a += Vec{3, 4};
+    a *= 2;
+    a -= Vec{1, 1};
+    println("{}", a);                         // expect: {x: 7, y: 11}
+    Vec b = (a += Vec{1, 1});
+    println("{} {}", a, b);                   // expect: {x: 8, y: 12} {x: 8, y: 12}
+
+    // The right side first, then the place, as C++17 has it.
+    vector<Vec> vs = {Vec{}, Vec{}};
+    vs[index()] += tip();
+    // expect: tip
+    // expect: index
+    vs[1] += Vec{5, 5};
+    vs[1] *= 2;
+    println("{} {}", vs, calls);              // expect: [{x: 1, y: 1}, {x: 10, y: 10}] 1
+
+    Grid g = Grid();
+    g.at(1) += Vec{2, 3};
+    bool first = false;
+    (first ? g.cells[0] : g.cells[1]) *= 10;
+    hashmap<string, Vec> m;
+    m["a"] += Vec{1, 0};
+    println("{} {}", g.cells, m);             // expect: [{x: 0, y: 0}, {x: 20, y: 30}] {"a": {x: 1, y: 0}}
+
+    Total<int> t = Total<int>();
+    t += 4;
+    t += 5;
+    Total<string> words = Total<string>();
+    words += "a";
+    words += "b";
+    println("{} {} {}", t.sum, t.count, words.sum);  // expect: 9 2 ab
+
+    Counter c = Counter(1);
+    Counter same = c;
+    c += 5;
+    Double d = Double();
+    Counter base = d;
+    base += 3;
+    println("{} {} {}", c.n, same.n, d.n);    // expect: 6 6 6
+    return 0;
+}

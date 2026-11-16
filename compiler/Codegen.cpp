@@ -4813,6 +4813,16 @@ struct Codegen::Impl {
     llvm::Value* genOperatorAssign(const AssignExpr& a) {
         const Type* ty = a.target->type;
         const Type* vt = a.value->type;
+        if (a.written) {  // `a += b` of a written `operator+=`, a method called on `a`, found after `b` as C++17 has it
+            llvm::Value* rhs = genOwned(*a.value, vt);
+            if (isManaged(vt)) temps.push_back({rhs, vt, inMemory(vt)});
+            const Expr& right = given(rhs, vt, a.value->loc);
+            llvm::Value* result = callOnPlace(*a.overload, *a.target, {&right}, a.path, a.loc, /*dispatch=*/true);
+            if (a.overload->returnsRef) return loadValue(ty, result);
+            if (a.overload->retType->is(K::Void)) return nullptr;
+            if (isManaged(a.overload->retType)) temps.push_back({result, a.overload->retType, inMemory(a.overload->retType)});
+            return result;
+        }
         llvm::Value* rhs = genOwned(*a.value, vt);
         if (isManaged(vt)) temps.push_back({rhs, vt, inMemory(vt)});
         llvm::Value* slot = addressOf(*a.target, false, true);
@@ -4840,15 +4850,21 @@ struct Codegen::Impl {
             retainValue(object, recv.type->elem);
             return object;
         }
-        // A struct method works on the struct in place, so its place is found after the arguments, as a reference argument's is
-        // (see genArguments). An argument could write to a vector it lies in, or hold a copy of that vector, and in both cases
-        // the vector must then get a buffer of its own, with `this` in it.
+        std::vector<const Expr*> argExprs;
+        for (auto& a : call.args) argExprs.push_back(a.get());
+        return callOnPlace(*call.method, recv, argExprs, call.path, call.loc, call.qualifier.empty());
+    }
+
+    // A method of a struct or a class called on `recv`. A struct method works on the struct in place, so its place is found after
+    // the arguments, as a reference argument's is (see genArguments). An argument could write to a vector it lies in, or hold a
+    // copy of that vector, and in both cases the vector must then get a buffer of its own, with `this` in it.
+    llvm::Value* callOnPlace(const FuncDecl& method, const Expr& recv, const std::vector<const Expr*>& argExprs, const BasePath& path, Loc loc, bool dispatch) {
         std::vector<ArgSpec> specs;
         llvm::Value* self = nullptr;
         if (recv.type->isClass()) {
-            self = atOffset(gen(recv), pathOffset(call.path));
+            self = atOffset(gen(recv), pathOffset(path));
         } else if (isPlace(recv)) {
-            specs.push_back({&recv, nullptr, !call.method->isConst});
+            specs.push_back({&recv, nullptr, !method.isConst});
         } else {
             // A struct value that is not stored anywhere, e.g. makePoint().move(1): the
             // method works on a temporary, which is released when the statement ends.
@@ -4862,13 +4878,13 @@ struct Codegen::Impl {
             self = slot;
         }
         size_t first = specs.size();
-        for (size_t i = 0; i < call.args.size(); ++i) specs.push_back(argSpec(*call.args[i], *call.method->params[i]));
+        for (size_t i = 0; i < argExprs.size(); ++i) specs.push_back(argSpec(*argExprs[i], *method.params[i]));
         std::vector<Hold> held;
         std::vector<llvm::Value*> values = genArguments(specs, held);
         std::vector<llvm::Value*> args{first ? values[0] : self};  // `this` comes first
         args.insert(args.end(), values.begin() + (long)first, values.end());
-        llvm::Value* result = callFunction(*call.method, std::move(args), call.qualifier.empty());
-        checkHeld(held, specs, call.method->name, call.loc);
+        llvm::Value* result = callFunction(method, std::move(args), dispatch);
+        checkHeld(held, specs, method.name, loc);
         return result;
     }
 

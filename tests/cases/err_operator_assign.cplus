@@ -1,0 +1,33 @@
+// What a written compound assignment must be: a non-const member that takes the right side and returns its left side, `T&`,
+// or nothing. Once one is written, `a += b` runs only the written ones.
+struct Vec {
+    double x = 0;
+    Vec operator+(double k) const { return Vec{x + k}; }
+    Vec& operator+=(const Vec& o) {
+        x += o.x;
+        return this;
+    }
+    Vec& operator-=(const Vec& o) const { return this; }
+    Vec operator*=(double k) { return this; }
+    Vec& operator/=(Vec& o) { return this; }
+    Vec& operator%=(const Vec& a, const Vec& b) { return this; }
+    void operator&=(const Vec& o) {}
+};
+Vec& operator|=(Vec& a, const Vec& b) { return a; }
+int main() {
+    Vec a = Vec{1};
+    a += 5;  // `+` takes a double, but `operator+=` is written, and takes a Vec
+    Vec c = (a &= a);
+    return 0;
+}
+// error: `operator-=` changes `this`, so it cannot be `const`
+// error: remove `const` after its parameters
+// error: `operator*=` returns its left side, `Vec&`, as in C++, or nothing
+// error: write `Vec& operator*=(double other) { ...; return this; }`
+// error: `operator/=` only reads its right side, so it cannot take a `Vec&`
+// error: a member `operator%=` takes the right side, as `this` is the left side
+// error: `operator|=` changes its left side, so it is written in the type, where `this` is that side
+// error: move it into 'Vec': `Vec& operator|=(const Vec& other) { ...; return this; }`
+// error: no `operator+=` takes 'Vec' and 'int'
+// error: expected 'Vec' to initialize 'c', but this is 'void'
+// error: 'this' cannot be returned as a reference inside const method 'operator-='

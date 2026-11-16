@@ -5035,7 +5035,7 @@ bool Sema::checkChangeable(const Expr& target, const char* action, const VarDecl
             }
     if (rootVar == thisVar() && fn_->isConst) {
         std::string what = element ? std::string("the ") + parts + " of " + q(outerVectorName(target))
-                                   : q(var ? path : rootVar->name);
+                                   : target.kind == Expr::Kind::This ? std::string("'this'") : q(var ? path : rootVar->name);
         diags_.error(target.loc, what + " cannot be " + action + " inside const method " + q(fn_->name),
                      "remove `const` after the parameter list of " + q(fn_->name) + " if it needs to change fields",
                      spec::Methods);
@@ -5970,7 +5970,7 @@ const Type* Sema::checkExpr(Expr& e, Flow& flow) {
                 if (ok && var) markAssigned(flow, var, path);
                 if (ok && var && path.empty()) notePointer(flow, var, *a.value);
             }
-            result = t;
+            result = a.written && a.overload->retType->is(K::Void) ? Type::voidTy() : t;  // what a written `operator+=` gives
             break;
         }
         case Expr::Kind::Ternary: {
@@ -7227,6 +7227,41 @@ void Sema::checkOperatorDecl(FuncDecl& f) {
         if (f.isAsync) fail(f.asyncLoc, "an operator cannot be async", "remove `async`");
         return;
     }
+    static const char* const compound[] = {"+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="};
+    if (std::find(std::begin(compound), std::end(compound), op) != std::end(compound)) {  // which changes the left side, `this`
+        const Type* rightType = f.params.size() == 1 ? f.params[0]->declType : nullptr;
+        const std::string right = rightType && (rightType->isArithmetic() || rightType->is(K::Char) || rightType->is(K::Bool))
+                                      ? std::string(rightType->name) + " other"
+                                      : "const " + std::string(rightType ? rightType->name : self) + "& other";
+        const std::string example = self + "& " + f.name + "(" + right + ") { ...; return this; }";
+        if (!member) {
+            fail(f.nameLoc, "`" + f.name + "` changes its left side, so it is written in the type, where `this` is that side", "move it into " + q(self) + ": `" + example + "`");
+            return;
+        }
+        if (f.params.size() != 1) {
+            fail(f.nameLoc, "a member `" + f.name + "` takes the right side, as `this` is the left side", "give it one parameter: `" + example + "`");
+            return;
+        }
+        if (f.isConst) {
+            fail(f.nameLoc, "`" + f.name + "` changes `this`, so it cannot be `const`", "remove `const` after its parameters");
+            return;
+        }
+        const StructDecl* gives = f.retType->decl;  // its own type, or a base class of it, as an override returns what it replaces does
+        const bool givesSelf = (f.returnsRef || f.returnsObject) && gives && (gives == f.owner || f.owner->derivesFrom(gives));
+        if (!givesSelf && !f.retType->is(K::Void) && !f.retType->isError()) {
+            fail(f.retTypeLoc, "`" + f.name + "` returns its left side, `" + self + "&`, as in C++, or nothing", "write `" + example + "`");
+            return;
+        }
+        const VarDecl& p = *f.params[0];
+        if (p.isRef && !p.isConst) {
+            fail(p.loc, "`" + f.name + "` only reads its right side, so it cannot take a `" + std::string(p.declType->name) + "&`",
+                 "take it by value, or as `const " + std::string(p.declType->name) + "&`");
+            return;
+        }
+        if (p.defaultArg) fail(p.loc, "the parameters of an operator cannot have default values", "remove the `= ...`");
+        if (f.isAsync) fail(f.asyncLoc, "an operator cannot be async", "remove `async`");
+        return;
+    }
     if (operands == 1 && (op == "*" || op == "&")) {
         if (op == "*") fail(f.nameLoc, "this compiler does not support a unary `operator*` yet", "write a method that gives what it leads to, such as `int get() const`");
         else fail(f.nameLoc, "a unary `operator&` cannot be written, as `&x` always gives the address of x", "remove it");
@@ -7535,9 +7570,24 @@ bool Sema::checkOperatorAssign(AssignExpr& a, const Type* t, Flow& flow) {
     if (t->isError() || vt->isError()) return true;  // already said
     const std::string name = operatorName(*a.op), sym = binOpSpelling(*a.op);
     std::vector<Expr*> operands{a.target.get(), a.value.get()};
+    const std::string target = asBase(spelled(*a.target, "a")), value = asBase(spelled(*a.value, "b"));
+    // A written `operator+=` of the left side's type is what `a += b` runs, as in C++, and nothing is made from `+` then.
+    if (takesOperators(t)) {
+        std::vector<FuncDecl*> written = methodsNamed(*t->decl, name + "="), tied;
+        if (!written.empty()) {
+            FuncDecl* f = bestOperator(written, operands, tied);
+            if (!f) {
+                reportOperatorChoice(name + "=", written, tied, {t, vt}, a.loc);
+                return true;
+            }
+            a.overload = f;
+            a.written = true;
+            useOperator(*f, operands, a.loc, flow, a.path, target + " " + sym + "= " + value);
+            return true;
+        }
+    }
     std::vector<FuncDecl*> candidates = operatorCandidates(name, t, vt, 2), tied;
     FuncDecl* f = bestOperator(candidates, operands, tied);
-    const std::string target = asBase(spelled(*a.target, "a")), value = asBase(spelled(*a.value, "b"));
     if (!f) {
         if (!tied.empty() || !candidates.empty()) {
             reportOperatorChoice(name, candidates, tied, {t, vt}, a.loc);

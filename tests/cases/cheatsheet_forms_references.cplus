@@ -59,3 +59,12 @@ int indexed() {
     c[0] = 2;
     return c[0];
 }
+struct Vec {
+    double x = 0;
+    Vec& operator+=(const Vec& other) { x += other.x; return this; }
+};
+double added() {
+    Vec a = Vec{1};
+    a += Vec{2};
+    return a.x;
+}

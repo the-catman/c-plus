@@ -2636,6 +2636,10 @@ a += b;               // a = a + b
   `try (f / f)`. As in Swift, `try f / f` puts `try` on its left side alone.
 - **`a += b`** runs `a = a + b`, for every operator that has a compound assignment, with the place of `a` found once,
   after `b`, as for numbers. C++ needs `operator+=` written as well.
+- **A written compound assignment**, `Vec& operator+=(const Vec& other) { ...; return this; }`, is what `a += b` runs
+  once the left side's type has one, as in C++: a method called on `a` in place, after `b` is worked out, and nothing is
+  made from `+` then. It is a member that is not `const`, takes the right side, and returns its left side, `Vec&`, with
+  `return this;`, or nothing, `void`. A class's one changes the object itself, as every reference to it sees.
 - **In a class**, an operator is a method: it is inherited and can be `virtual`.
 - **`operator[]`** gives a value, as `int operator[](long i) const { ... }` does, and is then `const`. It can take more
   than one index, as in C++23, `g[x, y]`, and be overloaded on what it takes. What it gives is a copy, so `g[i] = x` is
@@ -2646,7 +2650,7 @@ a += b;               // a = a + b
 - **`operator()`** makes a value callable, `add(5)`, as a function is, and can change the object, as a method can, and
   have default values. One that returns a `T&` gives a place, as a method that does gives one. It is called through a variable or a field; `make()(1)` is not supported yet.
 - The sides are worked out left to right, as for the language's own operators, even when `100 == m` runs `m == 100`.
-- **Not supported yet:** `operator<=>`, writing a compound assignment such as `operator+=`, calling the
+- **Not supported yet:** `operator<=>`, calling the
   `operator()` of what is not a variable or a field, `operator++`, `operator--`, a unary `*`, `operator->`, explicit
   conversion operators, operators on enums, and generic operators outside a type.
 - **Never:** `operator=`, as a struct is copied field by field and a class object is shared; `operator!=`; `operator&&`,
@@ -3964,8 +3968,8 @@ Integers, floats, strings and chars are in [Lexical structure](#lexical-structur
 | Inheritance, `virtual`, `override`, `= 0`, `protected:`, `dynamic_cast`, `Base::method()` | implemented |
 | Multiple inheritance, interfaces | implemented |
 | `final`, covariant return types, private and protected base classes | planned |
-| Operator overloading: `+ - * / % & \| ^ << >>`, unary `-` `+` `~`, `==` of structs and classes, `<` `>` `<=` `>=`, `operator[]` and `operator()` that give a value or a `T&`, members and free operators, `a += b` from `+`, `same_object(a, b)` | implemented |
-| `operator<=>`, written compound assignments, calling the `operator()` of what is not a variable or a field, `operator++`, a unary `*`, `operator->`, conversion operators, operators on enums, generic operators outside a type | planned |
+| Operator overloading: `+ - * / % & \| ^ << >>`, unary `-` `+` `~`, `==` of structs and classes, `<` `>` `<=` `>=`, `operator[]` and `operator()` that give a value or a `T&`, members and free operators, `a += b` from `+` or a written `operator+=`, `same_object(a, b)` | implemented |
+| `operator<=>`, calling the `operator()` of what is not a variable or a field, `operator++`, a unary `*`, `operator->`, conversion operators, operators on enums, generic operators outside a type | planned |
 | Destructors for structs, static members | planned |
 | `weak<T>` references: `lock`, `expired`, `reset` | implemented |
 | Errors: `throws`, `throw`, `try f()`, `try { } catch (E e) { }`, `catch (...)`, `throw;`, `Error`, `int main() throws` | implemented |
