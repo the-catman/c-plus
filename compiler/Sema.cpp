@@ -1460,7 +1460,10 @@ void Sema::reportUnknownName(const NameExpr& n) {
     }
     if (program_->unreadFunctions.count(n.name)) return;  // a header that could not be read may declare it, which has been said
     if (false) {}
-    else if (n.name == "cout" || n.name == "endl" || n.name == "cerr" || n.name == "console") help = "C+ prints with `println(\"{}\", value);`";
+    else if (n.name == "cout" || n.name == "endl") help = "C+ prints with `println(\"{}\", value);`";
+    else if (n.name == "cerr" || n.name == "clog") help = "C+ prints to standard error with `println(stderr, \"{}\", value);`";
+    else if (n.name == "console") help = "C+ prints with `println(\"{}\", value);`, and to standard error with `println(stderr, \"{}\", value);`";
+    else if (n.name == "stderr" || n.name == "stdout") help = "`" + n.name + "` is only where `print` and `println` write to: `println(" + n.name + ", \"{}\", value);`";
     else if (n.name == "cin") help = "read a line with `readLine()`, which is null at the end of the input, and a number from it with `try stoi(line)`";
     else if (isBuiltinModule(n.name)) {  // `fs.readFileSync(path)`, as in JavaScript
         bool imported = false;
@@ -6906,6 +6909,8 @@ const Type* Sema::checkCall(CallExpr& call, Flow& flow) {
         else if (name == "expm1") help = "write `exp(x) - 1`";
         else if (name == "printf" || name == "puts" || name == "putchar")
             help = "C+ prints with println: `printf(\"%d\\n\", x)` becomes `println(\"{}\", x)`";
+        else if (name == "eprintln" || name == "eprint" || name == "fprintf" || name == "fputs" || name == "perror")
+            help = "C+ prints to standard error with `println(stderr, \"{}\", value);`, or `print(stderr, ...)` for no new line";
         else if (std::string reader = cNumberReader(name); !reader.empty())
             help = "a C function must be declared: `extern \"C\" " + reader + ";`";
         else if ((name.back() == 'f' || name.back() == 'l') && isMathFunction(stem))
@@ -9220,6 +9225,14 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
                                             : Builtin::Format;
     bool format = call.builtin == Builtin::Format;
     const Type* result = format ? Type::stringTy() : Type::voidTy();
+    // `println(stderr, "{}", x)`, as in C++23: `stderr` and `stdout` are names only here, where they say where it goes.
+    if (!format && !call.args.empty() && call.args[0]->kind == Expr::Kind::Name) {
+        const std::string& stream = static_cast<const NameExpr&>(*call.args[0]).name;
+        if ((stream == "stderr" || stream == "stdout") && !lookup(stream)) {
+            call.toStderr = stream == "stderr";
+            call.args.erase(call.args.begin());
+        }
+    }
     for (auto& a : call.args) checkExpr(*a, flow);
     if (call.args.empty()) {
         if (call.builtin != Builtin::Println)
@@ -9229,6 +9242,11 @@ const Type* Sema::checkPrint(CallExpr& call, Flow& flow) {
         return result;
     }
     Expr& fmtExpr = *call.args[0];
+    if (fmtExpr.kind != Expr::Kind::StringLit && !format && fmtExpr.type && fmtExpr.type->name == std::string("fs::File")) {
+        diags_.error(fmtExpr.loc, "this compiler does not support printing to a file yet",
+                     "write the text with `try " + (plainKey(fmtExpr).empty() ? std::string("f") : plainKey(fmtExpr)) + ".write(format(\"{}\", value));`", spec::Printing);
+        return result;
+    }
     if (fmtExpr.kind != Expr::Kind::StringLit) {
         diags_.error(fmtExpr.loc, "the first argument of " + call.callee + " must be a format string written in quotes",
                      format ? "to turn a value into a string, write `format(\"{}\", value)`"

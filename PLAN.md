@@ -378,7 +378,9 @@ programs that import `json` or `reflect`, and for debug builds, whose leak repor
 
 ### 2.15 Standard library, v1 — DECIDED
 - `vector`, `array`, `hashmap`, `string`, optionals.
-- `print` for any value.
+- `print` for any value. Added 2026-11-16, after the exit check's first round, where a program had to declare C's `write` for
+  it: `println(stderr, ...)` and `print(stderr, ...)`, C++23's spelling, `stderr` and `stdout` being names only there. One
+  call's text is one write, after what standard output has waiting. Printing to an `fs::File` waits.
 - `json` parse and serialize via reflection.
 - `http` client and WebSockets, wrapping libcurl. This also proves the C FFI early. Decided 2026-11-07: linked as a shared
   library for now, and programs that stand alone come in Phase 9. The `libcurl.a` of a distribution still needs a dozen other

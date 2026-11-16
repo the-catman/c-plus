@@ -588,6 +588,7 @@ struct CallExpr : Expr {
     bool clears = false;                     // `__move(x)`, which always leaves x empty
     const Type* uniqueType = nullptr;        // `unique<Node>(args)`, which builds a new Node
     Builtin builtin = Builtin::None;       // set by Sema for built-ins
+    bool toStderr = false;                 // `println(stderr, ...)`, whose `stderr` Sema takes out of the arguments
     const Type* vectorType = nullptr;      // `vector<int>(n)` or `vector<int>(n, value)`
     const Type* compared = nullptr;        // `same_object(a, b)`: the class reference both are converted to
     std::vector<std::string> formatPieces;  // print, println, format, to_string: literal text around each {}

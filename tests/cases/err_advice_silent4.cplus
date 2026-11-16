@@ -30,7 +30,7 @@ void arrowFunction() {
 }
 void stdThings() {
     std::cerr << 1;
-    // error: For standard error, declare C's `write`
+    // error: C+ prints to standard error with `println(stderr, "{}", value);`
 }
 void stdText() {
     std::stringstream s;

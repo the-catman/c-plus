@@ -2922,7 +2922,12 @@ println("{{literal braces}}");
 - A method named `toString` is an ordinary method for now, which printing does not call.
 - What holds something of the runtime's prints as its name: `Task<int> {...}`, `Mutex {...}`, `LockGuard {...}`,
   `http::WebSocket {...}`, `reflect::Type {...}`, `fs::File {...}`. Its fields would only show addresses that change, or a secret in a URL.
-- There is no `printf`, `cout` or `std::`.
+- **Standard error** is `println(stderr, "line {}: {}", n, why);`, `print(stderr, ...)` and `println(stderr)`, as in
+  C++23. `stdout` says standard output, which is where the others go. `stderr` and `stdout` are names only there, as the
+  first argument of `print` or `println`. The text of one call is written in one piece, after what standard output has
+  waiting, so the two stay in order when they go to the same place, as `2>&1` sends them. Printing to an `fs::File` is
+  not supported yet: write `try f.write(format("{}", value));`.
+- There is no `printf`, `cout`, `cerr` or `std::`.
 
 `format` takes the same arguments as `print` and returns the text as a string instead of
 printing it, like C++20's `std::format`. `to_string(x)` is the text of a number, as in

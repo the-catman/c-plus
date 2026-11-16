@@ -1,0 +1,17 @@
+// The forms the cheat sheet gives for printing to standard error, and the spec's.
+import fs;
+int main() {
+    int n = 4;
+    string why = "bad date";
+    println(stderr, "line {}: {}", n, why);
+    print(stderr, "x");
+    try {
+        fs::File f = try fs::open("out.txt", "w");
+        string value = "v";
+        try f.write(format("{}", value));
+    } catch (Error e) {
+        println("{}", e.what());
+    }
+    return 0;
+}
+// stderr: line 4: bad date

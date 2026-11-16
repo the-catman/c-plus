@@ -52,7 +52,7 @@ struct Codegen::Impl {
     // A string is { ptr data, i64 length, ptr owner }, as the runtime's cplus_string.
     // `owner` is the reference-counted buffer holding the bytes, or null for a literal.
     llvm::StructType* stringTy = nullptr;
-    llvm::FunctionCallee rtPrintStr, rtPrintQuoted, rtPrintI32, rtPrintI64, rtPrintU64, rtPrintBool, rtPrintNewline, rtTrap;
+    llvm::FunctionCallee rtPrintStr, rtPrintQuoted, rtPrintI32, rtPrintI64, rtPrintU64, rtPrintBool, rtPrintNewline, rtPrintStderr, rtTrap;
     llvm::FunctionCallee rtThreadStart, rtThreadsFinish, rtPrintLock, rtPrintUnlock;
     llvm::FunctionCallee rtAlloc, rtFree, rtRetain, rtRelease, rtPrintEnter, rtPrintLeave, rtStrEq, rtHashBytes, rtTrapText;
     llvm::GlobalVariable* hashSeed = nullptr;
@@ -382,6 +382,7 @@ struct Codegen::Impl {
         rtPrintU64 = decl("cplus_print_u64", voidTy, {ptrTy, i64});
         rtPrintBool = decl("cplus_print_bool", voidTy, {ptrTy, i32});
         rtPrintNewline = decl("cplus_print_newline", voidTy, {});
+        rtPrintStderr = decl("cplus_print_stderr", voidTy, {ptrTy});
         rtTrap = decl("cplus_trap", voidTy, {ptrTy, ptrTy, i32, i32});
         if (auto* f = llvm::dyn_cast<llvm::Function>(rtTrap.getCallee())) {
             f->addFnAttr(llvm::Attribute::NoReturn);
@@ -3330,6 +3331,30 @@ struct Codegen::Impl {
         }
         bool toString = call.builtin == Builtin::Format || call.builtin == Builtin::ToString;
         llvm::Value* out = llvm::ConstantPointerNull::get(b.getPtrTy());
+        if (call.toStderr) {  // made as a string, then written at once: see cplus_print_stderr
+            out = entryAlloca(stringTy, "text");
+            b.CreateStore(llvm::Constant::getNullValue(stringTy), out);
+            for (size_t i = 0; i < call.formatPieces.size(); ++i) {
+                printText(out, call.formatPieces[i]);
+                if (i == fields) break;
+                const FormatSpec spec = i < call.formatSpecs.size() ? call.formatSpecs[i] : FormatSpec{};
+                const Type* t = call.args[spec.arg + first]->type;
+                if (!widths[i] || spec.zero) {
+                    printWithSpec(out, values[spec.arg], t, spec, precisions[i], spec.zero ? widths[i] : nullptr);
+                    continue;
+                }
+                llvm::Value* text = entryAlloca(stringTy, "padded");
+                b.CreateStore(llvm::Constant::getNullValue(stringTy), text);
+                printWithSpec(text, values[spec.arg], t, spec, precisions[i], nullptr);
+                b.CreateCall(rtPrintPadded, {out, text, widths[i], b.getInt32(spec.fill), b.getInt32(spec.align)});
+            }
+            if (call.builtin == Builtin::Println) printText(out, "\n");
+            if (usesThreads) b.CreateCall(rtPrintLock, {});
+            b.CreateCall(rtPrintStderr, {out});
+            if (usesThreads) b.CreateCall(rtPrintUnlock, {});
+            releaseValue(b.CreateLoad(stringTy, out, "text"), Type::stringTy());
+            return nullptr;
+        }
         if (toString) {
             out = entryAlloca(stringTy, "text");
             b.CreateStore(llvm::Constant::getNullValue(stringTy), out);

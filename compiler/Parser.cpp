@@ -2700,7 +2700,7 @@ void Parser::failStd(Loc loc, const Token& name) {
              "a class variable is already a counted reference: `class Node {...};`, then `Node n = Node();`", spec::Classes);
     if (n == "cerr" || n == "clog")
         fail(loc, "C+ has no std:: namespace",
-             "`println` prints to standard output. For standard error, declare C's `write`: `extern \"C\" long write(int fd, string s, long n);`, then `write(2, s, s.size());`", spec::Printing);
+             "C+ prints to standard error with `println(stderr, \"{}\", value);`: `std::cerr << x << std::endl;` becomes `println(stderr, \"{}\", x);`", spec::Printing);
     if (n == "cout" || n == "endl" || n == "printf")
         fail(loc, "C+ has no std:: namespace",
              "built-ins need no prefix: `std::cout << x << std::endl;` becomes `println(\"{}\", x);`", spec::Printing);

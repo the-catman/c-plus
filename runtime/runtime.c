@@ -1469,6 +1469,13 @@ void cplus_print_bool(cplus_string* out, int32_t value) {
 
 void cplus_print_newline(void) { fputc('\n', stdout); }
 
+// What `println(stderr, ...)` made, written as one piece, after what standard output has waiting, so that the two stay in
+// order when they go to the same place, as `2>&1` sends them.
+void cplus_print_stderr(cplus_string* text) {
+    fflush(stdout);
+    if (text->length > 0) fwrite(text->data, 1, (size_t)text->length, stderr);
+}
+
 // ---- Holds -------------------------------------------------------------------
 //
 // What a place in a container needs while a call uses it or a function has returned it: the buffer or the class object it

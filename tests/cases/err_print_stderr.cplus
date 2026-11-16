@@ -1,0 +1,23 @@
+// Standard error is where `println(stderr, ...)` writes; `stderr` is not a value, and C's and other languages' ways name it.
+import fs;
+int main() {
+    eprintln("x");
+    // error: there is no function named 'eprintln'
+    // error: C+ prints to standard error with `println(stderr, "{}", value);`, or `print(stderr, ...)` for no new line
+    fprintf(stderr, "%d", 1);
+    // error: there is no function named 'fprintf'
+    int where = stderr;
+    // error: 'stderr' is not declared
+    // error: `stderr` is only where `print` and `println` write to: `println(stderr, "{}", value);`
+    cerr << 1;
+    // error: C+ prints to standard error with `println(stderr, "{}", value);`
+    string s = format(stderr, "{}", 1);
+    // error: `stderr` is only where `print` and `println` write to
+    try {
+        fs::File out = try fs::open("x.txt", "w");
+        println(out, "{}", 1);
+        // error: this compiler does not support printing to a file yet
+        // error: write the text with `try out.write(format("{}", value));`
+    } catch (Error e) {}
+    return 0;
+}

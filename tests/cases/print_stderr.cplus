@@ -1,0 +1,21 @@
+// `println(stderr, ...)` and `print(stderr, ...)` write to standard error, as C++23's `std::println(stderr, ...)` does, each
+// call's text in one piece, after what standard output has waiting. `stdout` says standard output, as nothing does.
+int main() {
+    int line = 3;
+    println("{} lines", 2);
+    println(stderr, "line {}: bad amount {:>6}|", line, "x1");
+    print(stderr, "no new line, ");
+    print(stderr, "then {}", "one");
+    println(stderr);
+    println(stdout, "to {} {:.1f}", "stdout", 2.25);
+    vector<Task<void>> tasks;
+    for (int i = 0; i < 3; i += 1) tasks.push_back(spawn [=] { println(stderr, "thread {} of {}", i, 3); }());
+    for (auto& t : tasks) t.wait();
+    return 0;
+}
+// expect: 2 lines
+// expect: to stdout 2.2
+// stderr: line 3: bad amount     x1|
+// stderr: no new line, then one
+// stderr: thread 0 of 3
+// stderr: thread 2 of 3
